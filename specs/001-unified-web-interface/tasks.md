@@ -47,19 +47,19 @@ to a shared file** (T002); no task here modifies 002's own source, tests, or cat
 
 **Purpose**: Stand up the package skeleton this feature's code and tests live in.
 
-- [ ] T001 Create the `src/civsim_web/` package skeleton with empty `__init__.py` files in
+- [X] T001 Create the `src/civsim_web/` package skeleton with empty `__init__.py` files in
   `store_client/`, `registry/`, `viewmodels/`, `health/`, `refs/`, `routes/`, `negotiate/`,
   `templates/`, `static/`, and `net/`, plus a top-level `panels/` directory — the full layout named in
   plan.md's Project Structure section.
-- [ ] T002 Add `civsim_web` as a dependency group in `pyproject.toml` alongside the existing
+- [X] T002 Add `civsim_web` as a dependency group in `pyproject.toml` alongside the existing
   `civsim_harness` group, declaring `fastapi`, `uvicorn`, `jinja2`, `pydantic>=2`, `httpx` (test-only),
   `pytest`, `pytest-asyncio`, `syrupy`. Add entries only — do not remove, reorder, or otherwise alter
   any existing `civsim_harness` dependency declaration, since `pyproject.toml` is shared with the
   parallel `002-civ-playing-harness` effort.
-- [ ] T003 [P] Configure `ruff` (or the project's existing linter config) to cover `src/civsim_web/`
+- [X] T003 [P] Configure `ruff` (or the project's existing linter config) to cover `src/civsim_web/`
   and this feature's `tests/` paths, matching the formatting rules already applied to
   `src/civsim_harness/`.
-- [ ] T004 [P] Add `conftest.py` fixtures scaffolding for `tests/unit/`, `tests/contract/`, and
+- [X] T004 [P] Add `conftest.py` fixtures scaffolding for `tests/unit/`, `tests/contract/`, and
   `tests/integration/` under this feature's test tree (a seeded `MatchStore` fake fixture placeholder,
   a FastAPI `TestClient` fixture placeholder) — populated by Foundational tasks below.
 
@@ -72,19 +72,19 @@ content-negotiation mechanism every user story is built on.
 
 **⚠️ CRITICAL**: No user story task may begin until this phase is complete.
 
-- [ ] T005 Define the `MatchStore` Protocol import seam in `src/civsim_web/store_client/port.py`: a
+- [X] T005 Define the `MatchStore` Protocol import seam in `src/civsim_web/store_client/port.py`: a
   typed re-export matching the method signatures published in
   `specs/002-civ-playing-harness/contracts/match-store-port.md`'s read operations only
   (`get_run`, `get_turn_cycle`, `list_active_runs`, `turn_gaps`, `step_gaps`, `list_save_points`,
   `get_last_known_good`, `ping`). Document this module as the **only** module in `civsim_web` permitted
   to reference the `MatchStore` type (plan.md Constraints — read-only, structurally).
-- [ ] T006 Implement a Protocol-conformant `MatchStore` fake in `src/civsim_web/store_client/fake.py`
+- [X] T006 Implement a Protocol-conformant `MatchStore` fake in `src/civsim_web/store_client/fake.py`
   covering every read operation named in T005, seeded from fixture data. The fake MUST NOT expose any
   of the port's nine write operations (`create_run`, `update_run`, `write_turn_cycle`,
   `write_run_event`, `write_model_call`, `write_save_point`, `write_capture`,
   `mark_turn_superseded`, `archive_run`) — omit them entirely rather than stubbing them as no-ops, so a
   call to one is a type/attribute error, not a silent success. Depends on T005.
-- [ ] T007 [P] Implement the Panel Registry loader/validator in `src/civsim_web/registry/loader.py`
+- [X] T007 [P] Implement the Panel Registry loader/validator in `src/civsim_web/registry/loader.py`
   enforcing every rule in [contracts/panel-registry.md](./contracts/panel-registry.md): **P1** "A panel
   with `category: in_game` and an empty/missing `parity_basis` fails to load"; **P2** "A panel with
   `category: out_of_game_telemetry` must have `parity_basis: null`"; **P3** every `source_fields` entry
@@ -92,52 +92,109 @@ content-negotiation mechanism every user story is built on.
   `panel_id` unique across all four YAML files; **P5** `scope` consistent with every listed
   `source_fields` entry's granularity; **P6** declarations immutable within a version. A load failure
   on any rule MUST abort startup.
-- [ ] T008 [P] Create `panels/live.yaml`, `panels/history.yaml`, `panels/catalog.yaml`,
+- [X] T008 [P] Create `panels/live.yaml`, `panels/history.yaml`, `panels/catalog.yaml`,
   `panels/shared.yaml` as valid-but-empty declaration lists (`[]`), and `panels/VERSION` containing
   `1`, so T007's loader has a valid target from the start.
-- [ ] T009 [P] Implement the view models shared across every user story in
+- [X] T009 [P] Implement the view models shared across every user story in
   `src/civsim_web/viewmodels/base.py`: `RunSummaryView`, `HealthStatus`, `InterventionInfo`, and
   `PanelRegistryVersion`, exactly as specified in data-model.md §1, §2, §4, §13. `InterventionInfo`
   MUST carry no field through which a mutating request could be issued (data-model V9 / FR-026).
-- [ ] T010 [P] Implement `HealthStatus` derivation in `src/civsim_web/health/derive.py` per
+- [X] T010 [P] Implement `HealthStatus` derivation in `src/civsim_web/health/derive.py` per
   data-model.md §2's rule: "`state` is computed from `Run.lifecycle_state` first ... refined only by
   the *presence* of a matching, more specific `RunEvent`... never by an independent timestamp
   comparison this feature invents." Enforce the invariant verbatim: "`stalled` may only be set when a
   `RunEvent` of type `hang_detected` or `unresponsive_detected` exists for this run with no later
   `resumed`/`playing` transition after it."
-- [ ] T011 [P] Implement `ViewReference` parsing and serialization in
+- [X] T011 [P] Implement `ViewReference` parsing and serialization in
   `src/civsim_web/refs/reference.py` per data-model.md §12's canonical path shapes: run
   (`/runs/{run_id}`), turn (`/runs/{run_id}/turns/{turn_number}`), step
   (`/runs/{run_id}/turns/{turn_number}/steps/{step_index}`), turn-scoped panel
   (`/runs/{run_id}/turns/{turn_number}/panels/{panel_id}`), and run-scoped panel
   (`/runs/{run_id}/panels/{panel_id}`).
-- [ ] T012 [P] Implement the content-negotiation seam in `src/civsim_web/negotiate/respond.py`: one
+- [X] T012 [P] Implement the content-negotiation seam in `src/civsim_web/negotiate/respond.py`: one
   function taking a view model and a Jinja2 template name, returning the view model's JSON
   serialization on `Accept: application/json` or `?format=json`, and the rendered template with that
   same view model as context otherwise. This MUST be the only branch point of its kind in the codebase
   (contracts/web-read-api.md — "there is no route that computes the HTML response differently from the
   JSON one").
-- [ ] T013 [P] Implement LAN bind-address resolution in `src/civsim_web/net/bind.py`: enumerate host
+- [X] T013 [P] Implement LAN bind-address resolution in `src/civsim_web/net/bind.py`: enumerate host
   network interfaces, select RFC1918 IPv4 private-range addresses plus IPv4 loopback, and refuse a
   wildcard (`0.0.0.0`) bind (research R8).
-- [ ] T014 Wire the FastAPI application in `src/civsim_web/app.py`: mount `static/`, configure the
+- [X] T014 Wire the FastAPI application in `src/civsim_web/app.py`: mount `static/`, configure the
   Jinja2 environment against `templates/`, register `GET /healthz` returning this service's liveness
   plus the configured store's `ping()` result, and call T013's resolver at startup, logging every bound
   address. Depends on T012, T013.
-- [ ] T015 Implement `civsim-web doctor` and `civsim-web serve` CLI entry points in
+- [X] T015 Implement `civsim-web doctor` and `civsim-web serve` CLI entry points in
   `src/civsim_web/cli.py`: `doctor` reports store `ping()` status, Panel Registry load status, and the
   resolved bind address list, matching quickstart.md's expected output shape; `serve` starts T014's
   application. Depends on T006, T007, T013, T014.
-- [ ] T016 [P] Contract test in `tests/contract/test_panel_registry.py` covering P1–P6: one
+- [X] T016 [P] Contract test in `tests/contract/test_panel_registry.py` covering P1–P6: one
   deliberately-broken fixture YAML per rule, asserting each fails to load with an error naming the
   violated rule. Depends on T007.
-- [ ] T017 [P] Unit test in `tests/unit/test_health_derivation.py` asserting the invariant verbatim:
+- [X] T017 [P] Unit test in `tests/unit/test_health_derivation.py` asserting the invariant verbatim:
   "'stalled' only ever set from a `hang_detected`/`unresponsive_detected` event, never from an
   independently computed timestamp gap." Depends on T010.
-- [ ] T018 [P] Unit test in `tests/unit/test_view_reference.py` asserting round-trip parse/serialize
+- [X] T018 [P] Unit test in `tests/unit/test_view_reference.py` asserting round-trip parse/serialize
   for every path shape in T011. Depends on T011.
 
 **Checkpoint**: Foundation ready — user story implementation can begin.
+
+### Foundation notes for Phase 3–6 contributors
+
+Written when T001–T018 landed. Read before starting a user story; three of these
+are findings against the design artifacts, not implementation choices.
+
+**What exists to build on**
+
+- `civsim_web.store_client.port` — the read-only `MatchStore` Protocol, plus
+  record-shape Protocols (`RunLike`, `RunEventLike`, `SavePointLike`,
+  `ScreenCaptureLike`, `TurnCycleRecordLike`). `READ_OPERATIONS` /
+  `WRITE_OPERATIONS` are exported as data; `tests/contract/test_read_only_boundary.py`
+  AST-scans the whole package against them, so a write call fails CI.
+- `civsim_web.store_client.fake.FakeMatchStore` — seeded via constructor or
+  `seed_*` helpers, never `write_*`. Record dataclasses for all of 002's
+  entities already exist there.
+- `civsim_web.registry.loader.load_panel_registry()` → `PanelRegistry` with
+  `get(panel_id)` and `panels_for_field(entity, field)`. **Every view-model
+  constructor must consult `panels_for_field` rather than reading a store field
+  directly** — that is what makes UP-001 structural.
+- `civsim_web.viewmodels.base` — `ViewModel` (frozen, `extra='forbid'`),
+  `RunSummaryView`, `HealthStatus`, `InterventionInfo`, `PanelRegistryVersion`,
+  and `UnavailableField`. Subclass `ViewModel`, and use `UnavailableField`
+  rather than omitting a key, for FR-011/FR-025/C1 cases alike.
+- `civsim_web.negotiate.respond.respond(request, model, template_name)` — the
+  only negotiation branch. Templates receive `view` (the model) and `data` (its
+  `model_dump(mode="json")`); rendering `data` generically is what keeps the
+  JSON/HTML parity test (T033/T039) honest as models grow.
+- Test fixtures live in `tests/web_support/fixtures.py` (this feature's
+  counterpart to 002's `tests/fakes/`). `tests/{unit,contract,integration}/conftest.py`
+  expose `web_store`, `web_store_factory`, `web_app`, `web_client`, all with
+  lazy imports so a break here cannot affect 002's tests in the same directories.
+
+**Findings that affect Phase 3–6 work**
+
+1. **T005's read list is short two operations.** `get_capture` and
+   `list_run_events` are published reads on `match-store-port.md` and are
+   required by `GET /captures/{id}/image` (T029) and `GET /runs/{id}/events`
+   (T028). Both are on the Protocol as implemented.
+2. **The port cannot reach `RunConfiguration`, and has no blob fetch.** FR-018's
+   seed/civilization/ruleset/model columns live on `RunConfiguration`, which no
+   published read resolves from `Run.config_id`; and `get_capture` returns the
+   record with `blob_ref`, not bytes, so `GET /captures/{id}/image` has nothing
+   to serve from the published port. The first is handled by an optional
+   `RunConfigurationReader` capability the store is *probed* for (fields render
+   unavailable when absent); the second is unresolved and is T029's problem.
+   Both are the same C1 dependency and should be raised with deliverable 3.
+3. **`HealthState` carries two values beyond FR-003's seven.** `paused` (002 has
+   the lifecycle state; data-model.md SS2's derivation rule does not map it) and
+   `unknown` (fail-closed for an unrecognised future state). Templates must
+   render both.
+4. **A step-scoped panel's reference shape is not in the route table.**
+   data-model.md SS12 describes `/steps/{step_index}` being inserted into the
+   panel path; `contracts/web-read-api.md`'s resolution table lists only the
+   turn- and run-scoped panel shapes. `refs/reference.py` accepts the
+   step-scoped shape; **T035/T038 need a matching route** or a `scope: step`
+   panel has no resolvable URL.
 
 ---
 

@@ -1,0 +1,16 @@
+# Panel Registry -- live panels (contracts/panel-registry.md).
+#
+# This feature's own structural parity gate (UP-001). A store field with no
+# declaration in one of these four files has no code path into any template or
+# JSON body: view-model constructors consult the registry index rather than
+# reading store fields directly, so an unregistered field is never read at all
+# rather than filtered after the fact.
+#
+# Declarations are immutable within a version (rule P6). Changing one means
+# bumping panels/VERSION, not editing in place.
+#
+# Empty for now by design (T008): the loader needs a valid target from the
+# start, and each user story authors its own declarations -- live.yaml in US1
+# (T019), shared.yaml in US2 (T037), history.yaml in US3 (T040), catalog.yaml
+# in US4 (T048).
+[]

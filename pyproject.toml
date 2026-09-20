@@ -25,6 +25,7 @@ dependencies = [
 
 [project.scripts]
 civsim = "civsim_harness.operator.cli:app"
+civsim-web = "civsim_web.cli:main"
 
 # Per-platform host adapters (src/civsim_harness/host/{windows,macos,linux}/).
 # Each dependency also carries its own `sys_platform` marker as a second line
@@ -54,8 +55,24 @@ dev = [
   "mypy>=1.11",
 ]
 
+# Deliverable 1 -- the unified web interface (specs/001-unified-web-interface,
+# src/civsim_web/). Declared as its own group, additively, so a harness-only
+# install never pulls a template engine it has no use for, and so this file's
+# civsim_harness declarations above stay untouched (tasks.md T002).
+civsim_web = [
+  "fastapi",
+  "uvicorn",
+  "jinja2",
+  "pydantic>=2",
+  "PyYAML",          # the Panel Registry is YAML (contracts/panel-registry.md)
+  "httpx",           # test-only: FastAPI's ASGI test transport
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "syrupy>=4",
+]
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/civsim_harness"]
+packages = ["src/civsim_harness", "src/civsim_web"]
 
 # --------------------------------------------------------------------------
 # ruff
@@ -71,7 +88,7 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "TID"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["civsim_harness"]
+known-first-party = ["civsim_harness", "civsim_web"]
 
 # The portable core must run unchanged on every target platform (research
 # R19); host/ is the one directory permitted to speak to an OS directly
