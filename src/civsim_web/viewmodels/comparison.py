@@ -60,7 +60,7 @@ from civsim_web.viewmodels.base import (
     UnavailableField,
     ViewModel,
 )
-from civsim_web.viewmodels.metrics import MetricSeriesView
+from civsim_web.viewmodels.metrics import MetricAxis, MetricSeriesView, axis_for
 from civsim_web.viewmodels.provenance import Provenance
 
 __all__ = [
@@ -107,23 +107,6 @@ class DivergenceKind(StrEnum):
 
     LEADER_CHANGE = "leader_change"
     SEPARATION = "separation"
-
-
-class MetricAxis(ViewModel):
-    """The common axes several runs' series are drawn on (data-model.md SS11).
-
-    Present on the response rather than computed per renderer so the browser's
-    chart and the directing session's reading of the same comparison agree about
-    the scale -- a chart drawn to different bounds than the numbers were
-    described against is a Principle VI drift in visual form.
-    """
-
-    metric_name: str
-    min_turn: int = 0
-    max_turn: int = 0
-    min_value: float = 0.0
-    max_value: float = 0.0
-    run_ids: tuple[str, ...] = ()
 
 
 class DivergencePoint(ViewModel):
@@ -383,19 +366,6 @@ def build_divergence_points(
     return tuple(sorted(points, key=lambda point: (point.metric_name, point.turn, point.kind)))
 
 
-def _axis_for(metric_name: str, series_list: Sequence[MetricSeriesView]) -> MetricAxis:
-    turns = [point.turn for series in series_list for point in series.points]
-    values = [point.value for series in series_list for point in series.points]
-    return MetricAxis(
-        metric_name=metric_name,
-        min_turn=min(turns) if turns else 0,
-        max_turn=max(turns) if turns else 0,
-        min_value=min(values) if values else 0.0,
-        max_value=max(values) if values else 0.0,
-        run_ids=tuple(series.run_id for series in series_list),
-    )
-
-
 def build_comparison_view(
     *,
     runs: Sequence[RunSummaryView],
@@ -431,7 +401,7 @@ def build_comparison_view(
             if run_id in series_by_run and metric_name in series_by_run[run_id]
         ]
         series[metric_name] = collected
-        axes[metric_name] = _axis_for(metric_name, collected)
+        axes[metric_name] = axis_for(metric_name, collected)
         divergence.extend(
             build_divergence_points(
                 metric_name, {found.run_id: found for found in collected}

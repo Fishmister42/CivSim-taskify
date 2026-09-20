@@ -16,16 +16,16 @@ editing it:
   ``is_authoritative`` and ``superseded_by``, and the latter is now *computed*
   from the authoritative attempt rather than supplied by the caller. The store
   read lives in ``_load_attempt`` / ``store_client.reads.turn_attempt``.
-- **T043 (US3)** -- step-window pagination. Add ``?step_offset=`` /
-  ``?step_limit=`` to ``get_turn`` and pass them straight through; the builder
-  already accepts them and already reports ``StepWindow.skipped_step_indices``,
-  which is data-model.md SS5's "no page may skip an index without marking it".
-  **Add them to ``get_turn``'s signature only** -- ``build_turn_view`` and
-  ``_load_turn`` need no further change, and ``build_step_view`` deliberately
-  calls ``build_turn_view`` with the *full* step list so a step opened directly
-  is never missing because of someone else's page size.
+- **T043 (US3, done)** -- step-window pagination. ``?step_offset=`` /
+  ``?step_limit=`` on ``get_turn``, passed straight through; the builder already
+  accepted them and already reported ``StepWindow.skipped_step_indices``, which
+  is data-model.md SS5's "no page may skip an index without marking it". They
+  are on ``get_turn``'s signature **only** -- ``_load_turn`` and ``_load_attempt``
+  needed no change, and ``build_step_view`` deliberately calls
+  ``build_turn_view`` with the *full* step list so a step opened directly is
+  never missing because of someone else's page size.
 
-Five failure shapes are distinguished deliberately, because contracts/
+Six failure shapes are distinguished deliberately, because contracts/
 web-read-api.md, FR-009 and FR-016 all depend on a client being able to tell
 them apart:
 
@@ -36,13 +36,21 @@ them apart:
 | the turn is a recorded **gap**                | ``404 turn_gap`` + the gap        |
 | ``?attempt=k`` names an unrecorded attempt    | ``404 attempt_not_found``         |
 | ``?attempt=k`` names an unreachable attempt   | ``404 attempt_not_addressable``   |
+| ``?step_offset=`` is past the last step       | ``404 step_window_out_of_range``  |
 
 A gap is not the same as a turn that never happened, and collapsing the two
 would let a client mistake an incomplete record for a boring, complete turn --
-exactly what FR-016 and data-model.md SS5 forbid. The last two are likewise
+exactly what FR-016 and data-model.md SS5 forbid. The attempt pair are likewise
 different facts: one is about the run, the other about the store, and the
 published port cannot address an arbitrary attempt at all (see
 ``store_client/port.py`` ``TurnAttemptReader``).
+
+The last one is T043's own, and it is a ``404`` rather than an empty page for
+the same reason: a page of no steps for a turn that has steps is indistinguishable
+from a turn whose steps were never recorded, and SS5 spends its whole Validation
+clause on those two not being confusable. ``?step_offset=0`` on a turn with no
+recorded steps is *not* this error -- that turn genuinely has nothing to page
+through, and its ``step_gaps`` say whether that is a hole or a fact.
 
 **What never happens on any of those paths**: the current authoritative turn is
 never substituted for a superseded attempt someone asked for by name. That is
@@ -68,8 +76,13 @@ __all__ = ["build_step_view", "build_turn_view", "router"]
 
 router = APIRouter()
 
-TURN_TEMPLATE = "turns/turn.html"
+TURN_TEMPLATE = "history/turn_replay.html"
 STEP_TEMPLATE = "turns/step.html"
+
+#: Upper bound on one step page. A late-game turn of hundreds of steps is a
+#: valid turn (002 data-model.md SS5, validation 5), so the cap exists to bound
+#: one request rather than to bound a turn.
+MAX_STEP_PAGE_SIZE = 500
 
 
 @router.get("/runs/{run_id}/turns/{turn_number}")
@@ -78,6 +91,9 @@ def get_turn(
     run_id: str,
     turn_number: int,
     attempt: int | None = Query(default=None, ge=0),
+    step_offset: int = Query(default=0, ge=0),
+    step_limit: int | None = Query(default=None, ge=1, le=MAX_STEP_PAGE_SIZE),
+    focus: str | None = Query(default=None),
 ) -> Response:
     """One turn's full record (FR-014), or one named attempt of it (FR-009).
 
@@ -86,11 +102,29 @@ def get_turn(
     that exact attempt, abandoned or not, carrying ``is_authoritative=false``
     and a ``superseded_by`` pointer when it has been overtaken.
 
-    T043 adds the step window here; it forwards to ``build_turn_view``, which
-    already accepts it.
+    ``?step_offset=`` / ``?step_limit=`` are T043's step window (research R6,
+    data-model.md SS5). The default is still the whole ordered list: paging is
+    something a caller opts into for a turn of hundreds of steps, not a default
+    that would make every turn look shorter than it is. Whatever the window,
+    ``step_window.skipped_step_indices`` names every index this page left out,
+    so a page boundary can never be mistaken for a record gap.
+
+    ``?focus=`` is T044's panel focus, carried in the URL so stepping and
+    jumping preserve it across a plain ``<a href>`` (FR-015) and so the
+    directing session resolving the identical reference sees the identical page
+    (Principle VI). An unregistered ``panel_id`` is refused rather than ignored:
+    a focus parameter that quietly did nothing would leave the user looking at
+    an unfocused page they believe is focused.
     """
     context = load_run_context(request, run_id, with_events=False)
-    view = build_turn_view(context, turn_number, attempt=attempt)
+    view = build_turn_view(
+        context,
+        turn_number,
+        attempt=attempt,
+        step_offset=step_offset,
+        step_limit=step_limit,
+        focus_panel_id=_resolve_focus(context, focus),
+    )
     return respond(request, view, TURN_TEMPLATE)
 
 
@@ -127,6 +161,7 @@ def build_turn_view(
     superseded_by: int | None = None,
     step_offset: int = 0,
     step_limit: int | None = None,
+    focus_panel_id: str | None = None,
 ) -> TurnCycleView:
     """Build one turn's view model, or raise the ``WebError`` that explains why not.
 
@@ -144,7 +179,7 @@ def build_turn_view(
         record, gaps, computed_superseded_by = _load_attempt(context, turn_number, attempt)
 
     try:
-        return build_turn_cycle_view(
+        view = build_turn_cycle_view(
             record,
             registry=context.registry,
             provenance=context.provenance,
@@ -156,6 +191,7 @@ def build_turn_view(
             ),
             step_offset=step_offset,
             step_limit=step_limit,
+            focus_panel_id=focus_panel_id,
             # A named attempt on a turn whose every attempt was abandoned is a
             # real reference to a real record; it renders marked as a gap rather
             # than answering as a dead link (FR-009 over FR-016's 404).
@@ -163,6 +199,11 @@ def build_turn_view(
         )
     except TurnIsGap as exc:
         raise _gap_error(context, turn_number, exc.gaps) from exc
+
+    window = view.step_window
+    if window.returned == 0 and window.total > 0 and window.offset > 0:
+        raise _step_window_error(context, turn_number, window)
+    return view
 
 
 def build_step_view(
@@ -201,6 +242,35 @@ def build_step_view(
             },
         ),
     )
+
+
+def _resolve_focus(context: RunContext, focus: str | None) -> str | None:
+    """Validate ``?focus=`` against the Panel Registry (T044).
+
+    An unregistered ``panel_id`` is not a valid reference at all
+    (contracts/web-read-api.md's error table says so for the panel route), and
+    it is not a valid focus either. Answering ``400`` rather than dropping it
+    keeps this page consistent with ``GET /runs``'s unknown-filter rule: a
+    parameter that is silently ignored produces a page that looks like it obeyed
+    one.
+    """
+    if focus is None:
+        return None
+    if context.registry.get(focus) is None:
+        raise WebError(
+            400,
+            ErrorView(
+                kind="unknown_focus_panel",
+                message=(
+                    f"No Panel Registry entry named {focus!r}, so there is nothing "
+                    f"to focus. An unregistered panel_id is a reference error, not "
+                    f"a field-unavailable case."
+                ),
+                run_id=context.run_id,
+                detail={"focus": focus},
+            ),
+        )
+    return focus
 
 
 # --------------------------------------------------------------------------
@@ -270,6 +340,39 @@ def _gap_error(context: RunContext, turn_number: int, gaps: tuple[int, ...]) -> 
             run_id=context.run_id,
             turn_number=turn_number,
             detail={"turn_gaps": list(gaps), "turn_range": [low, high]},
+        ),
+    )
+
+
+def _step_window_error(context: RunContext, turn_number: int, window: Any) -> WebError:
+    """T043: a step page past the end says so, rather than looking empty.
+
+    data-model.md SS5 spends its whole lazy-loading clause on one distinction --
+    a page that skipped an index must never look like a genuine gap. The
+    converse belongs here: a window starting past the last recorded step is a
+    page that does not exist, and answering it with an empty step list would
+    render as a turn whose steps were never recorded.
+    """
+    return WebError(
+        404,
+        ErrorView(
+            kind="step_window_out_of_range",
+            message=(
+                f"Turn {turn_number} has {window.total} recorded step(s); "
+                f"step_offset={window.offset} starts past the last of them. This "
+                f"is a page that does not exist, not a turn with nothing recorded "
+                f"-- the two are answered differently on purpose."
+            ),
+            run_id=context.run_id,
+            turn_number=turn_number,
+            detail={
+                "step_offset": window.offset,
+                "step_limit": window.limit,
+                "step_count": window.total,
+                "first_page": ViewReference(
+                    run_id=context.run_id, turn_number=turn_number
+                ).path,
+            },
         ),
     )
 

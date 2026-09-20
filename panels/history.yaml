@@ -9,8 +9,78 @@
 # Declarations are immutable within a version (rule P6). Changing one means
 # bumping panels/VERSION, not editing in place.
 #
-# Empty for now by design (T008): the loader needs a valid target from the
-# start, and each user story authors its own declarations -- live.yaml in US1
-# (T019), shared.yaml in US2 (T037), history.yaml in US3 (T040), catalog.yaml
-# in US4 (T048).
-[]
+# Authored by T040 (US3) for turn-by-turn replay: the per-turn numbers a
+# single-run trajectory is drawn from, and the two markers replay exists to make
+# visible -- which attempt of a turn this is, and whether the run's record is
+# whole enough to trend at all.
+#
+# **Every field below is already declared by a US1 or US4 panel, and the
+# duplication is deliberate**, exactly as `catalog.yaml` states for its own: a
+# `panel_id` is one namespace (rule P4) but a *field* may be declared by several
+# panels. SC-005's auditor asking "what does the replay view show, and on what
+# basis?" should read the answer here rather than infer it from which live
+# panels the replay route happens to reuse.
+#
+# The category split is the one `live.yaml` states:
+#
+#   category: in_game               -- information a human player obtains through
+#                                      Civ VI's standard UI; `parity_basis` names
+#                                      the in-client action.
+#   category: out_of_game_telemetry -- harness operational data: how the turn was
+#                                      recorded, which attempt survived, whether
+#                                      the record has gaps (FR-013).
+#                                      `parity_basis` is null by rule P2.
+
+# --------------------------------------------------------------------------
+# Turn-scoped: what a human read off the HUD on that turn, and what only the
+# harness knows about how that turn came to be recorded.
+# --------------------------------------------------------------------------
+
+- panel_id: history.turn_yields
+  title: "Yields That Turn"
+  story: [US3]
+  scope: turn
+  source_fields:
+    - TurnCycle.turn_number
+    - TurnCycle.yields
+  parity_basis: >-
+    Read the per-turn yield totals from the resource bar across the top of the
+    in-game HUD on the turn in question, and the per-city breakdown from each
+    city's own panel. Replaying a recorded run shows the same numbers the player
+    saw on that turn and nothing the HUD did not show them -- a turn the run
+    never reached has no numbers here, and a turn whose record has a gap is
+    marked as a gap rather than drawn.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: history.attempt_marker
+  title: "Attempt Marker"
+  story: [US3]
+  scope: turn
+  source_fields:
+    - TurnCycle.attempt_index
+    - TurnCycle.is_authoritative
+    - TurnCycle.outcome
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+# --------------------------------------------------------------------------
+# Run-scoped: the gap marker. FR-016 requires a run with gaps be flagged unfit
+# for trend comparison wherever it is shown, and replay is where a reader is
+# most likely to meet one -- they opened a specific turn and it is not there.
+# Both statuses are read verbatim from `Run` and never re-derived (invariant
+# V5); `turn_gaps()` is a separate published read and is consulted alongside
+# them, which is why this feature fails closed on either (US4 notes, finding 4).
+# --------------------------------------------------------------------------
+
+- panel_id: history.gap_marker
+  title: "Record Completeness"
+  story: [US3]
+  scope: run
+  source_fields:
+    - Run.record_completeness_status
+    - Run.comparability_status
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"

@@ -11,9 +11,10 @@ shadowed rather than rejected, and having the order stated in one list makes
 that visible. Within the rest, order is irrelevant -- FastAPI matches the more
 specific path regardless of registration order for these shapes.
 
-Pending, by story:
-
-- **US3** -- ``metrics`` (T042): ``/runs/{run_id}/metrics``.
+``metrics`` (``/runs/{run_id}/metrics``) landed with US3 (T042). It is
+registered after ``turns`` only for readability -- ``/runs/{id}/metrics`` and
+``/runs/{id}/turns/{n}`` are distinct literal segments and neither shadows the
+other.
 
 ``panels`` landed with US2 (T035, T038) and carries three paths, not two: the
 run- and turn-scoped shapes the contract's table names, plus the step-scoped
@@ -40,6 +41,8 @@ __all__ = ["ROUTER_MODULES", "include_routers"]
 ROUTER_MODULES: tuple[str, ...] = (
     "live",
     "turns",
+    # US3 (T042) -- the single-run metric trajectory FR-015 navigates from.
+    "metrics",
     "events",
     "captures",
     # US2 (T035, T038) -- the ViewReference resolution targets.

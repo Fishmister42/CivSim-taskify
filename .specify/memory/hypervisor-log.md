@@ -201,3 +201,50 @@ quietly absorbing an under-specified contract that belongs to deliverable 3.
 item. Deliverable 3 has no spec of its own yet (only 001 and 002 are specced), so
 `contracts/match-store-port.md` is the right home and is in scope. Fold into the 002 convergence
 pass now running.
+
+---
+
+## OWNER RULINGS (binding — do not re-litigate)
+
+**T217 load path: try C, then A, then B.**
+- **C (first, untested):** can the client be started with a save already loaded? Recovery already
+  restarts the client, so if launch carries the save, the load path costs no UI automation and no
+  event hunting. Most promising variant: the game's own *continue / resume last save* behaviour,
+  since the save we want loaded is exactly the most recent one. Then binary flags, Steam launch
+  options, `UserOptions.txt` / `AppOptions.txt`.
+- **A (second):** finish the `UI.QuerySaveGameList` event-name hunt. Viable because Lua globals
+  persist across tuner commands. **Timeboxed** — three rounds have already failed; if a focused
+  session does not produce the event name, move on.
+- **B (fallback, fully authorised):** documented Principle II `firetuner_gap` + bespoke UI driver,
+  **scoped to exactly one operation, "load a named save."** Not a general UI automation layer.
+- **Wayland is expendable — pre-approved.** The standing objection to B was that synthetic input is
+  unavailable on Wayland by design, so Wayland hosts could never branch or recover. The owner
+  accepted that cost explicitly. **Nobody may reopen this as a blocker.**
+
+**Owner agreed with both hypervisor rulings** from the Phase 11 convergence: the additive
+`MatchStore.get_run_configuration` read, and the binding `create_branch` ruling (never hard-code
+`COMPARABLE`, never omit `host_platform`).
+
+**Spec amendment: ALLOWED.** Scope — (1) 001 `spec.md`: the FR-021 vs Principle III disagreement,
+resolved fail-closed in code but unstated in the spec; (2) 001 `spec.md`: Principle IV has no
+requirement behind it (`ComparisonBasis` satisfies the constitution, not any FR); (3) extended by
+hypervisor to 002 `contracts/match-store-port.md`, the four-probed-capabilities gap above, as the
+same class of problem. **Blocked on the US3 agent releasing `specs/001-...`** — queued, not dropped.
+
+**Long-horizon, explicitly NOT a current worry (owner):** the branch-identity fingerprint covers
+turn, yields, units and cities, and omits fog of war, diplomatic state, AI internal state, RNG
+state, and great-people/religion progress. Closed by T177 whenever branches start feeding real
+comparisons. Do not spend effort here before then.
+
+### Stale-spike hygiene (queued)
+
+`spikes/load-path-linux.md`'s section *"Turns were advancing on their own — auto-end-turn is
+enabled on this host"* is **retracted and wrong**. `UserOptions.txt`'s `AutoEndTurn 0` was already
+correct; the real measured cause was `GameConfiguration.GetTurnTimerType()` returning
+`TURNTIMER_STANDARD` in a single-player game, and `turn_timer_preflight` now refuses a run over it.
+The spike still tells a reader to "settle auto-end-turn before any unattended run." **Annotate it**
+— a stale spike that contradicts the code is exactly what burns a live client session. Verified by
+the hypervisor before escalating, rather than raised as a false blocker.
+
+Also standing from that spike: **never compare save bytes** in branch or replay verification.
+Saves are not byte-stable across save -> load -> save; identical position, almost no shared bytes.

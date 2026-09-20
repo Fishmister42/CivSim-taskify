@@ -301,3 +301,61 @@ main { padding: 0 1.25rem 3rem; max-width: 1600px; margin: 0 auto; }
   border-left: 3px solid var(--warn); background: var(--panel);
   padding: 0.6rem 0.9rem; color: var(--ink-dim); max-width: 80ch;
 }
+
+/* -- replay and trajectories (US3: T044, T045; extended by T056) ---------- */
+
+/*
+ * The one rule here that is a requirement rather than a preference: a **break
+ * in a trajectory line is drawn**, not left as the absence of a line
+ * (data-model.md SS10, FR-025, UP-005). A reader must be able to see that the
+ * record stops and resumes, rather than having to notice that it does.
+ */
+.trajectory-svg .series-break-rule { stroke: var(--bad); stroke-width: 1; opacity: 0.7; }
+.trajectory-svg .turn-dot { stroke: var(--bg); stroke-width: 1; }
+.trajectory-svg .turn-point:hover .turn-dot,
+.trajectory-svg .turn-point:focus .turn-dot { r: 6; stroke: var(--ink); }
+.trajectory-svg .turn-dot-here { stroke: var(--ink); stroke-width: 2; }
+.trajectory-svg .series-emphasised { stroke-width: 3.5; }
+
+/* The deferred figure on a replay page ships as a link to the page whose
+ * server-rendered chart carries the same content; the script inlines that chart
+ * when it can. Both states are complete pages, so neither is styled as a
+ * loading state. */
+.trajectory-deferred .trajectory-link,
+.trajectory-rendered .trajectory-link { color: var(--ink-dim); font-size: 0.85rem; }
+
+.replay-nav, .focus-bar {
+  display: flex; gap: 0.75rem; align-items: baseline; flex-wrap: wrap;
+  padding: 0.5rem 0; border-bottom: 1px solid var(--line); margin-bottom: 0.75rem;
+}
+.replay-here { font-weight: 600; }
+.replay-nav .disabled { opacity: 0.4; pointer-events: none; }
+.jump-to-turn { color: var(--ink-dim); font-size: 0.85rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.focus-label { color: var(--ink-dim); font-size: 0.85rem; }
+.focus-link { font-size: 0.85rem; }
+.focus-link.focused { color: var(--in-game); font-weight: 600; text-decoration: underline; }
+
+/* The focused panel is emphasised; the others are not dimmed. Dimming would
+ * make an unfocused panel read as unavailable, which is the one thing UP-005
+ * says the interface must never blur. The `focused` class is applied
+ * server-side by `_macros.html`, so this works with scripting off. */
+.observation-entry.focused, .turn-yields.focused {
+  outline: 2px solid var(--in-game); outline-offset: 4px; border-radius: 6px;
+}
+.replay-page .observation-entry, .replay-page .turn-yields { scroll-margin-top: 4rem; }
+
+.gap-banner {
+  padding: 0.75rem 1rem; border-left: 3px solid var(--bad);
+  background: var(--panel); color: var(--bad);
+}
+.incomplete-banner {
+  padding: 0.75rem 1rem; border-left: 3px solid var(--warn);
+  background: var(--panel); color: var(--warn);
+}
+.gaps { border-left: 3px solid var(--bad); padding-left: 0.75rem; }
+.unrecorded { border-left: 3px solid var(--warn); padding-left: 0.75rem; }
+.trend-eligibility.quarantined { border-left: 3px solid var(--bad); padding-left: 0.75rem; }
+.trend-eligibility.eligible { border-left: 3px solid var(--ok); padding-left: 0.75rem; }
+.eligibility-why { color: var(--ink-dim); font-size: 0.85rem; max-width: 80ch; }
+
+.divergence-row.revealed { background: var(--panel-2); border-radius: 6px; padding: 0.4rem 0.6rem; }

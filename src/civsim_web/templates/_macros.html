@@ -196,7 +196,7 @@
   One decision step: the observation it was made from, the capture taken at it,
   and the decision itself -- non-optional siblings, always rendered together.
 #}
-{% macro step_panel(path, step) -%}
+{% macro step_panel(path, step, focus=none) -%}
 {%- set p = (path ~ '.') if path else '' -%}
 <article class="step" data-group="{{ path }}" id="step-{{ step.step_index }}">
   <header class="step-header">
@@ -213,7 +213,15 @@
       {% if step.observation %}
       {% for entry in step.observation %}
       {% set ep = p ~ 'observation.' ~ loop.index0 ~ '.' %}
-      <div class="observation-entry">
+      {# `data-panel-id` is what the replay view's `?focus=` highlights (T044).
+         It is an attribute rather than an `id` because the same panel legitimately
+         appears on several steps of one turn, and duplicate ids would make the
+         highlight land on whichever the browser happened to resolve first. The
+         `focused` class is applied *server-side*, so the focus a user carries
+         between turns is visible with scripting off and is the same focus the
+         directing session reads off `focus_panel_id`. #}
+      <div class="observation-entry{% if focus and entry.panel_id == focus %} focused{% endif %}"
+           data-panel-id="{{ entry.panel_id }}">
         {{ leaf(ep ~ 'label', 'Panel', entry.label) }}
         {{ leaf(ep ~ 'panel_id', 'Panel id', entry.panel_id) }}
         {{ node(ep ~ 'value', 'Value', entry.value) }}
@@ -233,7 +241,7 @@
 </article>
 {%- endmacro %}
 
-{% macro turn_panel(path, turn) -%}
+{% macro turn_panel(path, turn, focus=none) -%}
 {%- set p = (path ~ '.') if path else '' -%}
 {% if turn %}
 <section class="turn" data-group="{{ path }}">
@@ -244,13 +252,17 @@
     {{ leaf(p ~ 'attempt_index', 'Attempt', turn.attempt_index) }}
     {{ leaf(p ~ 'is_authoritative', 'Authoritative', turn.is_authoritative) }}
     {{ leaf(p ~ 'superseded_by', 'Superseded by attempt', turn.superseded_by) }}
+    {{ leaf(p ~ 'focus_panel_id', 'Focused panel', turn.focus_panel_id) }}
     {{ leaf(p ~ 'outcome', 'Outcome', turn.outcome) }}
     {{ leaf(p ~ 'step_count', 'Recorded step count', turn.step_count) }}
     {{ leaf(p ~ 'started_at', 'Started at', turn.started_at) }}
     {{ leaf(p ~ 'ended_at', 'Ended at', turn.ended_at) }}
     <a class="ref" data-field="{{ p }}reference" href="{{ turn.reference }}">{{ turn.reference }}</a>
   </header>
-  {{ node(p ~ 'yields', 'Yields', turn.yields) }}
+  <div class="turn-yields{% if focus == 'history.turn_yields' %} focused{% endif %}"
+       data-panel-id="history.turn_yields">
+    {{ node(p ~ 'yields', 'Yields', turn.yields) }}
+  </div>
   <section class="completeness{% if not turn.completeness.is_complete %} incomplete{% endif %}">
     {{ leaf(p ~ 'completeness.is_complete', 'Record complete', turn.completeness.is_complete) }}
     {{ leaf(p ~ 'completeness.is_gap', 'Recorded as a gap', turn.completeness.is_gap) }}
@@ -259,7 +271,7 @@
   </section>
   {{ node(p ~ 'step_window', 'Step window', turn.step_window) }}
   {% if turn.steps %}
-  {% for step in turn.steps %}{{ step_panel(p ~ 'steps.' ~ loop.index0, step) }}{% endfor %}
+  {% for step in turn.steps %}{{ step_panel(p ~ 'steps.' ~ loop.index0, step, focus) }}{% endfor %}
   {% else %}
   {{ leaf(p ~ 'steps', 'Decision steps', none) }}
   {% endif %}

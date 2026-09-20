@@ -128,7 +128,26 @@ ROUTES: list[Route] = [
         "a superseded attempt, explaining itself (FR-009)",
         store_kwargs={"replayed_turns": [2]},
     ),
-    # T047 (US3): /runs/{id}/metrics
+    # T047 (US3) -- the single-run metric trajectory, and the step window.
+    Route("/runs/run-1/metrics", "US3", "every metric series this run recorded"),
+    Route("/runs/run-1/metrics?series=science_output", "US3", "narrowed by ?series="),
+    Route(
+        "/runs/run-1/metrics",
+        "US3",
+        "a run with a gapped turn -- the series omits it and says so",
+        store_kwargs={"gap_turns": [2]},
+    ),
+    Route(
+        "/runs/run-1/turns/2?step_offset=1&step_limit=1",
+        "US3",
+        "a step window, naming the indices it skipped",
+        store_kwargs={"step_count": 3},
+    ),
+    Route(
+        "/runs/run-1/turns/2?focus=observation.cities",
+        "US3",
+        "a focused panel, carried in the URL (FR-015)",
+    ),
     # T057 (US4) -- the catalog listing and the comparison. `/compare` is
     # exercised here against a single run because the fixture `make_store` holds
     # one; the multi-run cases (quarantine, divergence, capture-independence)
@@ -887,6 +906,164 @@ def test_no_view_model_declares_a_credential_shaped_field():
             if _CREDENTIAL_NAMES.search(name):
                 offenders.append(f"{model.__name__}.{name}")
     assert not offenders, offenders
+
+
+# ==========================================================================
+# US3 (T047) -- `metric_series_gaps`: a gapped turn is never a value, and the
+#               line that draws it never joins across it
+# ==========================================================================
+
+
+def _metrics(client, path="/runs/run-1/metrics"):
+    response = client.get(path, headers={"Accept": "application/json"})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_metric_series_never_carries_a_gapped_turn_as_a_value(web_store_factory):
+    """T047, verbatim: "`points` never includes a turn present in that run's
+    `turn_gaps()` as if it were a real value" (data-model.md SS10).
+
+    The store is seeded so turn 2 has no attempt at all, which is what makes the
+    fake's own `turn_gaps()` report it -- the gap is computed from the records,
+    not asserted over them, so this test cannot pass by the fixture lying.
+    """
+    from web_support.fixtures import make_client
+
+    with make_client(web_store_factory(turns=5, gap_turns=[2])) as client:
+        body = _metrics(client)
+
+    assert body["gapped_turns"] == [2]
+    assert body["series"], "the run recorded metrics; the series should not be empty"
+    for series in body["series"]:
+        turns = [point["turn"] for point in series["points"]]
+        assert 2 not in turns, (
+            f"series {series['metric_name']!r} carries turn 2 as a real value while "
+            f"the store records it as a gap"
+        )
+        assert series["gapped_turns"] == [2], (
+            "the gap is omitted from `points` *and* named on the series -- omitting "
+            "it silently would leave a hole nobody could account for"
+        )
+
+
+def test_a_gapped_turn_renders_as_a_break_in_the_line_not_a_join(web_store_factory):
+    """The rendering half of the same rule -- and the one a regression hides in.
+
+    data-model.md SS10 permits a gapped turn to be omitted from `points` *only*
+    if the gap is visible on the chart, "e.g. a break in the line". The server
+    already omits it, so a renderer that joins `points` end to end draws a
+    straight line **across** the gap: the chart then says the run progressed
+    smoothly through a turn nobody recorded, which is the interpolation the same
+    paragraph forbids and the exact hole Principle III's quarantine exists to
+    surface.
+
+    So: the page must draw more than one `<polyline>` for a series whose turns
+    are not contiguous, and must mark where the break falls. A regression to a
+    single joined polyline fails here.
+    """
+    from web_support.fixtures import make_client
+
+    with make_client(web_store_factory(turns=5, gap_turns=[3])) as client:
+        body = _metrics(client, "/runs/run-1/metrics?series=science_output")
+        markup = client.get(
+            "/runs/run-1/metrics?series=science_output", headers={"Accept": "text/html"}
+        ).text
+
+    points = body["series"][0]["points"]
+    assert [p["turn"] for p in points] == [1, 2, 4, 5]
+
+    polylines = re.findall(r'<polyline class="series"[^>]*>', markup)
+    assert len(polylines) == 2, (
+        f"a series broken by a gap must be drawn as one polyline per unbroken run "
+        f"of turns; found {len(polylines)}. One polyline through all four points "
+        f"joins straight across turn 3."
+    )
+    assert 'data-break-turn="3"' in markup, (
+        "the break is drawn, not merely implied by the absence of a line"
+    )
+
+    # And no single polyline carries points from both sides of the gap.
+    for polyline in polylines:
+        coordinates = re.search(r'points="([^"]*)"', polyline)
+        assert coordinates is not None
+        assert len(coordinates.group(1).split()) == 2
+
+
+def test_a_gapped_run_is_flagged_unfit_for_trend_comparison_on_its_own_chart(
+    web_store_factory,
+):
+    """FR-016's second clause, where a reader is most likely to need it.
+
+    A trajectory is the most trendable-looking thing this feature draws, so the
+    page that draws one has to say whether it may be trended at all. The run is
+    still shown -- FR-016 requires marking, not hiding.
+    """
+    from web_support.fixtures import make_client
+
+    with make_client(web_store_factory(turns=5, gap_turns=[2])) as client:
+        body = _metrics(client)
+        markup = client.get("/runs/run-1/metrics", headers={"Accept": "text/html"}).text
+
+    assert body["trend_eligibility"]["eligible"] is False
+    assert body["trend_eligibility"]["assessed"] is True
+    assert body["series"], "a quarantined run still gets its own chart"
+    assert "unfit" in markup.lower() or "trending" in markup.lower()
+
+
+def test_a_step_window_names_every_index_it_skipped(web_store_factory):
+    """T043 / data-model.md SS5: "no page may skip an index without marking it".
+
+    A page boundary and a record gap look identical to a reader who is only
+    shown what is on the page, and SS5 spends its whole lazy-loading clause on
+    those two not being confusable.
+    """
+    from web_support.fixtures import make_client
+
+    with make_client(web_store_factory(turns=3, step_count=4)) as client:
+        response = client.get(
+            "/runs/run-1/turns/2?step_offset=1&step_limit=2",
+            headers={"Accept": "application/json"},
+        )
+        past_end = client.get(
+            "/runs/run-1/turns/2?step_offset=9", headers={"Accept": "application/json"}
+        )
+
+    body = response.json()
+    assert [step["step_index"] for step in body["steps"]] == [2, 3]
+    assert body["step_window"]["skipped_step_indices"] == [1, 4]
+    assert body["step_window"]["total"] == 4
+    assert body["step_window"]["has_more"] is True
+
+    assert past_end.status_code == 404
+    assert past_end.json()["kind"] == "step_window_out_of_range"
+
+
+def test_panel_focus_travels_in_the_url_and_is_visible_to_both_readers(
+    web_store_factory,
+):
+    """FR-015 / Principle VI: focus is in the reference, so both readers see it.
+
+    A focus the browser rendered and the JSON did not mention would be a page
+    the directing session cannot reproduce from the same URL -- the asymmetry
+    Principle VI forbids, in miniature.
+    """
+    from web_support.fixtures import make_client
+
+    path = "/runs/run-1/turns/2?focus=observation.cities"
+    with make_client(web_store_factory()) as client:
+        body, markup = fetch_both(client, path)
+        unknown = client.get(
+            "/runs/run-1/turns/2?focus=not.a.panel", headers={"Accept": "application/json"}
+        )
+
+    assert body["focus_panel_id"] == "observation.cities"
+    assert 'class="observation-entry focused"' in markup
+    # Stepping to the next turn keeps it.
+    assert "/runs/run-1/turns/3?focus=observation.cities" in markup
+
+    assert unknown.status_code == 400
+    assert unknown.json()["kind"] == "unknown_focus_panel"
 
 
 # ==========================================================================

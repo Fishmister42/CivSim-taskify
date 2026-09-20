@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  Turn-by-turn replay (T044; FR-014 - FR-017, UP-004, UP-005).
+
+  This is the template `GET /runs/{run_id}/turns/{turn_number}` renders. It
+  replaced `turns/turn.html`, which US1 wrote to serve the same route (T027) and
+  which this file carries forward whole -- the crumbs, the superseded banner and
+  `m.turn_panel` below are that page, with replay navigation built around them.
+  Keeping two templates for one route would have let the turn a user reads and
+  the turn a user replays drift apart.
+
+  Four things replay adds:
+
+  1. **Stepping and jumping preserve the focused panel** (FR-015). Focus travels
+     in the URL as `?focus={panel_id}`, so every navigation below is a plain
+     `<a href>` that carries it -- no control, no client-side state, and the
+     directing session resolving the identical reference sees the identical
+     page (Principle VI). `TurnCycleView.focus_panel_id` is the field; the route
+     refuses an unregistered panel_id rather than ignoring it.
+
+  2. **Gap, incomplete and superseded are marked, distinctly** (FR-016, UP-005).
+     A gap is not an incomplete turn and neither is a superseded attempt; the
+     three say different things and are rendered as three different banners.
+
+  3. **An interrupted-and-resumed run reads as one run** (FR-017). The attempt
+     marker names which attempt this is and where the authoritative one lives,
+     and the run timeline carries the interruption and resume events in
+     sequence -- linked, not duplicated here.
+
+  4. **The metric trajectory is reachable from the turn** (FR-015's third
+     clause). The figure below is a real link to `/runs/{id}/metrics`, whose own
+     server-rendered SVG carries a clickable point per turn;
+     `static/trajectory.js` inlines that same chart here when scripting is
+     available. It is deliberately *not* rendered into this response:
+     `MetricSeriesPage` costs one `get_turn_cycle` per turn (plan.md C1), and
+     paying that on every turn page would put SC-008's two-second budget at risk
+     on a 300-turn run. Both readers can reach the identical chart at the
+     identical URL, which is what Principle VI asks; the browser is merely saved
+     a click.
+
+  There is no control anywhere on this page -- every affordance is an `<a href>`
+  that re-issues a GET (FR-026, UP-010).
+#}
+
+{% set focus_qs = ('?focus=' ~ view.focus_panel_id) if view.focus_panel_id else '' %}
+{% set focus_amp = ('&focus=' ~ view.focus_panel_id) if view.focus_panel_id else '' %}
+{% set turn_base = '/runs/' ~ view.run_id ~ '/turns/' %}
+
+{% block title %}Run {{ view.run_id }} &mdash; turn {{ view.turn_number }} (replay){% endblock %}
+{% block root_attrs %} data-run-id="{{ view.run_id }}" data-turn="{{ view.turn_number }}"
+  data-focus-panel="{{ view.focus_panel_id or '' }}"{% endblock %}
+
+{% block content %}
+<article class="turn-page replay-page">
+  <nav class="crumbs">
+    <a href="/runs/{{ view.run_id }}">&larr; Run {{ view.run_id }}</a>
+    <a href="/runs/{{ view.run_id }}/events">Timeline</a>
+    <a href="/runs/{{ view.run_id }}/metrics">Metric trajectories</a>
+  </nav>
+
+  {# ---- stepping and jumping (FR-015), focus carried through ---- #}
+  <nav class="replay-nav" aria-label="Replay navigation">
+    <a class="step-back{% if view.turn_number <= 1 %} disabled{% endif %}"
+       href="{{ turn_base }}{{ [view.turn_number - 1, 1]|max }}{{ focus_qs }}"
+       rel="prev">&larr; Turn {{ [view.turn_number - 1, 1]|max }}</a>
+    <span class="replay-here">Turn {{ view.turn_number }}</span>
+    <a class="step-forward" href="{{ turn_base }}{{ view.turn_number + 1 }}{{ focus_qs }}"
+       rel="next">Turn {{ view.turn_number + 1 }} &rarr;</a>
+
+    <span class="jump-to-turn">
+      Jump:
+      <a href="{{ turn_base }}1{{ focus_qs }}">1</a>
+      {% for n in range([view.turn_number - 5, 1]|max, view.turn_number + 6) %}
+      {% if n != view.turn_number %}
+      <a href="{{ turn_base }}{{ n }}{{ focus_qs }}">{{ n }}</a>
+      {% endif %}
+      {% endfor %}
+      <a href="/runs/{{ view.run_id }}/metrics">&hellip; by trajectory</a>
+    </span>
+  </nav>
+
+  {# ---- the three markers, kept distinct (UP-005) ---- #}
+
+  {#
+    FR-009: a reference to a superseded attempt explains itself. The link points
+    at the authoritative attempt rather than this page having silently become
+    it -- naming where the current record is, and never substituting it.
+  #}
+  {% if not view.is_authoritative %}
+  <p class="superseded-banner">
+    This is attempt {{ view.attempt_index }} of turn {{ view.turn_number }}, and it is
+    {% if view.superseded_by is not none %}
+    no longer the authoritative record: attempt {{ view.superseded_by }} superseded it.
+    {% else %}
+    not the authoritative record for this turn.
+    {% endif %}
+    {% if view.completeness.is_gap %}
+    No attempt of this turn is authoritative &mdash; the harness recorded the turn
+    as a gap, so the run is unfit for trend comparison.
+    {% else %}
+    The current record is at
+    <a href="{{ view.reference }}">{{ view.reference }}</a>.
+    An interrupted run and its resume are one run (FR-017): both attempts are
+    kept, and the interruption is in the
+    <a href="/runs/{{ view.run_id }}/events">run timeline</a>.
+    {% endif %}
+  </p>
+  {% endif %}
+
+  {% if view.completeness.is_gap %}
+  <p class="gap-banner">
+    Turn {{ view.turn_number }} is a recorded <strong>gap</strong>: it lies inside
+    this run's turn range and has no authoritative attempt. This run's
+    turn-by-turn record is incomplete, so it is
+    <strong>unfit for trend comparison</strong> &mdash; it is excluded from every
+    trend line and divergence point on the
+    <a href="/compare?runs={{ view.run_id }}">comparison view</a>.
+  </p>
+  {% elif not view.completeness.is_complete %}
+  <p class="incomplete-banner">
+    This turn's record is <strong>incomplete</strong>: step indices
+    {{ view.completeness.missing_step_indices|join(', ') }} are missing. An
+    incomplete turn is not the same as a gap (the turn happened and was
+    recorded) and not the same as a short turn (these indices were expected).
+  </p>
+  {% endif %}
+
+  {# ---- panel focus (FR-015): links, never controls ---- #}
+  {% set ns = namespace(ids=['history.turn_yields']) %}
+  {% for step in view.steps %}{% for entry in step.observation %}
+  {% if entry.panel_id and entry.panel_id not in ns.ids %}
+  {% set ns.ids = ns.ids + [entry.panel_id] %}
+  {% endif %}
+  {% endfor %}{% endfor %}
+  <nav class="focus-bar" aria-label="Panel focus">
+    <span class="focus-label">Focus a panel (kept while you step between turns):</span>
+    {% for panel_id in ns.ids %}
+    <a class="focus-link{% if panel_id == view.focus_panel_id %} focused{% endif %}"
+       href="{{ turn_base }}{{ view.turn_number }}?focus={{ panel_id }}">{{ panel_id }}</a>
+    {% endfor %}
+    {% if view.focus_panel_id %}
+    <a class="focus-clear" href="{{ turn_base }}{{ view.turn_number }}">clear focus</a>
+    {% endif %}
+  </nav>
+
+  {# ---- the trajectory, as a link the browser may inline (see header) ---- #}
+  <figure class="trajectory trajectory-deferred" data-trajectory-run="{{ view.run_id }}"
+          data-trajectory-src="/runs/{{ view.run_id }}/metrics"
+          data-trajectory-turn="{{ view.turn_number }}">
+    <figcaption>Metric trajectory</figcaption>
+    <a class="trajectory-link" href="/runs/{{ view.run_id }}/metrics">
+      Open this run's metric trajectories &mdash; every point links to its turn</a>
+  </figure>
+
+  {# ---- the turn itself, identical to what the JSON carries ---- #}
+  <div class="turn-body" data-focused-panel="{{ view.focus_panel_id or '' }}">
+    {{ m.turn_panel('', data, view.focus_panel_id) }}
+  </div>
+
+  {% if view.step_window.has_more or view.step_window.offset %}
+  <nav class="pager step-pager">
+    {% if view.step_window.offset %}
+    <a href="{{ turn_base }}{{ view.turn_number }}?step_offset={{
+         [view.step_window.offset - (view.step_window.limit or view.step_window.returned or 1), 0]|max
+       }}{% if view.step_window.limit %}&amp;step_limit={{ view.step_window.limit }}{% endif %}{{ focus_amp }}">
+      &larr; Earlier steps</a>
+    {% endif %}
+    {% if view.step_window.has_more %}
+    <a href="{{ turn_base }}{{ view.turn_number }}?step_offset={{
+         view.step_window.offset + view.step_window.returned
+       }}{% if view.step_window.limit %}&amp;step_limit={{ view.step_window.limit }}{% endif %}{{ focus_amp }}">
+      Later steps &rarr;</a>
+    {% endif %}
+  </nav>
+  {% endif %}
+</article>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/trajectory.js" defer></script>
+{% endblock %}

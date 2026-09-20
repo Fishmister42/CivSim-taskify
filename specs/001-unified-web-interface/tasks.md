@@ -494,32 +494,153 @@ FR-017, FR-015's trajectory-selection clause).
 
 ### Implementation for User Story 3
 
-- [ ] T040 [P] [US3] Author `panels/history.yaml` declarations for replay-specific panels (per-turn
+- [X] T040 [P] [US3] Author `panels/history.yaml` declarations for replay-specific panels (per-turn
   yields, attempt/gap markers).
-- [ ] T041 [P] [US3] Implement `MetricSeriesView` in `src/civsim_web/viewmodels/metrics.py` per
+- [X] T041 [P] [US3] Implement `MetricSeriesView` in `src/civsim_web/viewmodels/metrics.py` per
   data-model.md §10. Enforce verbatim: "`points` never includes a turn present in that run's
   `turn_gaps()` as if it were a real value."
-- [ ] T042 [US3] Implement `GET /runs/{run_id}/metrics` in `src/civsim_web/routes/metrics.py`, with
+- [X] T042 [US3] Implement `GET /runs/{run_id}/metrics` in `src/civsim_web/routes/metrics.py`, with
   `?series=name,name` narrowing. Depends on T041.
-- [ ] T043 [US3] Extend `GET /runs/{run_id}/turns/{turn_number}` in `src/civsim_web/routes/turns.py`
+- [X] T043 [US3] Extend `GET /runs/{run_id}/turns/{turn_number}` in `src/civsim_web/routes/turns.py`
   with step-window pagination per data-model.md §5: "`steps` on the default response is a bounded
   window ... with the full ordered list available by paging. The `step_index` ordering guarantee is
   preserved regardless of pagination — no page may skip an index without marking it." Depends on T036.
-- [ ] T044 [P] [US3] Author `templates/history/turn_replay.html`: turn detail with step-forward/
+- [X] T044 [P] [US3] Author `templates/history/turn_replay.html`: turn detail with step-forward/
   step-backward and jump-to-turn controls that preserve the current panel focus across navigation, gap/
   incomplete/superseded markers, and an inline single-run SVG metric trajectory with clickable turn
   points (research R4).
-- [ ] T045 [P] [US3] Author `static/trajectory.js`: renders the single-run SVG trajectory from
+- [X] T045 [P] [US3] Author `static/trajectory.js`: renders the single-run SVG trajectory from
   `MetricSeriesView` JSON and wires point clicks to jump-to-turn navigation (FR-015).
-- [ ] T046 [US3] Integration test in `tests/integration/test_replay.py`: a completed-run fixture
+- [X] T046 [US3] Integration test in `tests/integration/test_replay.py`: a completed-run fixture
   containing a turn-number gap, an abandoned-then-replayed attempt pair (crash/resume), and a
   withheld-capture turn; asserts the gap is marked and the run is flagged unfit for trend comparison,
   the abandoned/authoritative attempt pair both appear with timeline events, and stepping between
   adjacent turns preserves the current panel/focus. Depends on T043, T044.
-- [ ] T047 [US3] Contract test in `tests/contract/test_web_read_api.py`, `metric_series_gaps` case:
+- [X] T047 [US3] Contract test in `tests/contract/test_web_read_api.py`, `metric_series_gaps` case:
   `MetricSeriesView.points` never includes a gapped turn as a real value. Depends on T042.
 
 **Checkpoint**: User Stories 1, 2, and 3 all work independently.
+
+### US3 notes for Phase 7 contributors
+
+Written when T040–T047 landed, together with **T056** (a Phase 6 task deferred
+here because it extends `static/trajectory.js`, which T045 creates). Read
+alongside the Foundation, US1, US2 and US4 notes.
+
+**T041 was a review, and `viewmodels/metrics.py` passed it.** What US4 wrote
+satisfies data-model.md §10 and T041's verbatim rule, and enforces the rule in a
+`@model_validator` rather than in the caller — a series that carries a gapped
+turn as a value fails construction. Nothing was reimplemented. Three things were
+*added* on top:
+
+- **`MetricAxis` moved from `viewmodels/comparison.py` to `viewmodels/metrics.py`**
+  (comparison re-exports it, so `from ...comparison import MetricAxis` still
+  works). The single-run trajectory and the multi-run overlay now describe their
+  axes with one type, and `static/trajectory.js` renders both pages from the
+  same `axes[metric]` shape. Two axis contracts would have been a Principle VI
+  drift in visual form.
+- **`MetricSeriesView.segments` / `.break_turns`** — see below. They are
+  properties, not fields: a serialized `segments` would duplicate `points` in
+  every body and give the two representations a way to disagree.
+- **`MetricSeriesPage`**, the `GET /runs/{id}/metrics` response.
+
+**The one line worth reading twice.** data-model.md §10 permits a gapped turn to
+be omitted from `points` *only because the gap stays visible* — "a break in the
+line". The server already omits the turn, so **a renderer that joins `points`
+end to end draws a straight line across the gap**, which is the interpolation
+the same paragraph forbids, arrived at by not thinking about it. `segments`
+splits wherever two consecutive points are not on consecutive turns. It is
+deliberately the fail-closed form: it consults neither `gapped_turns` nor
+`missing_turns`, so a hole of a third kind still breaks the line.
+
+`templates/catalog/compare.html` **was drawing one polyline per series and
+therefore joining across holes** when US3 arrived. Quarantine keeps a *gapped*
+run out of `series` entirely, so `gapped_turns` can never be non-empty there and
+no Principle III violation had shipped — but `missing_turns` (a turn that
+recorded no value for *this* metric) does reach that chart, and the line joined
+across it. Fixed in place: one polyline per segment, plus a drawn break marker.
+
+**What US3 added that Phase 7 builds on**
+
+- `routes/metrics.py` (`GET /runs/{run_id}/metrics`, `?series=` narrowing),
+  registered in `ROUTER_MODULES`, in the `ROUTES` parity matrix, template
+  `templates/history/metrics.html`.
+- `templates/history/turn_replay.html` **replaced `templates/turns/turn.html`**
+  as the turn route's template (the old file is deleted). Keeping two templates
+  for one route would have let the turn a user reads and the turn a user replays
+  drift apart.
+- `TurnCycleView.focus_panel_id` and `?focus=` on the turn route — FR-015's
+  "preserve the current panel focus across navigation", carried in the URL so it
+  survives a plain `<a href>` with no client-side state, and so the directing
+  session resolving the identical reference sees the identical page. An
+  unregistered `panel_id` is a `400 unknown_focus_panel`, not a silent no-op.
+- `_macros.html`: `turn_panel(path, turn, focus=none)` and
+  `step_panel(path, step, focus=none)` — both default to `none`, so US1's
+  callers are unchanged. The `focused` class is applied server-side.
+- `?step_offset=` / `?step_limit=` on the turn route, plus a sixth failure
+  `kind`, `step_window_out_of_range`.
+- Fixtures: `make_store(gap_turns=[...])` omits a turn's records entirely so the
+  fake's own `turn_gaps()` *computes* the gap (distinct from the `turn_gaps=`
+  override, which asserts one the records do not show), and
+  `make_store(withheld_capture_turns=[...])` withholds named turns' captures
+  only.
+
+**Findings recorded against the design artifacts**
+
+1. **`GET /runs/{id}/metrics` returns a wrapper, not a bare list** — the third
+   instance of the same contract gap US1 recorded for `GET /runs/{id}/events`
+   (its finding 4) and US4 for `GET /runs` (its finding 5). A bare
+   `list[MetricSeriesView]` can carry neither the axes a chart must be drawn to,
+   nor the `?series=` narrowing it was asked for, nor invariant V10's provenance
+   stamp. **Three routes now differ from the contract's route table in the same
+   way; the table should say so.**
+2. **An unrecognised `?series=` name is *not* a 400**, unlike `GET /runs`'s
+   unknown filter field. There the field set is closed (whatever
+   `RunSummaryView` carries), so a name outside it is provably a client error.
+   Here spec Assumptions make the metric set open-ended, so a name this run has
+   no values under is a fact about the run. Reported as `unrecorded_series`
+   rather than silently drawing an empty chart that would read as a score of
+   zero. The two routes therefore answer an unknown name differently, on
+   purpose.
+3. **T044's "inline single-run SVG metric trajectory" is a link plus an
+   enhancement on the turn page, not a rendered chart in the turn response.**
+   Building one costs `yields_by_turn`, which is one `get_turn_cycle` per turn
+   (plan.md C1), and paying that on *every* turn page would put SC-008's
+   two-second budget at risk on a 300-turn run. The figure ships as a real
+   `<a>` to `/runs/{id}/metrics`, whose own chart is fully server-rendered with
+   a clickable point per turn; `trajectory.js` inlines that same chart when
+   scripting is available. Both readers reach identical content at an identical
+   URL, so Principle VI holds — but **the task as written asks for something
+   that is either a performance problem or a second composition, and the
+   artifacts should pick one.** T060's scale test will meet this directly.
+4. **`static/trajectory.js` has no executable test, and this project has no
+   place to put one.** plan.md's Primary Dependencies decline a bundler and an
+   npm dependency tree (research R2), so adding a JS runner to assert one
+   function would introduce the second ecosystem R2 rejected. The behavioural
+   guard therefore lives where the load-bearing chart lives — on the server, in
+   `tests/integration/test_replay.py::test_a_gapped_turn_is_a_break_in_the_trajectory_not_a_join`
+   and the contract suite's `metric_series_gaps` cases, both of which fail if a
+   series broken by a gap is drawn as one joined polyline. Two source-level
+   guards in `tests/contract/test_web_parity_boundary.py` cover the JS copy of
+   the rule (that a polyline is only ever built from a segment, and that the
+   script draws from `series` and reads `runs` only for the palette index).
+   **This is the honest state: the JS is guarded, not tested.**
+5. **The step window's out-of-range case had no convention to follow.** §5 says
+   only that "no page may skip an index without marking it". A `step_offset`
+   past the last step is answered `404 step_window_out_of_range` rather than as
+   an empty page, on the same reasoning: a page of no steps for a turn that has
+   steps is indistinguishable from a turn whose steps were never recorded.
+   `?step_offset=0` on a genuinely step-less turn is *not* that error.
+6. **`panels/VERSION` is still not bumped and `VERSION.lock` still does not
+   exist**, per the standing decision. `history.yaml` went from `[]` to three
+   declarations, all `introduced_in_version: "1"`; the registry is now **37
+   panels**. With Phase 5 closed, every story's declarations exist and **the set
+   is stable enough to freeze** — see the Phase 7 note under T059/T064 below.
+
+**Two unnumbered files were added**: `src/civsim_web/templates/history/metrics.html`
+(the `GET /runs/{id}/metrics` page — the server-rendered chart T045 enhances)
+and `src/civsim_web/routes/metrics.py`'s template pair. One file was **deleted**:
+`src/civsim_web/templates/turns/turn.html`, replaced by `history/turn_replay.html`.
 
 ---
 
@@ -559,10 +680,12 @@ rest, using only the interface.
 - [X] T054 [P] [US4] Author `templates/catalog/catalog.html`: filterable/sortable run listing.
 - [X] T055 [P] [US4] Author `templates/catalog/compare.html`: multi-run SVG trajectory comparison with
   clickable divergence points.
-- [ ] T056 [US4] Extend `static/trajectory.js` to support multi-series overlay rendering and
+- [X] T056 [US4] Extend `static/trajectory.js` to support multi-series overlay rendering and
   divergence-point click-through to each compared run's matching turn. Depends on T045.
-  **Deliberately left open by the US4 contributor**: `static/trajectory.js` does not exist
-  yet (T045, US3). See the US4 notes below for exactly what T056 needs from it.
+  **Closed by the US3 contributor alongside T045**, which created the file. See the
+  US3 notes in Phase 5 for what changed, including the fix to
+  `templates/catalog/compare.html`'s polyline, which was joining across
+  `missing_turns`.
 - [X] T057 [US4] Contract tests in `tests/contract/test_web_read_api.py`: (a)
   `comparison_never_needs_captures` — identical `ComparisonView` output whether every capture in the
   fixture is `screened_clean` or entirely `withheld` (FR-035, SC-016); (b) `quarantine` — an incomplete
@@ -575,8 +698,9 @@ rest, using only the interface.
 
 ### US4 notes for Phase 5 and Phase 7 contributors
 
-Written when T048–T055, T057 and T058 landed. **T056 is deliberately open** —
-see below. Read alongside the Foundation, US1 and US2 notes above.
+Written when T048–T055, T057 and T058 landed. **T056 was left open here and was
+closed in Phase 5** with T045, which created the file it extends — see the US3
+notes above. Read alongside the Foundation, US1 and US2 notes.
 
 **What US4 added that later work builds on**
 
@@ -700,11 +824,11 @@ Layer 3 is what makes this survive a careless edit. Deleting the filter in
 (`CatalogListingView` — see finding 5) and `src/civsim_web/viewmodels/metrics.py`
 (T041's file — see finding 1).
 
-**T056, for whoever picks it up cold**
-
-T056 extends `static/trajectory.js`, which **T045 (US3) has not created yet**.
-Everything T056 needs already exists on the server side; nothing about the
-comparison view has to change for it.
+**T056, for whoever picks it up cold** — *done; kept as the record of what it
+required.* The brief below was accurate except for its last clause: one thing
+about the comparison view did have to change (`compare.html` drew one polyline
+per series, which joins across a hole; it now draws one per segment). See US3
+note on `segments`.
 
 - **The page renders a complete multi-series SVG with no JavaScript at all.**
   `templates/catalog/compare.html` draws one `<figure class="trajectory"
@@ -741,9 +865,14 @@ comparison view has to change for it.
   violation the server side prevents.
 - **The colour order the page uses** is the palette in `compare.html`, indexed
   by each run's position in `runs`. Matching it keeps the legend honest.
-- T056 has **no test of its own in tasks.md**. The contract and integration
-  suites cover the server side only; a reviewer should decide whether T056 needs
-  one before Phase 7 closes.
+- T056 has **no test of its own in tasks.md**. *Decision taken in Phase 5:* it
+  gets no JS test runner — plan.md's dependencies decline npm (research R2), and
+  adding one to assert a single function would introduce the ecosystem R2
+  rejected. The behavioural guard lives on the server instead, where the
+  load-bearing chart lives (`test_replay.py::test_a_gapped_turn_is_a_break_in_the_trajectory_not_a_join`,
+  plus the `metric_series_gaps` contract cases); two source-level guards in
+  `test_web_parity_boundary.py` cover the JS copy of the break rule. The JS is
+  guarded, not tested, and US3 note 4 says so plainly.
 
 
 ---
@@ -752,6 +881,19 @@ comparison view has to change for it.
 
 **Purpose**: Release-blocking audits named directly in spec.md's Success Criteria, plus scale
 validation and operator-facing wiring.
+
+**Freeze the panel set first.** With Phases 3–6 closed, every story's
+declarations exist: **37 panels, all `introduced_in_version: "1"`**, and
+`panels/VERSION` has never been bumped by design — the standing decision was
+that the set stays unfrozen while the stories are authored, so the freeze would
+record real schema evolution rather than build churn. It is now stable.
+Whoever opens Phase 7 should write `panels/VERSION.lock` recording version 1's
+per-panel hashes (`registry/loader.py::_validate_p6` reads it, and
+`_declaration_payload` is the hash it compares); until that file exists, **rule
+P6's immutability check is not in force** and a declaration can be edited in
+place with nothing objecting. After the lock, adding or changing a panel means
+bumping `panels/VERSION`. T059's coverage reflection test is the natural place
+to assert the lock exists and matches.
 
 - [ ] T059 [P] Panel Registry coverage reflection test in `tests/contract/test_panel_registry.py`:
   every field in `specs/002-civ-playing-harness/data-model.md` not explicitly marked out-of-game either

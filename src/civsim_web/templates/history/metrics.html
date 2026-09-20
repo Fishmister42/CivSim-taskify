@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  One run's metric trajectories (T042/T045, FR-015, FR-020).
+
+  **The SVG is rendered here, on the server.** research R4 declined a JS
+  charting library in favour of hand-rolled inline SVG; this template and
+  `catalog/compare.html` are the hand-rolled half, and `static/trajectory.js`
+  enhances what is already drawn rather than drawing it. A chart that only
+  exists once a script runs is a chart the directing Claude Code session cannot
+  see, which is the asymmetry Principle VI forbids.
+
+  **Every point is a link to its turn.** FR-015's third clause -- "selecting a
+  point on a metric trajectory" -- is a plain `<a href>` to
+  `/runs/{id}/turns/{n}` here, so it works with JavaScript disabled and is
+  followable by a machine caller reading the HTML. `trajectory.js` adds hover
+  and keyboard behaviour on top; it does not add the navigation.
+
+  **A gapped turn is a break in the line, never a join.** The series omits
+  gapped turns from `points` (data-model.md SS10) and `MetricSeriesView.segments`
+  splits the polyline wherever two points are not on consecutive turns -- so one
+  `<polyline>` per segment, plus a visible break marker where the line stops.
+  Drawing a single polyline through `points` would bridge the gap with a
+  straight line, which is interpolation arrived at by not thinking about it.
+
+  There is no control here: every affordance is an `<a href>` re-issuing a GET
+  (FR-026, UP-010).
+#}
+
+{% set palette = ['#2f6fdb', '#d9822b', '#2f9e6f', '#a64ca6', '#c0392b', '#1b7f8c'] %}
+{% set W = 720 %}
+{% set H = 260 %}
+{% set PAD_L = 44 %}
+{% set PAD_R = 16 %}
+{% set PAD_T = 18 %}
+{% set PAD_B = 34 %}
+
+{% block title %}Run {{ view.run_id }} &mdash; metric trajectories{% endblock %}
+{% block root_attrs %} data-run-id="{{ view.run_id }}"{% endblock %}
+
+{% block content %}
+<article class="metrics-page">
+  <nav class="crumbs">
+    <a href="/runs/{{ view.run_id }}">&larr; Run {{ view.run_id }}</a>
+    <a data-field="reference" href="{{ view.reference }}">{{ view.reference }}</a>
+  </nav>
+
+  <h1>Metric trajectories</h1>
+
+  {#
+    FR-016: a run with gaps is flagged unfit for trend comparison wherever it is
+    shown, and a trajectory is the most trendable-looking thing this feature
+    draws. The chart is still rendered -- marking, not hiding.
+  #}
+  <section class="trend-eligibility {{ 'eligible' if view.trend_eligibility.eligible else 'quarantined' }}">
+    {{ m.leaf('trend_eligibility.eligible', 'May be used for trending',
+              view.trend_eligibility.eligible) }}
+    <p class="eligibility-why" data-field="trend_eligibility.explanation">
+      {{ view.trend_eligibility.explanation }}</p>
+    {{ m.node('trend_eligibility', 'Trend eligibility', data.trend_eligibility) }}
+  </section>
+
+  {% if view.gapped_turns %}
+  <section class="gaps">
+    <h2>Turns with no authoritative record</h2>
+    <p class="note">These turn numbers are inside the run's recorded range and
+      have no authoritative attempt. They are absent from every series below and
+      the lines break where they fall &mdash; never joined across.</p>
+    <ul>
+      {% for turn in view.gapped_turns %}
+      <li data-field="gapped_turns.{{ loop.index0 }}">Turn {{ turn }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% else %}
+  {{ m.leaf('gapped_turns', 'Gapped turns', none) }}
+  {% endif %}
+
+  {% if view.empty_state_reason %}
+  <section class="empty-state">
+    <h2>Nothing recorded yet</h2>
+    <p data-field="empty_state_reason">{{ view.empty_state_reason }}</p>
+  </section>
+  {% else %}
+  {{ m.leaf('empty_state_reason', 'Empty state', none) }}
+  {% endif %}
+
+  {% if view.unrecorded_series %}
+  <section class="unrecorded">
+    <h2>Requested, but never recorded</h2>
+    <ul>
+      {% for name in view.unrecorded_series %}
+      <li data-field="unrecorded_series.{{ loop.index0 }}">{{ name }} &mdash; this run
+        recorded no values under that name. That is not a score of zero.</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% else %}
+  {{ m.leaf('unrecorded_series', 'Requested but unrecorded', none) }}
+  {% endif %}
+
+  {% for series in view.series %}
+  {% set sp = 'series.' ~ loop.index0 ~ '.' %}
+  {% set colour = palette[loop.index0 % palette|length] %}
+  {% set metric = series.metric_name %}
+  {% set axis = view.axes.get(metric) %}
+  {% if axis %}
+  {% set span_t = (axis.max_turn - axis.min_turn) or 1 %}
+  {% set span_v = (axis.max_value - axis.min_value) or 1 %}
+  <figure class="trajectory" data-metric="{{ metric }}" data-trajectory-run="{{ view.run_id }}">
+    <figcaption data-field="{{ sp }}metric_name">{{ metric.replace('_', ' ') }}</figcaption>
+    {% if series.points %}
+    <svg class="trajectory-svg" viewBox="0 0 {{ W }} {{ H }}" role="img"
+         aria-label="{{ metric }} for run {{ view.run_id }}, turns
+                     {{ axis.min_turn }} to {{ axis.max_turn }}">
+      <line class="axis" x1="{{ PAD_L }}" y1="{{ PAD_T }}" x2="{{ PAD_L }}" y2="{{ H - PAD_B }}"></line>
+      <line class="axis" x1="{{ PAD_L }}" y1="{{ H - PAD_B }}" x2="{{ W - PAD_R }}" y2="{{ H - PAD_B }}"></line>
+      <text class="axis-label" x="{{ PAD_L }}" y="{{ H - PAD_B + 20 }}">turn {{ axis.min_turn }}</text>
+      <text class="axis-label axis-label-end" x="{{ W - PAD_R }}" y="{{ H - PAD_B + 20 }}">turn {{ axis.max_turn }}</text>
+      <text class="axis-label" x="4" y="{{ PAD_T + 8 }}">{{ axis.max_value }}</text>
+      <text class="axis-label" x="4" y="{{ H - PAD_B }}">{{ axis.min_value }}</text>
+
+      {#
+        One polyline per *segment*, not one per series. See the header comment
+        and `MetricSeriesView.segments`.
+      #}
+      {% for segment in series.segments %}
+      <polyline class="series" data-series-run="{{ view.run_id }}"
+                data-series-segment="{{ loop.index0 }}" fill="none"
+                stroke="{{ colour }}" stroke-width="2"
+                points="{% for p in segment %}{{ (PAD_L + (p.turn - axis.min_turn) / span_t * (W - PAD_L - PAD_R))|round(2) }},{{ ((H - PAD_B) - (p.value - axis.min_value) / span_v * (H - PAD_T - PAD_B))|round(2) }} {% endfor %}"></polyline>
+      {% endfor %}
+
+      {% for turn in series.break_turns %}
+      {% set bx = (PAD_L + (turn - axis.min_turn) / span_t * (W - PAD_L - PAD_R))|round(2) %}
+      <g class="series-break" data-break-turn="{{ turn }}">
+        <title>No record from turn {{ turn }} &mdash; the line breaks rather than
+               joining across it</title>
+        <line class="series-break-rule" x1="{{ bx }}" y1="{{ PAD_T }}"
+              x2="{{ bx }}" y2="{{ H - PAD_B }}" stroke-dasharray="3 3"></line>
+      </g>
+      {% endfor %}
+
+      {#
+        FR-015: selecting a point on the trajectory jumps to that turn. A plain
+        link, so it works with no JavaScript at all.
+      #}
+      {% for p in series.points %}
+      <a class="turn-point" href="/runs/{{ view.run_id }}/turns/{{ p.turn }}"
+         data-point-turn="{{ p.turn }}" data-point-run="{{ view.run_id }}">
+        <title>Turn {{ p.turn }} &mdash; {{ metric.replace('_', ' ') }} {{ p.value }}</title>
+        <circle class="turn-dot"
+                cx="{{ (PAD_L + (p.turn - axis.min_turn) / span_t * (W - PAD_L - PAD_R))|round(2) }}"
+                cy="{{ ((H - PAD_B) - (p.value - axis.min_value) / span_v * (H - PAD_T - PAD_B))|round(2) }}"
+                r="3" fill="{{ colour }}"></circle>
+      </a>
+      {% endfor %}
+    </svg>
+    {% else %}
+    <p class="empty-state">No values recorded for {{ metric }}.</p>
+    {% endif %}
+  </figure>
+  {% endif %}
+  {% endfor %}
+
+  {#
+    The whole response, rendered generically -- the same parity mechanism every
+    other page in this feature uses. A field added to `MetricSeriesPage` appears
+    here with no template edit.
+  #}
+  <section class="detail">
+    {{ m.leaf('run_id', 'Run id', data.run_id) }}
+    {{ m.leaf('turn_count', 'Turns recorded', data.turn_count) }}
+    {{ m.node('metric_names', 'Metrics recorded', data.metric_names) }}
+    {{ m.node('requested_series', 'Series requested', data.requested_series) }}
+    {{ m.node('series', 'Metric series', data.series) }}
+    {{ m.node('axes', 'Axes', data.axes) }}
+    {{ m.node('unavailable', 'Unavailable fields', data.unavailable) }}
+    {{ m.node('provenance', 'Provenance', data.provenance) }}
+    {{ m.node('panel_registry', 'Panel registry in force', data.panel_registry) }}
+  </section>
+</article>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/trajectory.js" defer></script>
+{% endblock %}

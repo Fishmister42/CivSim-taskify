@@ -119,6 +119,22 @@ class TurnCycleView(ViewModel):
     """The attempt index that superseded this one; set by T036 (US2) when a
     reference names a specific, since-superseded attempt (FR-009)."""
 
+    focus_panel_id: str | None = None
+    """Which panel the replay view is focused on (T044, FR-015).
+
+    **Why this is on the response and not a browser-side detail.** FR-015 wants
+    stepping and jumping between turns to preserve the current panel focus, and
+    the honest way to carry that across a plain ``<a href>`` navigation is in
+    the URL (``?focus=``) -- there is no control on this page and no client-side
+    state to keep. Once focus is in the URL, Principle VI settles where it
+    belongs: the directing session resolving the identical reference must see
+    the same page the user is looking at, focus included. A focus the browser
+    rendered and the JSON did not mention would be exactly the asymmetry
+    Principle VI forbids, in miniature.
+
+    ``None`` is "no panel focused", which is what a bare turn reference means
+    and must keep meaning."""
+
     provenance: Provenance
     unavailable: tuple[UnavailableField, ...] = ()
 
@@ -135,6 +151,7 @@ def build_turn_cycle_view(
     step_offset: int = 0,
     step_limit: int | None = None,
     allow_gap: bool = False,
+    focus_panel_id: str | None = None,
 ) -> TurnCycleView:
     """Project one of 002's ``TurnCycleRecord``s.
 
@@ -201,6 +218,7 @@ def build_turn_cycle_view(
             missing_step_indices=missing_steps,
         ),
         superseded_by=superseded_by,
+        focus_panel_id=focus_panel_id,
         provenance=provenance,
         unavailable=gate.missing,
     )

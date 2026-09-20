@@ -6,11 +6,11 @@
 
   **The SVG is rendered here, on the server.** research R4 declined a JS charting
   library in favour of hand-rolled inline SVG; this template is the hand-rolled
-  half. T056 will add multi-series overlay behaviour to `static/trajectory.js`
-  on top of this markup, but the page must -- and does -- answer "which run led,
-  and where did they separate?" with no JavaScript at all. A chart that only
-  exists once a script runs is a chart the directing Claude Code session cannot
-  see, which is the asymmetry Principle VI forbids.
+  half. `static/trajectory.js` (T045/T056) enhances this markup rather than
+  replacing it: the page must -- and does -- answer "which run led, and where
+  did they separate?" with no JavaScript at all. A chart that only exists once a
+  script runs is a chart the directing Claude Code session cannot see, which is
+  the asymmetry Principle VI forbids.
 
   **No capture appears anywhere on this page**, and none can: `ComparisonView`
   has no `CaptureView` in its type (FR-035, SC-016, invariant V7). The page is
@@ -110,11 +110,34 @@
       <text class="axis-label" x="4" y="{{ PAD_T + 8 }}">{{ axis.max_value }}</text>
       <text class="axis-label" x="4" y="{{ H - PAD_B }}">{{ axis.min_value }}</text>
 
+      {#
+        **One polyline per segment, not one per series** (T056, data-model.md
+        SS10). `MetricSeriesView.segments` splits `points` wherever two of them
+        are not on consecutive turns; a single polyline through `points` would
+        join straight across the hole, which is interpolation arrived at by not
+        thinking about it. Quarantine keeps a *gapped* run out of `series`
+        entirely, so this cannot fire for a `gapped_turns` hole here -- but a
+        turn that recorded no value for *this* metric (`missing_turns`) reaches
+        this chart, and joining across it would invent a trend line through a
+        number nobody wrote.
+      #}
       {% for series in view.series.get(metric) %}
       {% set colour = palette[loop.index0 % palette|length] %}
-      <polyline class="series" data-series-run="{{ series.run_id }}" fill="none"
+      {% for segment in series.segments %}
+      <polyline class="series" data-series-run="{{ series.run_id }}"
+                data-series-segment="{{ loop.index0 }}" fill="none"
                 stroke="{{ colour }}" stroke-width="2"
-                points="{% for p in series.points %}{{ (PAD_L + (p.turn - axis.min_turn) / span_t * (W - PAD_L - PAD_R))|round(2) }},{{ ((H - PAD_B) - (p.value - axis.min_value) / span_v * (H - PAD_T - PAD_B))|round(2) }} {% endfor %}"></polyline>
+                points="{% for p in segment %}{{ (PAD_L + (p.turn - axis.min_turn) / span_t * (W - PAD_L - PAD_R))|round(2) }},{{ ((H - PAD_B) - (p.value - axis.min_value) / span_v * (H - PAD_T - PAD_B))|round(2) }} {% endfor %}"></polyline>
+      {% endfor %}
+      {% for turn in series.break_turns %}
+      {% set bx = (PAD_L + (turn - axis.min_turn) / span_t * (W - PAD_L - PAD_R))|round(2) %}
+      <g class="series-break" data-break-turn="{{ turn }}" data-break-run="{{ series.run_id }}">
+        <title>{{ series.run_id }} recorded no {{ metric }} at turn {{ turn }} &mdash;
+               the line breaks rather than joining across it</title>
+        <line class="series-break-rule" x1="{{ bx }}" y1="{{ PAD_T }}"
+              x2="{{ bx }}" y2="{{ H - PAD_B }}" stroke-dasharray="3 3"></line>
+      </g>
+      {% endfor %}
       {% endfor %}
 
       {% for dp in view.divergence_points %}{% if dp.metric_name == metric %}
@@ -186,4 +209,8 @@
     {{ m.node('panel_registry', 'Panel registry in force', data.panel_registry) }}
   </section>
 </article>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/trajectory.js" defer></script>
 {% endblock %}

@@ -39,6 +39,7 @@ Three structural facts carry the claim, and each is checked below:
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -370,3 +371,75 @@ def test_no_catalog_panel_launders_telemetry_into_an_in_game_basis():
                 assert source.entity not in _TELEMETRY_ENTITIES, (
                     f"{declaration.panel_id} declares {source} as in_game"
                 )
+
+
+# ==========================================================================
+# The trajectory renderer (T045/T056) -- source-level guards
+# ==========================================================================
+
+#: `static/trajectory.js` is the one place in this feature where a rule is
+#: implemented twice: once in Python (`MetricSeriesView.segments`) for the
+#: server-rendered chart both readers get, and once in JavaScript for the
+#: figure the replay page inlines. This project has **no JavaScript test tier**
+#: and deliberately so -- plan.md's Primary Dependencies decline a bundler and
+#: an npm dependency tree, and adding a JS runner to assert one function would
+#: introduce the second ecosystem research R2 rejected. So the behavioural guard
+#: on the break rule lives where the load-bearing chart lives, on the server
+#: (`tests/integration/test_replay.py::
+#: test_a_gapped_turn_is_a_break_in_the_trajectory_not_a_join`), and these two
+#: tests guard the copy against the edits most likely to reintroduce the join.
+TRAJECTORY_JS = PACKAGE_ROOT / "static" / "trajectory.js"
+
+
+def test_the_trajectory_script_breaks_the_line_rather_than_joining_across_a_gap():
+    """A polyline is built from a *segment*, never from a raw `points` array.
+
+    data-model.md SS10 permits a gapped turn to be omitted from `points` only
+    because the gap stays visible as a break. The server omits the turn, so a
+    renderer that walks `points` straight into one polyline draws a line across
+    the hole -- the interpolation the same paragraph forbids, arrived at by not
+    thinking about it.
+    """
+    source = TRAJECTORY_JS.read_text(encoding="utf-8")
+
+    assert "function segmentsOf(" in source, (
+        "the segmentation rule is gone; without it a series is drawn as one "
+        "unbroken line through every recorded point"
+    )
+    # The fail-closed comparison itself: a new segment starts whenever two
+    # consecutive points are not on consecutive turns.
+    assert "current[current.length - 1].turn + 1" in source
+
+    # Every polyline is built inside the segment loop.
+    for match in re.finditer(r'el\("polyline"', source):
+        window = source[max(0, match.start() - 600) : match.start()]
+        assert "segments[i]" in window, (
+            "a polyline is being built outside the segment loop -- that is the "
+            "join across the gap"
+        )
+
+
+def test_the_trajectory_script_draws_from_series_never_from_runs():
+    """Principle III, on the client side of the same quarantine.
+
+    A quarantined run is listed in `runs` and absent from `series` by design
+    (`viewmodels/comparison.py`). A script that iterated `runs` to decide what
+    to draw would put a trend line back under a run whose turn-by-turn record
+    has gaps -- reintroducing on the client exactly what the server's model
+    validator refuses to construct.
+
+    `runs` is read for one thing only: a run's *position* in it is its colour
+    index, which is what keeps the legend honest.
+    """
+    source = TRAJECTORY_JS.read_text(encoding="utf-8")
+
+    uses = re.findall(r"payload\.runs", source)
+    assert uses, "the colour index is derived from `runs`; that use should exist"
+    assert len(uses) == 1, (
+        f"`payload.runs` is read in {len(uses)} places; it may be read only to "
+        f"index the palette (see `colourIndexes`). Anything else risks drawing a "
+        f"quarantined run."
+    )
+    assert "drawSeries(svg, byMetric[chosen][i]" in source, (
+        "the drawn series come from `series`, not from `runs`"
+    )

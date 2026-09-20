@@ -243,6 +243,8 @@ def make_store(
     turn_gaps: dict[str, list[int]] | None = None,
     extra_runs: Sequence[Any] = (),
     replayed_turns: Sequence[int] = (),
+    gap_turns: Sequence[int] = (),
+    withheld_capture_turns: Sequence[int] = (),
     attempt_reader: bool = True,
 ) -> Any:
     """A fake store holding one run with `turns` recorded turns.
@@ -259,6 +261,20 @@ def make_store(
     drops the fake's optional `TurnAttemptReader` capability so the same
     fixtures exercise the published-port fallback, which can address only the
     authoritative and the newest attempt (`store_client/port.py`).
+
+    `gap_turns` (T046) names turns whose record is **genuinely absent**: no
+    attempt of them is written at all, so the fake's own `turn_gaps()` computes
+    the gap rather than being told about it. That is the difference from the
+    `turn_gaps=` override, which asserts a gap the records do not show -- both
+    are real cases (a trailing turn is only knowable from the override), but a
+    replay test needs the turn to actually not be there. The turn's quicksave is
+    still seeded: Principle IV takes one at the *start* of every turn, so a turn
+    whose record was lost still has its save, and that is what makes it a gap
+    inside the range rather than the end of the run.
+
+    `withheld_capture_turns` withholds the captures of named turns only, leaving
+    the rest `screened_clean` -- the mixed case a replay walks through, as
+    opposed to `capture_status=` which sets every capture at once.
     """
     from civsim_web.store_client.fake import FakeMatchStore
 
@@ -269,8 +285,13 @@ def make_store(
         kwargs["reasoning"] = reasoning
 
     replayed = set(replayed_turns)
+    gapped = set(gap_turns)
+    withheld_turns = set(withheld_capture_turns)
     records = []
     for n in range(1, turns + 1):
+        if n in gapped:
+            # No attempt at all: the fake computes this turn as a gap.
+            continue
         if n in replayed:
             records.append(
                 make_turn_cycle(
@@ -290,7 +311,14 @@ def make_store(
 
     captures = (
         [
-            _capture_for(record, position, capture_status, withheld_reason)
+            _capture_for(
+                record,
+                position,
+                "withheld"
+                if record.turn_cycle.turn_number in withheld_turns
+                else capture_status,
+                withheld_reason,
+            )
             for record in records
             for position in range(len(record.steps))
         ]
