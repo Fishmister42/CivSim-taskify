@@ -1,0 +1,21 @@
+=== PROBE ===
+  Game.EndTurn  ->  nil
+  Game.SetCurrentGameTurn  ->  function
+  Game.GetCurrentGameTurn  ->  function
+  Game.GetCurrentTurnSegment  ->  function
+  Game.GetCurrentTurnPhase  ->  function
+  Game.GetGameEndTurn  ->  nil
+  Game.GetMaxGameTurns  ->  nil
+  UI.RequestAction  ->  ERROR(root missing)
+  UI.RequestPlayerOperation  ->  ERROR(root missing)
+  UI.CanEndTurn  ->  ERROR(root missing)
+  ActionTypes.ACTION_ENDTURN  ->  number
+  ActionTypes.ACTION_NEXTREADYUNIT  ->  nil
+  Network.SendPlayerOperation  ->  ERROR(root missing)
+  Network.SendAction  ->  ERROR(root missing)
+  PlayerOperations.ENDTURN  ->  nil
+  PlayerOperationTypes.ENDTURN  ->  ERROR(root missing)
+  EndTurnBlockingTypes.NO_ENDTURN_BLOCKING  ->  number
+  NotificationManager.GetCount  ->  nil
+  UI.GetHeadSelectedUnit  ->  ERROR(root missing)
+  UI.SelectNextReadyUnit  ->  ERROR(root missing)
