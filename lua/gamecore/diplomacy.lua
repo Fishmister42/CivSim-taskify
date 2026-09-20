@@ -1,0 +1,104 @@
+-- lua/gamecore/diplomacy.lua
+-- Context: GameCore_Tuner (read-only, best-effort).
+-- Backs declaration_id: diplomacy.state (catalogs/observations/diplomacy.yaml),
+-- capability_id: diplomacy.read.
+--
+-- CAUTION (research.md R3): diplomacy is named as a "UI-bound surface" that may only be fully
+-- reachable from the InGame context, not GameCore_Tuner. The fields below are the subset believed
+-- reachable as plain game-state reads (diplomatic state/visibility, which the standard diplomacy
+-- overview shows regardless of which screen is open); anything that turns out to require the
+-- InGame UI state at runtime must be re-declared against lua/ingame/diplomacy.lua's read side
+-- instead of this file. This tension is flagged, not resolved, here.
+--
+-- Parity note: only diplomatic *state* visible to the human player (met/not met, current
+-- diplomatic state, public agreements) is reported — never hidden AI intent, undisclosed grievances
+-- weighting, or an opponent's private diplomatic calculations.
+
+local function CivSim_JsonEncode(value)
+    local t = type(value)
+    if value == nil then
+        return "null"
+    elseif t == "boolean" then
+        return value and "true" or "false"
+    elseif t == "number" then
+        if value ~= value then return "null" end
+        return tostring(value)
+    elseif t == "string" then
+        local escaped = value:gsub('[%c"\\]', function(c)
+            if c == '"' then return '\\"'
+            elseif c == '\\' then return '\\\\'
+            elseif c == '\n' then return '\\n'
+            elseif c == '\r' then return '\\r'
+            elseif c == '\t' then return '\\t'
+            else return string.format('\\u%04x', string.byte(c)) end
+        end)
+        return '"' .. escaped .. '"'
+    elseif t == "table" then
+        local n = 0
+        for _ in pairs(value) do n = n + 1 end
+        if n == 0 then return "[]" end
+        local isArray = true
+        for i = 1, n do if value[i] == nil then isArray = false break end end
+        if isArray then
+            local parts = {}
+            for i = 1, n do parts[i] = CivSim_JsonEncode(value[i]) end
+            return "[" .. table.concat(parts, ",") .. "]"
+        else
+            local parts = {}
+            for k, v in pairs(value) do
+                parts[#parts + 1] = CivSim_JsonEncode(tostring(k)) .. ":" .. CivSim_JsonEncode(v)
+            end
+            return "{" .. table.concat(parts, ",") .. "}"
+        end
+    else
+        return "null"
+    end
+end
+
+local function CivSim_Diplomacy_GetState()
+    local localPlayer = Game.GetLocalPlayer()
+    local player = Players[localPlayer]
+    local diploAI = player:GetDiplomaticAI() -- UNVERIFIED: Player:GetDiplomaticAI()
+
+    local relations = {}
+    for _, otherPlayer in ipairs(PlayerManager.GetAliveMajors()) do -- UNVERIFIED
+        local otherID = otherPlayer:GetID()
+        if otherID ~= localPlayer then
+            local hasMet = false
+            local ok1, met = pcall(function() return player:GetDiplomacy():HasMet(otherID) end) -- UNVERIFIED
+            if ok1 then hasMet = met end
+            if hasMet then
+                local stateName = nil
+                local ok2, stateIndex = pcall(function()
+                    return diploAI:GetDiplomaticStateIndex(otherID) -- UNVERIFIED
+                end)
+                if ok2 and stateIndex then
+                    stateName = GameInfo.DiplomaticStates[stateIndex].StateType -- UNVERIFIED
+                end
+                local hasDelegation = false
+                local ok3, delegation = pcall(function()
+                    return player:GetDiplomacy():HasDelegationAt(otherID) -- UNVERIFIED
+                end)
+                if ok3 then hasDelegation = delegation end
+                relations[#relations + 1] = {
+                    player_id = otherID,
+                    has_met = true,
+                    diplomatic_state = stateName,
+                    has_delegation = hasDelegation,
+                    civilization = PlayerConfigurations[otherID]:GetCivilizationTypeName(), -- UNVERIFIED accessor name
+                }
+            else
+                relations[#relations + 1] = { player_id = otherID, has_met = false }
+            end
+        end
+    end
+
+    return { relations = relations }
+end
+
+CivSim_Diplomacy = {
+    state = CivSim_Diplomacy_GetState,
+}
+
+-- Example dispatch (performed by the Nexus dispatcher, not by this file):
+--   print(CivSim_JsonEncode(CivSim_Diplomacy.state()))

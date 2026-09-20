@@ -1,0 +1,35 @@
+# catalogs/observations/government.yaml
+# Backed by lua/gamecore/government.lua (capability_id: government.read).
+
+- declaration_id: government.state
+  kind: observation
+  summary: >
+    The local player's own current government, currently slottable policy cards, and governor
+    assignments.
+  parity_basis: >
+    Open the Government screen and look at the current government, the policy card slots, and
+    the governors panel.
+  context: GameCore_Tuner
+  capability_id: government.read
+  output_schema:
+    type: object
+    required: [current_government, available_governments, available_policies, governors, available_governors]
+    properties:
+      current_government: { type: [string, "null"] }
+      available_governments:
+        type: array
+        items: { type: string }
+      available_policies:
+        type: array
+        items: { type: string }
+      governors:
+        type: array
+        items:
+          type: object
+          properties:
+            governor_type: { type: [string, "null"] }
+            assigned_city_id: { type: [integer, "null"] }
+      available_governors:
+        type: array
+        items: { type: string }
+  introduced_in_version: "2026.09.1"

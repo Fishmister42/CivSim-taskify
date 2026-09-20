@@ -1,0 +1,17 @@
+# catalogs/actions/turn.yaml
+# T092 (US1). Backed by lua/ingame/turn_control.lua (capability_id: turn.control).
+# Matches contracts/capability-catalog.md's worked example verbatim (that contract names this
+# exact declaration_id, parity_basis, availability_predicate, and verification_predicate).
+
+- declaration_id: turn.end_turn
+  kind: action
+  summary: End the current turn and pass play to the other civilizations.
+  parity_basis: >
+    Click the end-turn button in the lower-right action panel, or press its hotkey.
+  context: InGame
+  capability_id: turn.control
+  availability_predicate: >
+    game.is_local_player_turn and not game.has_blocking_prompt
+  verification_predicate: >
+    game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players
+  introduced_in_version: "2026.09.1"

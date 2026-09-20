@@ -1,0 +1,27 @@
+# catalogs/observations/espionage.yaml
+# Backed by lua/gamecore/espionage.lua (capability_id: espionage.read).
+
+- declaration_id: espionage.state
+  kind: observation
+  summary: >
+    The local player's own spies, their current missions, and availability.
+  parity_basis: >
+    Open the Espionage panel and look at the local player's own spy list and their assigned
+    missions.
+  context: GameCore_Tuner
+  capability_id: espionage.read
+  output_schema:
+    type: object
+    required: [spies]
+    properties:
+      spies:
+        type: array
+        items:
+          type: object
+          required: [unit_id]
+          properties:
+            unit_id: { type: integer }
+            mission: { type: [string, "null"] }
+            target_city_id: { type: [integer, "null"] }
+            is_available: { type: boolean }
+  introduced_in_version: "2026.09.1"

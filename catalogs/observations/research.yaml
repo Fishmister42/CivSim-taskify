@@ -1,0 +1,26 @@
+# catalogs/observations/research.yaml
+# Backed by lua/gamecore/research.lua (capability_id: research.read).
+
+- declaration_id: research.state
+  kind: observation
+  summary: >
+    The local player's own current research and civic, and every tech/civic currently
+    researchable.
+  parity_basis: >
+    Open the Research or Civics tree screen and look at the highlighted current item and the
+    set of unlocked, researchable entries.
+  context: GameCore_Tuner
+  capability_id: research.read
+  output_schema:
+    type: object
+    required: [current_research, current_civic, researchable_techs, researchable_civics]
+    properties:
+      current_research: { type: [string, "null"] }
+      current_civic: { type: [string, "null"] }
+      researchable_techs:
+        type: array
+        items: { type: string }
+      researchable_civics:
+        type: array
+        items: { type: string }
+  introduced_in_version: "2026.09.1"

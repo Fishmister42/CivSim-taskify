@@ -1,0 +1,49 @@
+# catalogs/observations/cities.yaml
+# Backed by lua/gamecore/cities.lua (capability_id: cities.read). Also the source of the `city.*`
+# predicate symbols (catalogs/README.md §4) used by catalogs/actions/cities.yaml.
+
+- declaration_id: cities.state
+  kind: observation
+  summary: >
+    Every city the local player owns (full detail), plus other civilizations' cities currently
+    visible on a revealed and visible plot (name, owner, population only).
+  parity_basis: >
+    Look at city banners on the map and open a city's production/purchase panel for full detail
+    on an owned city.
+  context: GameCore_Tuner
+  capability_id: cities.read
+  output_schema:
+    type: object
+    required: [cities]
+    properties:
+      cities:
+        type: array
+        items:
+          type: object
+          required: [city_id, name, owner_player_id, owner_is_local_player, plot, population]
+          properties:
+            city_id: { type: integer }
+            name: { type: string }
+            owner_player_id: { type: integer }
+            owner_is_local_player: { type: boolean }
+            plot:
+              type: object
+              required: [x, y]
+              properties: { x: { type: integer }, y: { type: integer } }
+            population: { type: number }
+            production_queue:
+              type: array
+              items: { type: string }
+            available_productions:
+              type: array
+              items: { type: string }
+            gold_available: { type: number }
+            can_buy_with_gold: { type: boolean }
+            can_buy_with_faith: { type: boolean }
+            purchasable_with_gold:
+              type: array
+              items: { type: string }
+            purchasable_with_faith:
+              type: array
+              items: { type: string }
+  introduced_in_version: "2026.09.1"

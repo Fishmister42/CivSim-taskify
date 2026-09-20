@@ -1,0 +1,52 @@
+# catalogs/observations/units.yaml
+# Backed by lua/gamecore/units.lua (capability_id: units.read). Also the source of the `unit.*`
+# predicate symbols (catalogs/README.md §4) used by catalogs/actions/units.yaml.
+
+- declaration_id: units.state
+  kind: observation
+  summary: >
+    Every unit the local player owns, plus other civilizations' units currently visible on a
+    revealed and visible plot.
+  parity_basis: >
+    Look at unit flags on the map and the unit panel for a selected unit; movement range and
+    available promotions are exactly what that panel highlights.
+  context: GameCore_Tuner
+  capability_id: units.read
+  output_schema:
+    type: object
+    required: [units]
+    properties:
+      units:
+        type: array
+        items:
+          type: object
+          required: [unit_id, unit_type, owner_player_id, owner_is_local_player, plot]
+          properties:
+            unit_id: { type: integer }
+            unit_type: { type: string }
+            owner_player_id: { type: integer }
+            owner_is_local_player: { type: boolean }
+            plot:
+              type: object
+              required: [x, y]
+              properties: { x: { type: integer }, y: { type: integer } }
+            movement_remaining: { type: number }
+            max_movement: { type: number }
+            is_fortified: { type: boolean }
+            reachable_plots:
+              type: array
+              items:
+                type: object
+                properties: { x: { type: integer }, y: { type: integer } }
+            can_found_city: { type: boolean }
+            available_promotions:
+              type: array
+              items: { type: string }
+            charges_remaining: { type: [number, "null"] }
+            queued_path:
+              type: [object, "null"]
+              properties:
+                destination:
+                  type: object
+                  properties: { x: { type: integer }, y: { type: integer } }
+  introduced_in_version: "2026.09.1"

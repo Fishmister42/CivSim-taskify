@@ -1,0 +1,35 @@
+# catalogs/observations/map.yaml
+# Backed by lua/gamecore/map.lua (capability_id: map.read).
+# See catalogs/README.md for the predicate symbol vocabulary this file's output feeds.
+
+- declaration_id: map.state
+  kind: observation
+  summary: >
+    The revealed map: dimensions, and per-revealed-plot terrain, feature, visible resource,
+    improvement, and ownership.
+  parity_basis: >
+    Look at the revealed portion of the map on the main map view or minimap, and hover a
+    revealed plot to see its terrain, feature, resource, and improvement in the plot tooltip.
+  context: GameCore_Tuner
+  capability_id: map.read
+  output_schema:
+    type: object
+    required: [width, height, revealed_plots]
+    properties:
+      width: { type: integer, minimum: 1 }
+      height: { type: integer, minimum: 1 }
+      revealed_plots:
+        type: array
+        items:
+          type: object
+          required: [x, y, terrain, is_currently_visible, owner_player_id]
+          properties:
+            x: { type: integer }
+            y: { type: integer }
+            terrain: { type: string }
+            feature: { type: string }
+            resource: { type: string }
+            improvement: { type: string }
+            is_currently_visible: { type: boolean }
+            owner_player_id: { type: integer }
+  introduced_in_version: "2026.09.1"

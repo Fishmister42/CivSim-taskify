@@ -1,0 +1,25 @@
+# catalogs/actions/espionage.yaml
+# Backed by lua/ingame/espionage.lua (capability_id: espionage.orders). Verification re-reads
+# espionage.state (lua/gamecore/espionage.lua) after execution. `target` is the spy's own
+# unit_id; `spy.*` (catalogs/README.md §4) is the harness-bound state for that spy.
+#
+# Not named in tasks.md T091's literal file list (units/cities/research/policies/religion/
+# diplomacy/congress/great_people); added because lua/ingame/espionage.lua and
+# lua/gamecore/espionage.lua (both explicitly required by T083/T087) otherwise back no declared
+# action, leaving a capability with no resolving declaration for the espionage domain FR-009
+# names. Added as a necessary, narrowly scoped completion of T091's intent, called out in the
+# authoring report.
+
+- declaration_id: espionage.assign_mission
+  kind: action
+  summary: Assign an available spy to a mission against a target city.
+  parity_basis: >
+    Open the Espionage panel, select an available spy, and assign it a mission against a
+    target city offered on that panel.
+  context: InGame
+  capability_id: espionage.orders
+  availability_predicate: >
+    spy.exists and spy.is_available
+  verification_predicate: >
+    spy.mission != null
+  introduced_in_version: "2026.09.1"

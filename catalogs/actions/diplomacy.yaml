@@ -1,0 +1,46 @@
+# catalogs/actions/diplomacy.yaml
+# Backed by lua/ingame/diplomacy.lua (capability_id: diplomacy.orders). Verification re-reads
+# diplomacy.state (lua/gamecore/diplomacy.lua) after execution. `target` is the other player's
+# player_id; `other_player.*` (catalogs/README.md §4) is the harness-bound relation for that
+# player_id.
+
+- declaration_id: diplomacy.declare_war
+  kind: action
+  summary: Declare war on a met civilization.
+  parity_basis: >
+    Open the Diplomacy screen for a met civilization and select "Declare War" (formal or
+    surprise, whichever the standard UI currently offers).
+  context: InGame
+  capability_id: diplomacy.orders
+  availability_predicate: >
+    other_player.has_met and other_player.diplomatic_state != "war"
+  verification_predicate: >
+    other_player.diplomatic_state == "war"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: diplomacy.make_peace
+  kind: action
+  summary: Offer peace to a civilization currently at war with the local player.
+  parity_basis: >
+    Open the Diplomacy screen for that civilization and select "Make Peace" / propose a peace
+    deal.
+  context: InGame
+  capability_id: diplomacy.orders
+  availability_predicate: >
+    other_player.has_met and other_player.diplomatic_state == "war"
+  verification_predicate: >
+    other_player.diplomatic_state != "war"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: diplomacy.send_delegation
+  kind: action
+  summary: Send a delegation to a met civilization.
+  parity_basis: >
+    Open the Diplomacy screen for a met civilization and select "Send Delegation".
+  context: InGame
+  capability_id: diplomacy.orders
+  availability_predicate: >
+    other_player.has_met and not other_player.has_delegation
+  verification_predicate: >
+    other_player.has_delegation
+  introduced_in_version: "2026.09.1"
