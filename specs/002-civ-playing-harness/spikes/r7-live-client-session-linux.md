@@ -162,6 +162,49 @@ considering, since `capture_window()` keeps working while the tuner is closed.
 - **Dismissal behaviour:** `Escape` only. Re-confirmed three separate times today, including twice
   as incidental recovery between attempts.
 
+## ✅ Checklist item 4 — the full cycle runs, and it exonerates the end-turn
+
+`tests/live/test_full_turn_cycle.py`. Persist is deliberately ordered **before** the risky step, so a
+lost client would still leave a restore point and still prove the save half.
+
+```
+=== [1] OBSERVE ===              turn = 1   canEndTurn = true   gold = 10
+=== [2] PERSIST ===              Network.SaveGame ok=true ret=true
+                                 new files on disk: ['civsim__cycle__probe.Civ6Save']
+                                 size=681083 bytes  -> persist half PASSES
+=== [3] END TURN ===             RequestAction ok=true err=nil
+    t+ 1s .. t+20s               Civ6=alive  tuner=up      (every second)
+=== [4] VERIFY (later command) ===
+                                 turn now   = 2
+```
+
+**load → observe → end turn → persist → verify all pass**, with the turn advance read back in a
+*later* command rather than from the action's own return (it returns nil; the action is async).
+
+### This narrows Trap 2 substantially
+
+**The earlier clean exit did not reproduce.** Twenty seconds of per-second liveness polling after an
+`ACTION_ENDTURN` issued from a *verified-clean* in-game screen: alive throughout, tuner up
+throughout, turn advanced 1 → 2.
+
+So `ACTION_ENDTURN` **on its own is not the cause**. One non-reproduction does not make it
+unconditionally safe, but it does move the remaining weight onto the other candidate: the earlier
+run had **blind `Return`/`space` presses** fired at the intro screen moments before, and those are
+the plausible menu-activating input. The rule already drawn from it stands and is now better
+supported — verify the screen before firing keys, and prefer keys whose effect you have measured.
+
+### 🟡 New gotcha: the tuner refuses a reconnect for ~2 s after the previous socket closes
+
+The first run of this test died with `ConnectionRefusedError` on its *second* command. The client was
+alive and the port was listening; it simply will not accept a new connection immediately after the
+previous one closes. This is the known "one connection at a time" rule with a timing tail nobody had
+recorded.
+
+**A refused connection right after a clean close is expected, not a dead client** — the same
+misreading the loader already guards against mid-load. Retry with a short backoff (measured: refused
+immediately, fine ~2 s later). Worth checking `NexusClient.reconnect()` handles it, since any
+command sequence that opens and closes per command will hit this constantly.
+
 ## 🔴 Trap 2 — the client exited cleanly mid-session, and the cause is NOT established
 
 After the load, an end-turn was issued to build a genuine mid-game save:
