@@ -14,9 +14,18 @@ with stale ``results``, which is a caller discipline this module cannot and does
 enforce on its own -- it is enforced by there being no other entry point into an ``Observation``
 at all.
 
+**T231 -- one structural filter, not two.** The resolve-and-kind gate and the attributed-entry
+construction below are ``parity/filter.py``'s (``resolve_observable``/``filter_to_entries``), called
+rather than re-implemented. This module used to carry an inline twin of both, which left the copy in
+``parity/`` -- the package documented as "Principle I's enforcement point" -- with no caller at all,
+so hardening it would have hardened a path the agent's data never travels. What remains this
+module's own is ``output_schema`` validation (FR-018) and composing many results into one
+``Observation``.
+
 **T137 -- declaration attribution on this record path.** Every ``ObservationEntry`` this module
 builds carries ``declaration_id=declaration.declaration_id``, where ``declaration`` is what
-``registry.resolve(result.declaration_id)`` (via :func:`_resolve_observable`) actually returned --
+``registry.resolve(result.declaration_id)`` (via ``parity.filter.resolve_observable``) actually
+returned --
 never a caller-supplied string threaded through unchecked. Structurally, this could not be
 otherwise: ``ObservationEntry.declaration_id`` (``models/turn.py``) has no default, so an entry
 without one cannot be constructed at all, by this module or any other caller of that model. There
@@ -44,8 +53,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from civsim_harness.capability.registry import CapabilityRegistry
-from civsim_harness.errors import CatalogError, ObservationAssemblyError
-from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration
+from civsim_harness.errors import ObservationAssemblyError
+from civsim_harness.models.catalog import ParityDeclaration
 from civsim_harness.models.common import (
     CaptureId,
     CatalogVersionRef,
@@ -58,6 +67,8 @@ from civsim_harness.models.common import (
 )
 from civsim_harness.models.records import RunEvent, RunEventType
 from civsim_harness.models.turn import Observation, ObservationEntry
+from civsim_harness.parity.filter import CapabilityResult as FilterCapabilityResult
+from civsim_harness.parity.filter import filter_to_entries, resolve_observable
 
 # --------------------------------------------------------------------------
 # T095 -- assembly
@@ -103,14 +114,21 @@ def assemble_observation(
     """
     entries: list[ObservationEntry] = []
     for result in results:
-        declaration = _resolve_observable(registry, result.declaration_id)
+        # T231: the resolution-and-kind gate has exactly one definition, and it lives in
+        # `parity/filter.py` -- the package whose own docstring calls itself "Principle I's
+        # enforcement point". This module used to carry an inline twin of it, which made the
+        # `parity/` copy the dead one: a reviewer hardening the parity boundary would have edited
+        # a module the agent's data never passed through. What stays here is only what is
+        # genuinely this module's own -- `output_schema` validation, and composing many results
+        # into one `Observation`.
+        declaration = resolve_observable(registry, result.declaration_id)
         _validate_output(declaration, result.value)
-        entries.append(
-            ObservationEntry(
-                declaration_id=declaration.declaration_id,
-                key=str(declaration.declaration_id),
-                value=result.value,
-                context=declaration.context,
+        entries.extend(
+            filter_to_entries(
+                FilterCapabilityResult(
+                    declaration_id=declaration.declaration_id, value=result.value
+                ),
+                registry=registry,
             )
         )
 
@@ -123,24 +141,6 @@ def assemble_observation(
         captures=list(captures),
         screen_identity=screen_identity,
     )
-
-
-def _resolve_observable(
-    registry: CapabilityRegistry, declaration_id: DeclarationId
-) -> ParityDeclaration:
-    try:
-        declaration = registry.resolve(declaration_id)
-    except CatalogError as exc:
-        raise ObservationAssemblyError(
-            "capability result names a declaration_id absent from the loaded catalog",
-            detail={"declaration_id": str(declaration_id), "reason": exc.message},
-        ) from exc
-    if declaration.kind not in (DeclarationKind.OBSERVATION, DeclarationKind.VIEW):
-        raise ObservationAssemblyError(
-            "capability result names an action declaration, not an observation or view",
-            detail={"declaration_id": str(declaration_id), "kind": str(declaration.kind)},
-        )
-    return declaration
 
 
 def _validate_output(declaration: ParityDeclaration, value: Any) -> None:

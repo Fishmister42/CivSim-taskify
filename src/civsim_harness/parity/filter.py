@@ -9,21 +9,24 @@ package (and there must be none anywhere else in the harness) that builds an
 ``ObservationEntry`` from a bare Lua table, a raw Nexus payload string, or an
 unattributed dict.
 
-**Cross-reference, not a fork.** ``observe/assemble.py`` (T095, already
-landed as part of an earlier wave) independently implements this exact
-guarantee inline for its own composition job (building a whole
-``Observation`` from many results, with schema validation against each
-declaration's ``output_schema``): its own local ``CapabilityResult`` --
-``{declaration_id, value}`` -- is the identical shape this module exports,
-for the identical reason (contracts/capability-catalog.md "Context
-assembly": "the assembler accepts capability results only; there is no
-raw-Lua input type"). :class:`CapabilityResult` below mirrors that shape
-deliberately, so the two are structurally the same concept even though nothing
-currently imports one from the other -- see this wave's report for the
-integration note. This module exists as the *dedicated, reusable* home for
-that guarantee (T127 is a ``parity/`` deliverable in its own right, e.g. for
-any future call site that needs "one result in, its attributed entries out"
-without composing a full multi-result ``Observation``), and as the type
+**One definition, and it is this one (T231).** ``observe/assemble.py``
+(T095) used to re-implement this exact guarantee inline for its own
+composition job -- resolve the declaration, reject a non-observation/view
+kind, key the entry by the declaration id, carry the declaration's own
+``context`` -- which meant the copy living *here*, in the package whose own
+docstring calls itself "Principle I's enforcement point", was the dead one:
+a reviewer hardening the parity boundary would have edited a module the
+agent's data never passed through. ``assemble_observation`` now calls
+:func:`resolve_observable` for the resolution-and-kind gate and builds its
+entries the one way this module defines, adding only what is genuinely its
+own (validating each value against the declaration's ``output_schema``, and
+composing many results into one ``Observation``). Its local
+``CapabilityResult`` -- ``{declaration_id, value}`` -- remains the identical
+shape :class:`CapabilityResult` below exports, for the identical reason
+(contracts/capability-catalog.md "Context assembly": "the assembler accepts
+capability results only; there is no raw-Lua input type"); the two types
+stay separate so neither package has to import the other's model, but there
+is no longer two implementations of the *rule*. This module is also the type
 :mod:`civsim_harness.parity.forbidden` and
 :mod:`civsim_harness.parity.screening` are documented against.
 
@@ -34,11 +37,11 @@ Why the guarantee is structural rather than conventional:
   bare string or an unattributed mapping -- a caller holding one has to
   *already* know which catalog declaration answers it before this type will
   accept it at all.
-- :func:`filter_to_entries` immediately calls
-  :meth:`~civsim_harness.capability.registry.CapabilityRegistry.resolve`,
-  which raises :class:`~civsim_harness.errors.CatalogError` the moment
-  ``declaration_id`` does not resolve in the loaded catalog. There is no
-  code path here that skips this -- it is the first thing the function does.
+- :func:`filter_to_entries` immediately calls :func:`resolve_observable`,
+  which raises :class:`~civsim_harness.errors.ObservationAssemblyError` the
+  moment ``declaration_id`` does not resolve in the loaded catalog. There is
+  no code path here that skips this -- it is the first thing the function
+  does.
 - Only ``observation`` and ``view`` declarations may pass (matching
   ``observe/assemble.py``'s own rule) -- an ``action`` declaration never
   produces an observation entry, and routing one through here raises
@@ -50,7 +53,7 @@ Why the guarantee is structural rather than conventional:
 new value into the agent's observation is to author a catalog declaration
 (so it has a ``declaration_id`` this type can name and a registry can
 resolve), implement the capability behind it, and route the result through
-this function (or its ``observe/assemble.py`` twin). There is no shortcut
+this function (or ``observe/assemble.py``, which routes through it). There is no shortcut
 that also works -- not because the codebase asks nicely, but because every
 producer of ``ObservationEntry`` in the harness is typed against exactly
 this shape, and this shape cannot be built from an unattributed value.
@@ -62,8 +65,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from civsim_harness.capability.registry import CapabilityRegistry
-from civsim_harness.errors import ObservationAssemblyError
-from civsim_harness.models.catalog import DeclarationKind
+from civsim_harness.errors import CatalogError, ObservationAssemblyError
+from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration
 from civsim_harness.models.common import DeclarationId
 from civsim_harness.models.turn import ObservationEntry
 
@@ -101,9 +104,11 @@ def filter_to_entries(
 ) -> list[ObservationEntry]:
     """Turn one :class:`CapabilityResult` into its attributed observation entry.
 
-    1. Resolves ``result.declaration_id`` against *registry*, refusing (via
-       :class:`~civsim_harness.errors.CatalogError`) a ``declaration_id``
-       that is not registered in the loaded catalog (FR-023).
+    1. Resolves ``result.declaration_id`` against *registry* (see
+       :func:`resolve_observable`), refusing (via
+       :class:`~civsim_harness.errors.ObservationAssemblyError`) a
+       ``declaration_id`` that is not registered in the loaded catalog
+       (FR-023).
     2. Refuses (via :class:`~civsim_harness.errors.ObservationAssemblyError`)
        a declaration that is not ``kind in {observation, view}`` -- an
        action never produces an observation entry.
@@ -114,19 +119,47 @@ def filter_to_entries(
        entry is attributable back to the exact catalog entry that produced
        it (FR-016, SC-007).
     """
-    declaration = registry.resolve(result.declaration_id)
-
-    if declaration.kind not in (DeclarationKind.OBSERVATION, DeclarationKind.VIEW):
-        raise ObservationAssemblyError(
-            "capability result names an action declaration, not an observation or view",
-            detail={"declaration_id": str(result.declaration_id), "kind": str(declaration.kind)},
-        )
+    declaration = resolve_observable(registry, result.declaration_id)
 
     return [
         ObservationEntry(
-            declaration_id=result.declaration_id,
-            key=str(result.declaration_id),
+            declaration_id=declaration.declaration_id,
+            key=str(declaration.declaration_id),
             value=result.value,
             context=declaration.context,
         )
     ]
+
+
+def resolve_observable(
+    registry: CapabilityRegistry, declaration_id: DeclarationId
+) -> ParityDeclaration:
+    """Resolve *declaration_id* to the declaration that may answer an observation (T231).
+
+    Steps 1 and 2 of :func:`filter_to_entries`, split out because
+    :func:`~civsim_harness.observe.assemble.assemble_observation` needs the resolved declaration
+    itself (to validate the value against its ``output_schema``) and must not re-implement the
+    resolution to get it. **One definition, and it lives here** -- ``parity/``'s own package
+    docstring calls itself "Principle I's enforcement point", and until T231 the copy living here
+    was the dead one while ``observe/assemble.py`` carried an inline twin, so a reviewer hardening
+    the parity boundary would have edited a module the agent's data never passed through.
+
+    Raises :class:`~civsim_harness.errors.ObservationAssemblyError` -- never a bare
+    :class:`~civsim_harness.errors.CatalogError` -- both for a ``declaration_id`` absent from the
+    loaded catalog (FR-023) and for one naming an ``action``, which never produces an observation
+    entry. One error type for "this result may not become an observation entry" is what lets the
+    decision loop's own T096 handling treat every such failure identically.
+    """
+    try:
+        declaration = registry.resolve(declaration_id)
+    except CatalogError as exc:
+        raise ObservationAssemblyError(
+            "capability result names a declaration_id absent from the loaded catalog",
+            detail={"declaration_id": str(declaration_id), "reason": exc.message},
+        ) from exc
+    if declaration.kind not in (DeclarationKind.OBSERVATION, DeclarationKind.VIEW):
+        raise ObservationAssemblyError(
+            "capability result names an action declaration, not an observation or view",
+            detail={"declaration_id": str(declaration_id), "kind": str(declaration.kind)},
+        )
+    return declaration

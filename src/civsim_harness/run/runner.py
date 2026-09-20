@@ -65,7 +65,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from civsim_harness.config.run_config import load_run_configuration_file
+from civsim_harness.config.run_config import (
+    BranchFrom,
+    load_branch_configuration_file,
+    load_run_configuration_file,
+    peek_branch_from,
+)
 from civsim_harness.errors import (
     HarnessError,
     ProviderChainExhausted,
@@ -182,6 +187,22 @@ class RunnerDependencies:
     prepare_run: Callable[[RunConfiguration], PreparedRun | Awaitable[PreparedRun]]
     build_turn_dependencies: Callable[[PreparedRun, int], TurnCycleDependencies]
     evaluate_stop_facts: Callable[[PreparedRun, int], StopEvaluation]
+    prepare_branch: (
+        Callable[[RunConfiguration, BranchFrom], PreparedRun | Awaitable[PreparedRun]] | None
+    ) = None
+    """T226, FR-033: preparation for a **branch** of an existing run, or `None` for a composition
+    that cannot branch.
+
+    Separate from ``prepare_run`` only because it needs one more argument -- the lineage the branch
+    starts from -- not because it is a second pipeline: the production implementation
+    (:mod:`civsim_harness.run.composition`) is literally the same call with ``branch_from`` set, so
+    a branch passes through every gate an ordinary run does plus the branch-specific ones.
+
+    ``None`` is the honest default for the many test compositions that supply a hand-built
+    ``prepare_run`` and have no store records to branch from: :meth:`Runner.start` refuses a branch
+    document against such a runner by name, rather than silently starting it as a fresh,
+    unbranched run -- which is the one outcome worse than refusing (FR-033, Principle IV)."""
+
     connection_health: Callable[[], ConnectionHealth] = field(
         default=lambda: ConnectionHealth(tuner="unknown", client="unknown", store="unknown")
     )
@@ -264,6 +285,24 @@ class Runner(RunnerProtocol):
     # -- RunnerProtocol -----------------------------------------------------
 
     def start(self, config_path: Path) -> RunId:
+        """Start *config_path* -- an ordinary run configuration, **or a branch document** (T226).
+
+        ``runner_protocol.py``'s own design note says ``run branch`` "needs no new seam at all:
+        a branch document is a run configuration plus a ``branch_from`` block ... route it through
+        the *existing* ``start``". That note was never carried into this method, which meant every
+        branch command died here: ``load_run_configuration_file`` is the **non-branch** loader and
+        ``RunConfiguration`` is ``extra="forbid"``, so a ``branch_from`` block failed validation
+        outright and ``civsim run branch`` could not reach a branch at all.
+
+        The two loaders are not interchangeable -- the branch loader needs the *parent's*
+        ``RunConfiguration`` to inherit from, which cannot be fetched before the parent run id is
+        known -- so which one applies is decided first, by
+        :func:`~civsim_harness.config.run_config.peek_branch_from`, on one cheap parse.
+        """
+        branch_from = peek_branch_from(config_path)
+        if branch_from is not None:
+            return self.start_branch(config_path, branch_from)
+
         config = load_run_configuration_file(config_path)
         try:
             prepared = self._resolve_prepared_run(config)
@@ -274,16 +313,96 @@ class Runner(RunnerProtocol):
                 "run preparation failed; no run was created", detail={"reason": str(exc)}
             ) from exc
 
+        return self._begin(prepared, first_turn=None)
+
+    def _begin(self, prepared: PreparedRun, *, first_turn: int | None) -> RunId:
+        """Register *prepared* and schedule play, from turn 1 or from *first_turn* (T226).
+
+        *first_turn* is ``None`` for a fresh run (play begins at turn 1) and the branch point for
+        a branch: the parent's save at turn N is N's **start** quicksave, so the branch replays
+        turn N itself -- the same arithmetic :meth:`resume_from` uses (``current_turn = turn - 1``,
+        which ``_play_run``'s own ``(state.current_turn or 0) + 1`` lands exactly on N).
+
+        A run that preflight already landed in `failed` (contracts/operator-surface.md D2, T101's
+        host-tier gate, T072's build pin) is returned as-is: nothing to play, and the caller
+        discovers the failure through `get_status`, exactly as `RunnerProtocol` specifies.
+        """
         run_id = prepared.run.run_id
         with self._lock:
-            self._runs[run_id] = _RunState(run=prepared.run, prepared=prepared)
+            state = _RunState(run=prepared.run, prepared=prepared)
+            if first_turn is not None:
+                state.current_turn = first_turn - 1
+            self._runs[run_id] = state
 
         if prepared.run.lifecycle_state is LifecycleState.PLAYING:
             self._schedule(self._play_run(run_id))
-        # A run that preflight already landed in `failed` (contracts/operator-surface.md D2, T101's
-        # host-tier gate, T072's build pin, etc.) is returned as-is: nothing to play, and the caller
-        # discovers the failure through get_status, exactly as RunnerProtocol's docstring specifies.
         return run_id
+
+    def start_branch(self, config_path: Path, branch_from: BranchFrom) -> RunId:
+        """Start *config_path* as a branch of ``branch_from``'s run (T226, FR-033, FR-034).
+
+        Every refusal below happens **before** a child `Run` exists, and each names what was
+        missing. That matters more here than anywhere else in this module: the one outcome worse
+        than refusing a branch is starting it as a fresh, unbranched run while calling it a branch
+        -- Principle IV's "any branch that mutates or abandons a save MUST record which lineage it
+        branched from" is unsatisfiable after the fact.
+
+        The parent's own `RunConfiguration` is read back through
+        `MatchStore.get_run_configuration`: a branch inherits seed, civilization, ruleset, mod
+        set, map and game settings from it and is refused if it restates any of them differently
+        (`config/run_config.py`), so there is no way to validate a branch document without it.
+
+        **The save load itself is not satisfiable today (T217).** `run/composition.py`'s
+        `_NoLiveSaveLoader` raises on every call, so a real `civsim run branch` fails inside
+        `prepare_branch` naming the missing capability -- exactly as :meth:`resume_from` already
+        does, and for the same reason. The failure is surfaced with the branch's own lineage
+        attached rather than flattened into a generic "preparation failed".
+        """
+        prepare_branch = self._deps.prepare_branch
+        if prepare_branch is None:
+            raise RunPreparationFailed(
+                "this runner was composed without branch support, so a branch document cannot be "
+                "started through it; nothing was created (FR-033)",
+                detail={"parent_run_id": branch_from.run_id, "turn": branch_from.turn},
+            )
+
+        store = self._deps.store
+        if store.get_run(branch_from.run_id) is None:
+            raise RunPreparationFailed(
+                "cannot branch: no such parent run is on record",
+                detail={"parent_run_id": branch_from.run_id, "turn": branch_from.turn},
+            )
+        parent_config = store.get_run_configuration(branch_from.run_id)
+        if parent_config is None:
+            raise RunPreparationFailed(
+                "cannot branch: the parent run's own configuration is not on record, so the "
+                "fields a branch inherits from it (seed, civilization, ruleset, mod set, map and "
+                "game settings) cannot be resolved (FR-033)",
+                detail={"parent_run_id": branch_from.run_id, "turn": branch_from.turn},
+            )
+
+        child_config, parsed = load_branch_configuration_file(
+            config_path, parent_config=parent_config
+        )
+
+        try:
+            prepared = self._resolve_prepared(prepare_branch(child_config, parsed))
+        except RunPreparationFailed:
+            raise
+        except HarnessError as exc:
+            raise RunPreparationFailed(
+                f"branch of run {parsed.run_id} at turn {parsed.turn} could not be prepared, so "
+                f"no branch was created: {exc}",
+                detail={
+                    "parent_run_id": parsed.run_id,
+                    "turn": parsed.turn,
+                    "reason": str(exc),
+                    "error_type": type(exc).__name__,
+                    **dict(getattr(exc, "detail", {}) or {}),
+                },
+            ) from exc
+
+        return self._begin(prepared, first_turn=parsed.turn)
 
     def _resolve_prepared_run(self, config: RunConfiguration) -> PreparedRun:
         """Call ``self._deps.prepare_run(config)`` and, if it returns something awaitable rather
@@ -312,7 +431,13 @@ class Runner(RunnerProtocol):
         ``self._deps.prepare_run(config)`` call it replaces, not a behaviour change for any
         existing caller.
         """
-        result = self._deps.prepare_run(config)
+        return self._resolve_prepared(self._deps.prepare_run(config))
+
+    def _resolve_prepared(self, result: PreparedRun | Awaitable[PreparedRun]) -> PreparedRun:
+        """Await *result* on this runner's own loop if it is awaitable (see
+        :meth:`_resolve_prepared_run` for why that loop specifically). Shared verbatim by the
+        fresh-run and branch paths (T226), so a branch can never end up connecting its client on
+        a different loop than the one that later plays its turns."""
         if inspect.isawaitable(result):
             # `run_coroutine_threadsafe` wants a `Coroutine` specifically, not any `Awaitable` --
             # `_await_on_this_loop` below is a trivial wrapper that makes that true regardless of
@@ -399,16 +524,36 @@ class Runner(RunnerProtocol):
             )
 
     def branch(self, *, parent_run_id: RunId, turn: int, config_path: Path) -> RunId:
-        """``RunnerProtocol``'s T173 addendum (branch-and-replay, US4) -- not part of this wave's
-        assignment (T110-T117, T152) and not implemented here. Raises rather than silently doing
-        nothing or pretending to branch; a future wave (T173/T199) replaces this with the real
-        branch orchestration (resolving the parent's save, catalog/build/host-tier agreement, and
-        starting a new run with that lineage)."""
-        raise HarnessError(
-            "Runner.branch is not implemented in this wave (T173/US4 branch-and-replay is a "
-            "later, separate task from T110-T117/T152)",
-            detail={"parent_run_id": parent_run_id, "turn": turn},
-        )
+        """Branch *parent_run_id* at *turn* using *config_path*'s branch document (T226, FR-033).
+
+        The same path :meth:`start` takes for a ``branch_from``-bearing document, plus the one
+        check only this entry point can make: that the document's own ``branch_from`` block
+        **agrees with the arguments the operator typed**. `civsim run branch <run_id> --turn N
+        --config doc.yaml` states the lineage twice, and a document naming a different parent or
+        turn than the command is not a detail to reconcile silently -- under Principle IV the
+        lineage is the record's load-bearing claim, so a disagreement is refused with both values
+        named and nothing created.
+        """
+        branch_from = peek_branch_from(config_path)
+        if branch_from is None:
+            raise RunPreparationFailed(
+                "this configuration is not a branch document: it carries no branch_from block "
+                "naming the run and turn to branch from (contracts/run-configuration.md)",
+                detail={"parent_run_id": parent_run_id, "turn": turn, "config": str(config_path)},
+            )
+        if branch_from.run_id != parent_run_id or branch_from.turn != turn:
+            raise RunPreparationFailed(
+                "the branch document's branch_from block names a different lineage than this "
+                "command does; nothing was created (FR-033, Principle IV)",
+                detail={
+                    "command_parent_run_id": parent_run_id,
+                    "command_turn": turn,
+                    "document_parent_run_id": branch_from.run_id,
+                    "document_turn": branch_from.turn,
+                    "config": str(config_path),
+                },
+            )
+        return self.start_branch(config_path, branch_from)
 
     def resume_from(self, run_id: RunId, turn: int) -> None:
         """Rewind *run_id* -- the same run, never a branch -- to its recorded turn-start save at

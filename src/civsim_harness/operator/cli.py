@@ -69,6 +69,7 @@ import yaml
 
 from civsim_harness.capability.loader import Catalog, load_catalog
 from civsim_harness.capability.registry import CapabilityRegistry
+from civsim_harness.config.run_config import peek_branch_from
 from civsim_harness.config.seed_set import load_seed_set_file
 from civsim_harness.errors import CatalogError, HarnessError
 from civsim_harness.host.detect import probe_host_support
@@ -457,6 +458,33 @@ def run_branch(
     """
     store = _open_store(store_path)
     _reject_missing_save(store, run_id, turn, verb="branch")
+
+    # T226, FR-033, Principle IV: this command states the lineage twice -- once as its own
+    # arguments, once inside the document -- and the two must agree before anything is created.
+    # Checked here rather than left to the runner because this is the only layer that can see
+    # both, and because a mismatch is a wrong branch, not a recoverable detail: the lineage is the
+    # load-bearing claim a branch's whole record rests on.
+    try:
+        branch_from = peek_branch_from(config_path)
+    except HarnessError as exc:
+        typer.echo(f"run branch failed: {exc.message}", err=True)
+        raise typer.Exit(code=1) from exc
+    if branch_from is None:
+        typer.echo(
+            "run branch failed: this configuration is not a branch document -- it carries no "
+            "branch_from block naming the run and turn to branch from "
+            "(contracts/run-configuration.md 'Branch configuration')",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if branch_from.run_id != run_id or branch_from.turn != turn:
+        typer.echo(
+            "run branch failed: the branch document's branch_from block names "
+            f"{branch_from.run_id} at turn {branch_from.turn}, but this command names {run_id} "
+            f"at turn {turn}; nothing was created",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     _record_command(store, RunId(run_id), f"branch --turn {turn} --config {config_path}")
     runner = _get_runner()

@@ -391,3 +391,33 @@ def load_branch_configuration_file(
     return load_branch_configuration_yaml(
         path.read_text(encoding="utf-8"), parent_config=parent_config, source=str(path)
     )
+
+
+def peek_branch_from(path: Path) -> BranchFrom | None:
+    """Which run and turn *path* branches from, or `None` if it is an ordinary run configuration.
+
+    The one thing a caller must know **before** choosing a loader (T226): a branch document and a
+    plain run configuration are the same file format apart from the `branch_from` block, and the
+    two loaders are not interchangeable -- `load_run_configuration_file` rejects `branch_from`
+    outright (`RunConfiguration` is `extra="forbid"`), while `load_branch_configuration_file`
+    requires a *parent* `RunConfiguration` that can only be fetched once the parent run id is
+    known. This resolves that chicken-and-egg with one cheap parse and no validation of anything
+    else: a malformed `branch_from` still raises here (`parse_branch_from`), so a document that
+    means to be a branch and is not well-formed is never quietly loaded as a fresh run.
+
+    Raises `PreflightError` for unreadable or non-mapping YAML, so a caller never has to decide
+    what an unparseable file "probably" was.
+    """
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise PreflightError(
+            "run configuration is not valid YAML", detail={"source": str(path)}
+        ) from exc
+    if not isinstance(raw, dict):
+        raise PreflightError(
+            "run configuration must be a YAML mapping", detail={"source": str(path)}
+        )
+    if "branch_from" not in raw:
+        return None
+    return parse_branch_from(raw, source=str(path))

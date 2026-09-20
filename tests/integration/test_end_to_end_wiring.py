@@ -28,12 +28,14 @@ two things a real client does that the harness immediately checks afterwards.
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 import threading
 from pathlib import Path
 from typing import Any
 
+import psutil
 import pytest
 import yaml
 from typer.testing import CliRunner
@@ -45,8 +47,9 @@ from civsim_harness.host.detect import (
     OperatingSystem,
     SupportProbeResult,
 )
+from civsim_harness.host.port import GameProcess
 from civsim_harness.models.common import CapturePath, DeclarationId, ModelRef, RunId
-from civsim_harness.models.run import LifecycleState, StopResolution
+from civsim_harness.models.run import ComparabilityStatus, LifecycleState, StopResolution
 from civsim_harness.nexus.client import NexusClient
 from civsim_harness.operator import cli
 from civsim_harness.provider.port import ModelCapabilities, RawDecision
@@ -334,6 +337,11 @@ def _script_game(server: FakeNexusServer, game: _FakeGame) -> None:
     server.queue_response(
         game.end_turn, match=_dispatch_match("CivSim_TurnControl", "end_turn"), repeatable=True
     )
+    # T233: the tuner heartbeat the in-turn watchdog round-trips through `GameCore_Tuner`
+    # (`nexus/heartbeat.py`'s `print(true)`). A real client answers it; without this the fake
+    # would answer with its generic default, which `probe_heartbeat` correctly reads as a failed
+    # round-trip -- i.e. the *fake* would be the hang, not the harness.
+    server.queue_response(lambda _command: True, match="print(true)", repeatable=True)
 
 
 @pytest.fixture(autouse=True)
@@ -358,12 +366,30 @@ def _compose(
     port: int,
     provider: FakeModelProvider,
     run_lock: RunIdentityLock | None = None,
+    client_process: GameProcess | None = None,
 ) -> tuple[Runner, Any]:
     """Build a real `Runner` through the real composition root, against fakes."""
     deps, store = _compose_dependencies(
-        tmp_path, port=port, provider=provider, run_lock=run_lock
+        tmp_path,
+        port=port,
+        provider=provider,
+        run_lock=run_lock,
+        client_process=client_process,
     )
     return Runner(deps), store
+
+
+def _live_client_process() -> GameProcess:
+    """A "game client" PID that is genuinely a live process on this machine (T233).
+
+    `FakeHostPlatform`'s default process is a synthetic PID (42424) that almost certainly does not
+    exist, and T233 wired `resilience/liveness.py` -- a real `psutil` check -- into the production
+    run loop against whatever PID `locate_game_process()` reports. A fake host claiming a process
+    that is not there is a fake host describing a crashed client, and the harness now correctly
+    says so. Pointing the fake at this test process keeps the *real* liveness path in the loop
+    (no stub, no monkeypatch) while making the fake's claim true.
+    """
+    return GameProcess(pid=os.getpid(), name="CivilizationVI_FAKE", executable_path=None)
 
 
 def _compose_dependencies(
@@ -372,9 +398,12 @@ def _compose_dependencies(
     port: int,
     provider: FakeModelProvider,
     run_lock: RunIdentityLock | None = None,
+    client_process: GameProcess | None = None,
+    save_loader: Any = None,
 ) -> tuple[Any, SqliteMatchStore]:
     store = SqliteMatchStore(tmp_path / "match-store.db")
     host = FakeHostPlatform()
+    host.set_process(client_process if client_process is not None else _live_client_process())
     deps = build_runner_dependencies(
         store=store,
         # The real catalog and the real lua/ tree: this is what makes `implementation_ref`
@@ -398,6 +427,7 @@ def _compose_dependencies(
         run_lock=run_lock if run_lock is not None else RunIdentityLock(tmp_path / "run-locks"),
         disk_check_path=tmp_path,
         home=tmp_path,
+        save_loader=save_loader,
     )
     return deps, store
 
@@ -745,11 +775,402 @@ def test_a_run_claims_and_releases_its_run_identity(tmp_path: Path) -> None:
 
     # Claimed exactly once, for this run, keyed to the PID the host actually located -- never a
     # fabricated or placeholder one.
-    located = FakeHostPlatform().locate_game_process()
-    assert located is not None
-    assert lock.acquired == [(run_id, located.pid)]
+    assert lock.acquired == [(run_id, _live_client_process().pid)]
 
     # ...and given up once the run reached a terminal state.
     assert run_id in lock.released
     assert not lock.is_active(RunId(run_id))
     assert list((tmp_path / "run-locks").glob("*.lock.json")) == []
+
+
+# --------------------------------------------------------------------------
+# T233 -- the crash/hang detection layer, through the real composition root
+# --------------------------------------------------------------------------
+
+
+def _pid_that_is_not_running() -> int:
+    """A PID that is genuinely not a live process on this machine, right now.
+
+    Searched rather than hard-coded: a fixed "obviously dead" PID is exactly the assumption that
+    makes a detection test pass for the wrong reason on somebody else's box. `psutil.pid_exists`
+    is the same question `resilience/liveness.py` asks, so a candidate it rejects is one the
+    production path will also read as gone.
+    """
+    for candidate in range(4_000_000, 4_001_000):
+        if not psutil.pid_exists(candidate):
+            return candidate
+    raise AssertionError("no free PID could be found to stand in for a killed client")
+
+
+def test_a_killed_client_is_detected_and_recorded_by_the_production_run_loop(
+    tmp_path: Path,
+) -> None:
+    """T233 / FR-044, SC-010: the detection layer runs during a real run and records the crash.
+
+    `DetectionAggregator`, `HeartbeatMonitor` and `ProcessLivenessMonitor` were complete and
+    individually tested, and **constructed nowhere in `src/`** -- so SC-010 ("a game client crash
+    is detected and recorded within 60 seconds") had no mechanism behind it at all, and T193's
+    live test would have failed for that headless reason rather than for anything about a client.
+
+    Driven through the real composition root, against a host reporting a PID that is genuinely not
+    a running process -- which is what a killed client looks like to `locate_game_process()`. The
+    assertion is on the **recorded** `crash_detected` event, not on an internal flag: SC-010 asks
+    for detected *and recorded*, and a detection nobody wrote down satisfies half of it.
+
+    Removing the `detection=ctx.detection` line in `run/composition.py`'s
+    `build_turn_dependencies` (or the `_detect_between_turns` call in `run/turn_cycle.py`) makes
+    this test fail -- verified by reverting each in turn.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+    dead_pid = _pid_that_is_not_running()
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        runner, store = _compose(
+            tmp_path,
+            port=server.port,
+            provider=_build_provider(),
+            client_process=GameProcess(
+                pid=dead_pid, name="CivilizationVI_FAKE", executable_path=None
+            ),
+        )
+        cli.configure_runner_factory(lambda: runner)
+        result = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert result.exit_code == 0, _failure_report(result.output, store)
+        run_id = _parse_run_id(result.output)
+        _wait_for_recorded_event(runner, store, run_id, "crash_detected")
+
+    crash_events = [
+        event
+        for event in store.list_run_events(RunId(run_id))
+        if event.event_type.value == "crash_detected"
+    ]
+    assert crash_events, (
+        "the client PID was not a live process for the whole run and nothing detected it; "
+        "SC-010 has no mechanism behind it. Recorded events: "
+        f"{[event.event_type.value for event in store.list_run_events(RunId(run_id))]}"
+    )
+    assert crash_events[0].detail["pid"] == dead_pid
+
+    # The crash is caught *before* the turn commits to anything: no quicksave was taken, no turn
+    # was persisted, and the game was never told to end a turn.
+    assert game.saves_written == []
+    assert game.end_turns_issued == 0
+    assert store.get_turn_cycle(RunId(run_id), 1) is None
+
+    # ...and the run stops visibly rather than grinding on against a client that is not there.
+    status = runner.get_status(RunId(run_id))
+    assert status.lifecycle_state is LifecycleState.PAUSED
+    assert status.last_error is not None
+    assert status.last_error.type == "ClientFaultDetected"
+
+
+def test_every_turn_is_built_with_the_detection_layer_attached(tmp_path: Path) -> None:
+    """T233: the composition root hands each turn its `DetectionWatch`, not merely builds one.
+
+    The whole shape of defect Phase 11 was written about is a collaborator that is constructed and
+    then never asked anything. Asserting on `TurnCycleDependencies.detection` is the narrowest
+    statement of the wiring itself: it fails if `build_turn_dependencies` stops passing it through,
+    even in a run where nothing ever trips.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+
+    loop = asyncio.new_event_loop()
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        deps, _store = _compose_dependencies(
+            tmp_path, port=server.port, provider=_build_provider()
+        )
+        config = load_run_configuration_file(config_path)
+        try:
+            prepared = loop.run_until_complete(deps.prepare_run(config))
+            turn_deps = deps.build_turn_dependencies(prepared, 1)
+        finally:
+            loop.close()
+
+    assert turn_deps.detection is not None, (
+        "the run's detection layer never reaches the turn cycle; research R12's signals are "
+        "constructed and then asked nothing, which is SC-010 with no mechanism behind it (T233)"
+    )
+    assert turn_deps.detection_interval_s > 0
+
+
+def _wait_for_recorded_event(
+    runner: Runner, store: SqliteMatchStore, run_id: str, event_type: str
+) -> None:
+    """Poll until *event_type* is on *run_id*'s timeline, or the run stops, or time runs out.
+
+    `run start` returns as soon as the run is *scheduled*; the detection pass happens on the
+    runner's own background thread. Polling the record rather than sleeping a guessed interval is
+    the same discipline `_wait_for_terminal_run` uses.
+    """
+    deadline = 60.0
+    waited = 0.0
+    while waited < deadline:
+        recorded = {
+            event.event_type.value for event in store.list_run_events(RunId(run_id))
+        }
+        if event_type in recorded:
+            return
+        if runner.get_status(RunId(run_id)).lifecycle_state in (
+            LifecycleState.FINISHED,
+            LifecycleState.FAILED,
+            LifecycleState.PAUSED,
+        ):
+            # The run stopped; one more read so a race between the stop and the event write
+            # cannot report a false negative.
+            if event_type in {
+                event.event_type.value for event in store.list_run_events(RunId(run_id))
+            }:
+                return
+            return
+        threading.Event().wait(0.05)
+        waited += 0.05
+
+
+# --------------------------------------------------------------------------
+# T226 -- `civsim run branch` reaches a branch
+# --------------------------------------------------------------------------
+
+
+def _write_branch_config(path: Path, *, parent_run_id: str, turn: int) -> None:
+    """A branch document: a `branch_from` block plus only what a branch may vary.
+
+    Deliberately restates none of the inherited fields (seed, civilization, ruleset, mod set, map
+    and game settings) -- they come from the *parent's* recorded `RunConfiguration`, which is the
+    whole reason the branch loader needs `MatchStore.get_run_configuration` and the reason a
+    branch document cannot be loaded by the ordinary run-configuration loader.
+    """
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "config_id": "e2e-wiring-branch",
+                "branch_from": {"run_id": parent_run_id, "turn": turn},
+                # A branch may vary its stop condition; it may not vary its seed.
+                "stop_condition": {"type": "turn_reached", "turn": turn},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _branch_argv(parent_run_id: str, turn: int, branch_path: Path, tmp_path: Path) -> list[str]:
+    return [
+        "run",
+        "branch",
+        parent_run_id,
+        "--turn",
+        str(turn),
+        "--config",
+        str(branch_path),
+        "--store-path",
+        str(tmp_path / "match-store.db"),
+    ]
+
+
+def test_run_branch_reaches_a_branch_instead_of_failing_at_configuration_load(
+    tmp_path: Path,
+) -> None:
+    """T226 / FR-033, FR-034, SC-014: `run branch` gets past the loader and records lineage.
+
+    **The defect this replaces.** `operator/cli.py`'s `run_branch` forwarded the document to
+    `Runner.start`, which used the **non-branch** loader -- and `RunConfiguration` is
+    `extra="forbid"`, so a `branch_from` block failed validation outright (`PreflightError ...
+    'Extra inputs are not permitted'`). Every branch command therefore died before preparation
+    began, and the whole branch machinery (`load_branch_configuration_file`, `parse_branch_from`,
+    `check_branch_build`, `create_branch`, `BranchSource`) had zero production callers.
+
+    The save load is supplied here; T217 is still open, and the production default
+    (`_NoLiveSaveLoader`) raises on every call -- that half is the next test. Everything else is
+    real: the real CLI, the real composition root, the real `create_branch`, the real store.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+
+    loaded: list[Any] = []
+
+    class _RecordingLoader:
+        async def load(self, save: Any) -> None:
+            loaded.append(save)
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        deps, store = _compose_dependencies(
+            tmp_path,
+            port=server.port,
+            provider=_build_provider(),
+            save_loader=_RecordingLoader(),
+        )
+        runner = Runner(deps)
+        cli.configure_runner_factory(lambda: runner)
+
+        started = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert started.exit_code == 0, _failure_report(started.output, store)
+        parent_run_id = _wait_for_terminal_run(runner, store, started.output)
+
+        branch_path = tmp_path / "branch.yaml"
+        _write_branch_config(branch_path, parent_run_id=parent_run_id, turn=1)
+        branched = CliRunner().invoke(
+            cli.app, _branch_argv(parent_run_id, 1, branch_path, tmp_path)
+        )
+        assert "Extra inputs are not permitted" not in branched.output, (
+            "run branch is still routing the branch document through the non-branch loader"
+        )
+        assert branched.exit_code == 0, _failure_report(branched.output, store)
+        child_run_id = _parse_run_id(branched.output)
+        _wait_for_terminal_run(runner, store, branched.output)
+
+    # -- FR-033: the lineage is on the record, on the child, naming parent run and turn ---------
+    child = store.get_run(RunId(child_run_id))
+    assert child is not None
+    assert child.parent_run_id == parent_run_id
+    assert child.parent_turn == 1
+    assert child.run_id != parent_run_id
+
+    branch_events = [
+        event
+        for event in store.list_run_events(RunId(child_run_id))
+        if event.event_type.value == "branch_created"
+    ]
+    assert branch_events, "no branch_created event was recorded (FR-033)"
+    assert branch_events[0].detail["parent_run_id"] == parent_run_id
+    assert branch_events[0].detail["parent_turn"] == 1
+
+    # -- FR-036: the parent's own save was loaded, not a nearby one ----------------------------
+    assert len(loaded) == 1
+    assert loaded[0].run_id == parent_run_id
+    assert loaded[0].turn_number == 1
+
+    # -- T226's binding half: comparability and host platform are this host's, not a claim -----
+    # This composition's `support_probe` reports the R6 capture-hygiene spike as NOT passed, so
+    # the host gate resolves `visually_degraded`. A branch must record that, never `comparable`.
+    assert child.comparability_status is ComparabilityStatus.VISUALLY_DEGRADED
+    assert child.host_platform["os"] == "linux"
+    parent = store.get_run(RunId(parent_run_id))
+    assert parent is not None
+    assert child.comparability_status == parent.comparability_status, (
+        "the branch recorded a different comparability than the identically-composed run it "
+        "branched from; one of the two is not reporting what the host gate resolved"
+    )
+
+    # -- FR-034 / I12: the parent's own record is untouched by the branch -----------------------
+    assert parent.parent_run_id is None
+    assert store.turn_gaps(RunId(parent_run_id)) == []
+
+
+def test_run_branch_without_a_save_load_path_fails_loudly_naming_the_missing_capability(
+    tmp_path: Path,
+) -> None:
+    """T226 x T217: the blocked half refuses by name rather than starting an unbranched run.
+
+    The production `SaveLoader` default is `run/composition.py`'s `_NoLiveSaveLoader`, which
+    raises on every call because no verified live save-*load* path exists in this codebase yet
+    (T217, blocked on `spikes/load-path-linux.md`). A branch that cannot load its parent's save is
+    not a branch, and starting from turn 1 of a fresh game while claiming to be one is far worse
+    than refusing -- so the refusal names the missing capability, exactly as `Runner.resume_from`
+    already does for the same gap, and **creates nothing**.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        # No `save_loader=` -- the production default applies, which is the point.
+        deps, store = _compose_dependencies(
+            tmp_path, port=server.port, provider=_build_provider()
+        )
+        runner = Runner(deps)
+        cli.configure_runner_factory(lambda: runner)
+
+        started = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert started.exit_code == 0, _failure_report(started.output, store)
+        parent_run_id = _wait_for_terminal_run(runner, store, started.output)
+
+        branch_path = tmp_path / "branch.yaml"
+        _write_branch_config(branch_path, parent_run_id=parent_run_id, turn=1)
+        branched = CliRunner().invoke(
+            cli.app, _branch_argv(parent_run_id, 1, branch_path, tmp_path)
+        )
+
+    assert branched.exit_code == 1, branched.output
+    # Names the missing capability, not a generic "preparation failed".
+    assert "save-load path" in branched.output, branched.output
+    # ...and nothing was created: no run anywhere carries a branch lineage.
+    assert _runs_with_a_parent(tmp_path / "match-store.db") == []
+
+
+def test_run_branch_refuses_a_document_whose_lineage_disagrees_with_the_command(
+    tmp_path: Path,
+) -> None:
+    """T226 / Principle IV: the lineage is stated twice and the two must agree.
+
+    `civsim run branch <run_id> --turn N --config doc.yaml` names the lineage in the command and
+    again inside the document. A disagreement is not a detail to reconcile silently: the lineage
+    is the load-bearing claim a branch's entire comparative value rests on, so the mismatch is
+    refused with both values named, before the runner is ever reached.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        deps, store = _compose_dependencies(
+            tmp_path, port=server.port, provider=_build_provider()
+        )
+        runner = Runner(deps)
+        cli.configure_runner_factory(lambda: runner)
+
+        started = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert started.exit_code == 0, _failure_report(started.output, store)
+        parent_run_id = _wait_for_terminal_run(runner, store, started.output)
+
+        branch_path = tmp_path / "branch.yaml"
+        # The document says turn 2; the command below says turn 1.
+        _write_branch_config(branch_path, parent_run_id=parent_run_id, turn=2)
+        branched = CliRunner().invoke(
+            cli.app, _branch_argv(parent_run_id, 1, branch_path, tmp_path)
+        )
+
+    assert branched.exit_code == 1, branched.output
+    assert "branch_from" in branched.output
+    assert _runs_with_a_parent(tmp_path / "match-store.db") == []
+
+
+def _runs_with_a_parent(db_path: Path) -> list[str]:
+    """Every run in the store that records a branch lineage, by id.
+
+    Read straight from SQLite rather than through `list_active_runs`: the claim is "no branch was
+    created **at all**", which a filter over only the non-terminal runs could not make.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT run_id FROM runs WHERE parent_run_id IS NOT NULL"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()

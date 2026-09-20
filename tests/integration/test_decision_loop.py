@@ -61,6 +61,7 @@ from civsim_harness.models.run import (
 from civsim_harness.models.turn import ScreenCapture, StepProgress, TurnOutcome
 from civsim_harness.observe.assemble import CapabilityResult
 from civsim_harness.parity.screening import load_screening_profiles
+from civsim_harness.provider.accounting import ImageCountAccountingMismatch
 from civsim_harness.provider.port import RawDecision
 from civsim_harness.resilience.recovery import RecoveryEngine
 from civsim_harness.run.decision_loop import DecisionLoopContext
@@ -636,5 +637,61 @@ async def test_an_out_of_parity_camera_request_is_recorded_as_exactly_that(
         # refusal is a recorded step rather than a halted run.
         assert camera_step.step.progress is StepProgress.REJECTED
         assert len(record.steps) == 2
+    finally:
+        store.close()
+
+
+async def test_a_call_whose_image_count_disagrees_with_its_request_is_never_recorded(
+    tmp_path: Path,
+) -> None:
+    """T232 / FR-039, FR-040, P2, invariant I7: the accounting re-check runs on the real loop.
+
+    `provider/accounting.py` was built for exactly this -- turning one completed provider call
+    into its `ModelCall`, refusing first if the response's `image_count` disagrees with the
+    request it is accounting for -- and had **no caller anywhere in `src/`**: `run/decision_loop.py`
+    constructed the `ModelCall` inline, field by field, skipping the check entirely.
+
+    It is not redundant with `ProviderChain._assert_image_count`. That guards `complete_step`;
+    this guards *this loop*, whose `ctx.provider` is a chain only in the production composition
+    (`_ChainBackedProvider`) and is a bare `ModelProvider` in every other caller -- including the
+    one below. A `ModelCall` whose own `image_count` cannot be trusted is exactly the record that
+    would hide images having been silently dropped, so it is refused rather than written.
+
+    The expected behaviour is a **halt**, not a degraded turn: the accounting for this step cannot
+    be made truthful, so no `ModelCall`, no `DecisionStep`, and no turn record is produced.
+    """
+    run_id = RunId("run-image-accounting")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    game = _FakeGame()
+    provider = FakeModelProvider()
+    # This composition resolves no game window, so `request.images` is empty on every step. A
+    # response claiming it was sent an image is therefore a genuine disagreement, not a fixture
+    # artefact -- the exact shape P2 exists to catch.
+    provider.queue_decision(
+        _plain_decision(TICK_DECLARATION_ID, is_end_turn=True), image_count=1
+    )
+
+    deps = _make_deps(
+        tmp_path=tmp_path,
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        game=game,
+        provider=provider,
+        no_progress_step_limit=5,
+    )
+
+    try:
+        with pytest.raises(ImageCountAccountingMismatch) as excinfo:
+            await run_turn_cycle(deps, run=run)
+
+        assert excinfo.value.detail["expected_image_count"] == 0
+        assert excinfo.value.detail["reported_image_count"] == 1
+
+        # Nothing untrustworthy was written: no turn attempt, and no orphan ModelCall.
+        assert store.get_turn_cycle(run_id, 1, authoritative_only=False) is None
     finally:
         store.close()

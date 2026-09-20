@@ -720,6 +720,22 @@ class SqliteMatchStore:
 
         return self._with_lock(body)
 
+    def get_run_configuration(self, run_id: RunId) -> RunConfiguration | None:
+        """T226, FR-033: read back the configuration `create_run` already stored.
+
+        `config_json` is written `by_alias=True` (see `create_run`), which is the wire shape
+        `RunConfiguration` validates from, so this round-trips exactly what was persisted --
+        no re-derivation, no defaults applied on top of a stored value.
+        """
+
+        def body(conn: sqlite3.Connection) -> RunConfiguration | None:
+            row = conn.execute(
+                "SELECT config_json FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            return RunConfiguration.model_validate_json(row[0]) if row is not None else None
+
+        return self._with_lock(body)
+
     def get_turn_cycle(
         self, run_id: RunId, turn: int, *, authoritative_only: bool = True
     ) -> TurnCycleRecord | None:

@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -21,7 +22,7 @@ from civsim_harness.models.common import BuildAcceptance, CatalogVersionRef
 from civsim_harness.models.config import RunConfiguration
 from civsim_harness.models.decision import Decision
 from civsim_harness.models.records import ModelCall, RetentionStatus, SavePoint
-from civsim_harness.models.run import Run
+from civsim_harness.models.run import ComparabilityStatus, LifecycleState, Run
 from civsim_harness.models.turn import DecisionStep, Observation, TurnCycle
 from civsim_harness.saves.addressing import SaveAddressingError
 from civsim_harness.saves.branching import (
@@ -220,7 +221,12 @@ def _seed_parent_through_turn(store: SqliteMatchStore, run_id: str, *, up_to_tur
 
 
 def _branch_source(
-    run_id: str, *, model: str = "anthropic/claude-sonnet-5", game_build: str = "win/1.0.12.9"
+    run_id: str,
+    *,
+    model: str = "anthropic/claude-sonnet-5",
+    game_build: str = "win/1.0.12.9",
+    comparability_status: ComparabilityStatus = ComparabilityStatus.COMPARABLE,
+    host_platform: dict[str, Any] | None = None,
 ) -> BranchSource:
     return BranchSource(
         run_id=run_id,
@@ -230,6 +236,15 @@ def _branch_source(
         action_catalog_version=CatalogVersionRef.model_validate(_catalog_ref()),
         host_support_tier="validated",  # type: ignore[arg-type]
         capture_path="windows_graphics_capture",  # type: ignore[arg-type]
+        # T226: both are required of the caller now -- `create_branch` no longer hard-codes
+        # `COMPARABLE` and no longer omits the host platform. A caller must state what its own
+        # host gate actually resolved.
+        comparability_status=comparability_status,
+        host_platform=(
+            host_platform
+            if host_platform is not None
+            else {"os": "windows", "os_version": "11", "session_type": None}
+        ),
     )
 
 
@@ -295,6 +310,51 @@ async def test_two_branches_from_the_same_save_point_each_record_lineage(
     # -- each child is independently retrievable and distinct from the parent --
     assert store.get_run("branch-a") == child_a
     assert store.get_run("branch-b") == child_b
+
+
+async def test_a_branch_on_a_degraded_host_records_itself_degraded(
+    store: SqliteMatchStore,
+) -> None:
+    """T226 / Principle IV, FR-050, SC-013: a branch never claims a comparability it does not have.
+
+    `create_branch` used to hard-code `comparability_status=COMPARABLE` and set no
+    `host_platform` at all, so a branch started on a visually degraded host recorded itself as
+    fully comparable -- a silent falsehood in exactly the field that makes cross-branch comparison
+    trustworthy ("comparing strategies across branches or runs is only meaningful when starting
+    conditions are identical"). Both fields are now required of the caller, so the falsehood is
+    unreachable rather than merely discouraged; this asserts the recorded end of that.
+
+    Also pins the lifecycle state. A branch is created `preparing`, not `playing`: `failed` is
+    reachable only from `preparing` or `resuming` (data-model.md SS4), so a branch born `playing`
+    could never be failed by its own V2 setup verification.
+    """
+    _seed_parent_through_turn(store, "parent-degraded", up_to_turn=3)
+
+    child, _save, _event = await create_branch(
+        store,
+        _RecordingLoader(),
+        branch_from=BranchFrom(run_id="parent-degraded", turn=3),
+        child=_branch_source(
+            "branch-degraded",
+            comparability_status=ComparabilityStatus.VISUALLY_DEGRADED,
+            host_platform={"os": "linux", "os_version": "6.8", "session_type": "wayland"},
+        ),
+        occurred_at=NOW,
+    )
+
+    assert child.comparability_status is ComparabilityStatus.VISUALLY_DEGRADED
+    assert child.host_platform == {
+        "os": "linux",
+        "os_version": "6.8",
+        "session_type": "wayland",
+    }
+    assert child.lifecycle_state is LifecycleState.PREPARING
+
+    # ...and it is the *recorded* run that says so, not just the returned object.
+    stored = store.get_run("branch-degraded")
+    assert stored is not None
+    assert stored.comparability_status is ComparabilityStatus.VISUALLY_DEGRADED
+    assert stored.host_platform["os"] == "linux"
 
 
 async def test_branch_from_a_missing_save_is_rejected_never_retargeted(

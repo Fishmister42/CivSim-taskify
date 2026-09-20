@@ -107,6 +107,13 @@ from civsim_harness.run.decision_loop import (
     MidTurnObservationFailure,
     run_decision_loop,
 )
+from civsim_harness.run.detection import (
+    DEFAULT_DETECTION_INTERVAL_S,
+    ClientFaultDetected,
+    DetectionWatch,
+    primary_fault,
+    run_under_detection,
+)
 from civsim_harness.saves.headroom import build_disk_headroom_event, check_headroom
 from civsim_harness.saves.save_game import SaveCapability
 from civsim_harness.saves.save_point import build_save_point, save_name_for, write_save_point
@@ -179,10 +186,31 @@ class TurnCycleDependencies:
     up from this base, so the two mechanisms compose rather than competing.
     """
 
+    detection: DetectionWatch | None = None
+    """T233, FR-044/FR-045/SC-010: this run's binding of research R12's detection signals.
+
+    ``None`` disables detection entirely, which is the right default for a caller driving a
+    scripted in-memory game that has no client process and no tuner to probe. The production
+    composition root (``run/composition.py``) always supplies one: without it, SC-010 has no
+    mechanism behind it and a client that dies is noticed only when the next Nexus call happens
+    to fail, if it does. See ``run/detection.py`` for what runs where.
+    """
+
+    detection_interval_s: float = DEFAULT_DETECTION_INTERVAL_S
+    """How often the in-turn watchdog asks whether the client is still healthy (T233).
+
+    **Not a turn timer** (research R12, FR-014): it bounds how long this module may go without
+    *asking*, and is never compared against how long the turn or any step has been running.
+    """
+
     def __post_init__(self) -> None:
         if self.attempt_index_base < 0:
             raise ValueError(
                 f"attempt_index_base must be >= 0, got {self.attempt_index_base}"
+            )
+        if self.detection_interval_s <= 0:
+            raise ValueError(
+                f"detection_interval_s must be > 0, got {self.detection_interval_s}"
             )
 
 
@@ -312,6 +340,57 @@ async def _dispatch_backstop_end_turn(
     return turn_cycle_id
 
 
+async def _detect_between_turns(deps: TurnCycleDependencies) -> None:
+    """T233, FR-044/SC-010: is the client still there *before* this turn commits to anything?
+
+    Liveness only, and deliberately so -- see ``run/detection.py``'s module docstring. It is a
+    single point-in-time ``psutil`` call against the client's own PID: no Nexus traffic outside
+    the turn's own work, nothing that can block on the client's command lock, and the
+    authoritative answer to the question a turn boundary actually asks. A client that hung rather
+    than died is caught a moment later by the quicksave command's own per-operation bound.
+
+    Raises :class:`~civsim_harness.run.detection.ClientFaultDetected` rather than recovering: no
+    quicksave for this turn exists yet, so there is no attempt to abandon and no start save for
+    `RecoveryEngine` to resume from. Recording the crash and naming it is strictly better than
+    letting the quicksave a moment later fail with a transport error that says nothing about why.
+    """
+    if deps.detection is None:
+        return
+    events = await deps.detection.check_liveness_now(turn_number=deps.turn_number)
+    fault = primary_fault(events)
+    if fault is None:
+        return
+    raise ClientFaultDetected(
+        "the game client was detected faulty before this turn's quicksave was taken; the turn "
+        "never came into existence as an attempt, and there is no start save for this turn to "
+        "resume from (FR-044, SC-010)",
+        events=events,
+        primary=fault,
+        detail={"run_id": str(deps.run_id), "turn_number": deps.turn_number},
+    )
+
+
+async def _run_decision_loop_watched(
+    deps: TurnCycleDependencies, loop_ctx: DecisionLoopContext
+) -> DecisionLoopResult:
+    """:func:`~civsim_harness.run.decision_loop.run_decision_loop`, watched on a fixed cadence.
+
+    Identical to calling it directly when no detection is wired (``deps.detection is None``), so
+    every caller that drives a scripted in-memory game keeps the behaviour it had. When one *is*
+    wired, the loop runs concurrently with the watchdog described in ``run/detection.py`` -- which
+    is what makes SC-010's 60 s budget a property of the harness rather than of how long a
+    decision step happens to take.
+    """
+    if deps.detection is None:
+        return await run_decision_loop(loop_ctx)
+    return await run_under_detection(
+        lambda: run_decision_loop(loop_ctx),
+        watch=deps.detection,
+        turn_number=deps.turn_number,
+        interval_s=deps.detection_interval_s,
+    )
+
+
 async def _take_quicksave(deps: TurnCycleDependencies) -> SavePoint:
     """FR-007, invariant I2: a named, filesystem-verified quicksave before anything else for this
     turn. Raises on any failure -- the turn attempt never comes into existence."""
@@ -432,7 +511,16 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
     :class:`BackstopEndTurnNotConfirmed` when an ``ended_on_no_progress`` attempt's own end-turn
     dispatch to the game cannot be confirmed. None of these are this module's to resolve;
     ``run/runner.py`` (T116) decides what each means for the run's own lifecycle state.
+
+    Additionally raises :class:`~civsim_harness.run.detection.ClientFaultDetected` (T233, FR-044,
+    SC-010) when a detection signal trips **between** turns, before this turn's own quicksave has
+    been taken: there is no attempt to abandon and no start save to resume from at that point, so
+    the fault is recorded and raised by name rather than surfacing a moment later as a generic
+    transport failure from the quicksave. A fault detected *during* the turn is not raised -- it
+    is routed into ``deps.recovery`` below, exactly as a mid-turn observation failure is.
     """
+    await _detect_between_turns(deps)
+
     save_point = await _take_quicksave(deps)
 
     current_run = run
@@ -446,7 +534,46 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
         loop_ctx = deps.build_loop_context(turn_cycle_id)
         started_at = deps.clock()
         try:
-            result = await run_decision_loop(loop_ctx)
+            result = await _run_decision_loop_watched(deps, loop_ctx)
+        except ClientFaultDetected as exc:
+            # T233, FR-044/FR-045/SC-010. Same shape as the mid-turn observation failure below,
+            # for the same reason: the board this attempt was reading can no longer be trusted, so
+            # the attempt is abandoned and replayed from this turn's own start quicksave rather
+            # than continued. Unlike that path, this one carries no completed steps -- the
+            # watchdog cancelled the loop mid-await and the loop has no way to hand its partial
+            # work back through a cancellation -- which is exactly the "losing at most the turn in
+            # progress" SC-010 permits. The detections themselves are already durably recorded
+            # (`DetectionWatch` writes each event before reporting it), so the run's timeline
+            # still says why this attempt ended.
+            recovery_result = await deps.recovery.recover(
+                current_run,
+                turn_number=deps.turn_number,
+                turn_start_save=save_point,
+                trigger_event_type=exc.primary,
+                trigger_detail=dict(exc.detail),
+            )
+            current_run = recovery_result.run
+            # Replaying into a client that is *still* gone would spin: `RecoveryEngine` resets its
+            # consecutive-failure count on every successful recovery, so a load that "succeeds"
+            # against a dead client would never reach the FR-048 bound. One more liveness check --
+            # the cheap, non-blocking one -- turns that into a loud, recorded stop instead.
+            still_faulty = (
+                await deps.detection.check_liveness_now(turn_number=deps.turn_number)
+                if deps.detection is not None
+                else ()
+            )
+            fault = primary_fault(still_faulty)
+            if fault is not None:
+                raise ClientFaultDetected(
+                    "the game client is still detected faulty after recovery reloaded this "
+                    "turn's start quicksave; the run stops rather than replaying the turn into "
+                    "a client that is not there (FR-044, FR-048)",
+                    events=still_faulty,
+                    primary=fault,
+                    detail={"run_id": str(deps.run_id), "turn_number": deps.turn_number},
+                ) from exc
+            attempt_index += 1
+            continue
         except MidTurnObservationFailure as exc:
             ended_at = deps.clock()
             if exc.steps:

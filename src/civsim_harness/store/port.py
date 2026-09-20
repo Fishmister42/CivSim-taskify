@@ -177,11 +177,11 @@ class MatchStore(Protocol):
     """The store every harness write and recovery/branching/retention read
     goes through (contracts/match-store-port.md).
 
-    Nine writes (including `archive_run`), ten reads (including
-    `step_gaps`, `list_eligible_save_points`, `get_capture`, and
-    `list_run_events`), and `ping()`. Every write is synchronous-durable:
-    see the D1-D6 durability contract on each method below and in the
-    contract document. Later waves bind to this `Protocol`, never to
+    Nine writes (including `archive_run`), eleven reads (including
+    `step_gaps`, `list_eligible_save_points`, `get_capture`,
+    `list_run_events`, and `get_run_configuration`), and `ping()`. Every
+    write is synchronous-durable: see the D1-D6 durability contract on each
+    method below and in the contract document. Later waves bind to this `Protocol`, never to
     `SqliteMatchStore` directly, so that deliverable 3's real store is a
     drop-in configuration change (plan Complexity Tracking C2).
 
@@ -272,6 +272,27 @@ class MatchStore(Protocol):
 
     def get_run(self, run_id: RunId) -> Run | None:
         """Look up one run by id."""
+        ...
+
+    def get_run_configuration(self, run_id: RunId) -> RunConfiguration | None:
+        """The `RunConfiguration` this run was created with, or `None` if the
+        run is unknown (T226, FR-033).
+
+        A read of what `create_run` already persisted -- not a new record and
+        not a schema change. Branching needs it and nothing else could
+        supply it: `config/run_config.py`'s `load_branch_configuration_file`
+        inherits seed, civilization, ruleset, mod set, map and game settings
+        from the *parent's* configuration and refuses a branch document that
+        restates any of them differently, so a branch cannot be validated at
+        all without reading the parent's configuration back. Without this,
+        `civsim run branch` could not reach a branch: `branch_from` fails
+        `RunConfiguration`'s `extra="forbid"` on the non-branch loader, which
+        is the only loader that needs no parent configuration.
+
+        Returns exactly what was stored, never a merged, defaulted or
+        re-derived view -- a branch inherits from what the parent actually
+        ran, not from what a later default would produce.
+        """
         ...
 
     def get_turn_cycle(

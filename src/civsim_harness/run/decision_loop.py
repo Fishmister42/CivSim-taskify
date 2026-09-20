@@ -86,13 +86,14 @@ from civsim_harness.models.common import (
 )
 from civsim_harness.models.config import GuidanceSet
 from civsim_harness.models.decision import DecisionTrigger, RejectionReason
-from civsim_harness.models.records import CallOutcome, ModelCall, RunEvent
+from civsim_harness.models.records import CallOutcome, RunEvent
 from civsim_harness.models.turn import DecisionStep, Observation, StepProgress, TurnOutcome
 from civsim_harness.observe.assemble import CapabilityResult, assemble_observation
 from civsim_harness.observe.capture import capture_for_step
 from civsim_harness.observe.screen_identity import interpret_screen_state
 from civsim_harness.parity.forbidden import enforce_parity_boundary
 from civsim_harness.parity.screening import ScreeningProfiles
+from civsim_harness.provider.accounting import build_model_call
 from civsim_harness.provider.port import ModelProvider
 from civsim_harness.run.no_progress import NoProgressTracker, build_no_progress_event
 from civsim_harness.store.port import DecisionStepBundle, MatchStore
@@ -501,19 +502,25 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
 
         response = ctx.provider.complete(request)
 
-        model_call = ModelCall(
+        # T232, FR-040, contracts/model-provider-port.md P2/P3/P7: one definition of how a
+        # completed provider call becomes a `ModelCall`. This loop used to construct it inline,
+        # field by field, while `provider/accounting.py` -- built for exactly this and carrying
+        # the P2 image-count re-check -- had no caller anywhere in `src/`.
+        #
+        # The re-check is not redundant with `ProviderChain._assert_image_count`. That one guards
+        # `complete_step`; this one guards *this* loop, whose `ctx.provider` is only a chain in
+        # the production composition (`_ChainBackedProvider`) and is a bare `ModelProvider` in
+        # every other caller. A `ModelCall` whose own `image_count` disagrees with the request it
+        # is accounting for cannot be trusted to show whether images were silently dropped
+        # (FR-039, invariant I7), so it is refused rather than written.
+        model_call = build_model_call(
             model_call_id=ModelCallId(uuid.uuid4().hex),
             run_id=ctx.run_id,
             turn_cycle_id=ctx.turn_cycle_id,
             decision_step_id=step_id,
             model_requested=ctx.model,
-            model_served=response.model_served,
-            latency_ms=response.latency_ms,
-            cost=response.cost,
-            retry_count=response.retry_count,
-            fallback_occurred=response.fallback_occurred,
-            image_count=response.image_count,
-            outcome=response.outcome,
+            request=request,
+            response=response,
         )
 
         if response.outcome is not CallOutcome.DECISION_RETURNED or response.decision is None:

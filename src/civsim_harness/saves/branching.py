@@ -17,9 +17,10 @@ record keyed by the parent's own ``run_id``: every write here targets the
 ``load_branch_configuration_yaml`` (T166) is where a restated seed,
 civilization, ruleset, mod set, map, or game setting that disagrees with
 the parent is rejected; this module receives an already-validated child
-``RunConfiguration`` and does not re-derive or re-verify that inheritance,
-since the store's ``MatchStore`` port exposes no way to fetch a run's
-configuration back out to compare against.
+``RunConfiguration`` and does not re-derive or re-verify that inheritance.
+The parent configuration that check needs is read through
+``MatchStore.get_run_configuration`` (T226) by the caller that loads the
+branch document, not here.
 
 **Same-build branching (T175, FR-033, research R20).** A branch whose game
 build -- platform or version -- differs from its parent's is refused by
@@ -233,6 +234,20 @@ class BranchFrom:
 class BranchSource:
     """Everything about the child run that is resolved at its own preflight
     -- as any run's would be -- and is not derivable from the parent alone.
+
+    **`comparability_status` and `host_platform` have no defaults, and that
+    is the point (T226).** An earlier version of this module hard-coded
+    ``comparability_status=COMPARABLE`` and set no ``host_platform`` at all,
+    so a branch started on a degraded host recorded itself as fully
+    comparable -- a silent falsehood in precisely the field that makes
+    cross-branch comparison trustworthy (Principle IV: "comparing strategies
+    across branches or runs is only meaningful when starting conditions are
+    identical"; FR-050/SC-013's "a platform may be less capable, but it may
+    not be less honest"). Both are now required of the caller, resolved from
+    the same ``evaluate_host_gate`` result and ``HostInfo`` an ordinary
+    run's own preparation uses -- there is no way to construct a
+    ``BranchSource`` that omits them, so the falsehood is unreachable
+    rather than merely discouraged.
     """
 
     run_id: RunId
@@ -242,6 +257,15 @@ class BranchSource:
     action_catalog_version: CatalogVersionRef
     host_support_tier: HostSupportTier
     capture_path: CapturePath
+    comparability_status: ComparabilityStatus
+    """What this host's own capability gate actually resolved for this run --
+    never assumed comparable. A branch that is not comparable must say so."""
+
+    host_platform: dict[str, Any]
+    """The platform this branch actually ran on (`os`, `os_version`,
+    `session_type`), recorded exactly as the non-branch path records it. An
+    empty or absent host platform makes a run's comparability
+    uninterpretable after the fact."""
 
 
 def _event(
@@ -309,10 +333,18 @@ async def create_branch(
     child_run = Run(
         run_id=child.run_id,
         config_id=child.config.config_id,
-        lifecycle_state=LifecycleState.PLAYING,
-        started_at=occurred_at,
+        # T226: `preparing`, not `playing`. A branch's own setup still has to be verified against
+        # the *loaded* save before it may play (FR-002/V2), exactly as a fresh run's does, and
+        # `failed` is reachable only from `preparing` or `resuming` (data-model.md SS4) -- a branch
+        # created straight into `playing` could never be failed by its own V2 check, which would
+        # make the verification unenforceable on precisely the runs Principle IV cares most about.
+        # The caller drives `preparing -> playing` after that check, on the one code path that
+        # already does so for every other run.
+        lifecycle_state=LifecycleState.PREPARING,
         record_completeness_status=RecordCompletenessStatus.UNKNOWN,
-        comparability_status=ComparabilityStatus.COMPARABLE,
+        # T226: taken from the caller's own host gate, never assumed. See `BranchSource`.
+        comparability_status=child.comparability_status,
+        host_platform=dict(child.host_platform),
         observation_catalog_version=child.observation_catalog_version,
         action_catalog_version=child.action_catalog_version,
         parent_run_id=branch_from.run_id,

@@ -73,6 +73,7 @@ from civsim_harness.capability.executor import CapabilityExecutor
 from civsim_harness.capability.loader import Catalog, load_catalog
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.config.guidance import load_guidance
+from civsim_harness.config.run_config import BranchFrom
 from civsim_harness.config.seed_set import check_seed_set_agreement, load_seed_set_file
 from civsim_harness.errors import HarnessError
 from civsim_harness.host.detect import (
@@ -117,8 +118,12 @@ from civsim_harness.provider.port import (
     ModelProvider,
 )
 from civsim_harness.provider.preflight import preflight_chain
+from civsim_harness.resilience.detector import DetectionAggregator
+from civsim_harness.resilience.heartbeat_monitor import HeartbeatMonitor
+from civsim_harness.resilience.liveness import ProcessLivenessMonitor
 from civsim_harness.resilience.recovery import RecoveryEngine, SaveLoader
 from civsim_harness.run.decision_loop import DecisionLoopContext
+from civsim_harness.run.detection import DEFAULT_DETECTION_INTERVAL_S, DetectionWatch
 from civsim_harness.run.identity_lock import RunIdentityLock
 from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
 from civsim_harness.run.preparation import (
@@ -138,6 +143,11 @@ from civsim_harness.run.preparation import (
 from civsim_harness.run.runner import PreparedRun, RunnerDependencies
 from civsim_harness.run.stop import GameOutcome, StopEvaluation, evaluate_stop
 from civsim_harness.run.turn_cycle import TurnCycleDependencies
+from civsim_harness.saves.branching import BranchFrom as SaveBranchFrom
+from civsim_harness.saves.branching import (
+    BranchSource,
+    create_branch,
+)
 from civsim_harness.saves.save_game import LuaSaveCapability
 from civsim_harness.store.port import MatchStore
 from civsim_harness.telemetry.logging import get_harness_logger, log_event
@@ -303,6 +313,15 @@ class _RunContext:
     guidance: GuidanceSet | None = None
     """T219: the run's resolved `GuidanceSet`, loaded once at preparation and handed to every
     decision step's `DecisionLoopContext`. `None` only when the configuration names none."""
+
+    detection: DetectionWatch | None = None
+    """T233: this run's binding of research R12's detection signals (FR-044, FR-045, SC-010).
+
+    Built once at preparation, against the same `NexusClient` this run dispatches through and the
+    PID of the client process the host actually located, and handed to every turn's
+    `TurnCycleDependencies`. `None` only when the client's socket is somehow unusable for a
+    heartbeat *and* the host could not locate a process -- i.e. when there is genuinely no signal
+    to read, which is recorded rather than faked."""
 
     last_game_outcome: GameOutcome | None = None
     """T216: the most recent `game.outcome_state` this run actually read, updated by
@@ -477,6 +496,59 @@ def _resolve_capture_path(
 
 
 # --------------------------------------------------------------------------
+# T233 -- the crash/hang detection layer, bound to this run
+# --------------------------------------------------------------------------
+
+
+def _build_detection_watch(
+    *,
+    store: MatchStore,
+    run_id: RunId,
+    nexus_client: NexusClient,
+    client_pid: int | None,
+    clock: Callable[[], Timestamp],
+) -> DetectionWatch:
+    """This run's `DetectionWatch` (T233, FR-044/FR-045/SC-010).
+
+    `DetectionAggregator`, `HeartbeatMonitor` and `ProcessLivenessMonitor` were each complete and
+    each individually tested, and **nothing in `src/` constructed any of them** -- so none of
+    research R12's signals ever ran during a real run and SC-010 had no mechanism behind it at
+    all. This function is the construction that was missing.
+
+    Two of R12's four signals are wired here, and the omissions are deliberate rather than
+    unfinished:
+
+    - **Process liveness** -- keyed to the PID `host.locate_game_process()` actually reported (the
+      same call T227's identity lock already makes, so no second probe is introduced). A host that
+      could not locate the process supplies no monitor rather than a fabricated PID: the
+      heartbeat still runs, and `check_heartbeat`'s own corroboration step degrades honestly to
+      `unresponsive_detected` when it has no liveness signal to confirm a crash against.
+    - **Tuner heartbeat** -- bound to *this run's own* connected `NexusClient`, the same one every
+      per-turn call dispatches through, so the probe shares the client's single connection slot
+      (research R4) instead of opening a second one the game would refuse.
+    - **Per-operation bounds** are not a signal the aggregator polls: every Nexus command already
+      carries `nexus/client.py`'s own per-command timeout (T032), and `run/detection.py` applies
+      `resilience.operation_bounds.run_bounded` to the aggregate pass itself so a wedged pass
+      cannot silently switch detection off.
+    - **The screen-identity probe** is deliberately left unwired -- `run/decision_loop.py` already
+      polls the declared `game.screen_state` observation between decision steps and raises
+      `UnknownScreenEncountered` (FR-049, research R13). See `run/detection.py`'s docstring.
+    """
+    liveness = ProcessLivenessMonitor(pid=client_pid) if client_pid is not None else None
+    aggregator = DetectionAggregator(
+        liveness=liveness,
+        heartbeat=HeartbeatMonitor(client=nexus_client),
+    )
+    return DetectionWatch(
+        aggregator=aggregator,
+        store=store,
+        run_id=run_id,
+        clock=clock,
+        liveness=liveness,
+    )
+
+
+# --------------------------------------------------------------------------
 # T214 -- the single-connection NexusClient's lifetime
 # --------------------------------------------------------------------------
 
@@ -553,6 +625,8 @@ async def _prepare_run(
     clock: Callable[[], Timestamp],
     run_contexts: dict[RunId, _RunContext],
     run_lock: RunIdentityLock,
+    save_loader: SaveLoader,
+    branch_from: BranchFrom | None = None,
 ) -> PreparedRun:
     """T210: chain every preparation step this codebase has, in an order deliberately justified
     below, ending either in a raised `HarnessError` (nothing constructed -- `Runner.start` wraps
@@ -667,6 +741,8 @@ async def _prepare_run(
             clock=clock,
             run_contexts=run_contexts,
             run_lock=run_lock,
+            save_loader=save_loader,
+            branch_from=branch_from,
         )
     except BaseException:
         await _close_quietly(nexus_client)
@@ -691,6 +767,8 @@ async def _prepare_connected_run(
     clock: Callable[[], Timestamp],
     run_contexts: dict[RunId, _RunContext],
     run_lock: RunIdentityLock,
+    save_loader: SaveLoader,
+    branch_from: BranchFrom | None = None,
 ) -> PreparedRun:
     """Steps 3b-8 of :func:`_prepare_run`, split out purely so its caller can own one
     ``try``/``except`` around the whole post-connect sequence (T214).
@@ -744,29 +822,67 @@ async def _prepare_connected_run(
             game_build_acceptance_ref = build_pin_result.acceptance.acceptance_id
 
     # -- 7. every gate above either raised (nothing constructed) or recorded-and-proceeded ------
-    run = Run(
-        run_id=RunId(f"run-{uuid.uuid4().hex}"),
-        config_id=config.config_id,
-        lifecycle_state=LifecycleState.PREPARING,
-        record_completeness_status=RecordCompletenessStatus.COMPLETE,
-        comparability_status=host_gate_result.comparability_status,
-        observation_catalog_version=catalog_result.observation_catalog_version,
-        action_catalog_version=catalog_result.action_catalog_version,
-        game_build=actual_build,
-        game_build_acceptance_ref=game_build_acceptance_ref,
-        host_platform={
-            "os": host_info.os.value,
-            "os_version": host_info.os_version,
-            "session_type": host_info.session_type.value if host_info.session_type else None,
-        },
-        host_support_tier=host_gate_result.tier,
-        # T220: measured, not declared -- one real capture attempt against the live window, whose
-        # result names the R6-ranked mechanism that actually produced a frame (or `NONE`).
-        capture_path=_resolve_capture_path(
-            host=host, host_info=host_info, window_provider=window_provider
-        ),
+    host_platform = {
+        "os": host_info.os.value,
+        "os_version": host_info.os_version,
+        "session_type": host_info.session_type.value if host_info.session_type else None,
+    }
+    # T220: measured, not declared -- one real capture attempt against the live window, whose
+    # result names the R6-ranked mechanism that actually produced a frame (or `NONE`).
+    capture_path = _resolve_capture_path(
+        host=host, host_info=host_info, window_provider=window_provider
     )
-    store.create_run(run, config)
+
+    if branch_from is not None:
+        # T226, FR-033/FR-034, Principle IV. `saves/branching.py` owns every branch-specific
+        # step -- the parent must exist, its build must agree with this client's (T174/T175),
+        # its save at `branch_from.turn` must be available (FR-036, never retargeted), that save
+        # must actually load, and the lineage plus `branch_created` must be recorded. All of it
+        # happens here rather than in a second preparation path of its own, so a branch passes
+        # through the *same* gates 1-6 above and the *same* V2 verification and
+        # `preparing -> playing` transition below that every other run does.
+        run, _save_point, _branch_event = await create_branch(
+            store,
+            save_loader,
+            branch_from=SaveBranchFrom(run_id=branch_from.run_id, turn=branch_from.turn),
+            child=BranchSource(
+                run_id=RunId(f"run-{uuid.uuid4().hex}"),
+                config=config,
+                game_build=actual_build,
+                observation_catalog_version=catalog_result.observation_catalog_version,
+                action_catalog_version=catalog_result.action_catalog_version,
+                host_support_tier=host_gate_result.tier,
+                capture_path=capture_path,
+                # The binding half of T226: both come from this host's own gate and this
+                # process's own `HostInfo`, exactly as the non-branch construction below does.
+                # A branch on a degraded host records itself degraded.
+                comparability_status=host_gate_result.comparability_status,
+                host_platform=host_platform,
+            ),
+            accepted_build_changes=(
+                tuple(seed_set.accepted_build_changes) if seed_set is not None else ()
+            ),
+            occurred_at=clock(),
+        )
+        # Loading a save is a phase boundary like any other: the state table the client reported
+        # before the load cannot be assumed valid after it (`nexus/client.py`).
+        await nexus_client.refresh_state_indices()
+    else:
+        run = Run(
+            run_id=RunId(f"run-{uuid.uuid4().hex}"),
+            config_id=config.config_id,
+            lifecycle_state=LifecycleState.PREPARING,
+            record_completeness_status=RecordCompletenessStatus.COMPLETE,
+            comparability_status=host_gate_result.comparability_status,
+            observation_catalog_version=catalog_result.observation_catalog_version,
+            action_catalog_version=catalog_result.action_catalog_version,
+            game_build=actual_build,
+            game_build_acceptance_ref=game_build_acceptance_ref,
+            host_platform=host_platform,
+            host_support_tier=host_gate_result.tier,
+            capture_path=capture_path,
+        )
+        store.create_run(run, config)
 
     # T227, FR-006/V8, research R4: claim this run identity before a single turn is played.
     # The game's own one-tuner-at-a-time limit already stops two harnesses attaching to the
@@ -856,6 +972,15 @@ async def _prepare_connected_run(
         catalog_version=catalog_result.observation_catalog_version,
         executor=executor,
         guidance=guidance,
+        # T233: built from the PID step 7 already located for T227's lock and from this run's own
+        # connected client -- no second process probe, no second tuner connection.
+        detection=_build_detection_watch(
+            store=store,
+            run_id=playing_run.run_id,
+            nexus_client=nexus_client,
+            client_pid=client_process.pid if client_process is not None else None,
+            clock=clock,
+        ),
     )
 
     return PreparedRun(run=playing_run, stop_condition=config.stop_condition)
@@ -939,6 +1064,7 @@ def build_runner_dependencies(
     disk_check_path: Path | None = None,
     home: Path | None = None,
     screening_profiles: ScreeningProfiles | None = None,
+    detection_interval_s: float = DEFAULT_DETECTION_INTERVAL_S,
     clock: Callable[[], Timestamp] = _utcnow,
 ) -> RunnerDependencies:
     """Build a real `RunnerDependencies` (T209): the composition root.
@@ -977,6 +1103,12 @@ def build_runner_dependencies(
     *guidance_root* is where `RunConfiguration.guidance_set_id`'s source reference resolves from
     (T219); it is read once per run during preparation, never per turn.
 
+    *detection_interval_s* is how often the in-turn watchdog asks research R12's detection signals
+    whether the client is still healthy (T233, FR-044/SC-010) -- **not** a turn timer: it bounds
+    how long the harness may go without asking, never how long a turn, a step, or an operation may
+    take (FR-014). The detection layer itself is always wired; before T233 nothing in `src/`
+    constructed it, so SC-010 had no mechanism at all.
+
     *observation_declaration_ids* narrows what each decision step reads to an explicit subset. The
     default (``None``) reads **every** ``kind: observation`` declaration the loaded catalog
     carries -- the right production default, since the agent should see everything the catalog
@@ -1009,7 +1141,9 @@ def build_runner_dependencies(
 
     run_contexts: dict[RunId, _RunContext] = {}
 
-    async def prepare_run(config: RunConfiguration) -> PreparedRun:
+    async def _prepare(
+        config: RunConfiguration, branch_from: BranchFrom | None
+    ) -> PreparedRun:
         # T214: release any client still held by an already-terminal run before asking the tuner
         # for its single connection slot again -- see `_release_terminal_run_clients`.
         await _release_terminal_run_clients(store, run_contexts, resolved_run_lock)
@@ -1034,7 +1168,29 @@ def build_runner_dependencies(
             clock=clock,
             run_contexts=run_contexts,
             run_lock=resolved_run_lock,
+            save_loader=resolved_save_loader,
+            branch_from=branch_from,
         )
+
+    async def prepare_run(config: RunConfiguration) -> PreparedRun:
+        return await _prepare(config, None)
+
+    async def prepare_branch(config: RunConfiguration, branch_from: BranchFrom) -> PreparedRun:
+        """T226, FR-033/FR-034: prepare a **branch** of an existing run.
+
+        Deliberately the same call as `prepare_run` with one extra argument, not a second
+        preparation pipeline: a branch must pass every gate an ordinary run passes (seed-set
+        agreement, catalog, host capability, model chain, build pin, V2 read-back) *plus* the
+        branch-specific ones, and the surest way to keep that true is for there to be only one
+        sequence that can be added to. See `_prepare_connected_run`'s step 7.
+
+        Fails loudly and specifically rather than starting an unbranched run: a missing parent
+        (`BranchSourceMissingError`), a build disagreement (`BranchBuildMismatchError` /
+        `BranchPlatformSpikeRequiredError`), an absent save (`SaveAddressingError`, never
+        retargeted), or -- today, universally -- the missing save-*load* capability itself
+        (`_NoLiveSaveLoader`, T217), each raised by name before any child `Run` is constructed.
+        """
+        return await _prepare(config, branch_from)
 
     def _next_attempt_index(run_id: RunId, turn_number: int) -> int:
         """T223 (FR-004, FR-047): the `attempt_index` this play of *turn_number* must start at.
@@ -1120,6 +1276,11 @@ def build_runner_dependencies(
             home=home,
             clock=clock,
             attempt_index_base=_next_attempt_index(run_id, turn_number),
+            # T233, FR-044/FR-045/SC-010: the detection layer this run was prepared with. Without
+            # this line the aggregator is constructed and never asked anything, which is exactly
+            # the defect the whole of Phase 11 was written about.
+            detection=ctx.detection,
+            detection_interval_s=detection_interval_s,
         )
 
     def evaluate_stop_facts(prepared: PreparedRun, turn_number: int) -> StopEvaluation:
@@ -1217,6 +1378,7 @@ def build_runner_dependencies(
     return RunnerDependencies(
         store=store,
         prepare_run=prepare_run,
+        prepare_branch=prepare_branch,
         build_turn_dependencies=build_turn_dependencies,
         evaluate_stop_facts=evaluate_stop_facts,
         connection_health=connection_health,

@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from civsim_harness.errors import HarnessError, PreflightError
+from civsim_harness.errors import HarnessError, NexusError, PreflightError
 from civsim_harness.host.detect import (
     UNPROBED,
     HostInfo,
@@ -913,3 +913,134 @@ def test_audit_parity_cli_passes_against_a_well_formed_run(
     )
     assert result.exit_code == 0
     assert "passed" in result.output
+
+
+# --------------------------------------------------------------------------
+# `doctor` against a tuner that is actually listening
+# --------------------------------------------------------------------------
+
+
+class _HandshakeTimesOutNexusClient:
+    """Something *is* listening on the tuner port, but the handshake never completes.
+
+    The whole family of failures this stands for -- a handshake that times out, a socket that
+    drops mid-handshake, a state table that comes back malformed -- raises `NexusError`, not
+    `PreflightError`, and **every one of them is only reachable when a client is actually
+    running**. That is why this path had no coverage: until a live client existed, nothing could
+    reach it.
+    """
+
+    async def connect(self) -> Any:
+        raise NexusError(
+            "Nexus handshake exceeded its timeout",
+            detail={"reason": "timeout", "timeout_s": 5.0},
+        )
+
+    async def close(self) -> None:
+        return None
+
+
+class _StateQueryFailsNexusClient:
+    """`connect()` succeeds, then the state query fails at the transport level.
+
+    Distinct from `_MainMenuNexusClient`, whose `resolve_game_states()` raises `PreflightError`
+    to mean the honest, expected "reachable, no game loaded". This one is the transport failing,
+    which is not a diagnosis -- it is a crash unless reported.
+    """
+
+    async def connect(self) -> Any:
+        return None
+
+    async def resolve_game_states(self) -> Any:
+        raise NexusError("socket closed during LSQ", detail={"reason": "connection_lost"})
+
+    async def close(self) -> None:
+        return None
+
+
+class _UncloseableNexusClient:
+    """Connects and resolves fine, but will not shut its socket down cleanly."""
+
+    async def connect(self) -> Any:
+        return None
+
+    async def resolve_game_states(self) -> Any:
+        from civsim_harness.nexus.client import StateIndices
+
+        return StateIndices(
+            by_name={"GameCore_Tuner": 7, "InGame": 8}, game_core_tuner=7, in_game=8
+        )
+
+    async def close(self) -> None:
+        raise OSError("socket refused to close")
+
+
+@pytest.mark.parametrize(
+    ("client_factory", "expected_detail_fragment"),
+    [
+        (_HandshakeTimesOutNexusClient, "handshake"),
+        (_StateQueryFailsNexusClient, "socket closed"),
+    ],
+)
+async def test_a_tuner_that_answers_but_fails_is_reported_not_raised(
+    client_factory: Callable[[], Any], expected_detail_fragment: str
+) -> None:
+    """`doctor`'s own contract is "nothing here ever raises out of `run_doctor`".
+
+    `_probe_tuner` caught only `PreflightError`, which covers the two states reachable with **no**
+    client running -- a refused connection, and a reachable tuner with no game loaded. Every
+    transport-level failure raises `NexusError` and escaped, so `civsim doctor` -- the first
+    command anyone runs against a live client -- would crash on exactly the host it exists to
+    diagnose, and would do so intermittently, depending on whether the client happened to be up.
+    """
+    report = await doctor.run_doctor(
+        host=_FakeHost(),
+        host_info=_host_info(),
+        nexus_client_factory=client_factory,
+        store=_FakeDoctorStore(),
+        catalog_root=REPO_CATALOG_ROOT,
+    )
+    assert report.tuner.status == "unreachable"
+    assert report.tuner.detail is not None
+    assert expected_detail_fragment in report.tuner.detail
+    # The rest of the report still arrives -- one failed section never costs the others.
+    assert report.store.status == "ok"
+    assert report.catalog.status == "ok"
+
+
+async def test_a_socket_that_will_not_close_does_not_discard_the_diagnosis() -> None:
+    """The close happens after everything useful has been gathered; it must not replace it."""
+    report = await doctor.run_doctor(
+        host=_FakeHost(),
+        host_info=_host_info(),
+        nexus_client_factory=_UncloseableNexusClient,
+        store=_FakeDoctorStore(),
+        catalog_root=REPO_CATALOG_ROOT,
+    )
+    assert report.tuner.status == "ok"
+    assert report.tuner.game_core_tuner_index == 7
+    assert report.tuner.in_game_index == 8
+
+
+async def test_a_build_read_that_fails_still_reports_the_client_as_running() -> None:
+    """`build_reader` only runs when a process was actually located, so this line had never
+    executed on a host with no client. It reads a version off disk and can fail for ordinary
+    reasons -- a permission-denied read, a path the adapter resolved differently, a missing
+    optional dependency -- none of which mean "no client is running", which is the only question
+    this probe is being asked.
+    """
+
+    def _explode() -> str | None:
+        raise OSError("permission denied reading the game executable")
+
+    report = await doctor.run_doctor(
+        host=_FakeHost(pid=4242),
+        host_info=_host_info(),
+        nexus_client_factory=_RaisingNexusClient,
+        store=_FakeDoctorStore(),
+        catalog_root=REPO_CATALOG_ROOT,
+        build_reader=_explode,
+    )
+    assert report.client.status == "ok"
+    assert report.client.pid == 4242
+    assert report.client.build is None

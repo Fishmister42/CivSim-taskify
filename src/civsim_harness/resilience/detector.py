@@ -1,4 +1,4 @@
-"""The detection aggregator (T150).
+r"""The detection aggregator (T150).
 
 research R12 names four independent signals, any of which trips detection
 within the 60 s budget of SC-010:

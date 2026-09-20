@@ -29,10 +29,11 @@ one more field than its schema promises is therefore not caught by schema
 validation at all -- it is caught here, by the forbidden-field guard
 (T128), which is exactly the "belt-and-braces" role research R9 rule 5
 assigns it. This suite proves that role is actually filled, across
-:mod:`civsim_harness.parity.filter` and ``observe/assemble.py`` alike (both
-independently implement research R9 rule 1's "capability result is the only
-input" shape; see ``parity/filter.py``'s module docstring for the
-cross-reference), and across every step of a multi-step turn.
+:mod:`civsim_harness.parity.filter` and ``observe/assemble.py`` alike --
+which since T231 are the *same* implementation of research R9 rule 1's
+"capability result is the only input" shape, the assembler having routed
+through ``parity.filter`` rather than copying it (see the T231 tests at the
+bottom of this file) -- and across every step of a multi-step turn.
 """
 
 from __future__ import annotations
@@ -315,3 +316,102 @@ def test_realistic_transcript_every_step_independently_checked(
         "expected every contaminated step to be caught independently; "
         f"a per-turn (rather than per-step) check would only catch the first: {caught_steps}"
     )
+
+
+# --------------------------------------------------------------------------
+# T231 -- one structural filter, enforced structurally
+# --------------------------------------------------------------------------
+
+
+_HARNESS_ROOT = _REPO_ROOT / "src" / "civsim_harness"
+
+#: The one module allowed to construct an `ObservationEntry`, relative to `src/civsim_harness`.
+#: `models/turn.py` defines the class and is excluded by the AST check itself (a `ClassDef` is
+#: not a `Call`).
+_SOLE_ENTRY_PRODUCER = Path("parity") / "filter.py"
+
+
+def _modules_constructing_observation_entry() -> list[str]:
+    """Every harness module with a literal `ObservationEntry(...)` call, by relative path.
+
+    An AST scan rather than a text scan, for the same reason
+    `tests/contract/test_read_only_boundary.py` gives: several modules *name* `ObservationEntry`
+    in prose to document what they must not build, and a text match would flag exactly the files
+    whose job is to be explicit about the boundary.
+    """
+    import ast
+
+    found: list[str] = []
+    for path in sorted(_HARNESS_ROOT.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (
+                func.id
+                if isinstance(func, ast.Name)
+                else func.attr
+                if isinstance(func, ast.Attribute)
+                else None
+            )
+            if name == "ObservationEntry":
+                found.append(str(path.relative_to(_HARNESS_ROOT)))
+                break
+    return found
+
+
+def test_exactly_one_module_in_the_harness_builds_an_observation_entry() -> None:
+    """T231 / FR-018, Principle I: one structural parity filter, not two.
+
+    `parity/filter.py`'s own docstring makes the load-bearing claim -- "there is no other function
+    in this package (and there must be none anywhere else in the harness) that builds an
+    `ObservationEntry` from a bare Lua table, a raw Nexus payload string, or an unattributed
+    dict". Until T231 that claim was false in the way that matters most: `observe/assemble.py`
+    re-implemented the same rule inline (resolve the declaration, reject a non-observation/view
+    kind, key by declaration id, carry the declaration's own `context`), and **it** was the copy
+    the agent's data actually passed through, while the `parity/` one had no caller in `src/` at
+    all. Both were correct, which is precisely why it was dangerous: a reviewer hardening the
+    parity boundary would have hardened the dead path.
+
+    Asserted structurally rather than behaviourally on purpose. Two correct implementations agree
+    on every input, so no behavioural test can tell "one definition" from "two that happen to
+    match today" -- only the shape of the code can.
+    """
+    producers = _modules_constructing_observation_entry()
+    assert producers == [str(_SOLE_ENTRY_PRODUCER)], (
+        "every ObservationEntry in the harness must be built by parity/filter.py, the module "
+        "whose own package docstring calls itself Principle I's enforcement point; a second "
+        "producer means the parity boundary can be hardened in a place the agent's data never "
+        f"travels (T231, FR-018). Producers found: {producers}"
+    )
+
+
+def test_the_assembler_routes_through_the_parity_filter_rather_than_copying_it(
+    registry: CapabilityRegistry,
+) -> None:
+    """The same claim from the calling side: `assemble_observation` delegates, it does not copy.
+
+    A spy rather than an import check: an import can exist and be unused, which is the exact
+    failure mode Phase 11 was written about. This asserts the call actually happens, once per
+    result, on the real assembly path.
+    """
+    import civsim_harness.observe.assemble as assemble_module
+
+    calls: list[Any] = []
+    real = assemble_module.filter_to_entries
+
+    def _spy(result: Any, *, registry: CapabilityRegistry) -> Any:
+        calls.append(result.declaration_id)
+        return real(result, registry=registry)
+
+    payloads = _legitimate_payloads()
+    assemble_module.filter_to_entries = _spy  # type: ignore[assignment]
+    try:
+        observation = _build_observation_via_assemble(registry, payloads, 1)
+    finally:
+        assemble_module.filter_to_entries = real  # type: ignore[assignment]
+
+    assert calls, "assemble_observation built its entries without the parity filter (T231)"
+    assert len(calls) == len(payloads)
+    assert [entry.declaration_id for entry in observation.entries] == calls

@@ -45,7 +45,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from civsim_harness.capability.loader import load_catalog
-from civsim_harness.errors import CatalogError, PreflightError
+from civsim_harness.errors import CatalogError, NexusError, PreflightError
 from civsim_harness.host.detect import (
     UNPROBED,
     HostInfo,
@@ -173,18 +173,34 @@ def _probe_platform(
 
 
 async def _probe_tuner(client_factory: NexusClientFactory) -> TunerDiagnostic:
+    """Report the tuner's state. Never raises -- see this module's docstring.
+
+    **`NexusError` is caught alongside `PreflightError`, and that is not defensive padding.**
+    `PreflightError` alone covers the two states reachable with *no* client running: a refused
+    connection, and a reachable tuner with no game loaded. Every other way the handshake can end
+    -- it times out, the socket drops mid-handshake, the state table comes back malformed --
+    raises `NexusError`, and all three are only reachable when something is **actually listening
+    on the tuner port**. That is precisely the situation `doctor` exists for: it is the first
+    command anyone runs against a live client, and a `doctor` that crashes instead of reporting
+    is worse than no `doctor` at all. Reported as `unreachable` with the underlying message,
+    which is the honest description of a tuner that answered but could not be handshaked.
+    """
     client = client_factory()
     try:
         await client.connect()
     except PreflightError as exc:
+        return TunerDiagnostic(status="unreachable", detail=exc.message)
+    except NexusError as exc:
         return TunerDiagnostic(status="unreachable", detail=exc.message)
 
     try:
         indices: StateIndices = await client.resolve_game_states()
     except PreflightError:
         return TunerDiagnostic(status="no_game_loaded")
+    except NexusError as exc:
+        return TunerDiagnostic(status="unreachable", detail=exc.message)
     finally:
-        await client.close()
+        await _close_quietly(client)
 
     return TunerDiagnostic(
         status="ok",
@@ -193,13 +209,39 @@ async def _probe_tuner(client_factory: NexusClientFactory) -> TunerDiagnostic:
     )
 
 
+async def _close_quietly(client: NexusClient) -> None:
+    """Close *client* without letting a failed close become the error the operator sees.
+
+    `doctor` has already gathered everything it came for by the time this runs; a socket that
+    will not shut down cleanly is not a diagnostic result and must not replace one.
+    """
+    try:
+        await client.close()
+    except Exception:  # noqa: BLE001 - a failed close must never crash a diagnostic command
+        return
+
+
 def _probe_client(
     host: HostPlatform, *, build_reader: Callable[[], str | None]
 ) -> ClientDiagnostic:
+    """Report client liveness and, when one is running, its build. Never raises.
+
+    `build_reader` is only ever called when a process was actually located, so until a live
+    client existed on a host this line had never run. It reads the executable's version off disk
+    (`observe/game_build.py`), which can fail for perfectly ordinary reasons on a real machine --
+    a permission-denied read, a path the platform adapter resolved differently, a missing
+    optional dependency. None of those mean "no client is running", which is the only thing this
+    probe is being asked, so the build is reported as unknown and the liveness answer -- the
+    useful one -- survives.
+    """
     process = host.locate_game_process()
     if process is None:
         return ClientDiagnostic(status="not_running")
-    return ClientDiagnostic(status="ok", pid=process.pid, build=build_reader())
+    try:
+        build = build_reader()
+    except Exception:  # noqa: BLE001 - see docstring: liveness must survive a failed build read
+        build = None
+    return ClientDiagnostic(status="ok", pid=process.pid, build=build)
 
 
 def _probe_store(store: MatchStore) -> StoreDiagnostic:

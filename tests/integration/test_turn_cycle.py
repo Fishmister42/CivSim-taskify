@@ -11,8 +11,10 @@ return value alone.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -56,8 +58,10 @@ from civsim_harness.models.turn import TurnOutcome
 from civsim_harness.observe.assemble import CapabilityResult
 from civsim_harness.parity.screening import load_screening_profiles
 from civsim_harness.provider.port import DecisionRequest, RawDecision
+from civsim_harness.resilience.detector import DetectionAggregator
 from civsim_harness.resilience.recovery import RecoveryEngine
 from civsim_harness.run.decision_loop import DecisionLoopContext
+from civsim_harness.run.detection import DetectionWatch
 from civsim_harness.run.stop import GameOutcome, StopEvaluation, evaluate_stop
 from civsim_harness.run.turn_cycle import TurnCycleDependencies, run_turn_cycle
 from civsim_harness.store.completeness import record_completeness_status
@@ -215,6 +219,9 @@ def _make_deps(
     game: _FakeGame,
     provider: FakeModelProvider,
     host: FakeHostPlatform | None = None,
+    detection: DetectionWatch | None = None,
+    detection_interval_s: float = 10.0,
+    save_loader: Any = None,
 ) -> TurnCycleDependencies:
     registry = _build_registry()
     host = host if host is not None else FakeHostPlatform()
@@ -252,9 +259,14 @@ def _make_deps(
         disk_check_path=tmp_path,
         build_loop_context=build_loop_context,
         recovery=RecoveryEngine(
-            run_id=run_id, store=store, loader=_FakeSaveLoader(), recovery_attempt_limit=3
+            run_id=run_id,
+            store=store,
+            loader=save_loader if save_loader is not None else _FakeSaveLoader(),
+            recovery_attempt_limit=3,
         ),
         home=tmp_path,
+        detection=detection,
+        detection_interval_s=detection_interval_s,
     )
 
 
@@ -405,5 +417,140 @@ async def test_a_headroom_halt_puts_its_own_warning_on_the_run_timeline(tmp_path
         # (data-model.md SS5's failure table) -- no quicksave was taken, so none was recorded.
         assert store.get_turn_cycle(run_id, 1, authoritative_only=False) is None
         assert store.list_save_points(run_id) == []
+    finally:
+        store.close()
+
+
+# --------------------------------------------------------------------------
+# T233 -- the in-turn crash watchdog
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ScriptedLiveness:
+    """A `ProcessLivenessMonitor` whose answer this test controls, turn by turn.
+
+    Duck-typed rather than subclassed: `resilience/detector.py` asks a liveness monitor exactly
+    two things -- `.pid` and `.check()` -- and a real `psutil` monitor cannot be made to report a
+    process dying at a chosen instant. What is under test here is the *wiring* (does the watchdog
+    run during a turn, and does a trip route into `RecoveryEngine`), not `psutil` itself, which
+    `resilience/liveness.py` already has its own coverage for.
+    """
+
+    pid: int
+    alive: list[bool]
+
+    def check(self) -> bool:
+        return self.alive[0]
+
+
+class _RevivingSaveLoader:
+    """A save loader that also brings the client back -- what a real recovery would achieve.
+
+    Recovery's whole job is to get the run playing again from this turn's start quicksave; a
+    loader that left the client dead would only ever exercise the "still faulty after recovery"
+    refusal. This exercises the path that matters: detect, abandon, recover, replay, finish.
+    """
+
+    def __init__(self, alive: list[bool]) -> None:
+        self._alive = alive
+        self.loads: list[str] = []
+
+    async def load(self, save: SavePoint) -> None:
+        self.loads.append(str(save.save_point_id))
+        self._alive[0] = True
+
+
+async def test_a_client_that_dies_mid_turn_is_detected_and_the_turn_is_replayed(
+    tmp_path: Path,
+) -> None:
+    """T233 / FR-044, FR-045, SC-010: the in-turn watchdog runs, trips, and routes to recovery.
+
+    `DetectionAggregator`, `HeartbeatMonitor` and `ProcessLivenessMonitor` were complete and
+    **constructed nowhere in `src/`**, so none of research R12's signals ran during a real turn:
+    a client that died mid-turn was noticed only when the next Nexus call happened to fail, if it
+    did. This drives the real `run_turn_cycle` with the detection layer attached and a client that
+    stops being a live process partway through the first attempt.
+
+    The claim is the whole chain, not any one link: the detection is **recorded**
+    (`crash_detected`), the attempt is **abandoned** with that detection named as its trigger
+    (`turn_abandoned`), recovery resumes from *this turn's own* start quicksave (FR-045), and the
+    replay lands as a fresh attempt. Reverting `_run_decision_loop_watched` in
+    `run/turn_cycle.py` to a bare `run_decision_loop` call makes this test fail.
+    """
+    run_id = RunId("run-detect-midturn")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    alive = [True]
+    liveness = _ScriptedLiveness(pid=4242, alive=alive)
+    loader = _RevivingSaveLoader(alive)
+
+    game = _FakeGame()
+    real_read = game.read
+
+    async def read_and_die() -> tuple[Sequence[CapabilityResult], str]:
+        """The client dies during the first attempt's very first observation read.
+
+        The sleep is what gives the watchdog a pass to run in: the cadence is deliberately real
+        (`asyncio.wait` with a timeout), so a decision loop that never yields would finish before
+        any pass happened -- which is exactly why the interval below is small rather than the
+        production default.
+        """
+        if alive[0] and loader.loads == []:
+            alive[0] = False
+        await asyncio.sleep(0.05)
+        return await real_read()
+
+    game.read = read_and_die  # type: ignore[method-assign]
+
+    provider = FakeModelProvider()
+    provider.set_default_decision_factory(_two_step_factory)
+    deps = _make_deps(
+        tmp_path=tmp_path,
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        game=game,
+        provider=provider,
+        detection=DetectionWatch(
+            aggregator=DetectionAggregator(liveness=liveness),
+            store=store,
+            run_id=run_id,
+            clock=lambda: datetime.now(UTC),
+            liveness=liveness,
+        ),
+        detection_interval_s=0.01,
+        save_loader=loader,
+    )
+
+    try:
+        outcome = await run_turn_cycle(deps, run=run)
+
+        crashes = store.list_run_events(run_id, event_types=[RunEventType.CRASH_DETECTED])
+        assert crashes, (
+            "the client stopped being a live process mid-turn and nothing detected it; SC-010 "
+            "has no mechanism behind it"
+        )
+        assert crashes[0].detail["pid"] == 4242
+
+        abandoned = store.list_run_events(run_id, event_types=[RunEventType.TURN_ABANDONED])
+        assert len(abandoned) == 1
+        assert abandoned[0].detail["trigger"] == RunEventType.CRASH_DETECTED.value
+        assert abandoned[0].turn_number == 1
+
+        # FR-045: resumed from *this turn's* start quicksave, not "the most recent good save".
+        save_points = store.list_save_points(run_id)
+        assert [point.turn_number for point in save_points] == [1]
+        assert loader.loads == [str(save_points[0].save_point_id)]
+
+        # The replay is a fresh attempt and it is the authoritative one (FR-047).
+        assert outcome.outcome is TurnOutcome.ENDED_BY_AGENT
+        record = store.get_turn_cycle(run_id, 1)
+        assert record is not None
+        assert record.turn_cycle.attempt_index == 1
+        assert record.turn_cycle.is_authoritative
+        assert record.steps
     finally:
         store.close()
