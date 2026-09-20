@@ -44,7 +44,7 @@ from civsim_harness.host.detect import (
     OperatingSystem,
     SupportProbeResult,
 )
-from civsim_harness.models.common import DeclarationId, ModelRef
+from civsim_harness.models.common import CapturePath, DeclarationId, ModelRef
 from civsim_harness.models.run import LifecycleState, StopResolution
 from civsim_harness.nexus.client import NexusClient
 from civsim_harness.operator import cli
@@ -425,6 +425,21 @@ def test_run_start_plays_and_persists_turns_through_the_real_composition_root(
     # -- FR-007: a real quicksave per turn, verified on the filesystem -----------------------
     assert len(game.saves_written) == STOP_AT_TURN
     assert len(store.list_save_points(run_id)) == STOP_AT_TURN
+
+    # -- T214/FR-006: the run's NexusClient is released once the run is terminal --------------
+    # The tuner accepts one connection at a time (research R4), so a client held past a finished
+    # run is a client a second `run start` in this process can never get. `connection_health`
+    # reports `no_run` only once this run's context (and with it its client) has been dropped.
+    health = runner.get_status(run_id).connection_health
+    assert health.tuner == "no_run", (
+        "the finished run's Nexus client was never released; a second run in this process "
+        f"could not connect (connection_health={health!r})"
+    )
+
+    # -- T220/FR-050: capture_path is measured, not declared ---------------------------------
+    # This composition resolves no game window (`window_provider=lambda: None`), so there is no
+    # capture mechanism to name -- `NONE` here is the measured result, not a placeholder.
+    assert run.capture_path is CapturePath.NONE
 
 
 def _wait_for_terminal_run(runner: Runner, store: SqliteMatchStore, output: str) -> str:

@@ -59,8 +59,10 @@ binding exists to remove.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -70,13 +72,14 @@ from civsim_harness.act.executor import ActionExecutor
 from civsim_harness.capability.executor import CapabilityExecutor
 from civsim_harness.capability.loader import Catalog, load_catalog
 from civsim_harness.capability.registry import CapabilityRegistry
+from civsim_harness.config.guidance import load_guidance
 from civsim_harness.config.seed_set import check_seed_set_agreement, load_seed_set_file
 from civsim_harness.errors import HarnessError
 from civsim_harness.host.detect import (
-    UNPROBED,
     HostInfo,
     SupportProbeResult,
     detect_host_info,
+    probe_host_support,
 )
 from civsim_harness.host.port import GameWindow, HostPlatform
 from civsim_harness.models.common import (
@@ -84,15 +87,18 @@ from civsim_harness.models.common import (
     CatalogVersionRef,
     DeclarationId,
     EventId,
+    LuaContext,
     ModelRef,
     RunId,
     Timestamp,
     TurnCycleId,
 )
-from civsim_harness.models.config import RunConfiguration, StopCondition
+from civsim_harness.models.config import GuidanceSet, RunConfiguration, StopCondition
 from civsim_harness.models.records import RunEvent, RunEventType
 from civsim_harness.models.run import LifecycleState, RecordCompletenessStatus, Run
 from civsim_harness.nexus.client import NexusClient
+from civsim_harness.observe.assemble import CapabilityResult
+from civsim_harness.observe.capture_paths import select_capture_path
 from civsim_harness.observe.game_build import (
     make_host_executable_version_reader,
     make_tuner_version_reader,
@@ -113,7 +119,7 @@ from civsim_harness.provider.port import (
 from civsim_harness.provider.preflight import preflight_chain
 from civsim_harness.resilience.recovery import RecoveryEngine, SaveLoader
 from civsim_harness.run.decision_loop import DecisionLoopContext
-from civsim_harness.run.lifecycle import transition
+from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
 from civsim_harness.run.preparation import (
     GameSetupSnapshot,
     LeaderSelectionOutcome,
@@ -129,15 +135,30 @@ from civsim_harness.run.preparation import (
     verify_configuration,
 )
 from civsim_harness.run.runner import PreparedRun, RunnerDependencies
-from civsim_harness.run.stop import StopEvaluation
+from civsim_harness.run.stop import GameOutcome, StopEvaluation, evaluate_stop
 from civsim_harness.run.turn_cycle import TurnCycleDependencies
 from civsim_harness.saves.save_game import LuaSaveCapability
 from civsim_harness.store.port import MatchStore
+from civsim_harness.telemetry.logging import get_harness_logger, log_event
 
 DEFAULT_CATALOG_ROOT = Path("catalogs")
 DEFAULT_SEEDSET_ROOT = Path("configs/seedsets")
 DEFAULT_LUA_ROOT = Path(".")
+#: Where `RunConfiguration.guidance_set_id`'s source reference (e.g. ``GUIDEBOOK.md@a1b2c3d``,
+#: contracts/run-configuration.md) is resolved from -- the repository root, the same place
+#: `GUIDEBOOK.md` itself is expected to live (constitution Principle V).
+DEFAULT_GUIDANCE_ROOT = Path(".")
 DEFAULT_VIEW_DECLARATION_ID = DeclarationId("views.world")
+
+#: catalogs/observations/game.yaml (T216): the local player's own victory/defeat state, and the
+#: only thing `_evaluate_stop_facts` has to resolve FR-005's `game_outcome` stop condition from.
+#: Read as part of each decision step's ordinary observation sweep -- never as a side-channel.
+GAME_OUTCOME_DECLARATION_ID = DeclarationId("game.outcome_state")
+
+#: catalogs/observations/camera.yaml (T221): where the camera is actually looking, read fresh per
+#: decision step so a capture's `camera_state` can be checked against the view's declared
+#: `camera_requirements` (FR-026) instead of being empty.
+CAMERA_STATE_DECLARATION_ID = DeclarationId("camera.read_state")
 
 #: contracts/model-provider-port.md P1's own "worst-case decision step" sizing is explicitly not
 #: this module's to compute (`provider/preflight.py`'s own docstring: it "has no access to game
@@ -278,6 +299,16 @@ class _RunContext:
     registry: CapabilityRegistry
     catalog_version: CatalogVersionRef
     executor: CapabilityExecutor
+    guidance: GuidanceSet | None = None
+    """T219: the run's resolved `GuidanceSet`, loaded once at preparation and handed to every
+    decision step's `DecisionLoopContext`. `None` only when the configuration names none."""
+
+    last_game_outcome: GameOutcome | None = None
+    """T216: the most recent `game.outcome_state` this run actually read, updated by
+    :class:`_OutcomeTrackingObservationReader` on every decision step's observation sweep and
+    consumed by `evaluate_stop_facts` after the turn ends. `None` means "no outcome has been
+    observed", which is distinct from "the game reported that no outcome has occurred" only in
+    that the former can also mean the declaration was never in this run's read set at all."""
 
 
 #: The Lua state the game-setup read-back runs in once the game is loaded. `HostGame` (the Create
@@ -292,6 +323,210 @@ _IN_GAME_STATE_NAME = "InGame"
 _HOST_GAME_STATE_NAME = "HostGame"
 
 
+# --------------------------------------------------------------------------
+# T216 -- resolving the game's own outcome
+# --------------------------------------------------------------------------
+
+
+def _interpret_game_outcome(value: Any) -> GameOutcome | None:
+    """Translate one ``game.outcome_state`` capability result into ``run.stop``'s `GameOutcome`.
+
+    Returns ``None`` for every shape that is not an explicit, recognised ``"victory"``/
+    ``"defeat"`` -- including the declaration's own ``"none"`` (the game is still running) and
+    ``"unresolved"`` (no local player, or nothing could be read). Nothing here infers an outcome:
+    a run must not be stopped and recorded as a defeat because a Lua read came back malformed.
+    """
+    if not isinstance(value, Mapping):
+        return None
+    outcome = value.get("outcome")
+    if outcome == GameOutcome.VICTORY.value:
+        return GameOutcome.VICTORY
+    if outcome == GameOutcome.DEFEAT.value:
+        return GameOutcome.DEFEAT
+    return None
+
+
+class _OutcomeTrackingObservationReader:
+    """Wraps the production `ObservationReader` and remembers this run's last observed outcome.
+
+    **Why this indirection exists.** ``RunnerDependencies.evaluate_stop_facts`` is a *synchronous*
+    callable, and `Runner._play_run` invokes it from inside its own coroutine on its own event
+    loop -- so it cannot itself ``await`` a Lua read, and cannot block on one scheduled back onto
+    the loop it is already running on without deadlocking. Reading the outcome here instead costs
+    nothing extra: the declaration is already part of every step's ordinary observation sweep, so
+    the value `evaluate_stop_facts` later reads is the one from that turn's final fresh read --
+    exactly the "what actually happened *this* turn" fact FR-009 asks the stop evaluator for.
+
+    It is also the Principle I-correct place for it. The outcome reaches the stop evaluator by
+    the same declared, catalogued, agent-visible path everything else does, rather than through a
+    private read the record would not show.
+    """
+
+    def __init__(self, reader: ObservationReader, context: _RunContext) -> None:
+        self._reader = reader
+        self._context = context
+
+    async def __call__(self) -> tuple[Sequence[CapabilityResult], str]:
+        results, screen_identity = await self._reader()
+        for result in results:
+            if result.declaration_id == GAME_OUTCOME_DECLARATION_ID:
+                self._context.last_game_outcome = _interpret_game_outcome(result.value)
+        return results, screen_identity
+
+
+# --------------------------------------------------------------------------
+# T221 -- the live camera state behind every capture
+# --------------------------------------------------------------------------
+
+
+def _to_camera_state(value: Any) -> Mapping[str, Any]:
+    """Translate a ``camera.read_state`` result into the shape `parity.screening` checks.
+
+    The one rename this performs is deliberate and is the whole reason this function exists:
+    ``lua/ingame/camera.lua`` reports ``target_is_revealed`` (its own long-standing field name,
+    which `catalogs/actions/camera.yaml`'s ``camera.move`` verification predicate also reads),
+    while `CaptureAttempt`/`_check_provenance` look for ``target_revealed``. Mapping it here, in
+    one named place, is better than renaming a field two existing predicates already bind to.
+
+    An unrecognised or unreadable result becomes an empty camera state, which fails the provenance
+    gate closed (FR-026 permits no permissive default) rather than passing a partial one through.
+    """
+    if not isinstance(value, Mapping):
+        return {}
+    state: dict[str, Any] = {
+        "mode": value.get("mode"),
+        "zoom": value.get("zoom"),
+        "target_plot": value.get("target_plot"),
+        "target_revealed": value.get("target_is_revealed") is True,
+    }
+    return state
+
+
+def _make_camera_state_provider(
+    context: _RunContext,
+) -> Callable[[], Awaitable[Mapping[str, Any]]]:
+    """This run's real `camera_state_provider` (T221, FR-026).
+
+    **Degrades the capture rather than failing the step.** Every read in
+    ``lua/ingame/camera.lua`` is still `UNVERIFIED` against a live client, and a transport or
+    catalog failure here would otherwise propagate out of the decision loop and pause the whole
+    run. FR-050 already has the proportionate answer for "this step has no trustworthy image":
+    returning an empty camera state withholds the capture, records ``image_withheld`` and
+    ``capture_failed`` events naming the step, and marks the run visually degraded -- all of which
+    leave the failure in the record, visibly, without abandoning a turn the agent can still play.
+    """
+
+    async def _read_camera_state() -> Mapping[str, Any]:
+        try:
+            result = await context.executor.execute(
+                CAMERA_STATE_DECLARATION_ID, context=LuaContext.IN_GAME
+            )
+        except HarnessError as exc:
+            log_event(
+                get_harness_logger(),
+                logging.WARNING,
+                "run/composition: live camera state could not be read; this step's capture will "
+                "be withheld and the run recorded visually degraded (FR-050)",
+                extra={
+                    "declaration_id": str(CAMERA_STATE_DECLARATION_ID),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return {}
+        return _to_camera_state(result.value)
+
+    return _read_camera_state
+
+
+# --------------------------------------------------------------------------
+# T220 -- what capture mechanism this host actually resolved
+# --------------------------------------------------------------------------
+
+
+def _resolve_capture_path(
+    *,
+    host: HostPlatform,
+    host_info: HostInfo,
+    window_provider: Callable[[], GameWindow | None],
+) -> CapturePath:
+    """Resolve the `CapturePath` this host **actually** produced a frame through (FR-050, SC-013).
+
+    Deliberately makes one real capture attempt rather than looking up this platform's
+    highest-ranked candidate from `observe.capture_paths.ranked_capture_paths`. Recording a path
+    the host was never shown to be able to use is precisely the claim `select_capture_path` exists
+    to refuse: it resolves to `CapturePath.NONE` for anything other than an ``ok`` result, and
+    "no capture path" is a legitimate recorded operating state (research R6 rank 4), not an error.
+
+    Today this resolves to ``NONE`` on every host -- pixel extraction is stubbed in all three host
+    adapters (`observe/capture_paths.py`'s own docstring) -- which is exactly why it must be
+    *measured* rather than declared: the value flips on its own the moment an adapter can really
+    capture, with no second place to remember to update.
+    """
+    window = window_provider()
+    if window is None:
+        return CapturePath.NONE
+    try:
+        return select_capture_path(
+            host=host, host_info=host_info, window=window
+        ).capture_path
+    except HarnessError:
+        # `capture_window` is contractually not allowed to raise (host/port.py), so this is
+        # defensive only -- an adapter that breaks that contract must not take preparation down.
+        return CapturePath.NONE
+
+
+# --------------------------------------------------------------------------
+# T214 -- the single-connection NexusClient's lifetime
+# --------------------------------------------------------------------------
+
+
+async def _release_terminal_run_clients(
+    store: MatchStore, run_contexts: dict[RunId, _RunContext]
+) -> None:
+    """Close and drop the `NexusClient` of every run this process is still holding a context for
+    that has since reached a terminal state (T214, FR-006).
+
+    **Why a sweep at the start of the next run, rather than only an event at the end of the last.**
+    `evaluate_stop_facts` closes the client on the ordinary stop path, but it is not on *every*
+    path into a terminal state: `Runner._play_run` checks `state.stop_requested` at the top of its
+    loop and calls `_finish` directly, without consulting the stop evaluator at all, and
+    `RecoveryEngine` drives a run to `failed` before raising, likewise never coming back through
+    it. `RunnerDependencies` exposes no terminal-state callback and `run/runner.py` is not this
+    task's to edit, so the store -- which every one of those paths *does* write through -- is the
+    one place all of them are visible from. Asking it here costs one read per held context, once
+    per `run start`, and it is asked at exactly the moment the answer matters: the tuner accepts
+    one connection at a time (research R4), so a client held by a finished run is a client the
+    next run cannot have.
+
+    A context whose run has no store record at all is treated as terminal too: nothing will ever
+    transition a run that was never persisted, so its client would otherwise be held forever.
+    """
+    for run_id in list(run_contexts):
+        context = run_contexts[run_id]
+        run = store.get_run(run_id)
+        is_terminal = run is None or run.lifecycle_state in TERMINAL_STATES
+        if is_terminal or not context.nexus_client.is_connected:
+            run_contexts.pop(run_id, None)
+            await _close_quietly(context.nexus_client)
+
+
+async def _close_quietly(client: NexusClient) -> None:
+    """Close *client*, never raising (T214).
+
+    Every caller below is already on a failure or terminal path, where a socket that would not
+    shut down cleanly must not become the error the operator sees instead of the real one.
+    """
+    try:
+        await client.close()
+    except Exception as exc:  # noqa: BLE001 - see docstring: this must never mask the real error
+        log_event(
+            get_harness_logger(),
+            logging.WARNING,
+            "run/composition: the Nexus client could not be closed cleanly",
+            extra={"error_type": type(exc).__name__},
+        )
+
+
 async def _prepare_run(
     config: RunConfiguration,
     *,
@@ -304,7 +539,9 @@ async def _prepare_run(
     provider: ModelProvider,
     support_probe: SupportProbeResult,
     seedset_root: Path,
+    guidance_root: Path,
     lua_root: Path,
+    window_provider: Callable[[], GameWindow | None],
     worst_case_context_tokens: int,
     home: Path | None,
     clock: Callable[[], Timestamp],
@@ -374,6 +611,22 @@ async def _prepare_run(
         seed_set = load_seed_set_file(seedset_root / f"{config.seed_set_id}.yaml")
         check_seed_set_agreement(config, seed_set)
 
+    # -- 1b. guidance (T219, FR-021, V6) ------------------------------------------------------
+    # Resolved here, with the other pure local gates, and deliberately *before* anything live is
+    # touched: a configuration naming guidance that does not exist, or whose content collides with
+    # a different content already registered under the same hash, must refuse the run for free
+    # rather than at the agent's first decision step. `guidance_set_id` carries the source
+    # reference verbatim (contracts/run-configuration.md's `guidance_set: GUIDEBOOK.md@a1b2c3d`;
+    # config/run_config.py maps that key onto this field), and `load_guidance` recomputes the
+    # content hash from what it actually read rather than trusting the `@...` pin.
+    guidance: GuidanceSet | None = None
+    if config.guidance_set_id is not None:
+        guidance = load_guidance(
+            str(config.guidance_set_id),
+            root=guidance_root,
+            guidance_set_id=config.guidance_set_id,
+        )
+
     # -- 2. every gate that needs no live client at all --------------------------------------
     catalog_result = catalog_preflight(catalog)
     debug_menu_preflight(host, home=home)
@@ -385,7 +638,59 @@ async def _prepare_run(
     )
 
     # -- 3. connect, then resolve the phase we actually attached to ---------------------------
+    # From here on the client holds the tuner's single connection slot (research R4), so every
+    # path that leaves this function without handing the client to a live `_RunContext` must close
+    # it -- otherwise a second `run start` in this process can never connect (T214).
     await nexus_client.connect()
+    try:
+        return await _prepare_connected_run(
+            config,
+            store=store,
+            catalog=catalog,
+            registry=registry,
+            host=host,
+            host_info=host_info,
+            nexus_client=nexus_client,
+            seed_set=seed_set,
+            guidance=guidance,
+            catalog_result=catalog_result,
+            host_gate_result=host_gate_result,
+            lua_root=lua_root,
+            window_provider=window_provider,
+            clock=clock,
+            run_contexts=run_contexts,
+        )
+    except BaseException:
+        await _close_quietly(nexus_client)
+        raise
+
+
+async def _prepare_connected_run(
+    config: RunConfiguration,
+    *,
+    store: MatchStore,
+    catalog: Catalog,
+    registry: CapabilityRegistry,
+    host: HostPlatform,
+    host_info: HostInfo,
+    nexus_client: NexusClient,
+    seed_set: Any,
+    guidance: GuidanceSet | None,
+    catalog_result: Any,
+    host_gate_result: Any,
+    lua_root: Path,
+    window_provider: Callable[[], GameWindow | None],
+    clock: Callable[[], Timestamp],
+    run_contexts: dict[RunId, _RunContext],
+) -> PreparedRun:
+    """Steps 3b-8 of :func:`_prepare_run`, split out purely so its caller can own one
+    ``try``/``except`` around the whole post-connect sequence (T214).
+
+    Every ``return`` below either registers *nexus_client* in ``run_contexts`` (the run is
+    playing, and the client is now that run's) or closes it (the run reached ``failed`` before
+    turn 1, and nothing will ever dispatch through it again). Anything raised is closed by the
+    caller. There is no fourth path out of this function.
+    """
     await nexus_client.refresh_state_indices()
     execute = _bind_execute(nexus_client)
 
@@ -446,7 +751,11 @@ async def _prepare_run(
             "session_type": host_info.session_type.value if host_info.session_type else None,
         },
         host_support_tier=host_gate_result.tier,
-        capture_path=CapturePath.NONE,
+        # T220: measured, not declared -- one real capture attempt against the live window, whose
+        # result names the R6-ranked mechanism that actually produced a frame (or `NONE`).
+        capture_path=_resolve_capture_path(
+            host=host, host_info=host_info, window_provider=window_provider
+        ),
     )
     store.create_run(run, config)
 
@@ -458,6 +767,7 @@ async def _prepare_run(
             reason="leader/civilization selection could not be verified (V2, V3)",
             mismatches=leader_result.mismatches,
             clock=clock,
+            nexus_client=nexus_client,
         )
 
     # -- 8. one snapshot, feeding both of preparation.py's synchronous read seams --------------
@@ -493,6 +803,7 @@ async def _prepare_run(
             reason="configured setup did not verify against its live read-back (V2)",
             mismatches=verify_result.mismatches,
             clock=clock,
+            nexus_client=nexus_client,
         )
 
     playing_run, event = transition(
@@ -520,6 +831,7 @@ async def _prepare_run(
         registry=registry,
         catalog_version=catalog_result.observation_catalog_version,
         executor=executor,
+        guidance=guidance,
     )
 
     return PreparedRun(run=playing_run, stop_condition=config.stop_condition)
@@ -533,10 +845,15 @@ async def _fail_preparation(
     reason: str,
     mismatches: Sequence[SettingMismatch],
     clock: Callable[[], Timestamp],
+    nexus_client: NexusClient,
 ) -> PreparedRun:
     """A `Run` already exists (`preparing`) -- record why it cannot proceed and transition it to
     `failed`, per contracts/operator-surface.md's "run created in failed state ... no turn 1"
     (never raised: see `_prepare_run`'s own docstring).
+
+    *nexus_client* is closed here (T214): `failed` is terminal, this run will never play a turn,
+    and nothing else will ever close it -- no `_RunContext` is registered on this path, so the
+    tuner's single connection slot would otherwise stay held for the life of the process.
     """
     store.write_run_event(
         RunEvent(
@@ -566,19 +883,8 @@ async def _fail_preparation(
         lifecycle_state=failed_run.lifecycle_state,
         ended_at=failed_run.ended_at,
     )
+    await _close_quietly(nexus_client)
     return PreparedRun(run=failed_run, stop_condition=stop_condition)
-
-
-def _evaluate_stop_facts(_prepared: PreparedRun, turn_number: int) -> StopEvaluation:
-    """`game_outcome` has no declared catalog capability anywhere in this codebase yet (a victory/
-    defeat read, unlike civilization/leader or the turn counter, was never built by any wave) --
-    honestly reported as `None` (never resolved) rather than guessed at; a run configured with a
-    `game_outcome` stop condition simply never resolves through that path until such a declaration
-    exists. `operator_stop_requested` needs no entry here at all: `Runner._play_run` already
-    checks its own `state.stop_requested` flag *before* calling this function, so an operator stop
-    is handled entirely on the runner's own side of this seam.
-    """
-    return StopEvaluation(current_turn=turn_number)
 
 
 def build_runner_dependencies(
@@ -586,12 +892,13 @@ def build_runner_dependencies(
     store: MatchStore,
     catalog_root: Path = DEFAULT_CATALOG_ROOT,
     seedset_root: Path = DEFAULT_SEEDSET_ROOT,
+    guidance_root: Path = DEFAULT_GUIDANCE_ROOT,
     lua_root: Path = DEFAULT_LUA_ROOT,
     host: HostPlatform,
     host_info: HostInfo | None = None,
     nexus_client_factory: NexusClientFactory | None = None,
     provider: ModelProvider | None = None,
-    support_probe: SupportProbeResult = UNPROBED,
+    support_probe: SupportProbeResult | None = None,
     worst_case_context_tokens: int = DEFAULT_WORST_CASE_CONTEXT_TOKENS,
     view_declaration_id: DeclarationId = DEFAULT_VIEW_DECLARATION_ID,
     observation_declaration_ids: Sequence[DeclarationId] | None = None,
@@ -615,10 +922,21 @@ def build_runner_dependencies(
     port=4318` -- `nexus/client.py`'s own defaults), mirroring `operator/doctor.py`'s identical
     convention. *provider* defaults to a real `OpenRouterProvider()`; credentials resolve inside it
     at call time only (`config/secrets.py`, via `require_secret` -- see that adapter's own
-    docstring), never here. *support_probe* defaults to `UNPROBED` -- the same honest "not yet
-    probed" state `doctor` itself uses when no live capture-hygiene spike result exists for this
-    host -- so an unprobed host fails `evaluate_host_gate` closed rather than silently assuming a
-    capability it was never shown to have.
+    docstring), never here.
+
+    *support_probe* defaults to the real R19 per-platform probe
+    (:func:`~civsim_harness.host.detect.probe_host_support`, T212), run against *host* and
+    *host_info* at composition time. It previously defaulted to `UNPROBED`, and because nothing in
+    `src/` ever constructed anything else, `evaluate_host_gate` refused **every** run on **every**
+    host -- including the Linux one that had already passed live validation -- with a message that
+    read as host-specific and was not. The probe reports recorded per-platform spike evidence and
+    never generalises across platforms, so a host with no spike on record still refuses, now
+    naming which spike is missing on which platform rather than "not yet probed". An explicit
+    *support_probe* still wins, which is what lets a test (or a host whose spike has since been
+    run) supply its own evidence.
+
+    *guidance_root* is where `RunConfiguration.guidance_set_id`'s source reference resolves from
+    (T219); it is read once per run during preparation, never per turn.
 
     *observation_declaration_ids* narrows what each decision step reads to an explicit subset. The
     default (``None``) reads **every** ``kind: observation`` declaration the loaded catalog
@@ -643,10 +961,19 @@ def build_runner_dependencies(
     resolved_screening_profiles = (
         screening_profiles if screening_profiles is not None else load_screening_profiles()
     )
+    resolved_support_probe: SupportProbeResult = (
+        support_probe
+        if support_probe is not None
+        else probe_host_support(host, resolved_host_info, home=home)
+    )
 
     run_contexts: dict[RunId, _RunContext] = {}
 
     async def prepare_run(config: RunConfiguration) -> PreparedRun:
+        # T214: release any client still held by an already-terminal run before asking the tuner
+        # for its single connection slot again -- see `_release_terminal_run_clients`.
+        await _release_terminal_run_clients(store, run_contexts)
+
         nexus_client = resolved_client_factory()
         return await _prepare_run(
             config,
@@ -657,9 +984,11 @@ def build_runner_dependencies(
             host_info=resolved_host_info,
             nexus_client=nexus_client,
             provider=resolved_provider,
-            support_probe=support_probe,
+            support_probe=resolved_support_probe,
             seedset_root=seedset_root,
+            guidance_root=guidance_root,
             lua_root=lua_root,
+            window_provider=resolved_window_provider,
             worst_case_context_tokens=worst_case_context_tokens,
             home=home,
             clock=clock,
@@ -679,10 +1008,13 @@ def build_runner_dependencies(
                 retry_policy=RetryPolicy(),
             )
             chain_provider = _ChainBackedProvider(chain, run_id=run_id, turn_number=turn_number)
-            observation_reader = ObservationReader(
-                executor=ctx.executor,
-                registry=ctx.registry,
-                declaration_ids=observation_declaration_ids,
+            observation_reader = _OutcomeTrackingObservationReader(
+                ObservationReader(
+                    executor=ctx.executor,
+                    registry=ctx.registry,
+                    declaration_ids=observation_declaration_ids,
+                ),
+                ctx,
             )
             action_executor = ActionExecutor(executor=ctx.executor, registry=ctx.registry)
             return DecisionLoopContext(
@@ -692,7 +1024,7 @@ def build_runner_dependencies(
                 registry=ctx.registry,
                 catalog_version=ctx.catalog_version,
                 model=config.agent_model_config.primary,
-                guidance=None,
+                guidance=ctx.guidance,
                 provider=chain_provider,
                 no_progress_step_limit=config.no_progress_step_limit,
                 read_observation_inputs=observation_reader,
@@ -703,6 +1035,7 @@ def build_runner_dependencies(
                 screening_profiles=resolved_screening_profiles,
                 store=store,
                 window_provider=resolved_window_provider,
+                camera_state_provider=_make_camera_state_provider(ctx),
                 clock=clock,
             )
 
@@ -725,11 +1058,90 @@ def build_runner_dependencies(
             clock=clock,
         )
 
+    def evaluate_stop_facts(prepared: PreparedRun, turn_number: int) -> StopEvaluation:
+        """Report what `run.stop.evaluate_stop` needs after *turn_number* finished (T216, FR-005).
+
+        ``game_outcome`` comes from the last ``game.outcome_state`` this run actually observed --
+        the declaration T216 added to the catalog, read as part of every decision step's ordinary
+        observation sweep and recorded on the run's `_RunContext` by
+        :class:`_OutcomeTrackingObservationReader`. It is therefore the outcome as of this turn's
+        *final* fresh read, which is exactly the "what actually happened this turn" fact FR-009
+        asks for, and it resolves for every run regardless of configured `StopCondition` -- a run
+        configured to stop at `turn_reached(50)` must still recognise a victory on turn 30
+        (`run/stop.py`'s own contract).
+
+        ``None`` when this run never read that declaration (a caller narrowed
+        *observation_declaration_ids* past it, or no step has completed yet). That is the honest
+        report -- never an assumed "no victory" that a caller could mistake for an observation.
+
+        ``operator_stop_requested`` needs no entry: `Runner._play_run` checks its own
+        `state.stop_requested` before ever calling this. ``unrecoverable_failure`` likewise has no
+        source here -- a failure that terminates a run reaches the runner as a raised
+        `HarnessError`, which `_handle_run_failure` routes on its own side of this seam, never by
+        coming back around through this function.
+
+        **T214's terminal-state close lives here too**, and this is the only seam that can host
+        it: `RunnerDependencies` exposes no terminal-state callback, and `run/runner.py` is not
+        this task's to edit. Re-deriving the same `StopDecision` the runner is about to derive
+        from these identical facts tells this function whether the run it just reported on is
+        finishing -- and if it is, the client that run has held is released here, before
+        `Runner._finish` records the transition. The re-derivation is not a second source of
+        truth: `evaluate_stop` is a pure function and the runner calls it on this very return
+        value a moment later, so the two cannot disagree.
+        """
+        ctx = run_contexts.get(prepared.run.run_id)
+        facts = StopEvaluation(
+            current_turn=turn_number,
+            game_outcome=ctx.last_game_outcome if ctx is not None else None,
+        )
+
+        if ctx is not None and evaluate_stop(prepared.stop_condition, facts).resolution is not None:
+            run_contexts.pop(prepared.run.run_id, None)
+            try:
+                asyncio.get_running_loop().create_task(_close_quietly(ctx.nexus_client))
+            except RuntimeError:  # pragma: no cover - only if called off the runner's own loop
+                log_event(
+                    get_harness_logger(),
+                    logging.WARNING,
+                    "run/composition: no running event loop to close this run's Nexus client on; "
+                    "the tuner's single connection slot may stay held until the process exits",
+                    extra={"run_id": str(prepared.run.run_id)},
+                )
+
+        return facts
+
     def connection_health() -> ConnectionHealth:
+        """Real tuner and client reachability (T222, FR-053).
+
+        Both were hard-coded ``"unknown"``, which made `run status` unable to tell a live client
+        from a dead one -- the single thing this field exists for. Neither value below performs
+        any I/O of its own: the tuner's is read from the `NexusClient`'s own socket state, and the
+        client's from the same `locate_game_process()` call `doctor` already reports from, so
+        `status` stays as cheap as it was and can never block on a hung socket.
+
+        The vocabulary is deliberately the short free-form one `ConnectionHealth` documents, not a
+        closed enum -- ``"no_run"`` (this process is driving no run, so there is no tuner
+        connection to have) is genuinely distinct from ``"disconnected"`` (there is a run and its
+        connection is gone), and collapsing them would hide exactly the case an operator is
+        looking at `status` to understand.
+        """
         health = store.ping()
+
+        if not run_contexts:
+            tuner = "no_run"
+        elif any(ctx.nexus_client.is_connected for ctx in run_contexts.values()):
+            tuner = "ok"
+        else:
+            tuner = "disconnected"
+
+        try:
+            client = "ok" if host.locate_game_process() is not None else "not_running"
+        except Exception:  # noqa: BLE001 - psutil's own failures must not take `status` down
+            client = "unknown"
+
         return ConnectionHealth(
-            tuner="unknown",
-            client="unknown",
+            tuner=tuner,
+            client=client,
             store="ok" if health.ok else "unreachable",
         )
 
@@ -741,7 +1153,7 @@ def build_runner_dependencies(
         store=store,
         prepare_run=prepare_run,
         build_turn_dependencies=build_turn_dependencies,
-        evaluate_stop_facts=_evaluate_stop_facts,
+        evaluate_stop_facts=evaluate_stop_facts,
         connection_health=connection_health,
         disk_headroom_gb=disk_headroom_gb,
         clock=clock,
@@ -767,11 +1179,14 @@ class _NoLiveSaveLoader:
 
 
 __all__ = [
+    "CAMERA_STATE_DECLARATION_ID",
     "DEFAULT_CATALOG_ROOT",
+    "DEFAULT_GUIDANCE_ROOT",
     "DEFAULT_LUA_ROOT",
     "DEFAULT_SEEDSET_ROOT",
     "DEFAULT_VIEW_DECLARATION_ID",
     "DEFAULT_WORST_CASE_CONTEXT_TOKENS",
+    "GAME_OUTCOME_DECLARATION_ID",
     "NexusClientFactory",
     "build_runner_dependencies",
 ]

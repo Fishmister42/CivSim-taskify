@@ -1,0 +1,47 @@
+# catalogs/observations/camera.yaml
+# T221. Backed by lua/ingame/camera.lua's own `read_state` function (capability_id:
+# camera.control) — the same read that catalogs/actions/camera.yaml's three camera actions already
+# verify themselves against, declared here so the harness can also *observe* it.
+#
+# Why this declaration had to exist. Every view in catalogs/observations/views.yaml carries
+# `camera_requirements` (mode, zoom_range, target_must_be_revealed) and the provenance gate in
+# src/civsim_harness/parity/screening.py checks a capture's `camera_state` against them. Until this
+# declaration, run/composition.py left `DecisionLoopContext.camera_state_provider` at its `dict`
+# default, so every capture carried an EMPTY camera state and therefore failed the provenance gate
+# on the first check (`camera mode None does not match the declared view's mode`) — no view's
+# declared camera requirements could ever be satisfied on any host, no matter how clean the frame.
+#
+# Parity basis note: the camera's position, zoom, and view mode are not privileged information —
+# they are the most visible thing on a player's own screen. This declaration reads only the local
+# player's own camera, and `target_is_revealed` is resolved against the LOCAL player's own
+# revealed-plot state (lua/ingame/camera.lua: `plot:IsRevealed(Game.GetLocalPlayer())`), never
+# another player's.
+
+- declaration_id: camera.read_state
+  kind: observation
+  summary: >
+    Where the camera is currently looking: its view mode, zoom level, target plot, and whether
+    that target plot is one this player has revealed.
+  parity_basis: >
+    Look at your own screen — the current view mode, how far in the map is zoomed, and what the
+    camera is centred on are all plainly visible to the player sitting in front of the game.
+  context: InGame
+  capability_id: camera.control
+  # All four reads in lua/ingame/camera.lua's CivSim_Camera.read_state are marked UNVERIFIED
+  # against a live client (UI.GetCameraTargetPlot / UI.GetCameraZoom / UI.IsStrategicView), and
+  # each is independently pcall-guarded there: an unreadable field comes back absent rather than
+  # fabricated, which is why only `mode` and `target_is_revealed` are required below. An absent
+  # `zoom` fails the provenance gate closed (screening.py: "camera_state carries no numeric zoom
+  # to check against the declared range"), which is the correct direction — a capture whose camera
+  # state cannot be confirmed must be withheld, never shown on an assumption.
+  output_schema:
+    type: object
+    required: [mode, target_is_revealed]
+    properties:
+      mode: { type: string }
+      zoom: { type: [number, "null"] }
+      target_is_revealed: { type: boolean }
+      target_plot:
+        type: [object, "null"]
+        properties: { x: { type: integer }, y: { type: integer } }
+  introduced_in_version: "2026.09.2"

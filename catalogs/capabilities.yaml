@@ -82,6 +82,18 @@
   writes: []
   firetuner_gap: null
 
+# T216. The local player's own victory/defeat state, and nothing adjacent to it. Declared
+# path: firetuner with no gap: the R5/T077 live namespace enumeration
+# (spikes/r5-raw/GameCore_Tuner__namespaces.txt) lists Game.GetWinningTeam and Game.GetLocalPlayer
+# as real functions in this context, so no spike was needed to establish reachability and no
+# bespoke path is a legitimate design option here (Principle II).
+- capability_id: game.outcome
+  path: firetuner
+  implementation_ref: lua/gamecore/game_outcome.lua
+  reads: [whether the game has ended, and whether the local player themselves won or lost]
+  writes: []
+  firetuner_gap: null
+
 - capability_id: screens.probe
   path: firetuner
   implementation_ref: lua/ingame/screens.lua

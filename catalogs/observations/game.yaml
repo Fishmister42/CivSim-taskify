@@ -74,3 +74,38 @@
       is_local_player_turn: { type: boolean }
       is_waiting_for_other_players: { type: boolean }
   introduced_in_version: "2026.09.1"
+
+- declaration_id: game.outcome_state
+  kind: observation
+  summary: >
+    Whether the game has ended, and whether it ended in this player's own victory or defeat.
+  parity_basis: >
+    Look at your own victory or defeat screen — the game shows the local player, and only the
+    local player, whether their own game has been won or lost the moment it ends.
+  # T216. Added because run/composition.py's `_evaluate_stop_facts` had nothing to resolve FR-005's
+  # `game_outcome` stop condition from: no declaration in this catalog read the game's own outcome,
+  # so a run configured to play to a victory or defeat could never stop. Scoped deliberately
+  # narrowly — see lua/gamecore/game_outcome.lua's own header for the full parity note, and in
+  # particular for why `Game.GetVictoryProgressForTeam` (one call away from what this reads) is
+  # named there as forbidden rather than merely unused: another team's progress toward victory is
+  # hidden opponent state, and this declaration must never be widened to include it.
+  #
+  # `outcome` is this player's own result only. It never names which other civilization won, nor
+  # by which victory type — "defeat" is all a losing local player's own screen establishes here.
+  #
+  # VERIFIED that the backing calls exist: the R5/T077 live namespace enumeration
+  # (spikes/r5-raw/GameCore_Tuner__namespaces.txt) lists Game.GetWinningTeam, Game.GetLocalPlayer,
+  # and Game.GetCurrentGameTurn as real functions in this context. The per-player accessors
+  # (GetTeam/IsAlive) remain UNVERIFIED and are pcall-guarded individually in the Lua, degrading to
+  # "unresolved" rather than to a fabricated outcome.
+  context: GameCore_Tuner
+  capability_id: game.outcome
+  output_schema:
+    type: object
+    required: [is_game_over, outcome]
+    properties:
+      is_game_over: { type: boolean }
+      # "victory" | "defeat" | "none" (game still running) | "unresolved" (no local player, or
+      # the outcome could not be read at all). Never a team id and never a victory type.
+      outcome: { type: string }
+  introduced_in_version: "2026.09.2"

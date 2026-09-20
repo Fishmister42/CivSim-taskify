@@ -70,6 +70,7 @@ from civsim_harness.capability.loader import Catalog, load_catalog
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.config.seed_set import load_seed_set_file
 from civsim_harness.errors import CatalogError, HarnessError
+from civsim_harness.host.detect import probe_host_support
 from civsim_harness.host.factory import get_host_platform
 from civsim_harness.models.common import AcceptanceId, BuildAcceptance, EventId, RunId, Timestamp
 from civsim_harness.models.config import SeedSet
@@ -163,12 +164,16 @@ def default_runner_factory() -> RunnerProtocol:
     :data:`DEFAULT_CATALOG_ROOT`. Imported lazily so ``civsim --help`` and the ``audit``/``doctor``
     commands never pay for loading the run stack they do not use.
 
-    **The host support probe is left at ``UNPROBED``**, matching ``doctor``'s own default: no
-    per-platform R19 probe exists in this codebase yet, so the honest answer is "not yet probed",
-    which :func:`~civsim_harness.observe.host_gate.evaluate_host_gate` resolves to
-    ``UNSUPPORTED`` and refuses before turn 1 (FR-054). That refusal is a real, recorded
-    environment finding rather than a wiring failure -- a host claiming a capability nothing ever
-    demonstrated is exactly what that gate exists to prevent.
+    **The host support probe is the real R19 per-platform one** (T212,
+    :func:`~civsim_harness.host.detect.probe_host_support`, resolved inside
+    ``build_runner_dependencies``). It was left at ``UNPROBED`` until that probe existed, and
+    since nothing in ``src/`` ever constructed anything else,
+    :func:`~civsim_harness.observe.host_gate.evaluate_host_gate` refused **every** run on
+    **every** host -- including a Linux one that had already passed live validation -- with a
+    message that read as a host-specific finding and was not one. A host with no recorded spike
+    for its platform still refuses (FR-054), which is the correct outcome: a host claiming a
+    capability nothing ever demonstrated is exactly what that gate exists to prevent. What
+    changed is that the refusal now names which spike is missing on which platform.
     """
     from civsim_harness.run.composition import build_runner_dependencies
     from civsim_harness.run.runner import Runner
@@ -646,7 +651,20 @@ def doctor(
     host = get_host_platform()
     store = _open_store(store_path)
     try:
-        report = asyncio.run(run_doctor(host=host, store=store, catalog_root=catalog_root))
+        # T212: the same real per-platform probe `run start` now gates on. `run_doctor`'s own
+        # default is still `UNPROBED` -- it is a library entry point with no host opinion of its
+        # own -- but the CLI *does* know which host it is on, and R19's whole point is that
+        # `doctor` prints the tier with its reason. Reporting "not yet probed" here while the
+        # runner refuses for a concrete, nameable reason would make `doctor` the less useful of
+        # the two commands an operator reaches for first.
+        report = asyncio.run(
+            run_doctor(
+                host=host,
+                store=store,
+                catalog_root=catalog_root,
+                support_probe=probe_host_support(host),
+            )
+        )
     finally:
         close = getattr(store, "close", None)
         if callable(close):

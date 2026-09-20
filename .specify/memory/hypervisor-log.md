@@ -121,3 +121,50 @@ confirm that code forever. That is the predictor for where the next one hides.
 all previously ended in a bare `return`, which the tuner's print-only channel discards),
 T217 (production `SaveLoader`, blocked on the load-path spike), T218 (five unverified setting
 getters).
+
+### Run 2 results (partial — Swarm D still running)
+
+**Swarm C (001 Phase 3 / US1) -> commit `9010407`.** COMPLETE, T019-T034. 286 feature tests
+pass. Built `tests/contract/test_web_parity_boundary.py` (80 tests) guarding the Principle I
+asymmetry — the web path may show the *user* what the *playing agent* must never receive.
+Rejected reading `blob_ref` off disk to work around a port gap, on the grounds that it reaches
+around the port and creates a second unaudited path to run data. That was the right call.
+Five further artifact contradictions recorded.
+
+**Swarm E (002 T215) -> commit `2cad61e`.** DONE. `Runner.resume_from` implemented by
+delegating to the existing `RecoveryEngine` — no second load path written, which given this
+repo's failure mode was the point. Lineage recorded **before** the load as well as after, so a
+rewind that dies mid-flight still records what it was attempting (Principle IV). Supersede
+ordered after the load, keeping today's guaranteed T217 failure non-destructive.
+
+### Open item to file as a task when Swarm D returns
+
+**Attempt-index gap (found by Swarm E, reported not chased).** Once a real `SaveLoader` lands,
+the replayed turn still cannot persist: `run/turn_cycle.py::run_turn_cycle` hardcodes
+`attempt_index = 0`, and `sqlite_adapter.write_turn_cycle`'s D4 check rejects a second write of
+`(run_id, turn_number, 0)` with different content. Needs an attempt-index base on
+`TurnCycleDependencies`. Documented in `resume_from`'s docstring. **File as T223.**
+
+---
+
+## Run 3 — 2026-09-20
+
+**Swarm D (002 Phase 10) still in flight** from Run 2; `composition.py` was observed mid-edit
+(`NameError: _evaluate_stop_facts`), which is expected and is the source of the only failing
+tests in the repo right now.
+
+Two new 001 swarms, per Swarm C's extension-surface analysis:
+- **Swarm F** — Phase 4 / US2 (T035-T042). Owns `routes/turns.py`.
+- **Swarm G** — Phase 6 / US4 (T050-T058) **minus T056**, which extends a file US3 has not
+  created yet. Owns `viewmodels/base.py`.
+
+US3 (Phase 5) is deliberately **not** running: T043 extends `routes/turns.py`, which Swarm F
+owns this wave. It follows F.
+
+Both carry an explicit **no-subagent** clause after Run 1's duplication incident, and both are
+told which two append-only files they share (`tests/contract/test_web_read_api.py`,
+`routes/__init__.py`) with instructions to re-read on conflict.
+
+**Hypervisor decision recorded: `panels/VERSION` stays unfrozen and no `VERSION.lock` is
+created until Phase 6 completes.** Freezing mid-construction would force version bumps out of
+concurrent story agents and record build churn as schema history. Revisit at Phase 7 (Polish).

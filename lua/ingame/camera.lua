@@ -107,10 +107,20 @@ local function CivSim_Camera_ReadState()
     if okZoom then zoom = z end
     local okMode, m = pcall(function() return UI.IsStrategicView() and "strategic" or "world" end) -- UNVERIFIED
     if okMode then mode = m end
+    -- T221: pcall-guarded like every other read in this function. It was the one unguarded call
+    -- here, and it became load-bearing once run/composition.py started reading this function every
+    -- decision step to satisfy each view's declared camera_requirements -- a raised `Map` or
+    -- `IsRevealed` error would have failed the whole command rather than degrading the capture.
+    -- `target_is_revealed` stays false on any failure, which is the fail-closed direction FR-026
+    -- requires (screening.py: "A camera state missing that confirmation is treated as *not*
+    -- revealed"). Reveal is read for the LOCAL player only -- never another player's visibility.
     local revealed = false
     if x ~= nil and y ~= nil then
-        local plot = Map.GetPlot(x, y)
-        revealed = (plot ~= nil and plot:IsRevealed(Game.GetLocalPlayer()))
+        local okReveal, isRevealed = pcall(function()
+            local plot = Map.GetPlot(x, y)
+            return (plot ~= nil and plot:IsRevealed(Game.GetLocalPlayer())) -- UNVERIFIED
+        end)
+        revealed = (okReveal and isRevealed == true)
     end
     return {
         mode = mode,

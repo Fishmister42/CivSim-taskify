@@ -23,11 +23,13 @@ from civsim_harness.host.detect import (
     HostInfo,
     LinuxSessionType,
     OperatingSystem,
+    SpikeEvidence,
     SupportProbeResult,
     SupportTier,
     detect_host_info,
     detect_linux_session_type,
     detect_os,
+    probe_host_support,
     resolve_support_tier,
 )
 from civsim_harness.host.factory import get_host_platform
@@ -64,6 +66,7 @@ __all__ = [
     "InputStatus",
     "LinuxSessionType",
     "OperatingSystem",
+    "SpikeEvidence",
     "SupportProbeResult",
     "SupportTier",
     "WindowRect",
@@ -71,5 +74,6 @@ __all__ = [
     "detect_linux_session_type",
     "detect_os",
     "get_host_platform",
+    "probe_host_support",
     "resolve_support_tier",
 ]

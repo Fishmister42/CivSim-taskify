@@ -50,8 +50,9 @@ default or heuristic move for the missing decision.
 
 from __future__ import annotations
 
+import inspect
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -206,7 +207,19 @@ class DecisionLoopContext:
     screening_profiles: ScreeningProfiles
     store: MatchStore
     window_provider: Callable[[], GameWindow | None] = field(default=lambda: None)
-    camera_state_provider: Callable[[], Mapping[str, Any]] = field(default=dict)
+    camera_state_provider: Callable[[], Mapping[str, Any] | Awaitable[Mapping[str, Any]]] = field(
+        default=dict
+    )
+    """Where this step's ``camera_state`` comes from (FR-026).
+
+    **May be synchronous or a coroutine function**, and :func:`_observe` awaits whichever it is
+    handed. The real provider (``run/composition.py``, T221) reads the live camera through the
+    declared ``camera.read_state`` capability, which is inherently ``async``; the ``dict`` default
+    -- an empty camera state, which fails the provenance gate closed -- is synchronous, as is
+    every test's. Widening the type rather than forcing one shape is what let the composition root
+    supply a real reader without every existing caller of this context changing.
+    """
+
     clock: Callable[[], Timestamp] = field(default=_utcnow)
 
 
@@ -233,6 +246,23 @@ class _FreshObservation:
     events: tuple[RunEvent, ...]
 
 
+async def _resolve_camera_state(ctx: DecisionLoopContext) -> Mapping[str, Any]:
+    """Call ``ctx.camera_state_provider`` and await it if it returned an awaitable.
+
+    Exists because the real provider is inherently ``async`` (it reads the live camera through a
+    declared catalog capability) while the default and every test's is a plain callable -- see
+    :attr:`DecisionLoopContext.camera_state_provider`. This loop defaults and rescues nothing here:
+    a provider that raises propagates, because a camera state the harness could not read is not a
+    camera state *this module* may substitute for. Whether an unreadable camera is worth failing a
+    step over is the provider's own policy (the real one, in ``run/composition.py``, degrades the
+    capture instead -- FR-050), not a decision taken behind its back here.
+    """
+    produced = ctx.camera_state_provider()
+    if inspect.isawaitable(produced):
+        return await produced
+    return produced
+
+
 async def _observe(
     ctx: DecisionLoopContext, *, step_id: DecisionStepId, step_index: int
 ) -> _FreshObservation:
@@ -248,12 +278,20 @@ async def _observe(
     results, screen_identity = await ctx.read_observation_inputs()
 
     window = ctx.window_provider()
+    # The camera state is only resolved when there is actually a window to attribute a frame to.
+    # A step with no resolved window produces a withheld capture regardless (``capture_for_step``
+    # never even calls the host), so reading the live camera there would be a Lua round trip whose
+    # result could not change anything -- and it would happen on every step of a headless or
+    # window-less run. When there *is* a window, this read is mandatory: the provenance gate
+    # checks it against the view's declared ``camera_requirements`` (FR-026), and an empty camera
+    # state fails that gate on its first check.
+    camera_state = await _resolve_camera_state(ctx) if window is not None else {}
     step_capture = capture_for_step(
         host=ctx.host,
         host_info=ctx.host_info,
         window=window,
         view_declaration_id=ctx.view_declaration_id,
-        camera_state=dict(ctx.camera_state_provider()),
+        camera_state=dict(camera_state),
         run_id=ctx.run_id,
         turn_number=ctx.turn_number,
         decision_step_id=step_id,
