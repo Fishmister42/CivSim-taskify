@@ -236,6 +236,18 @@ turn, yields, units and cities, and omits fog of war, diplomatic state, AI inter
 state, and great-people/religion progress. Closed by T177 whenever branches start feeding real
 comparisons. Do not spend effort here before then.
 
+**Provider budget: the $80 OpenRouter cap is PRE-SPENT (2026-09-20).** The owner's words: "that
+$80 is yours. Already written off by me it is for your experimentation and meant to be spent. If
+we need more we'll talk then but don't ask for what's yours." Delivered via Claude remote, stored
+in gitignored `secrets.yaml`, verified live (200, $80 remaining, paid tier). Consequences:
+- **Never ask permission to spend within the cap** — asking is a violation of the ruling, not
+  caution. Model-driven runs, provider probes, capability checks: just run them.
+- Escalate to the owner only when the cap is *exhausted* and more is needed.
+- The key exists in this session's transcript (owner knowingly accepted; cap is the mitigation).
+  Rotation = swap the value in `secrets.yaml`, nothing else.
+- Spend is still *observable*: accounting/telemetry record usage per run as designed, and
+  `https://openrouter.ai/api/v1/auth/key` reports `usage`/`limit_remaining` without spending.
+
 ### Stale-spike hygiene (queued)
 
 `spikes/load-path-linux.md`'s section *"Turns were advancing on their own — auto-end-turn is
@@ -388,7 +400,46 @@ Two candidate readings, NOT yet decided:
    wrong root, and "Epic is the live one" was under-evidenced. The hypervisor's own finding may be
    the wrong one here.
 
-**Do not summarise `r5-save-path-windows.md` (when it lands) without first checking which install
-and which options root it actually evidences.** Scribe holds the same instruction. The R5 evidence
-flag in `host/detect.py` stays un-flipped until the spike file exists (repair agent's correct call:
-a comment is not evidence).
+**RESOLVED — reading 2 was right, and the hypervisor's Epic finding was WRONG.** Steam is the
+live install (played 2026-09-16, build 1.0.12.68, **BBG 7.5.0 from steamapps/workshop** —
+charter-compliant). Epic last played 2021-05-30; its BBG was never loaded. The Steam Documents
+Mods folder looked empty because Workshop mods do not live there. Real T050 defect: Windows uses
+TWO roots — saves under Documents, AppOptions.txt under %LOCALAPPDATA%\Firaxis Games\ — and the
+preflights read a nonexistent file. Fixed. *Lesson: one-root evidence generalised to a two-root
+platform; the correction came from an agent that checked last-played timestamps instead of
+directory contents.*
+
+---
+
+## Run 5 (continued) — THE DEMO LANDED
+
+**`eb6ade1` (pushed): the harness ended a real turn in a live game.** Steam client, BBG 7.5.0.
+Launched the client, dismissed attract screen + leader modal via its own `send_input` (**the
+input layer's first production caller** — the peer's dead layer is now alive), loaded an
+autosave, 4 verified quicksaves, ended turn 8→9 with far-side assertion + game-log corroboration.
+Window-scoped GIF at `spikes/demo-evidence/harness-ends-a-turn.gif`. **Scripted decisions, zero
+model calls, labelled everywhere.** R5 windows: PASS (flag flipped on the spike file; probe test
+now demands Windows cite its OWN spike; doctor: tier SUPPORTED). R6: PASS occlusion (0.0 matching
+pixels, z-order-verified occluders) / FAIL in-frame chrome (FPS overlay) → capture stays
+un-credited, honestly degraded. Machine changes recorded in spikes (steam_appid.txt critical —
+without it Steam launches on the owner's laptop via Remote Play). 973MB desktop recording
+deliberately uncommitted (shows whole desktop); GIF is the publishable artifact.
+
+**🚨 THE FINDING THAT OUTRANKS THE DEMO — three defects in `nexus/client.py` mean the STOCK
+harness cannot drive ANY client:** (1) `_handshake` never reads the `APP:` reply → `connect()`
+always fails; (2) `_query_states` crashes on interleaved tag −1 frames; (3) `_await_result`
+listens on tag 3, but the real client returns tag-3 EMPTY and prints results on tag −1 with an
+`O\0<State>: ` prefix → every command times out while its Lua runs. The Linux R5 spike used a RAW
+client, so this path was never exercised live on any platform: **1539 green tests and the core
+transport did not work — the fake speaks the protocol the code expects, not the one the client
+speaks.** Demo ran on session-local patches NOT in the tree. Proper fix in flight (fix client +
+correct the fake to the REAL protocol + regression tests, evidence: `spikes/r5-raw-windows/` and
+the peer's `t217-evidence/run_lua.py`; nexus-protocol.md to be updated). Linux peer asked to
+re-run the raw probe to rule out a platform split.
+
+**`9cbc2fa` (pushed): T217 production SaveLoader landed.** Spike-exact transcription,
+revert-verified, branch + resume-from reach it cleanly. 1539/2/0. Live checklist ships in the
+commit. Windows blockers noted: Steam relaunches every few minutes (LogonFailure, 8× today) —
+no unattended Windows runs until it settles; DX12 exe exits instantly (DX11 only).
+
+**In flight:** nexus transport fix (the critical one); scribe publishing the demo.

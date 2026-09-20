@@ -306,19 +306,23 @@ def test_resolve_api_key_reads_secrets_file(
 
 
 def test_missing_credential_raises_credential_resolution_error(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("CIVSIM_SECRETS_FILE", raising=False)
+    # Point the file source at a path that cannot exist instead of delenv-ing
+    # it: with no override the resolver falls back to Path.cwd()/secrets.yaml,
+    # so a real operator key in the repo root would satisfy this test's
+    # "missing" premise. _read_secrets_file returns {} for an absent file.
+    monkeypatch.setenv("CIVSIM_SECRETS_FILE", str(tmp_path / "absent.yaml"))
     with pytest.raises(CredentialResolutionError):
         _resolve_api_key()
 
 
 def test_missing_credential_error_message_contains_no_secret(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("CIVSIM_SECRETS_FILE", raising=False)
+    monkeypatch.setenv("CIVSIM_SECRETS_FILE", str(tmp_path / "absent.yaml"))
     with pytest.raises(CredentialResolutionError) as excinfo:
         _resolve_api_key()
     assert _FAKE_KEY not in str(excinfo.value)
