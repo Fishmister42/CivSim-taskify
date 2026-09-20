@@ -422,6 +422,48 @@ verified by reading `xev`'s stream, never by trusting `InputResult.status`.
 - **Civ VI has still received no synthetic event from this adapter** — whether the client accepts
   XTest input is inference, not measurement, until the client can be launched.
 
+### Reachability audit: capture has a window that is always `None`, and input has no caller at all
+
+Run 2026-09-20 from the Linux node against its own contribution, after the owning side found the
+same shape three times (fabricated V2, dead Lua `return`s, guards with no callers). **The question
+asked was not "is this code correct" but "does anything call it".**
+
+⚠️ **Scope caveat:** this reflects the code visible from `origin/002-civ-playing-harness` at
+`8c3d8f8` plus `live/linux`. The Phase 9 composition-root commits (`adda5c2`, `2f301c2`, `d919786`)
+**are not pushed to the remote**, so some of the below may already be wired there. Each finding
+names exactly what was searched so it can be checked off quickly rather than re-derived.
+
+- 🔴 **The synthetic input layer is reachable from nothing.** `grep -rn "InputEvent("` across `src/`
+  returns **zero constructions** outside the port's own definition, and `send_input` has **no
+  production caller** — only the three adapter definitions and the `HostPlatform` protocol.
+  `InputEventKind` appears only in `host/`. So no end-turn keystroke, no save-dialog driving, and
+  nothing that would exercise the bespoke save path. **The three `send_input` defects fixed today
+  were, in production terms, fixes to dead code** — they matter the moment a caller exists, and not
+  before.
+- 🔴 **Capture is wired, but always receives `window=None`.** The chain
+  `decision_loop -> capture_for_step -> select_capture_path -> host.capture_window` is real. But the
+  window comes from `ctx.window_provider()`, declared as
+  `window_provider: Callable[[], GameWindow | None] = field(default=lambda: None)`
+  (`run/decision_loop.py:208`) and **assigned in exactly one place in the repository: a test**
+  (`tests/integration/test_prompts.py:243`, supplying a hard-coded `DEFAULT_WINDOW`). Nothing in
+  `src/` ever sets it. In production every step therefore captures `None`, is treated as a host
+  failure, and is recorded **visually degraded** — regardless of the capture path beneath it.
+- 🔴 **`find_game_window` has no production caller either**, on any platform. So even a caller
+  wanting to set `window_provider` has nothing wired that resolves a window to give it.
+- 🟡 **`capture_preconditions()` has no production caller — this one is ours.** It was added on the
+  Linux node today, and it is the same shape: a preflight check that runs only when a test calls it.
+  Flagged against our own work rather than waiting to be caught.
+
+**The consequence worth stating plainly: the "last capture stub is gone" claim is true about the
+stub and false about the outcome.** Real `BGRA8` pixels are produced on Linux/X11, and **no image
+reaches an agent in production**, because no window is ever resolved to capture. The two gaps are
+independent and both must close before Principle I's visual half is evidenced.
+
+This is the same root cause the owning side named — *a fake that shares the defect's assumption
+confirms production forever*. Here the fake is `DEFAULT_WINDOW`. **Generalised rule proposed: for
+anything crossing a process or protocol boundary, assert on what the far side received, never on
+what our side returned** — a fake cannot fabricate an X server's error reply or an `xev` stream.
+
 ### Steam is a hard dependency of the live node
 
 `spikes/steam-dependency-linux.md`. Civ VI **cannot** run without a running, signed-in Steam client:
