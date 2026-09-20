@@ -1,0 +1,10 @@
+t+000s  recording started (frames via capture_window(), window-scoped)
+t+004s  leaving the current game: Events.ExitToMainMenu()
+t+035s  applying the 'CivSim DEFAULT' preset from Lua -- no UI
+t+051s  starting the game: Network.HostGame(SERVER_TYPE_NONE)
+t+093s  dismissing the leader-intro screen with send_input(Escape)
+t+098s  intro dismissed after 1 Escape press(es)
+t+103s  in game -- observing through the tuner
+t+123s  ending the turn
+t+147s  verifying the turn advanced (far side, later command)
+t+165s  recording stopped: 152 frames
