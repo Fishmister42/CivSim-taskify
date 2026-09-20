@@ -13,10 +13,19 @@ specific path regardless of registration order for these shapes.
 
 Pending, by story:
 
-- **US2** -- ``panels`` (T035, T038): ``/runs/{run_id}/turns/{turn}/panels/{panel_id}``
-  and ``/runs/{run_id}/panels/{panel_id}``.
 - **US3** -- ``metrics`` (T042): ``/runs/{run_id}/metrics``.
-- **US4** -- ``catalog`` (T051): ``/runs``; ``compare`` (T053): ``/compare``.
+
+``panels`` landed with US2 (T035, T038) and carries three paths, not two: the
+run- and turn-scoped shapes the contract's table names, plus the step-scoped
+one ``data-model.md`` SS12 describes and that table omits (see the module's own
+docstring -- twenty shipped panels are ``scope: step`` and would otherwise have
+no resolvable URL).
+
+``catalog`` (``/runs``) and ``compare`` (``/compare``) landed with US4. Note
+that ``catalog`` is registered *after* ``live``: ``live`` owns ``/`` and
+``/runs/{run_id}``, and ``/runs`` is a distinct literal path, so the two do not
+shadow one another -- but the ordering is the one stated above and should stay
+that way.
 """
 
 from __future__ import annotations
@@ -33,6 +42,11 @@ ROUTER_MODULES: tuple[str, ...] = (
     "turns",
     "events",
     "captures",
+    # US2 (T035, T038) -- the ViewReference resolution targets.
+    "panels",
+    # US4 (T051, T053).
+    "catalog",
+    "compare",
 )
 
 

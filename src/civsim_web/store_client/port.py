@@ -50,6 +50,7 @@ __all__ = [
     "MatchStore",
     "ModelConfigLike",
     "READ_OPERATIONS",
+    "RunCatalogReader",
     "RunConfigurationLike",
     "RunConfigurationReader",
     "RunEventLike",
@@ -59,6 +60,7 @@ __all__ = [
     "ScreenCaptureLike",
     "StoreHealthLike",
     "Timestamp",
+    "TurnAttemptReader",
     "TurnCycleRecordLike",
     "WRITE_OPERATIONS",
 ]
@@ -293,6 +295,33 @@ class RunConfigurationReader(Protocol):
         ...
 
 
+class RunCatalogReader(Protocol):
+    """A third **optional** capability -- the listing half of the same C1 gap.
+
+    ``list_active_runs`` is documented for *active* runs (recovery and run
+    identity). FR-018's catalog is the full historical record: every run ever
+    recorded, with its columns, filterable and sortable. The published
+    ``match-store-port.md`` names no operation that enumerates terminal runs,
+    which plan.md Complexity Tracking **C1** already records as the gap this
+    feature must absorb rather than resolve.
+
+    Probed for exactly as the other two are. A store that offers it gets a real
+    historical catalog; a store that does not gets the *active* runs plus an
+    explicit marker saying the listing is partial and why -- never a page that
+    looks like the whole history while quietly being a slice of it, which is the
+    failure mode UP-005 exists to prevent and the one most likely to corrupt a
+    trend conclusion (Principle III).
+
+    **This is a dependency to raise with deliverable 3, not a decision taken
+    here.** When the port publishes a catalog listing, delete this Protocol and
+    widen ``MatchStore`` to match.
+    """
+
+    def list_runs(self) -> list[RunLike]:
+        """Every recorded run, active and terminal alike."""
+        ...
+
+
 class CaptureBlobReader(Protocol):
     """A second **optional** capability, and the second half of the same gap.
 
@@ -321,6 +350,43 @@ class CaptureBlobReader(Protocol):
 
     def get_capture_blob(self, capture_id: CaptureId) -> bytes | None:
         """Resolve a capture's ``blob_ref`` to its image bytes."""
+        ...
+
+
+class TurnAttemptReader(Protocol):
+    """A fourth **optional** capability -- the one FR-009 needs (US2/T036).
+
+    ``contracts/web-read-api.md`` gives ``GET /runs/{id}/turns/{n}`` an
+    ``?attempt={k}`` parameter that "selects a specific (including abandoned)
+    attempt", and FR-009 requires a reference naming a since-superseded attempt
+    to return *that* attempt rather than the current authoritative one. The
+    published ``match-store-port.md`` has no read that addresses an attempt by
+    index: ``get_turn_cycle`` takes only ``authoritative_only``, whose flag-off
+    form is documented as "abandoned attempts remain retrievable" without saying
+    *which* one a turn with three attempts returns. Every implementation --
+    002's adapter and this package's fake alike -- returns the most recent.
+
+    So the two published reads between them address exactly two attempts of any
+    turn: the authoritative one, and the newest one. A turn replayed after a
+    crash (attempt 0 abandoned, attempt 1 authoritative) has its abandoned
+    attempt unreachable, which is precisely the reference FR-009 is about.
+
+    Probed for exactly as the other three are. A store that offers it can answer
+    any ``?attempt=``; a store that does not answers the two reachable ones and
+    says plainly, for the rest, that the published port cannot address them --
+    never a silent substitution of the authoritative turn, which is the one
+    outcome FR-009 rules out by name.
+
+    **This is a dependency to raise with deliverable 3, not a decision taken
+    here.** When the port publishes an attempt-addressed read (or documents
+    ``authoritative_only=False`` as returning every attempt), delete this
+    Protocol and widen ``MatchStore`` to match.
+    """
+
+    def get_turn_cycle_attempt(
+        self, run_id: RunId, turn: int, attempt: int
+    ) -> TurnCycleRecordLike | None:
+        """One specific attempt of one turn, authoritative or not."""
         ...
 
 

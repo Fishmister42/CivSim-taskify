@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  The run catalog (T054, FR-018, FR-019).
+
+  Filterable and sortable, with **no control anywhere on the page**. Every
+  affordance here is an `<a href>` that re-issues the same `GET` with different
+  query parameters -- no `<form>`, no `<select>`, no `<button>`. That is not a
+  styling preference: FR-026 and UP-010 make this interface one that reports and
+  never acts, and a page whose only interactive elements are links cannot be
+  wired to a mutating request by a later edit that adds a handler to one.
+
+  The column headers are the sort control. The active filters are echoed as
+  chips, each with a link that removes it, so "what am I looking at" is
+  answerable from the page rather than from the URL bar.
+
+  Principle III is the first thing the page says. `trend_eligible_count` and the
+  quarantine marker on each row come before the metrics, because a catalog that
+  shows outcome numbers first invites reading them off an incomplete run.
+#}
+
+{% set qs = [] %}
+{% for f in view.filters %}
+  {% set _ = qs.append((f.field ~ ('__' ~ f.operator if f.operator != 'eq' else '')) ~ '=' ~ (f.value|urlencode)) %}
+{% endfor %}
+{% set filter_qs = qs|join('&amp;') %}
+
+{% macro sort_link(field, label) -%}
+{%- set next_order = 'asc' if (view.sort == field and view.order == 'desc') else 'desc' -%}
+<a class="sort{% if view.sort == field %} sort-active sort-{{ view.order }}{% endif %}"
+   href="/runs?sort={{ field }}&amp;order={{ next_order }}&amp;page_size={{ view.page_size }}{% if filter_qs %}&amp;{{ filter_qs }}{% endif %}">{{ label }}</a>
+{%- endmacro %}
+
+{% block title %}CivSim &mdash; run catalog{% endblock %}
+
+{% block content %}
+<article class="catalog-page">
+  <h1>Run catalog</h1>
+
+  {% if view.listing_is_partial %}
+  <p class="warning" data-field="partial_reason">{{ view.partial_reason }}</p>
+  {% else %}
+  {{ m.leaf('partial_reason', 'Listing limitation', none) }}
+  {% endif %}
+
+  <p class="note">
+    <span data-field="trend_eligible_count">{{ view.trend_eligible_count }}</span>
+    of <span data-field="total">{{ view.total }}</span> matching runs may be used as
+    trending input. A run whose turn-by-turn record has gaps is listed here but
+    quarantined from comparison (Principle III, FR-021).
+  </p>
+
+  {% if view.filters %}
+  <ul class="filter-chips">
+    {% for f in view.filters %}
+    {% set fp = 'filters.' ~ loop.index0 ~ '.' %}
+    <li class="chip">
+      <span data-field="{{ fp }}field">{{ f.field }}</span>
+      <span data-field="{{ fp }}operator">{{ f.operator }}</span>
+      <span data-field="{{ fp }}value">{{ f.value }}</span>
+    </li>
+    {% endfor %}
+    <li class="chip chip-clear"><a href="/runs?sort={{ view.sort }}&amp;order={{ view.order }}">clear all filters</a></li>
+  </ul>
+  {% else %}
+  {{ m.leaf('filters', 'Active filters', none) }}
+  {% endif %}
+
+  {% if view.runs %}
+  <table class="catalog">
+    <thead>
+      <tr>
+        <th>{{ sort_link('run_id', 'Run') }}</th>
+        <th>{{ sort_link('trend_eligibility.eligible', 'Trend eligible') }}</th>
+        <th>{{ sort_link('seed', 'Seed') }}</th>
+        <th>{{ sort_link('civilization', 'Civilization') }}</th>
+        <th>{{ sort_link('leader', 'Leader') }}</th>
+        <th>{{ sort_link('ruleset', 'Ruleset') }}</th>
+        <th>{{ sort_link('model_primary', 'Model') }}</th>
+        <th>{{ sort_link('turn_count', 'Turns') }}</th>
+        <th>{{ sort_link('record_completeness_status', 'Record') }}</th>
+        <th>{{ sort_link('comparability_status', 'Comparability') }}</th>
+        <th>{{ sort_link('lifecycle_state', 'Lifecycle') }}</th>
+        <th>{{ sort_link('started_at', 'Started') }}</th>
+        <th>{{ sort_link('ended_at', 'Ended') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in view.runs %}
+      {% set rp = 'runs.' ~ loop.index0 ~ '.' %}
+      <tr class="catalog-row{% if not run.trend_eligibility.eligible %} quarantined{% endif %}">
+        <td><a href="/runs/{{ run.run_id }}" data-field="{{ rp }}run_id">{{ run.run_id }}</a></td>
+        <td class="eligibility">
+          <span class="badge badge-{{ 'eligible' if run.trend_eligibility.eligible else 'quarantined' }}"
+                data-field="{{ rp }}trend_eligibility.eligible">{{ 'yes' if run.trend_eligibility.eligible else 'no' }}</span>
+          <span class="eligibility-why" data-field="{{ rp }}trend_eligibility.explanation">{{ run.trend_eligibility.explanation }}</span>
+        </td>
+        <td data-field="{{ rp }}seed">{{ m.scalar(run.seed) }}</td>
+        <td data-field="{{ rp }}civilization">{{ m.scalar(run.civilization) }}</td>
+        <td data-field="{{ rp }}leader">{{ m.scalar(run.leader) }}</td>
+        <td data-field="{{ rp }}ruleset">{{ m.scalar(run.ruleset) }}</td>
+        <td data-field="{{ rp }}model_primary">{{ m.scalar(run.model_primary) }}</td>
+        <td data-field="{{ rp }}turn_count">{{ run.turn_count }}</td>
+        <td data-field="{{ rp }}record_completeness_status">{{ m.scalar(run.record_completeness_status) }}</td>
+        <td data-field="{{ rp }}comparability_status">{{ m.scalar(run.comparability_status) }}</td>
+        <td>{{ m.health_badge(rp ~ 'health', run.health) }}
+            <span data-field="{{ rp }}lifecycle_state">{{ m.scalar(run.lifecycle_state) }}</span></td>
+        <td data-field="{{ rp }}started_at">{{ m.scalar(data.runs[loop.index0].started_at) }}</td>
+        <td data-field="{{ rp }}ended_at">{{ m.scalar(data.runs[loop.index0].ended_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p class="compare-cta">
+    <a href="/compare?runs={{ view.runs|map(attribute='run_id')|join(',') }}">Compare the runs on this page</a>
+    &mdash; quarantined runs appear in the comparison but are excluded from its
+    trend lines.
+  </p>
+  {% else %}
+  <section class="empty-state">
+    <h2>No runs match</h2>
+    <p data-field="empty_state_reason">{{ view.empty_state_reason }}</p>
+  </section>
+  {% endif %}
+
+  {% if view.runs %}{{ m.leaf('empty_state_reason', 'Empty state', none) }}{% endif %}
+
+  <nav class="pager">
+    {% if view.page > 1 %}
+    <a href="/runs?page={{ view.page - 1 }}&amp;page_size={{ view.page_size }}&amp;sort={{ view.sort }}&amp;order={{ view.order }}{% if filter_qs %}&amp;{{ filter_qs }}{% endif %}">&larr; Previous page</a>
+    {% endif %}
+    {% if view.has_more %}
+    <a href="/runs?page={{ view.page + 1 }}&amp;page_size={{ view.page_size }}&amp;sort={{ view.sort }}&amp;order={{ view.order }}{% if filter_qs %}&amp;{{ filter_qs }}{% endif %}">Next page &rarr;</a>
+    {% endif %}
+  </nav>
+
+  {#
+    The whole response, rendered generically. This is what keeps JSON/HTML field
+    parity true as the models grow (T033/T039): a field added to
+    `CatalogListingView` or `RunSummaryView` appears here with no template edit.
+  #}
+  <section class="detail">
+    {{ m.node('runs', 'Runs', data.runs) }}
+    {{ m.node('filters', 'Active filters', data.filters) }}
+    {{ m.leaf('page', 'Page', data.page) }}
+    {{ m.leaf('page_size', 'Page size', data.page_size) }}
+    {{ m.leaf('total', 'Matching runs', data.total) }}
+    {{ m.leaf('has_more', 'More pages', data.has_more) }}
+    {{ m.leaf('sort', 'Sorted by', data.sort) }}
+    {{ m.leaf('order', 'Sort order', data.order) }}
+    {{ m.node('sortable_fields', 'Sortable and filterable fields', data.sortable_fields) }}
+    {{ m.leaf('trend_eligible_count', 'Trend-eligible runs', data.trend_eligible_count) }}
+    {{ m.node('quarantined_run_ids', 'Quarantined runs', data.quarantined_run_ids) }}
+    {{ m.leaf('listing_is_partial', 'Listing is partial', data.listing_is_partial) }}
+    {{ m.node('unavailable', 'Unavailable fields', data.unavailable) }}
+    {{ m.node('provenance', 'Provenance', data.provenance) }}
+    {{ m.node('panel_registry', 'Panel registry in force', data.panel_registry) }}
+  </section>
+</article>
+{% endblock %}

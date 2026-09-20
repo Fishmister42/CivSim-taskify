@@ -25,73 +25,14 @@
 #                                     in-client equivalent and must not acquire
 #                                     a fabricated one.
 
-# --------------------------------------------------------------------------
-# Run-scoped: the header, its configuration, the timeline, and FR-027's
-# intervention facts. All out-of-game telemetry -- FR-013 names run
-# configuration, save lineage, and harness errors explicitly.
-# --------------------------------------------------------------------------
-
-- panel_id: run.header
-  title: "Run Header"
-  story: [US1, US2, US3, US4]
-  scope: run
-  source_fields:
-    - Run.run_id
-    - Run.lifecycle_state
-    - Run.started_at
-    - Run.ended_at
-    - Run.record_completeness_status
-    - Run.comparability_status
-    - Run.observation_catalog_version
-    - Run.action_catalog_version
-    - Run.parent_run_id
-    - Run.parent_turn
-  parity_basis: null
-  category: out_of_game_telemetry
-  introduced_in_version: "1"
-
-- panel_id: run.configuration
-  title: "Run Configuration"
-  story: [US1, US4]
-  scope: run
-  source_fields:
-    - RunConfiguration.map_seed
-    - RunConfiguration.civilization
-    - RunConfiguration.leader
-    - RunConfiguration.ruleset
-    - RunConfiguration.model_config
-    - ModelConfig.primary
-  parity_basis: null
-  category: out_of_game_telemetry
-  introduced_in_version: "1"
-
-- panel_id: run.intervention
-  title: "Intervention Information"
-  story: [US1, US2]
-  scope: run
-  source_fields:
-    - SavePoint.save_point_id
-    - SavePoint.turn_number
-    - SavePoint.save_name
-  parity_basis: null
-  category: out_of_game_telemetry
-  introduced_in_version: "1"
-
-- panel_id: run.timeline
-  title: "Run Timeline"
-  story: [US1, US3]
-  scope: run
-  source_fields:
-    - RunEvent.event_id
-    - RunEvent.event_type
-    - RunEvent.turn_number
-    - RunEvent.step_index
-    - RunEvent.occurred_at
-    - RunEvent.detail
-  parity_basis: null
-  category: out_of_game_telemetry
-  introduced_in_version: "1"
-
+# **The four run-scoped panels this file opened with now live in
+# `panels/shared.yaml`**, relocated by T037 (US2) -- that is the file
+# panel-registry.md names for "panels reused across views (run header,
+# intervention info, event timeline)", and all four span several stories. The
+# move is inert: `declared_in` is excluded from the hash rule P6 compares, so
+# the declarations and the registry's `content_hash` are unchanged, and
+# `panels/VERSION` is not bumped.
+#
 # --------------------------------------------------------------------------
 # Turn-scoped: what a human reads off the HUD, and what only the harness knows
 # about how the turn was recorded.

@@ -371,18 +371,18 @@ panel, with no element present in one and absent from the other.
 
 ### Implementation for User Story 2
 
-- [ ] T035 [US2] Implement `GET /runs/{run_id}/turns/{turn_number}/panels/{panel_id}` in
+- [X] T035 [US2] Implement `GET /runs/{run_id}/turns/{turn_number}/panels/{panel_id}` in
   `src/civsim_web/routes/panels.py` — the canonical `ViewReference` resolution target for a turn-scoped
   panel. Depends on T011, T020.
-- [ ] T036 [US2] Extend `GET /runs/{run_id}/turns/{turn_number}` in `src/civsim_web/routes/turns.py`
+- [X] T036 [US2] Extend `GET /runs/{run_id}/turns/{turn_number}` in `src/civsim_web/routes/turns.py`
   with `?attempt={n}` handling: when the named attempt is not the current authoritative one, return
   that attempt's `TurnCycleView` with `is_authoritative=false` and `superseded_by` set — "rather than
   404 or the current authoritative turn silently substituted" (FR-009). Depends on T027.
-- [ ] T037 [P] [US2] Author `panels/shared.yaml` entries for the run-level panels referenced by
+- [X] T037 [P] [US2] Author `panels/shared.yaml` entries for the run-level panels referenced by
   `ViewReference`'s run-scoped shape (`/runs/{run_id}/panels/{panel_id}`).
-- [ ] T038 [US2] Implement `GET /runs/{run_id}/panels/{panel_id}` in `src/civsim_web/routes/panels.py`
+- [X] T038 [US2] Implement `GET /runs/{run_id}/panels/{panel_id}` in `src/civsim_web/routes/panels.py`
   for run-scoped panel resolution. Depends on T035, T037.
-- [ ] T039 [US2] Contract tests in `tests/contract/test_web_read_api.py`: (a) `json_html_parity` — a
+- [X] T039 [US2] Contract tests in `tests/contract/test_web_read_api.py`: (a) `json_html_parity` — a
   full matrix across every route registered so far, asserting a field present in the JSON body is
   present in the rendered HTML and vice versa (the SC-004 audit, made mechanical); (b) `ref_resolution`
   — the identical `ViewReference` string, resolved once with no `Accept` header (simulated browser) and
@@ -394,6 +394,92 @@ panel, with no element present in one and absent from the other.
 
 **Checkpoint**: User Stories 1 and 2 both work independently — every US1 view is now also a stable,
 auditable reference.
+
+### US2 notes for Phase 5-7 contributors
+
+Written when T035–T039 landed. Read alongside the Foundation and US1 notes above.
+
+**What US2 added that later stories build on**
+
+- `routes/panels.py` — three routes, not two. The contract's table names the
+  run- and turn-scoped panel shapes; the **step-scoped** shape
+  (`/runs/{id}/turns/{n}/steps/{i}/panels/{panel_id}`) is also routed, because
+  `refs/reference.py` parses it and twenty of the registry's shipped panels are
+  `scope: step` — Foundation note 4's open question, now closed.
+- `viewmodels/panel.py` — `PanelView`, and the projection that makes a panel
+  response a *slice of an already-built enclosing view* rather than a second
+  store read. **A new route that should be panel-addressable needs an
+  `ENTITY_PATHS` entry, nothing more**: the map says where each 002 entity sits
+  inside a view, `source_fields` does the rest, and `FIELD_ALIASES` records the
+  nine places a view model renamed a store field. Adding a *panel* needs no
+  change here at all.
+- `store_client/reads.turn_attempt` + `AttemptLookup` — attempt-addressed reads
+  and the honest statement of what the published port can reach.
+- `viewmodels/turn.build_turn_cycle_view(..., allow_gap=True)` — the only way to
+  build a view for a gapped turn. US3's replay work (T043/T046) will meet gapped
+  turns: the default refusal is still correct for a bare turn reference, and
+  `allow_gap` exists for a reference that names an attempt.
+- Fixtures: `make_store(replayed_turns=[n])` seeds an abandoned attempt 0 plus an
+  authoritative attempt 1 — the crash/resume pair T046 needs. `attempt_reader=False`
+  drops the fake's optional capability so the published-port fallback is exercised.
+
+**For T043 (US3), which extends `routes/turns.py` next**
+
+`get_turn` now takes `attempt: int | None`. T043's `?step_offset=` / `?step_limit=`
+are **additions to that signature only** — `build_turn_view` already accepts and
+forwards both, and `_load_turn` / `_load_attempt` need no change. Do not route the
+step window through `build_step_view`: it calls `build_turn_view` with the full
+step list on purpose, so a step opened directly is never missing because of
+someone else's page size. The module docstring's failure table now lists five
+shapes; add the window's own (a `step_offset` past the end) there rather than
+inventing a second convention.
+
+**Findings recorded against the design artifacts**
+
+1. **`?attempt={n}` is not implementable against the published port.** The route
+   contract says it "selects a specific (including abandoned) attempt", and
+   `match-store-port.md` has no read that addresses an attempt by index:
+   `get_turn_cycle` takes a boolean, and its flag-off form is documented only as
+   "abandoned attempts remain retrievable" — every implementation returns the
+   *most recent*. So the two published reads address exactly two attempts of any
+   turn, and the one FR-009 is actually about (attempt 0 abandoned, attempt 1
+   authoritative) is not one of them. A probed optional `TurnAttemptReader`
+   capability was added, the fourth of its kind. **Raise with deliverable 3
+   alongside C1, C-captures and C-catalog** — four probed capabilities is no
+   longer a workaround, it is an unpublished half of the port.
+2. **`TurnCompleteness.is_gap` was authored but unreachable.** The field existed
+   on the model from T020 and the builder hard-coded it `False`, because the same
+   builder refused to construct a view for a gapped turn at all. T036's
+   `allow_gap` is what reaches it: a turn whose *every* attempt was abandoned
+   (spec Edge Cases, "a branch was abandoned or rolled back") is now answerable
+   by a reference that names the attempt, marked as the gap it belongs to.
+3. **The registry's run-scoped panels were declared in the wrong file.** T019
+   put `run.header`, `run.configuration`, `run.intervention` and `run.timeline`
+   in `live.yaml`; `contracts/panel-registry.md` and plan.md both name
+   `shared.yaml` for exactly those ("run header, intervention info, event
+   timeline"), and P4's single namespace makes re-declaring them impossible.
+   T037 **relocated** them. The move is provably inert — the loader excludes
+   `declared_in` from P6's hash, so neither the declarations nor the registry's
+   `content_hash` changed — and `panels/VERSION` was not bumped.
+4. **T039(a)'s "every route registered so far" is ambiguous under parallel
+   staffing.** US4 landed `/runs` and `/compare` concurrently with this phase;
+   both are in `ROUTES` now (appended by US4's own work). T047 and T057 should
+   keep appending rather than reading "so far" as a snapshot of their own phase.
+5. **`ViewReference` has no attempt component.** `superseded_by` is an attempt
+   *index*, so a reference to a superseded attempt cannot itself be re-serialized
+   as a reference — the `?attempt=` query parameter carries it, and the canonical
+   `reference` field on the response stays the bare turn path. That is defensible
+   (the contract makes `?attempt=` a query, not a path segment) but it means
+   data-model.md SS12's "the reference *is* the URL path" is true of five of the
+   six shapes and not of an attempt-qualified one. Recorded, not resolved.
+6. **T039(b) asks for the wrong header.** It describes the browser side of the
+   SC-012 check as "resolved once with **no** `Accept` header (simulated
+   browser)", but the negotiation seam's documented rule 5 answers a request
+   with no `Accept` in **JSON** — deliberately, since a client expressing no
+   preference is far likelier to be a script than a browser, and browsers always
+   send an `Accept` naming `text/html`. Taking the task literally would have
+   compared JSON to JSON and proved nothing. The test sends `Accept: text/html`
+   for the browser side.
 
 ---
 
@@ -448,42 +534,217 @@ rest, using only the interface.
 
 ### Implementation for User Story 4
 
-- [ ] T048 [P] [US4] Author `panels/catalog.yaml` declarations for catalog-row and comparison-view
+- [X] T048 [P] [US4] Author `panels/catalog.yaml` declarations for catalog-row and comparison-view
   fields.
-- [ ] T049 [US4] Implement the catalog-listing projection in `src/civsim_web/store_client/catalog.py`,
+- [X] T049 [US4] Implement the catalog-listing projection in `src/civsim_web/store_client/catalog.py`,
   composing `list_active_runs()` plus per-run `get_run()`/metric reads into the FR-018 projection.
   Mark the module with a code comment noting the dependency risk in plan.md Complexity Tracking C1 —
   `match-store-port.md` does not yet publish a dedicated catalog-listing read — so this module is the
   single place that absorbs the gap and can be swapped for a real listing read without touching routes
   or view models. Depends on T006.
-- [ ] T050 [US4] Extend `RunSummaryView` population in `src/civsim_web/viewmodels/base.py` to project
+- [X] T050 [US4] Extend `RunSummaryView` population in `src/civsim_web/viewmodels/base.py` to project
   seed, civilization, ruleset, model, turn count, outcome metrics, completeness status, and start/end
   times from T049's catalog projection. Depends on T049.
-- [ ] T051 [US4] Implement `GET /runs` in `src/civsim_web/routes/catalog.py`: server-side pagination,
+- [X] T051 [US4] Implement `GET /runs` in `src/civsim_web/routes/catalog.py`: server-side pagination,
   and filter/sort by any `RunSummaryView` field via query parameters (research R6). Depends on T049,
   T050.
-- [ ] T052 [P] [US4] Implement `ComparisonView` and `DivergencePoint` in
+- [X] T052 [P] [US4] Implement `ComparisonView` and `DivergencePoint` in
   `src/civsim_web/viewmodels/comparison.py` per data-model.md §11. Enforce verbatim: "this entire model
   is constructed with `CaptureView` nowhere in its type" and "A run in `quarantined_run_ids` still
   appears in `runs` ... but is excluded from `series` and `divergence_points` computation" for any run
   whose `record_completeness_status != complete`.
-- [ ] T053 [US4] Implement `GET /compare` in `src/civsim_web/routes/compare.py` with `?runs=` and
+- [X] T053 [US4] Implement `GET /compare` in `src/civsim_web/routes/compare.py` with `?runs=` and
   `?metrics=` query parameters, computing `divergence_points` with a ready-to-navigate `refs` entry per
   compared run (FR-022). Depends on T041, T052.
-- [ ] T054 [P] [US4] Author `templates/catalog/catalog.html`: filterable/sortable run listing.
-- [ ] T055 [P] [US4] Author `templates/catalog/compare.html`: multi-run SVG trajectory comparison with
+- [X] T054 [P] [US4] Author `templates/catalog/catalog.html`: filterable/sortable run listing.
+- [X] T055 [P] [US4] Author `templates/catalog/compare.html`: multi-run SVG trajectory comparison with
   clickable divergence points.
 - [ ] T056 [US4] Extend `static/trajectory.js` to support multi-series overlay rendering and
   divergence-point click-through to each compared run's matching turn. Depends on T045.
-- [ ] T057 [US4] Contract tests in `tests/contract/test_web_read_api.py`: (a)
+  **Deliberately left open by the US4 contributor**: `static/trajectory.js` does not exist
+  yet (T045, US3). See the US4 notes below for exactly what T056 needs from it.
+- [X] T057 [US4] Contract tests in `tests/contract/test_web_read_api.py`: (a)
   `comparison_never_needs_captures` — identical `ComparisonView` output whether every capture in the
   fixture is `screened_clean` or entirely `withheld` (FR-035, SC-016); (b) `quarantine` — an incomplete
   run appears in `runs` but is excluded from `series` and `divergence_points`. Depends on T052, T053.
-- [ ] T058 [US4] Integration test in `tests/integration/test_catalog_and_compare.py`: a 50+ run catalog
+- [X] T058 [US4] Integration test in `tests/integration/test_catalog_and_compare.py`: a 50+ run catalog
   fixture exercising filter/sort correctness, and a 5-run comparison where following a divergence
   point's `refs` opens the matching turn in each compared run. Depends on T051, T053.
 
 **Checkpoint**: All four user stories are independently functional.
+
+### US4 notes for Phase 5 and Phase 7 contributors
+
+Written when T048–T055, T057 and T058 landed. **T056 is deliberately open** —
+see below. Read alongside the Foundation, US1 and US2 notes above.
+
+**What US4 added that later work builds on**
+
+- `store_client/catalog.py` — the FR-018 projection, and **the single place
+  plan.md C1 is absorbed**. `list_catalog_rows()` returns `CatalogRow` records
+  (store records plus already-read numbers, never view models), and
+  `CatalogListing.listing_is_partial` says out loud when the store could only
+  enumerate *active* runs. When deliverable 3 publishes an indexed catalog read,
+  this file changes and nothing above it does.
+- `viewmodels/base.py` — `TrendEligibility` and `derive_trend_eligibility()`
+  (T050), plus `RunSummaryView.trend_eligibility`. **The default is ineligible,
+  not-assessed**; `build_run_summary(..., assess_trend_eligibility=True,
+  gapped_turns=...)` is the only way to get an eligible verdict, and there is no
+  argument combination that produces one without the `turn_gaps()` read.
+- `viewmodels/comparison.py` — `ComparisonView`, `DivergencePoint`,
+  `ComparisonBasis`, `MetricAxis`. The quarantine filter lives in
+  `build_comparison_view()` and **the model's own validator re-checks its
+  outcome**, so deleting the filter raises rather than silently averaging.
+- `viewmodels/catalog.py` — `CatalogListingView` plus the filter/sort machinery,
+  which works over the **serialized** view models. "Filterable and sortable by
+  any `RunSummaryView` field" therefore includes nested ones
+  (`health.state`, `trend_eligibility.eligible`, `outcome_metrics.science_output`)
+  with no allow-list to fall out of date, and a field the Panel Registry never
+  permitted onto the model cannot be filtered on because it is not there.
+- `routes/catalog.py` (`GET /runs`) and `routes/compare.py` (`GET /compare`).
+  Both registered in `ROUTER_MODULES`; both appear in the `ROUTES` parity matrix.
+- `tests/web_support/fixtures.py` — `make_catalog_store(...)` (multi-run,
+  shaped metric trajectories, per-run completeness and gap control) and
+  `published_port_only(store)`, which hides the three optional capabilities so a
+  test can exercise the store the *published* contract actually promises.
+
+**How a gapped run is kept out of trending (Principle III)**
+
+Three layers, in the order a value would have to pass through them:
+
+1. `store_client/catalog.py` reads `turn_gaps(run_id)` for **every** row, always,
+   not optionally.
+2. `derive_trend_eligibility()` fails closed on any of: a
+   `record_completeness_status` that is not `complete` (read verbatim, never
+   re-derived — invariant V5); a non-empty `turn_gaps()`; a completeness value
+   this code does not recognise; or the gap read not having happened at all.
+3. `build_comparison_view()` excludes ineligible runs from `series`, `axes` and
+   `divergence_points` while keeping them in `runs` — and `ComparisonView`'s
+   `@model_validator` then **refuses to construct** a model in which a
+   quarantined run has a series, an axis, a leadership claim, or a `refs` entry,
+   *and* refuses one in which a quarantined run has been hidden from `runs`
+   instead of marked.
+
+Layer 3 is what makes this survive a careless edit. Deleting the filter in
+`build_comparison_view` does not produce a quietly-wrong chart; it produces a
+`ValidationError` naming Principle III.
+
+**Findings recorded against the design artifacts**
+
+1. **T053's stated dependency on T041 crosses a story boundary that tasks.md's
+   own parallelism note denies.** "Parallel Opportunities" says US4 "shares no
+   file with either [US2 or US3] except `viewmodels/base.py` and
+   `static/trajectory.js`" — but T053 depends on T041, and
+   `ComparisonView.series` is typed `dict[str, list[MetricSeriesView]]` by
+   data-model.md §11, so US4 cannot be built without T041's file.
+   **`src/civsim_web/viewmodels/metrics.py` was therefore written by US4**, to
+   data-model.md §10 and T041's verbatim rule and nothing more. **T041 is left
+   unchecked**: what remains of it is a review, plus whatever US3 needs beyond
+   `MetricSeriesView`/`MetricPoint`/`build_metric_series`. T042 (`GET
+   /runs/{id}/metrics` with `?series=` narrowing) is untouched and still US3's.
+   T047's `metric_series_gaps` case is also still US3's, though US4's
+   `test_a_metric_series_never_carries_a_gapped_turn_as_a_value` already covers
+   the rule at the model level.
+2. **The port publishes no run-catalog listing — the third instance of C1.**
+   `list_active_runs` is documented for *active* runs; nothing enumerates
+   terminal ones. An optional `RunCatalogReader` capability is probed for
+   (`store_client/port.py`), and a store without it gets
+   `listing_is_partial: true` with the reason on the response. A partial catalog
+   that looked complete is the one failure mode here capable of quietly
+   truncating the population a trend is drawn from. **Raise with deliverable 3
+   alongside C1.**
+3. **The port publishes no metric-series read — the fourth instance of C1.**
+   The per-turn numbers FR-020 wants live on `TurnCycle.yields`, so a series
+   costs one `get_turn_cycle` per turn (`store_client/catalog.yields_by_turn`,
+   bounded by `METRIC_TURN_LIMIT`). T060's scale test should be read as a check
+   on this composition specifically.
+4. **FR-021 and Principle III do not say the same thing, and the difference
+   matters.** FR-021 quarantines on `record_completeness_status != complete`;
+   the constitution quarantines on the turn-by-turn record *having gaps*.
+   `turn_gaps()` is a separately published read of exactly that, so a store can
+   answer the two questions differently. This feature fails closed on either,
+   which is stricter than FR-021 as written. **The spec should say so, or say
+   why not.**
+5. **`GET /runs` returns a wrapper, not a bare list** — the same contract gap
+   US1 recorded for `GET /runs/{id}/events` (its finding 4). The route table
+   says `list[RunSummaryView]`, but a bare list can carry neither the pagination
+   the same line asks for nor the provenance stamp data-model.md §13 explicitly
+   requires of "catalog listings". `CatalogListingView` wraps it.
+6. **`DivergencePoint` has no field for *why* a turn is a divergence point.**
+   data-model.md §11's prose names two distinct causes — "turns where the
+   leading run changes, or values separate beyond a threshold" — and its table
+   has no discriminator between them. A `kind` field (`leader_change` |
+   `separation`) was added; a user navigating to a point needs to know which
+   they are looking at.
+7. **Nothing in the artifacts states the separation threshold.** §11 says
+   "beyond a threshold" and names no number. `SEPARATION_RATIO = 0.25` (relative
+   to the leading value, because spec Assumptions make the metric set
+   open-ended) is this implementation's choice and is **a product decision
+   nobody has actually made**.
+8. **Principle IV has no requirement behind it in spec.md.** FR-018–FR-022 never
+   require the comparison view to say that the runs being compared differ in
+   seed, civilization, ruleset, or model — yet the constitution makes a
+   comparison across differing starting conditions meaningless. `ComparisonBasis`
+   exists to satisfy the *constitution*, not a requirement, and reports
+   `unverifiable` (not `uniform`) for dimensions the port cannot reach. **The
+   spec should grow a requirement for this.**
+9. **`panels/VERSION` is still not bumped, and Phase 6 is now the moment to
+   freeze it.** `catalog.yaml` went from `[]` to five declarations, all
+   `introduced_in_version: "1"`, per the standing decision that the panel set
+   stays unfrozen while the stories are authored. With US4 complete, no
+   `panels/VERSION.lock` exists, so rule **P6's immutability check is still not
+   in force**. Whoever closes Phase 6 should write the lock file; after that,
+   adding a panel means bumping `VERSION`.
+
+**Two unnumbered files were added**: `src/civsim_web/viewmodels/catalog.py`
+(`CatalogListingView` — see finding 5) and `src/civsim_web/viewmodels/metrics.py`
+(T041's file — see finding 1).
+
+**T056, for whoever picks it up cold**
+
+T056 extends `static/trajectory.js`, which **T045 (US3) has not created yet**.
+Everything T056 needs already exists on the server side; nothing about the
+comparison view has to change for it.
+
+- **The page renders a complete multi-series SVG with no JavaScript at all.**
+  `templates/catalog/compare.html` draws one `<figure class="trajectory"
+  data-metric="…">` per metric, containing `<svg class="trajectory-svg"
+  viewBox="0 0 720 260">` with one `<polyline class="series"
+  data-series-run="{run_id}">` per compared run and one `<a class="divergence"
+  href="{ref}" data-divergence-turn="…" data-divergence-kind="…">` per
+  divergence point. **T056 must enhance this, not replace it** — a chart that
+  only exists once a script runs is a chart the directing session cannot see,
+  which is the asymmetry Principle VI forbids.
+- **The data it should render from** is `GET /compare?runs=…&metrics=…` with
+  `Accept: application/json` — the identical URL the page was served from.
+  `series` is `{metric_name: [MetricSeriesView, …]}`; each series carries
+  `run_id`, ordered `points[{turn, value}]`, `gapped_turns`, and
+  `missing_turns`. **`gapped_turns` must render as a visible break in the line,
+  never as a join between the points either side of it** (data-model.md §10,
+  FR-025) — the server has already omitted those turns from `points`, so a naive
+  line join would silently bridge the gap.
+- **The common axes are already computed**: `axes[metric_name]` carries
+  `min_turn`, `max_turn`, `min_value`, `max_value`, `run_ids`. Use them rather
+  than recomputing, so the script's chart and the JSON's description of it
+  cannot disagree.
+- **Divergence click-through** is `divergence_points[i].refs`, a
+  `{run_id: path}` map of canonical view-reference paths
+  (`/runs/{run_id}/turns/{turn}`) — one per compared, non-quarantined run at
+  that turn. FR-022's "jump to this turn in each compared run" is a navigation
+  to those paths and needs no extra round trip. The paths are already live
+  routes; `tests/integration/test_catalog_and_compare.py::
+  test_following_a_divergence_ref_opens_that_turn_in_each_compared_run` fetches
+  every one of them.
+- **Quarantined runs must not acquire a line.** `quarantined_run_ids` lists
+  them, and they are already absent from `series`; a script that drew from
+  `runs` instead of from `series` would reintroduce exactly the Principle III
+  violation the server side prevents.
+- **The colour order the page uses** is the palette in `compare.html`, indexed
+  by each run's position in `runs`. Matching it keeps the legend honest.
+- T056 has **no test of its own in tasks.md**. The contract and integration
+  suites cover the server side only; a reviewer should decide whether T056 needs
+  one before Phase 7 closes.
+
 
 ---
 

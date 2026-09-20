@@ -164,3 +164,209 @@ def test_telemetry_panels_carry_no_fabricated_parity_basis():
     for declaration in registry.declarations:
         if declaration.category == "out_of_game_telemetry":
             assert declaration.parity_basis is None, declaration.panel_id
+
+
+# --------------------------------------------------------------------------
+# US2 (T035/T038) -- the panel projection, checked against the registry
+# --------------------------------------------------------------------------
+
+
+def test_every_shipped_panel_can_be_placed_on_the_view_its_scope_names():
+    """A registered panel with no place on its own view is invisible by accident.
+
+    `viewmodels/panel.py` resolves a panel reference by locating each of 002's
+    entities inside the enclosing view model, so a panel declaring an entity
+    that map has no entry for would answer with an explanation and no content --
+    which reads to a user exactly like a run with nothing recorded. The two must
+    not be confusable (UP-005), so the drift is caught here, on the build,
+    rather than discovered as an empty panel.
+
+    This is the check that makes the projection honest as the registry grows:
+    adding a panel over an already-placed entity needs no code change, and
+    adding one over a *new* entity fails here until someone places it.
+    """
+    from civsim_web.viewmodels.panel import ENTITY_PATHS
+
+    registry = load_panel_registry(default_panels_dir())
+    offenders: list[str] = []
+    for declaration in registry.declarations:
+        placeable = ENTITY_PATHS[declaration.scope]
+        for source in declaration.parsed_source_fields:
+            if source.entity not in placeable:
+                offenders.append(
+                    f"{declaration.panel_id} ({declaration.scope}-scoped) declares "
+                    f"{source}, and viewmodels/panel.py has no place for "
+                    f"{source.entity!r} on a {declaration.scope} view"
+                )
+    assert not offenders, offenders
+
+
+def test_the_panel_projection_never_reaches_past_the_declared_fields():
+    """UP-001 at the panel endpoint: `source_fields` is the whole permission.
+
+    Every value a panel response carries names the `Entity.field` declaration
+    that permitted it, and that declaration must be one the panel actually
+    declares. A projection that widened -- returning a neighbouring key because
+    it happened to sit on the same node -- would be the panel endpoint reading a
+    field the registry never cleared, which is the one thing the registry exists
+    to prevent.
+    """
+    from civsim_web.viewmodels.panel import project_panel
+
+    registry = load_panel_registry(default_panels_dir())
+    panel = registry.get("run.intervention")
+    assert panel is not None, "the fixture panel for this check is gone; pick another"
+
+    data = {
+        "intervention_info": {
+            "run_id": "run-1",
+            "lifecycle_status": "playing",
+            "last_known_good_turn": 3,
+            "last_known_good_save_id": "save-1",
+            "last_known_good_save_name": "civsim__run-1__t0003",
+        }
+    }
+    values, unplaceable = project_panel(panel, data, {"SavePoint": ("intervention_info",)})
+
+    assert not unplaceable
+    assert {value.source for value in values} <= set(panel.source_fields)
+    # `run_id` and `lifecycle_status` sit on the same node and are declared by a
+    # different panel (`run.header`). This one must not pick them up.
+    assert not any(
+        value.path.endswith((".run_id", ".lifecycle_status")) for value in values
+    )
+
+
+# --------------------------------------------------------------------------
+# US4 (T057) -- the comparison boundary, checked from the type graph
+#
+# The same shape of argument as the three above, applied to the one requirement
+# this feature states as a property of a *type* rather than of a response:
+# FR-035 and SC-016 require every comparison and trend question to be answerable
+# with every capture in every compared run withheld, and data-model.md SS11 says
+# how: *"this entire model is constructed with `CaptureView` nowhere in its type
+# -- not merely unused, but structurally absent, so a future addition to this
+# view cannot accidentally introduce a capture dependency into a comparison
+# question without changing the type."*
+#
+# A response-level scan (`tests/contract/test_web_read_api.py`) proves no
+# capture reached one particular body. Only a type-level walk proves none can.
+# --------------------------------------------------------------------------
+
+
+def _reachable_models(root: type) -> set[type]:
+    """Every Pydantic model reachable from `root` through its annotations."""
+    from pydantic import BaseModel
+
+    seen: set[type] = set()
+    pending = [root]
+    while pending:
+        model = pending.pop()
+        if model in seen:
+            continue
+        seen.add(model)
+        for info in model.model_fields.values():
+            for candidate in _annotation_types(info.annotation):
+                if isinstance(candidate, type) and issubclass(candidate, BaseModel):
+                    pending.append(candidate)
+    return seen
+
+
+def _annotation_types(annotation: object) -> list[object]:
+    """Flatten an annotation into the concrete types it can hold.
+
+    Walks `tuple[X, ...]`, `list[X]`, `dict[K, V]`, `X | None`, and nestings of
+    those, because a capture smuggled in as `dict[str, list[CaptureView]]` is
+    exactly as much of a dependency as a bare field would be.
+    """
+    from typing import get_args
+
+    found: list[object] = [annotation]
+    for argument in get_args(annotation):
+        found.extend(_annotation_types(argument))
+    return found
+
+
+def test_the_comparison_view_has_no_capture_anywhere_in_its_type():
+    """Invariant V7, from the type graph rather than from one response.
+
+    FR-035 / SC-016: the comparison view never depends on a capture. This walks
+    every model reachable from `ComparisonView` through its field annotations
+    and asserts `CaptureView` is not among them -- so adding one, at any depth,
+    fails here rather than quietly making a trend question depend on whether a
+    screenshot survived screening.
+    """
+    from civsim_web.viewmodels.capture import CaptureView
+    from civsim_web.viewmodels.comparison import ComparisonView
+
+    reachable = _reachable_models(ComparisonView)
+    assert len(reachable) >= 5, "the walk found almost nothing -- it is not walking"
+    assert CaptureView not in reachable, (
+        "ComparisonView can reach CaptureView through its type. data-model.md "
+        "SS11 requires captures be structurally absent from this model, so a "
+        "comparison stays answerable with every capture withheld (FR-035, SC-016)"
+    )
+    offenders = sorted(
+        model.__name__
+        for model in reachable
+        if "capture" in model.__name__.lower()
+    )
+    assert not offenders, offenders
+
+
+def test_the_comparison_module_imports_nothing_capture_shaped():
+    """The import graph half of the same claim.
+
+    A model cannot reach a type its module never imports, so this is the cheaper
+    check -- kept alongside the type walk because the two fail for different
+    reasons and a reader of one failure wants the other's answer.
+    """
+    import ast
+
+    module = PACKAGE_ROOT / "viewmodels" / "comparison.py"
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+    offenders = sorted(name for name in _imported_names(tree) if "capture" in name.lower())
+    assert not offenders, f"viewmodels/comparison.py imports {offenders}"
+
+
+def test_the_compare_route_reads_no_capture_operation():
+    """`GET /compare` never calls a capture read (FR-035).
+
+    Asserted against the route module's own AST: `get_capture`,
+    `get_capture_blob`, and `capture_records_for_turn` are the three ways this
+    codebase can reach a capture, and none of them may appear on the path that
+    answers a comparison question.
+    """
+    import ast
+
+    capture_reads = {"get_capture", "get_capture_blob", "capture_records_for_turn"}
+    for name in ("compare.py", "catalog.py"):
+        module = PACKAGE_ROOT / "routes" / name
+        tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+        offenders = sorted(
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr in capture_reads
+        )
+        assert not offenders, f"routes/{name} reaches for {offenders}"
+
+
+def test_no_catalog_panel_launders_telemetry_into_an_in_game_basis():
+    """Rule P2 against US4's own declarations specifically.
+
+    `test_no_harness_telemetry_is_declared_in_game` above covers the whole
+    registry; this narrows to `catalog.yaml` so a US4 regression names US4 in
+    the failure rather than being reported as a registry-wide problem.
+    """
+    registry = load_panel_registry(default_panels_dir())
+    catalog_panels = [d for d in registry.declarations if d.declared_in == "catalog.yaml"]
+    assert catalog_panels, "catalog.yaml declares no panels"
+    for declaration in catalog_panels:
+        if declaration.category == "out_of_game_telemetry":
+            assert declaration.parity_basis is None, declaration.panel_id
+        else:
+            assert (declaration.parity_basis or "").strip(), declaration.panel_id
+            for source in declaration.parsed_source_fields:
+                assert source.entity not in _TELEMETRY_ENTITIES, (
+                    f"{declaration.panel_id} declares {source} as in_game"
+                )

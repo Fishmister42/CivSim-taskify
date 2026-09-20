@@ -18,19 +18,24 @@ from "nobody thought about it".
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
+    "COMPLETE",
     "HealthState",
     "HealthStatus",
     "InterventionInfo",
     "PanelRegistryVersion",
     "RunSummaryView",
+    "TrendEligibility",
+    "TrendIneligibleReason",
     "UnavailableField",
     "ViewModel",
+    "derive_trend_eligibility",
 ]
 
 
@@ -125,6 +130,158 @@ class InterventionInfo(ViewModel):
     unavailable: tuple[UnavailableField, ...] = ()
 
 
+#: The one value of 002's ``Run.record_completeness_status`` that means the
+#: turn-by-turn record is whole. ``has_gaps`` and ``unknown`` are the other two
+#: the schema publishes; anything else is a value this code does not recognise.
+COMPLETE = "complete"
+
+
+class TrendIneligibleReason(StrEnum):
+    """Why a run's results may not be used as trending input (Principle III).
+
+    Each value is a *separate* disqualification and several can hold at once, so
+    ``TrendEligibility.reasons`` is a list rather than a single value: "this run
+    is marked ``has_gaps`` **and** the store lists turn 7 as missing" is two
+    facts, and collapsing them would hide one of them.
+    """
+
+    NOT_ASSESSED = "not_assessed"
+    RECORD_NOT_COMPLETE = "record_completeness_status_is_not_complete"
+    TURN_GAPS_RECORDED = "turn_gaps_recorded"
+    COMPLETENESS_UNRECOGNIZED = "record_completeness_status_unrecognized"
+
+
+class TrendEligibility(ViewModel):
+    """Whether this run may be used as trending input, and why not (Principle III).
+
+    The constitution's Principle III is not advisory and its second sentence is
+    the whole of this model's reason to exist:
+
+        A run's results MUST NOT be used for trending, datamining, or
+        optimization input if its turn-by-turn record has gaps.
+
+    Three properties make that structural rather than remembered:
+
+    1. **The default is ineligible.** ``TrendEligibility()`` -- the value a
+       caller gets by forgetting to assess a run -- is ``eligible=False`` with
+       ``NOT_ASSESSED``. A run reaches a trend line only by something having
+       positively established that it may, never by nobody having checked.
+    2. **Two independent store facts must agree, and disagreement fails
+       closed.** ``Run.record_completeness_status`` is read *verbatim* and never
+       re-derived (invariant V5) -- but ``MatchStore.turn_gaps()`` is a second,
+       separately published read of the same question, and a run the store calls
+       ``complete`` while also listing turn numbers with no authoritative
+       attempt is quarantined on the strength of the gap list. This is not a
+       competing completeness judgment: it adds no opinion of its own, it simply
+       refuses to average a run that the store describes two ways.
+    3. **An unrecognised status is a disqualification, not a pass.** The same
+       fail-closed discipline ``CaptureView`` applies to an unknown
+       ``screening_status``: a future 002 schema value must not silently
+       qualify a run this code was never updated to understand.
+
+    ``eligible`` being false does **not** hide the run. FR-016 requires marking,
+    not hiding: the run still appears in the catalog and in
+    ``ComparisonView.runs`` with this explanation attached, and is excluded only
+    from the series and divergence computation (FR-021).
+    """
+
+    eligible: bool = False
+    assessed: bool = False
+    reasons: tuple[TrendIneligibleReason, ...] = (TrendIneligibleReason.NOT_ASSESSED,)
+    record_completeness_status: str | None = None
+    """Verbatim from ``Run`` -- shown beside the verdict so a reader sees the
+    store's own word, not only our reading of it."""
+    gapped_turns: tuple[int, ...] = ()
+    """Verbatim from ``turn_gaps()``. Non-empty is itself a disqualification."""
+    explanation: str = ""
+
+
+#: Said in the words the page shows, so the user and the directing session read
+#: the same sentence about the same run (Principle VI).
+_TREND_EXPLANATIONS: dict[TrendIneligibleReason, str] = {
+    TrendIneligibleReason.NOT_ASSESSED: (
+        "Trend eligibility was not assessed for this response. A run is never "
+        "treated as trend-eligible by default (Principle III)."
+    ),
+    TrendIneligibleReason.RECORD_NOT_COMPLETE: (
+        "The store records this run's turn-by-turn record as incomplete, so its "
+        "results may not be used for trending (Principle III)."
+    ),
+    TrendIneligibleReason.TURN_GAPS_RECORDED: (
+        "The store lists turn numbers with no authoritative attempt for this "
+        "run, so its results may not be used for trending (Principle III)."
+    ),
+    TrendIneligibleReason.COMPLETENESS_UNRECOGNIZED: (
+        "This run's recorded completeness status is a value this interface does "
+        "not recognise. An unrecognised status is treated as incomplete rather "
+        "than as complete-by-default."
+    ),
+}
+
+ELIGIBLE_EXPLANATION = (
+    "The store records this run's turn-by-turn record as complete and lists no "
+    "missing turns, so it may be used as trending input (Principle III)."
+)
+
+#: The two non-``complete`` values 002's schema publishes. Listed so a third,
+#: future value is distinguishable from these and gets its own reason rather
+#: than being folded into one that asserts something nobody recorded.
+_KNOWN_INCOMPLETE = ("has_gaps", "unknown")
+
+
+def derive_trend_eligibility(
+    *,
+    record_completeness_status: str | None,
+    gapped_turns: Sequence[int] | None,
+    assessed: bool = True,
+) -> TrendEligibility:
+    """Decide whether a run's results may be used as trending input.
+
+    ``gapped_turns`` is ``MatchStore.turn_gaps(run_id)``'s answer, read rather
+    than computed. Passing ``None`` means the gap read was not performed, which
+    is itself a disqualification -- there is no "probably fine" branch here.
+    """
+    if not assessed:
+        return TrendEligibility(
+            record_completeness_status=record_completeness_status,
+            explanation=_TREND_EXPLANATIONS[TrendIneligibleReason.NOT_ASSESSED],
+        )
+
+    reasons: list[TrendIneligibleReason] = []
+    status = (record_completeness_status or "").strip()
+    if status != COMPLETE:
+        reasons.append(TrendIneligibleReason.RECORD_NOT_COMPLETE)
+        if status not in _KNOWN_INCOMPLETE:
+            reasons.append(TrendIneligibleReason.COMPLETENESS_UNRECOGNIZED)
+
+    if gapped_turns is None:
+        reasons.append(TrendIneligibleReason.TURN_GAPS_RECORDED)
+        gaps: tuple[int, ...] = ()
+    else:
+        gaps = tuple(sorted(int(turn) for turn in gapped_turns))
+        if gaps and TrendIneligibleReason.TURN_GAPS_RECORDED not in reasons:
+            reasons.append(TrendIneligibleReason.TURN_GAPS_RECORDED)
+
+    if not reasons:
+        return TrendEligibility(
+            eligible=True,
+            assessed=True,
+            reasons=(),
+            record_completeness_status=record_completeness_status,
+            gapped_turns=gaps,
+            explanation=ELIGIBLE_EXPLANATION,
+        )
+
+    return TrendEligibility(
+        eligible=False,
+        assessed=True,
+        reasons=tuple(reasons),
+        record_completeness_status=record_completeness_status,
+        gapped_turns=gaps,
+        explanation=" ".join(_TREND_EXPLANATIONS[reason] for reason in reasons),
+    )
+
+
 class PanelRegistryVersion(ViewModel):
     """The registry version that decided how a response was displayed (SS13).
 
@@ -151,6 +308,13 @@ class RunSummaryView(ViewModel):
     named in ``unavailable`` rather than left blank: an empty civilization
     column that might mean "no civilization" is worse than one that says why it
     is missing.
+
+    **``trend_eligibility`` is the Principle III gate** (T050). It defaults to
+    *ineligible, not assessed*: a summary built without the gap read -- the live
+    glance, for instance, which asks a different question -- says so, and never
+    presents an unchecked run as fit to average. Only the catalog projection
+    (``store_client/catalog.py``), which performs the ``turn_gaps()`` read,
+    produces an assessed verdict.
     """
 
     run_id: str
@@ -158,6 +322,7 @@ class RunSummaryView(ViewModel):
     health: HealthStatus
     record_completeness_status: str
     comparability_status: str
+    trend_eligibility: TrendEligibility = Field(default_factory=TrendEligibility)
 
     # FR-018 catalog columns (see the class docstring on optionality).
     seed: str | None = None

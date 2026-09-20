@@ -18,11 +18,17 @@ port gap rather than a schema change).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from civsim_web.health.derive import derive_health
 from civsim_web.registry.loader import PanelRegistry
-from civsim_web.viewmodels.base import RunSummaryView, UnavailableField
+from civsim_web.viewmodels.base import (
+    RunSummaryView,
+    TrendEligibility,
+    UnavailableField,
+    derive_trend_eligibility,
+)
 from civsim_web.viewmodels.gate import GatedReader, Reason
 
 __all__ = ["build_run_summary"]
@@ -44,6 +50,8 @@ def build_run_summary(
     configuration: Any | None = None,
     turn_count: int = 0,
     outcome_metrics: dict[str, float] | None = None,
+    gapped_turns: Sequence[int] | None = None,
+    assess_trend_eligibility: bool = False,
 ) -> RunSummaryView:
     """Project 002's ``Run`` (+ its ``RunConfiguration``, where reachable).
 
@@ -52,6 +60,12 @@ def build_run_summary(
     ``comparability_status`` are read verbatim and never re-derived (invariant
     V5) -- a second, independently computed completeness judgment could disagree
     with 002's and reproduce the exact asymmetry Principle VI forbids.
+
+    **``assess_trend_eligibility`` defaults to ``False``** (T050, Principle
+    III). A caller that has not performed the ``turn_gaps()`` read gets an
+    explicitly *not assessed* verdict, which is ineligible; there is no argument
+    combination that produces an eligible verdict without the gap list being
+    supplied. The catalog projection is the caller that supplies it.
     """
     gate = GatedReader(registry, "Run", run)
     missing: list[UnavailableField] = []
@@ -79,12 +93,20 @@ def build_run_summary(
         values["model_primary"] = _model_primary(config_gate)
         missing.extend(config_gate.missing)
 
+    completeness = gate.text("record_completeness_status", default="") or ""
+    trend_eligibility: TrendEligibility = derive_trend_eligibility(
+        record_completeness_status=completeness,
+        gapped_turns=gapped_turns,
+        assessed=assess_trend_eligibility,
+    )
+
     return RunSummaryView(
         run_id=str(gate.get("run_id", default="") or ""),
         lifecycle_state=gate.text("lifecycle_state", default="") or "",
         health=derive_health(run, tuple(events or ())),
-        record_completeness_status=gate.text("record_completeness_status", default="") or "",
+        record_completeness_status=completeness,
         comparability_status=gate.text("comparability_status", default="") or "",
+        trend_eligibility=trend_eligibility,
         seed=values.get("seed"),
         civilization=values.get("civilization"),
         leader=values.get("leader"),

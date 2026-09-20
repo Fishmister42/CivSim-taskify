@@ -9,8 +9,85 @@
 # Declarations are immutable within a version (rule P6). Changing one means
 # bumping panels/VERSION, not editing in place.
 #
-# Empty for now by design (T008): the loader needs a valid target from the
-# start, and each user story authors its own declarations -- live.yaml in US1
-# (T019), shared.yaml in US2 (T037), history.yaml in US3 (T040), catalog.yaml
-# in US4 (T048).
-[]
+# Authored by T037 (US2). These are the four **run-scoped** panels -- the ones
+# `ViewReference`'s run-scoped shape (`/runs/{run_id}/panels/{panel_id}`)
+# resolves to, and the ones panel-registry.md names as this file's contents:
+# "panels reused across views (run header, intervention info, event timeline)".
+# Every `story:` list below spans several user stories, which is the same thing
+# said from the other direction.
+#
+# **They were declared in `live.yaml` by T019 and are relocated here, not
+# rewritten.** Rule P6's immutability is about the declaration, not its filing:
+# the loader excludes `declared_in` from the hash it compares (see
+# `_declaration_payload`), so this move leaves every declaration -- and the
+# registry's own `content_hash` -- byte-identical. `panels/VERSION` is therefore
+# not bumped, and no `VERSION.lock` exists yet, so version 1 is still under
+# authorship (US1 notes, finding 7).
+#
+# All four are `category: out_of_game_telemetry`: FR-013 names run
+# configuration, save lineage, model identity and harness errors explicitly as
+# out-of-game data, visible to the user and the directing session and never
+# presented to the playing agent as game information. `parity_basis` is `null`
+# by rule P2, because this data has no in-client equivalent and must not
+# acquire a fabricated one.
+
+- panel_id: run.header
+  title: "Run Header"
+  story: [US1, US2, US3, US4]
+  scope: run
+  source_fields:
+    - Run.run_id
+    - Run.lifecycle_state
+    - Run.started_at
+    - Run.ended_at
+    - Run.record_completeness_status
+    - Run.comparability_status
+    - Run.observation_catalog_version
+    - Run.action_catalog_version
+    - Run.parent_run_id
+    - Run.parent_turn
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: run.configuration
+  title: "Run Configuration"
+  story: [US1, US4]
+  scope: run
+  source_fields:
+    - RunConfiguration.map_seed
+    - RunConfiguration.civilization
+    - RunConfiguration.leader
+    - RunConfiguration.ruleset
+    - RunConfiguration.model_config
+    - ModelConfig.primary
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: run.intervention
+  title: "Intervention Information"
+  story: [US1, US2]
+  scope: run
+  source_fields:
+    - SavePoint.save_point_id
+    - SavePoint.turn_number
+    - SavePoint.save_name
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: run.timeline
+  title: "Run Timeline"
+  story: [US1, US3]
+  scope: run
+  source_fields:
+    - RunEvent.event_id
+    - RunEvent.event_type
+    - RunEvent.turn_number
+    - RunEvent.step_index
+    - RunEvent.occurred_at
+    - RunEvent.detail
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"

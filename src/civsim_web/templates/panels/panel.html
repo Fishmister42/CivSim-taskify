@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  One panel, resolved from a reference (T035/T038).
+
+  The page a user opens when they are handed a panel reference, and the JSON the
+  directing Claude Code session gets from the identical URL. Both are rendered
+  from the same `PanelView`, and the body below is generic on purpose: `node`
+  walks the model's serialized form and emits every leaf with its JSON path, so
+  the panel page cannot fall behind the panel body as the model grows.
+
+  No control anywhere -- the interface reports and never acts (FR-026, UP-010).
+#}
+
+{% block title %}{{ view.title }} &mdash; {{ view.reference }}{% endblock %}
+{% block root_attrs %} data-run-id="{{ view.run_id }}"{% endblock %}
+
+{% block content %}
+<article class="panel-page">
+  <nav class="crumbs">
+    <a href="/runs/{{ view.run_id }}">&larr; Run {{ view.run_id }}</a>
+    <a href="{{ view.context_reference }}">&larr; {{ view.context_reference }}</a>
+  </nav>
+
+  <header class="panel-header">
+    <h1>{{ view.title }}</h1>
+    <p class="panel-basis {{ 'telemetry-tag' if view.category != 'in_game' else 'parity-basis' }}">
+      {{ view.panel_basis }}
+    </p>
+  </header>
+
+  {% if view.absent_reason %}
+  <p class="panel-absent">{{ view.absent_reason }}</p>
+  {% endif %}
+
+  {{ m.node('', 'Panel', data) }}
+</article>
+{% endblock %}

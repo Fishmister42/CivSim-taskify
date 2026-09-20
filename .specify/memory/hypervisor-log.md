@@ -168,3 +168,36 @@ told which two append-only files they share (`tests/contract/test_web_read_api.p
 **Hypervisor decision recorded: `panels/VERSION` stays unfrozen and no `VERSION.lock` is
 created until Phase 6 completes.** Freezing mid-construction would force version bumps out of
 concurrent story agents and record build churn as schema history. Revisit at Phase 7 (Polish).
+
+### Correction to the hypervisor's own brief
+
+I briefed Swarm F with "Phase 4 = T035-T042". **Wrong** — Phase 4 is T035-T039; T040-T049 is
+Phase 5 / US3. The agent read `tasks.md`, closed the actual phase, and flagged the discrepancy
+rather than quietly implementing three tasks belonging to a story it had been told not to start.
+Lesson: derive task ranges from the file, not from a prior agent's prose summary. The Phase 6
+range I gave Swarm G (T050-T058) was correct.
+
+### 🔺 ESCALATION CANDIDATE — the published store port cannot serve deliverable 1
+
+Swarm F's most important finding, and it is architectural rather than local. Spec 001 has now
+had to declare **four optional probed capabilities** to work around gaps in `match-store-port.md`
+(002's contract):
+
+| Capability | What the published port cannot do |
+|---|---|
+| `RunConfigurationReader` | resolve `Run.config_id` -> seed / civilization / ruleset / model (FR-018, FR-031) |
+| `CaptureBlobReader` | return capture **bytes**; `get_capture` yields only a `blob_ref` |
+| `RunCatalogReader` | reach the capability catalog at all |
+| `TurnAttemptReader` | address a specific attempt — `get_turn_cycle` selects by boolean, so only *authoritative* and *newest* are reachable, and FR-009's actual case (attempt 0 abandoned, attempt 1 authoritative) is **unreachable** |
+
+Each is individually justified and each fails *honestly* (fields render `unavailable`, never
+fabricated). But collectively: **a store satisfying `match-store-port.md` exactly cannot serve
+the catalog, capture images, or FR-009.** Four is a pattern, not an accident — deliverable 1 is
+quietly absorbing an under-specified contract that belongs to deliverable 3.
+
+`?attempt={n}` (T036) is the sharp edge: **not implementable against the published port.**
+
+**Hypervisor position:** stop letting 001 absorb this. File it against 002's contract as one
+item. Deliverable 3 has no spec of its own yet (only 001 and 002 are specced), so
+`contracts/match-store-port.md` is the right home and is in scope. Fold into the 002 convergence
+pass now running.

@@ -9,8 +9,112 @@
 # Declarations are immutable within a version (rule P6). Changing one means
 # bumping panels/VERSION, not editing in place.
 #
-# Empty for now by design (T008): the loader needs a valid target from the
-# start, and each user story authors its own declarations -- live.yaml in US1
-# (T019), shared.yaml in US2 (T037), history.yaml in US3 (T040), catalog.yaml
-# in US4 (T048).
-[]
+# Authored by T048 (US4) for the run catalog (`GET /runs`) and the comparison
+# view (`GET /compare`). Every source field below is also declared by a US1
+# live-view panel, and that duplication is deliberate rather than redundant: a
+# `panel_id` is one namespace (rule P4) but a *field* may be declared by several
+# panels, and SC-005's auditor asking "what does the catalog show, and on what
+# basis?" should be able to read the answer in one place rather than infer it
+# from which live panels the catalog route happens to reuse.
+#
+# The category split is the same one live.yaml states:
+#
+#   category: in_game               -- information a human player obtains through
+#                                      Civ VI's standard UI; `parity_basis` names
+#                                      the in-client action.
+#   category: out_of_game_telemetry -- harness operational data: run
+#                                      configuration, model identity, record
+#                                      completeness, lineage (FR-013).
+#                                      `parity_basis` is null by rule P2.
+
+# --------------------------------------------------------------------------
+# Run-scoped: the catalog row itself, and the two judgments the catalog has to
+# publish about each row -- may this run be trended (Principle III), and is it
+# comparable to the others (Principle IV).
+# --------------------------------------------------------------------------
+
+- panel_id: catalog.run_row
+  title: "Catalog Row"
+  story: [US4]
+  scope: run
+  source_fields:
+    - Run.run_id
+    - Run.lifecycle_state
+    - Run.started_at
+    - Run.ended_at
+    - Run.record_completeness_status
+    - Run.comparability_status
+    - Run.parent_run_id
+    - Run.parent_turn
+    - RunConfiguration.map_seed
+    - RunConfiguration.civilization
+    - RunConfiguration.leader
+    - RunConfiguration.ruleset
+    - RunConfiguration.model_config
+    - ModelConfig.primary
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: catalog.trend_eligibility
+  title: "Trend Eligibility"
+  story: [US4]
+  scope: run
+  source_fields:
+    - Run.record_completeness_status
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: catalog.comparison_basis
+  title: "Comparison Basis"
+  story: [US4]
+  scope: run
+  source_fields:
+    - RunConfiguration.map_seed
+    - RunConfiguration.civilization
+    - RunConfiguration.leader
+    - RunConfiguration.ruleset
+    - ModelConfig.primary
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+# --------------------------------------------------------------------------
+# Turn-scoped: the per-turn numbers a trajectory is drawn from. These are
+# in-game -- a human reads every one of them off the HUD -- so they carry a
+# restated parity basis, and the aggregation across turns and runs is a
+# display-level one over already-declared fields, which contracts/panel-registry.md
+# permits a panel to author a fresh basis for.
+# --------------------------------------------------------------------------
+
+- panel_id: comparison.metric_series
+  title: "Metric Trajectory"
+  story: [US3, US4]
+  scope: turn
+  source_fields:
+    - TurnCycle.turn_number
+    - TurnCycle.yields
+  parity_basis: >-
+    Read the per-turn yield totals from the resource bar across the top of the
+    in-game HUD on each turn, noting them down turn by turn; a human comparing
+    two games reads the same numbers off each game's HUD and lays them side by
+    side. This panel shows only numbers already visible that way -- it neither
+    reveals a turn the player did not reach nor a value the HUD does not show.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: comparison.divergence_points
+  title: "Divergence Points"
+  story: [US4]
+  scope: turn
+  source_fields:
+    - TurnCycle.turn_number
+    - TurnCycle.yields
+  parity_basis: >-
+    Compare the per-turn yield totals read from each game's in-game HUD resource
+    bar and note the turn at which one game's figure overtakes another's or pulls
+    clearly ahead. The turn at which runs diverge is an arithmetic comparison of
+    numbers a human player already has in front of them, not a new observation.
+  category: in_game
+  introduced_in_version: "1"

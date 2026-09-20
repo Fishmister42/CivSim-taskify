@@ -65,6 +65,12 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+#: Sort floor for a run with no ``started_at``. A run that never started still
+#: belongs in the catalog (FR-018 lists every recorded run); it simply sorts
+#: first rather than crashing the comparison against runs that did start.
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
 # --------------------------------------------------------------------------
 # Record shapes (002 data-model.md; only the fields this feature reads)
 # --------------------------------------------------------------------------
@@ -320,6 +326,7 @@ class FakeMatchStore:
         turn_gaps: dict[RunId, list[int]] | None = None,
         step_gaps: dict[tuple[RunId, int], list[int]] | None = None,
         terminal_states: Sequence[str] = ("finished", "failed"),
+        attempt_reader: bool = True,
     ) -> None:
         self._runs: dict[RunId, FakeRun] = {r.run_id: r for r in runs}
         self._configurations: dict[str, FakeRunConfiguration] = {
@@ -338,6 +345,13 @@ class FakeMatchStore:
         self._explicit_turn_gaps = dict(turn_gaps or {})
         self._explicit_step_gaps = dict(step_gaps or {})
         self._terminal_states = tuple(terminal_states)
+        if not attempt_reader:
+            # A store that does not offer the optional `TurnAttemptReader`
+            # capability at all -- which is the shape the *published* port
+            # actually has. Suppressed on the instance rather than subclassed so
+            # a fixture can exercise the fallback path (`?attempt=` answered
+            # from `get_turn_cycle` alone) without a second fake to maintain.
+            self.get_turn_cycle_attempt = None  # type: ignore[method-assign, assignment]
 
     # -- seeding (fixtures only; not a port operation) ----------------------
 
@@ -478,6 +492,39 @@ class FakeMatchStore:
     def get_run_configuration(self, config_id: str) -> RunConfigurationLike | None:
         """See ``port.RunConfigurationReader`` -- not a published port read."""
         return self._configurations.get(config_id)
+
+    def list_runs(self) -> list[FakeRun]:
+        """See ``port.RunCatalogReader`` -- not a published port read.
+
+        The full historical catalog FR-018 asks for, which ``list_active_runs``
+        deliberately is not. Ordered by ``started_at`` then ``run_id`` so a
+        catalog page is stable across requests without the route having to
+        impose an order the store never promised.
+        """
+        return sorted(
+            self._runs.values(),
+            key=lambda run: (run.started_at or _EPOCH, run.run_id),
+        )
+
+    def get_turn_cycle_attempt(
+        self, run_id: RunId, turn: int, attempt: int
+    ) -> FakeTurnCycleRecord | None:
+        """See ``port.TurnAttemptReader`` -- not a published port read.
+
+        Addresses one attempt by index, which is what FR-009 needs and what
+        ``get_turn_cycle``'s boolean cannot express. A fixture built with
+        ``attempt_reader=False`` has this method suppressed entirely, so the
+        published-port fallback is exercised too.
+        """
+        for record in self._turn_cycles:
+            cycle = record.turn_cycle
+            if (
+                cycle.run_id == run_id
+                and cycle.turn_number == turn
+                and cycle.attempt_index == attempt
+            ):
+                return record
+        return None
 
     def get_capture_blob(self, capture_id: CaptureId) -> bytes | None:
         """See ``port.CaptureBlobReader`` -- not a published port read.

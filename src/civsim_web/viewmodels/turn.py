@@ -14,10 +14,13 @@ forget; a constructor that refuses is a place they cannot.
 **Extension points**, named so the two later stories that edit this file and its
 route do not have to reverse-engineer them:
 
-- **T036 (US2)** adds ``?attempt={n}``. It needs ``is_authoritative`` and
-  ``superseded_by``, both already on the model and both already populated from
-  the record -- so T036 is a *route* change (read a different attempt) plus
-  passing ``superseded_by=`` here, not a model change.
+- **T036 (US2, done)** added ``?attempt={n}``. It needed ``is_authoritative``
+  and ``superseded_by``, both already on the model and both already populated
+  from the record -- so T036 was a *route* change (read a different attempt)
+  plus passing ``superseded_by=`` here, and **no model change**. The one
+  addition to this file was ``allow_gap=``, which is what lets a reference to a
+  turn whose every attempt was abandoned answer with the attempt rather than
+  with the bare turn's gap 404; see ``build_turn_cycle_view``.
 - **T043 (US3)** adds step-window pagination. ``build_turn_cycle_view`` already
   takes ``steps`` as an explicit sequence the caller selected, and
   ``StepWindow`` below is the shape the page metadata goes in; the ordering
@@ -131,6 +134,7 @@ def build_turn_cycle_view(
     superseded_by: int | None = None,
     step_offset: int = 0,
     step_limit: int | None = None,
+    allow_gap: bool = False,
 ) -> TurnCycleView:
     """Project one of 002's ``TurnCycleRecord``s.
 
@@ -138,6 +142,18 @@ def build_turn_cycle_view(
     record, because store reads belong at the route layer. A step whose capture
     id is absent from the mapping renders as unavailable rather than as missing
     markup (FR-034).
+
+    ``allow_gap`` is US2's addition (T036) and is the only way this constructor
+    will build a view for a gapped turn. The default refusal stands: a turn
+    number in ``turn_gaps()`` has no authoritative attempt, so the *bare* turn
+    reference must answer with the explicit gap response FR-016 requires. But a
+    reference that names a specific attempt (``?attempt=k``) is asking for an
+    attempt, not for the authoritative record -- and a turn whose every attempt
+    was abandoned is exactly the "branch abandoned or rolled back" case FR-009
+    says must explain itself rather than look like a dead link. Such a view is
+    built with ``completeness.is_gap = true`` and ``is_complete = false``, so
+    invariant V4 ("never rendered as if it were a normal, complete turn") holds
+    on the response rather than by the constructor refusing to exist.
     """
     cycle = getattr(record, "turn_cycle", record)
     gate = GatedReader(registry, "TurnCycle", cycle)
@@ -145,7 +161,8 @@ def build_turn_cycle_view(
     run_id = str(gate.get("run_id", default="") or "")
     turn_number = int(gate.get("turn_number", default=0) or 0)
 
-    if turn_number in tuple(turn_gaps):
+    is_gap = turn_number in tuple(turn_gaps)
+    if is_gap and not allow_gap:
         raise TurnIsGap(run_id, turn_number, turn_gaps)
 
     all_steps = tuple(getattr(record, "steps", ()) or ())
@@ -179,8 +196,8 @@ def build_turn_cycle_view(
         started_at=gate.get("started_at"),
         ended_at=gate.get("ended_at"),
         completeness=TurnCompleteness(
-            is_complete=not missing_steps,
-            is_gap=False,
+            is_complete=not missing_steps and not is_gap,
+            is_gap=is_gap,
             missing_step_indices=missing_steps,
         ),
         superseded_by=superseded_by,

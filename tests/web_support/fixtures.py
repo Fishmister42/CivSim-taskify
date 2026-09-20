@@ -242,6 +242,8 @@ def make_store(
     reasoning: str | None = None,
     turn_gaps: dict[str, list[int]] | None = None,
     extra_runs: Sequence[Any] = (),
+    replayed_turns: Sequence[int] = (),
+    attempt_reader: bool = True,
 ) -> Any:
     """A fake store holding one run with `turns` recorded turns.
 
@@ -250,6 +252,13 @@ def make_store(
     `CaptureView` fail-closed matrix (including a deliberately unrecognised
     value); `with_captures=False` seeds the turn records without any capture
     record at all, which is the `missing_record` case.
+
+    `replayed_turns` names turns that were attempted, abandoned, and replayed --
+    attempt 0 abandoned, attempt 1 authoritative. That is FR-009's subject: a
+    reference naming attempt 0 must still return attempt 0. `attempt_reader=False`
+    drops the fake's optional `TurnAttemptReader` capability so the same
+    fixtures exercise the published-port fallback, which can address only the
+    authoritative and the newest attempt (`store_client/port.py`).
     """
     from civsim_web.store_client.fake import FakeMatchStore
 
@@ -258,7 +267,27 @@ def make_store(
     kwargs: dict[str, Any] = {"step_count": step_count, "capture_status": capture_status}
     if reasoning is not None:
         kwargs["reasoning"] = reasoning
-    records = [make_turn_cycle(n, run_id=run_id, **kwargs) for n in range(1, turns + 1)]
+
+    replayed = set(replayed_turns)
+    records = []
+    for n in range(1, turns + 1):
+        if n in replayed:
+            records.append(
+                make_turn_cycle(
+                    n,
+                    run_id=run_id,
+                    attempt_index=0,
+                    is_authoritative=False,
+                    outcome="abandoned",
+                    **kwargs,
+                )
+            )
+            records.append(
+                make_turn_cycle(n, run_id=run_id, attempt_index=1, **kwargs)
+            )
+        else:
+            records.append(make_turn_cycle(n, run_id=run_id, **kwargs))
+
     captures = (
         [
             _capture_for(record, position, capture_status, withheld_reason)
@@ -277,6 +306,7 @@ def make_store(
         captures=captures,
         healthy=healthy,
         turn_gaps=turn_gaps,
+        attempt_reader=attempt_reader,
     )
 
 
@@ -299,6 +329,147 @@ def _capture_for(
         captured_at=bundle.step.started_at,
         blob=b"\x89PNG\r\n\x1a\n" if screening_status == "screened_clean" else None,
     )
+
+
+def make_catalog_store(
+    *,
+    count: int = 5,
+    turns: int = 8,
+    seeds: Sequence[str] | None = None,
+    civilizations: Sequence[str] | None = None,
+    leaders: Sequence[str] | None = None,
+    rulesets: Sequence[str] | None = None,
+    models: Sequence[str] | None = None,
+    lifecycle_states: Sequence[str] | None = None,
+    science_base: Sequence[float] | None = None,
+    science_step: Sequence[float] | None = None,
+    culture_base: Sequence[float] | None = None,
+    completeness: dict[str, str] | None = None,
+    turn_gaps: dict[str, list[int]] | None = None,
+    capture_status: str = "screened_clean",
+    with_captures: bool = True,
+    with_configuration: bool = True,
+) -> Any:
+    """A multi-run store for the catalog (T058) and comparison (T057) tests.
+
+    Runs are `run-01` .. `run-NN` so string sort and numeric sort agree, which
+    keeps a paging assertion about "the first five" unambiguous.
+
+    The per-run metric shape is the point of most of these parameters: the
+    comparison view's divergence detection is only testable against series whose
+    leader is known in advance, so `science_base` and `science_step` let a test
+    say "run-02 starts behind and overtakes at turn 5" rather than seeding noise
+    and asserting whatever comes out.
+
+    `completeness` and `turn_gaps` drive the Principle III quarantine: a run
+    marked `has_gaps`, and -- separately -- a run the store calls `complete`
+    while still listing gapped turns, must both be excluded from every trend
+    line.
+    """
+    from civsim_web.store_client.fake import FakeMatchStore
+
+    def pick(values: Sequence[Any] | None, default: Sequence[Any], index: int) -> Any:
+        source = values if values else default
+        return source[index % len(source)]
+
+    completeness = completeness or {}
+    turn_gaps = turn_gaps or {}
+
+    runs: list[Any] = []
+    configurations: list[Any] = []
+    records: list[Any] = []
+    save_points: list[Any] = []
+    captures: list[Any] = []
+
+    for index in range(count):
+        run_id = f"run-{index + 1:02d}"
+        config_id = f"cfg-{index + 1:02d}"
+        configurations.append(
+            make_configuration(
+                config_id,
+                map_seed=pick(seeds, ("SEED-0001",), index),
+                civilization=pick(civilizations, ("GREECE", "ROME", "EGYPT", "NORWAY"), index),
+                leader=pick(leaders, ("PERICLES", "TRAJAN", "CLEOPATRA", "HARALD"), index),
+                ruleset=pick(rulesets, ("BBG",), index),
+                model_primary=pick(
+                    models, ("anthropic/claude-sonnet-4", "openai/gpt-5"), index
+                ),
+            )
+        )
+        runs.append(
+            make_run(
+                run_id,
+                config_id=config_id,
+                lifecycle_state=pick(lifecycle_states, ("finished",), index),
+                record_completeness_status=completeness.get(run_id, "complete"),
+                started_at=at(index),
+                ended_at=at(index + turns),
+            )
+        )
+
+        gaps = set(turn_gaps.get(run_id, ()))
+        base = float(pick(science_base, (10.0,), index)) + index
+        step = float(pick(science_step, (2.0,), index))
+        culture = float(pick(culture_base, (5.0,), index)) + index
+
+        for turn in range(1, turns + 1):
+            if turn in gaps:
+                continue
+            record = make_turn_cycle(
+                turn,
+                run_id=run_id,
+                capture_status=capture_status,
+                yields={
+                    "science_output": base + step * turn,
+                    "culture_output": culture + turn,
+                },
+            )
+            records.append(record)
+            save_points.append(make_save_point(turn, run_id=run_id))
+            if with_captures:
+                captures.append(_capture_for(record, 0, capture_status, None))
+
+    return FakeMatchStore(
+        runs=runs,
+        configurations=configurations if with_configuration else [],
+        turn_cycles=records,
+        save_points=save_points,
+        captures=captures,
+        turn_gaps={rid: list(values) for rid, values in turn_gaps.items()},
+    )
+
+
+class _PublishedPortOnly:
+    """A store exposing *only* the reads `match-store-port.md` publishes.
+
+    `FakeMatchStore` also offers the three optional capabilities this feature
+    probes for (`get_run_configuration`, `get_capture_blob`, `list_runs`), which
+    is what lets most tests exercise fully-populated pages. This wrapper is the
+    other case, and it is the *realistic* one until deliverable 3 lands: a store
+    that implements the published contract and nothing more.
+
+    Forwarding by an explicit name list rather than `__getattr__` is the point --
+    `getattr(store, "list_runs", None)` must genuinely find nothing, which a
+    catch-all delegate would defeat.
+    """
+
+    def __init__(self, store: Any) -> None:
+        self._store = store
+
+    def __getattr__(self, name: str) -> Any:
+        from civsim_web.store_client.port import READ_OPERATIONS
+
+        if name in READ_OPERATIONS:
+            return getattr(self._store, name)
+        raise AttributeError(
+            f"{name!r} is not a published MatchStore read; this store offers only "
+            f"the operations in contracts/match-store-port.md"
+        )
+
+
+def published_port_only(store: Any) -> Any:
+    """Hide every optional capability, leaving the published reads (plan C1)."""
+    return _PublishedPortOnly(store)
 
 
 def make_app(store: Any = None, *, panels_dir: Path | None = None) -> Any:

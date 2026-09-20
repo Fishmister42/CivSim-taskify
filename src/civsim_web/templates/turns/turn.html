@@ -22,9 +22,26 @@
     <a href="/runs/{{ view.run_id }}/turns/{{ view.turn_number + 1 }}">Turn {{ view.turn_number + 1 }} &rarr;</a>
   </nav>
 
+  {#
+    FR-009: a reference to a superseded attempt explains itself. The link points
+    at the authoritative attempt rather than this page having silently become
+    it -- naming where the current record is, and never substituting it.
+  #}
   {% if not view.is_authoritative %}
   <p class="superseded-banner">
-    This is not the authoritative attempt for turn {{ view.turn_number }}.
+    This is attempt {{ view.attempt_index }} of turn {{ view.turn_number }}, and it is
+    {% if view.superseded_by is not none %}
+    no longer the authoritative record: attempt {{ view.superseded_by }} superseded it.
+    {% else %}
+    not the authoritative record for this turn.
+    {% endif %}
+    {% if view.completeness.is_gap %}
+    No attempt of this turn is authoritative &mdash; the harness recorded the turn
+    as a gap, so the run is unfit for trend comparison.
+    {% else %}
+    The current record is at
+    <a href="{{ view.reference }}">{{ view.reference }}</a>.
+    {% endif %}
   </p>
   {% endif %}
 

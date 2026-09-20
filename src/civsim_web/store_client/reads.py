@@ -26,10 +26,13 @@ reads, or an explicitly-probed optional capability.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 __all__ = [
     "TURN_PROBE_LIMIT",
+    "AttemptLookup",
+    "attempt_index_of",
     "capture_blob",
     "capture_records_for_turn",
     "highest_recorded_turn",
@@ -38,6 +41,7 @@ __all__ = [
     "list_run_events",
     "run_configuration",
     "store_is_reachable",
+    "turn_attempt",
     "turn_gaps",
     "turn_record",
 ]
@@ -184,3 +188,64 @@ def latest_authoritative_turn(
         if found is not None:
             return found
     return None
+
+
+# --------------------------------------------------------------------------
+# Attempt addressing (US2 / T036 -- FR-009)
+# --------------------------------------------------------------------------
+
+
+def attempt_index_of(record: Any) -> int:
+    """A turn record's ``attempt_index``, defaulting to the first attempt."""
+    cycle = getattr(record, "turn_cycle", record)
+    return int(getattr(cycle, "attempt_index", 0) or 0)
+
+
+@dataclass(frozen=True)
+class AttemptLookup:
+    """The answer to "give me attempt k of this turn", with its limits stated.
+
+    ``addressable`` and ``exhaustive`` exist so a route can tell a caller the
+    difference between *this attempt was never recorded* and *this store cannot
+    reach it*. Collapsing the two would make a port gap look like a fact about
+    the run, which is exactly the kind of absence-rendered-as-fact UP-005
+    forbids.
+    """
+
+    record: Any | None
+    addressable: tuple[int, ...]
+    """Attempt indices this lookup could reach. Meaningful only when
+    ``exhaustive`` -- a store with the optional capability can reach any."""
+
+    exhaustive: bool
+    """``True`` when ``addressable`` is the *complete* set the published port
+    can address, i.e. the fallback path was used."""
+
+
+def turn_attempt(store: Any, run_id: str, turn: int, attempt: int) -> AttemptLookup:
+    """One named attempt of one turn (FR-009), through whichever read can reach it.
+
+    **A fourth instance of the C1 gap** (``store_client/port.py``
+    ``TurnAttemptReader``). The published port addresses at most two attempts of
+    any turn -- the authoritative one and the most recent one -- because
+    ``get_turn_cycle`` takes a boolean, not an index. A store offering the
+    optional ``TurnAttemptReader`` capability can address any; one that does not
+    gets the two, and the route says plainly which those were rather than
+    substituting the authoritative attempt for the one that was asked for.
+    """
+    reader = getattr(store, "get_turn_cycle_attempt", None)
+    if reader is not None:
+        return AttemptLookup(reader(run_id, turn, attempt), addressable=(), exhaustive=False)
+
+    reachable: dict[int, Any] = {}
+    for record in (
+        turn_record(store, run_id, turn, authoritative_only=True),
+        turn_record(store, run_id, turn, authoritative_only=False),
+    ):
+        if record is not None:
+            reachable.setdefault(attempt_index_of(record), record)
+    return AttemptLookup(
+        reachable.get(attempt),
+        addressable=tuple(sorted(reachable)),
+        exhaustive=True,
+    )

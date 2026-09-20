@@ -207,3 +207,97 @@ main { padding: 0 1.25rem 3rem; max-width: 1600px; margin: 0 auto; }
 .error h1 { color: var(--bad); }
 .error-message { color: var(--ink-dim); max-width: 60ch; }
 .ref { font-family: ui-monospace, monospace; font-size: 0.8rem; color: var(--ink-dim); }
+
+/* ========================================================================
+   US4 -- run catalog and multi-run comparison (T054, T055)
+
+   Appended by User Story 4. Two things here are load-bearing rather than
+   decorative:
+
+   - `.quarantined` and `.badge-quarantined` give a run whose turn-by-turn
+     record has gaps a visible treatment wherever it appears, so "excluded from
+     the trend" is readable at a glance rather than only in the JSON body
+     (Principle III, FR-021, UP-005).
+   - `.basis-mixed` marks a comparison whose runs do not share a seed,
+     civilization, and ruleset (Principle IV), for the same reason.
+
+   Nothing here styles a control, because there is none to style: every
+   affordance on both pages is an `<a href>` (FR-026, UP-010).
+   ======================================================================== */
+
+.catalog { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.catalog th, .catalog td {
+  text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.catalog th { color: var(--ink-dim); font-weight: 600; white-space: nowrap; }
+.catalog .sort { color: var(--ink-dim); text-decoration: none; }
+.catalog .sort-active { color: var(--ink); }
+.catalog .sort-active::after { content: " \25BC"; font-size: 0.7em; }
+.catalog .sort-active.sort-asc::after { content: " \25B2"; }
+.catalog-row.quarantined { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+
+.badge {
+  display: inline-block; padding: 0.05rem 0.4rem; border-radius: 999px;
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.badge-eligible { background: color-mix(in srgb, var(--ok) 25%, transparent); color: var(--ok); }
+.badge-quarantined { background: color-mix(in srgb, var(--bad) 25%, transparent); color: var(--bad); }
+.eligibility-why { display: block; color: var(--ink-dim); font-size: 0.72rem; max-width: 40ch; }
+
+.filter-chips { list-style: none; display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0; }
+.chip {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 0.15rem 0.6rem; font-size: 0.75rem;
+}
+.warning {
+  border-left: 3px solid var(--warn); background: var(--panel);
+  padding: 0.6rem 0.9rem; color: var(--warn); max-width: 80ch;
+}
+
+/* -- comparison ---------------------------------------------------------- */
+
+.basis { border-left: 3px solid var(--ok); background: var(--panel); padding: 0.6rem 0.9rem; }
+.basis-mixed { border-left-color: var(--warn); }
+.basis-note { color: var(--ink-dim); max-width: 80ch; margin: 0.25rem 0 0; }
+.quarantine { border-left: 3px solid var(--bad); background: var(--panel); padding: 0.6rem 0.9rem; }
+
+.legend-list { list-style: none; padding: 0; }
+.legend-item { display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap; padding: 0.3rem 0; }
+.legend-item.quarantined { opacity: 0.65; }
+.swatch { width: 0.8rem; height: 0.8rem; border-radius: 2px; display: inline-block; }
+
+.trajectory { margin: 1.25rem 0; }
+.trajectory figcaption { color: var(--ink-dim); text-transform: capitalize; margin-bottom: 0.25rem; }
+.trajectory-svg { width: 100%; height: auto; background: var(--panel); border-radius: 8px; }
+.trajectory-svg .axis { stroke: var(--line); stroke-width: 1; }
+.trajectory-svg .axis-label { fill: var(--ink-dim); font-size: 10px; }
+.trajectory-svg .axis-label-end { text-anchor: end; }
+.trajectory-svg .divergence-rule { stroke: var(--warn); stroke-width: 1; stroke-dasharray: 3 3; }
+.trajectory-svg .divergence-dot { fill: var(--warn); stroke: var(--bg); stroke-width: 1.5; }
+.trajectory-svg .divergence:hover .divergence-dot { fill: var(--ink); }
+
+.divergences ol { padding-left: 1.2rem; }
+.divergence-row { margin-bottom: 0.6rem; }
+.divergence-refs { list-style: none; display: flex; gap: 0.8rem; flex-wrap: wrap; padding: 0; }
+
+/* -- panel references (US2) ---------------------------------------------- */
+
+/*
+ * A panel page is one panel cut out of the view it appears on, so it is styled
+ * as a narrow column rather than as a dashboard: whoever opened it was handed a
+ * reference to one thing, not sent to browse.
+ */
+.panel-page { max-width: 90ch; }
+.panel-header { border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; margin-bottom: 1rem; }
+.panel-header h1 { margin-bottom: 0.3rem; }
+
+/* The basis is the first thing on the page, because it is what makes the panel
+ * auditable at all (SC-005) -- and it carries the in-game/out-of-game split the
+ * rest of the interface already uses, so neither can be mistaken for the other. */
+.panel-basis { margin: 0; max-width: 80ch; }
+
+.panel-absent {
+  border-left: 3px solid var(--warn); background: var(--panel);
+  padding: 0.6rem 0.9rem; color: var(--ink-dim); max-width: 80ch;
+}
