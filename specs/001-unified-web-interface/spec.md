@@ -540,6 +540,12 @@ Recorded here so their absence reads as a decision rather than an oversight.
   deliverable's contract to make this one's tasks look closed is precisely the move that would bury
   the finding. They stay recorded as notes in `tasks.md` (Foundation note 2, US1 notes 1 and 3, US2
   note 1, US4 notes 2 and 3) and remain open against deliverable 3.
+  *(Update, 2026-09-20, owner-authorised: the port contract has since been amended from its own
+  side — `match-store-port.md`'s new **Capability extensions** section publishes the four reads as
+  obligations on deliverable 3, and `get_run_configuration` is now a published read, keyed by
+  `run_id`. This feature's probe still keys that name by `config_id`; the re-key is recorded there
+  as the remaining consumer-side fix. The decision recorded here — that this feature would not edit
+  another deliverable's contract — stands; the amendment was made by the contract's owner.)*
 - **`SEPARATION_RATIO = 0.25`** — data-model.md §11 says divergence includes values separating
   "beyond a threshold" and names no number. The implementation chose 0.25 relative to the leading
   value. Writing that number into this spec would convert an implementation default into a product

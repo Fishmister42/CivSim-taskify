@@ -3,6 +3,9 @@
 **Feature**: `002-civ-playing-harness` | **Schema version**: 1
 **Implemented by**: deliverable 3 (match-tracking store). A local SQLite + blob reference adapter
 implements it in the interim (plan Complexity Tracking C2).
+**Amended**: 2026-09-20, owner-authorised — the [Capability extensions](#capability-extensions--the-reads-deliverable-1-proved-missing)
+section was added and two read-table rows sharpened. Schema version unchanged: the amendment adds
+read obligations, no record shape changed.
 
 This is the contract the harness writes through and the one deliverable 3 must satisfy. It exists
 because FR-013 makes a successful write a *precondition of advancing the game* — the harness cannot
@@ -79,8 +82,8 @@ until it ends, which is bounded by the turn and paid once per turn.
 
 | Operation | Used for | Requirement |
 |---|---|---|
-| `get_turn_cycle(authoritative_only=True)` | Recovery, audit, replay | Returns the authoritative attempt with its steps in order; abandoned attempts remain retrievable with the flag off (FR-047) |
-| `get_run_configuration` | Branching | Returns the `RunConfiguration` `create_run` persisted for this run, verbatim -- never a merged, defaulted, or re-derived view. A branch inherits seed, civilization, ruleset, mod set, map and game settings from its **parent's** configuration and is refused if it restates any of them differently (FR-033, `config/run_config.py`), so a branch cannot be validated without reading the parent's configuration back |
+| `get_turn_cycle(authoritative_only=True)` | Recovery, audit, replay | Returns the authoritative attempt with its steps in order; abandoned attempts remain retrievable with the flag off (FR-047). The flag-off read returns the **most recent** attempt (`sqlite_adapter.py`: `ORDER BY attempt_index DESC`) — previously unstated, which left "which attempt does a three-attempt turn return?" implementation-defined. The two forms together address at most two attempts of any turn; see Capability extensions below *(row amended 2026-09-20)* |
+| `get_run_configuration` | Branching; deliverable 1's catalog columns | Returns the `RunConfiguration` `create_run` persisted for this run, verbatim -- never a merged, defaulted, or re-derived view. A branch inherits seed, civilization, ruleset, mod set, map and game settings from its **parent's** configuration and is refused if it restates any of them differently (FR-033, `config/run_config.py`), so a branch cannot be validated without reading the parent's configuration back. Also the read that resolves the web catalog's seed / civilization / ruleset / model columns, which live on `RunConfiguration` (001 FR-018); see Capability extensions below for the keying collision its consumer-side probe still carries *(row amended 2026-09-20)* |
 | `get_last_known_good` | Crash recovery, failed-state reporting | Must identify the save a failed run stopped at (FR-048, SC-021) |
 | `turn_gaps` | Completeness status | Returns turn numbers between 1 and the highest recorded turn with no authoritative attempt (FR-052, SC-011). "Highest recorded turn" is the highest `turn_number` with an authoritative `TurnCycle` -- except on a run whose `lifecycle_state` (`Run.lifecycle_state`) is not one of the three states in which a run is actively cycling through its own turn loop (`playing`, `waiting_on_model`, `waiting_on_game`), where it is instead the highest of that value and the highest turn with a save point at all (`list_save_points`). That extension is what makes a **trailing** attempted-but-never-recorded turn a reported gap once a run has stopped advancing -- paused (FR-042, e.g. after chain exhaustion), interrupted, resuming, or terminal (`finished`/`failed`) alike: a run's quicksave for turn N always precedes N's `TurnCycle` (FR-007), so on a run still actively playing that same shape is normal, not a gap, and is deliberately left unreported |
 | `step_gaps` | Completeness status | Returns missing `step_index` values within a turn. SC-003 requires step-level contiguity, so a turn present but internally incomplete must be detectable — turn-level gap detection alone would call it complete |
@@ -89,6 +92,56 @@ until it ends, which is bounded by the turn and paid once per turn.
 | `list_active_runs` | Run-identity guard | Second gate on FR-006 alongside the single-tuner limit |
 | `get_capture` | Parity, capabilities audit | Looks up one `ScreenCapture` by id so a visual declaration (`view_declaration_id`) can be resolved without reaching past the port |
 | `list_run_events` | Prompt audit | Returns a run's `RunEvent` timeline, chronological by `occurred_at`, optionally filtered by `event_types`; what makes "every prompt is a recorded `prompt_response` decision or a recorded stall" (FR-005) checkable from the record alone |
+
+## Capability extensions — the reads deliverable 1 proved missing
+
+*Amendment (2026-09-20, owner-authorised). This is the contract that owns the gap; spec 001
+recorded the same four findings from the consumer's side (its `tasks.md`: Foundation note 2, US1
+notes 1 and 3, US2 note 1, US4 notes 2 and 3) and deliberately declined to edit this file, because
+a consumer amending a producer's contract to make its own tasks look closed would bury the
+finding. The owner ruled the amendment lands here instead.*
+
+This contract was written for its first consumer — the harness, which writes through it. Building
+its second consumer, the unified web interface (deliverable 1, a pure reader over this same port),
+proved that **a store satisfying this contract exactly cannot serve the historical run catalog,
+capture images, or an attempt-addressed turn read.** The consumer absorbed each gap as an
+*optional probed capability* (`src/civsim_web/store_client/port.py`) rather than reaching around
+the port into this store's blob and file layout — the right refusal — but four probed
+capabilities is not four local workarounds; it is an unpublished half of this port. This section
+publishes that half.
+
+| Capability read | Signature (as probed) | What the published operations cannot do without it |
+|---|---|---|
+| **Run catalog** | `list_runs() -> list[Run]` | `list_active_runs` is documented for *active* runs (the run-identity guard); no operation enumerates terminal or archived runs, so the full historical catalog (001 FR-018/FR-019) cannot be assembled. A catalog silently missing finished runs is the failure most likely to corrupt the population a trend is drawn from (Principle III) |
+| **Capture bytes** | `get_capture_blob(capture_id: CaptureId)` — returns the image bytes, or `None` | `get_capture` returns the record carrying `blob_ref`, a content address no published operation resolves to bytes. Serving an image without this read means reading `blob_ref` off the record and opening the file directly — a second, unaudited path into this store's layout (001 FR-031) |
+| **Attempt addressing** | `get_turn_cycle_attempt(run_id: RunId, turn: int, attempt: int)` — returns that attempt's `TurnCycleRecord`, or `None` if it was never recorded | `get_turn_cycle`'s two forms address exactly two attempts of any turn: the authoritative one and the most recent one (see the amended row above). The case 001 FR-009 is actually about — attempt 0 abandoned, attempt 1 authoritative — is unreachable through the published reads |
+| **Configuration resolution** | *(published above — `get_run_configuration(run_id)`)* | Originally: nothing resolved `Run.config_id` to the `RunConfiguration` carrying the catalog's seed, civilization, ruleset and model columns (001 FR-018). Closed at the contract level when `get_run_configuration` was published for branching (FR-033); the residue is a keying collision, stated below |
+
+Rules, binding on implementations:
+
+| # | Requirement |
+|---|---|
+| **E1** | **Deliverable 3 MUST offer all of these reads.** For the interim reference adapter they remain optional: it predates them, and the consumer's degraded rendering (E3) is the documented interim behaviour, not a defect |
+| **E2** | **Discovery is structural, so absence is the only honest "cannot".** The consumer probes for each read by name and treats the name's presence as the capability's presence (`src/civsim_web/store_client/reads.py`, `catalog.py`). A store MUST NOT expose one of these names as a stub — fabricated, empty-but-plausible, or partial answers under a probed name are a contract violation, strictly worse than not offering the read, because a probe cannot tell a stub from the real thing |
+| **E3** | **Absence degrades honestly, never silently.** Without `list_runs`, the catalog is marked `listing_is_partial` with the reason on the response; without `get_capture_blob`, an explicit "this store cannot resolve capture blobs" answer, never a placeholder image; without `get_turn_cycle_attempt`, the two reachable attempts plus a plain statement that the rest are unaddressable — never the authoritative attempt silently substituted for the one asked for. This behaviour exists and is tested on the consumer side (`tests/web_support/fixtures.py::published_port_only` runs the consumer's suite against a store offering exactly this contract and nothing more) |
+| **E4** | **`get_capture_blob` on a withheld capture returns `None`.** Withheld captures are recorded without their blob (Immutability below), and the record — not a substitute image — is the evidence that screening worked |
+| **E5** | **`get_run_configuration` resolves run ids and nothing else.** An id that is not a known `run_id` MUST answer `None`; resolving against any secondary key — `config_id` in particular — would turn the collision below into silently serving the wrong run's configuration |
+
+**The keying collision, stated so nobody rediscovers it.** The consumer's probe
+(`RunConfigurationReader`, `src/civsim_web/store_client/port.py`) predates this contract's
+`get_run_configuration` and binds the **same method name** with a **`config_id`** argument —
+`reads.py::run_configuration` passes `run.config_id` — while the read published above is keyed by
+**`run_id`**. A store implementing this contract is therefore probed as capable and then
+mis-keyed: under E5 it answers `None`, the consumer renders those columns unavailable, and the
+capability appears offered-but-empty rather than absent. Honest, but not the populated catalog
+001 FR-018 wants. The fix is consumer-side — re-key the probe to `run_id` and retire the
+`RunConfigurationReader` protocol in favour of the published read — and is recorded here, on the
+contract that surfaced it, so it is filed rather than folklore.
+
+The conformance suite below asserts none of these extensions today; the consumer's own suite
+exercises both their presence (its fake store offers all four) and their absence
+(`published_port_only`). When deliverable 3 lands them, `tests/contract/test_match_store_port.py`
+is where E1–E5 get asserted against the real store.
 
 ## Archival and retention
 
