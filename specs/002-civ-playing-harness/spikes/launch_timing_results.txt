@@ -1,0 +1,2 @@
+intro DISABLED: PlayIntroVideo=0 t_port=12.0s t_menu=29.4s
+intro ENABLED: PlayIntroVideo=1 t_port=12.0s t_menu=28.9s

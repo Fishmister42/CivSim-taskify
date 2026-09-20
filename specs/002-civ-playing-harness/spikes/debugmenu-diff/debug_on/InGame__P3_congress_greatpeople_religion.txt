@@ -1,0 +1,9 @@
+=== PROBE ===
+  Game.GetWorldCongress  ->  function
+  Game.GetReligion  ->  function
+  Game.GetGreatPeople  ->  function
+  Game.GetEmergencyManager  ->  function
+  Game.GetHistoryManager  ->  function
+  Game.GetEras  ->  function
+  Game.GetQuestsManager  ->  function
+  Game.GetGossipManager  ->  function
