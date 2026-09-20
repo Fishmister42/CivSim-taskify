@@ -397,6 +397,31 @@ cross-referenced here to avoid duplication.
   X11 windows only, because the client could not be launched (see below). Fullscreen capture, GPU
   overlays, and redirect churn on a live game window are all unmeasured.
 
+### XTest synthetic input: driven, with three defects found and fixed
+
+`spikes/r5-xtest-input-linux.md` (T052, R5). All input injected into a nested `Xephyr` server and
+verified by reading `xev`'s stream, never by trusting `InputResult.status`.
+
+- **XTest events arrive as real device input (`synthetic NO`)**, indistinguishable from a human's
+  keystroke — unlike `XSendEvent`, which arrives flagged `synthetic YES` and which games routinely
+  ignore. That is the load-bearing reason to use XTest.
+- 🔴 **Three defects in `send_input`, all reporting `ok` while dispatching nothing or the wrong
+  thing** — the same class as the capture false-pass, and the reason each was measured rather than
+  reviewed. (a) any key outside a five-entry table was **silently dropped**; (b)
+  `InputEventKind.text` **had no branch at all**, so a text event did nothing — and it is the event
+  the bespoke save path most needs, since a save dialog wants a filename typed into it; (c)
+  **`button` was ignored**, so a right-click request delivered button 1. All three fixed, with
+  undispatchable events now reported `failed` naming the offending event and index.
+- ⚠️ **`InputEvent.x/y` are root-absolute, and the port does not say so.** The Civ window on this
+  host sits at `2560,0` on a second monitor, so **a caller passing window-relative coordinates
+  would click on the wrong monitor**. Behaviour is pinned by a regression test; **the port should
+  state the coordinate space explicitly** — flagged, not changed.
+- ⚠️ **XTest has no window targeting and `send_input` takes no window.** It injects into whatever
+  holds focus, so **nothing stops synthetic input reaching the operator's own windows** if the
+  client is not focused. No focus management exists anywhere in the harness.
+- **Civ VI has still received no synthetic event from this adapter** — whether the client accepts
+  XTest input is inference, not measurement, until the client can be launched.
+
 ### Steam is a hard dependency of the live node
 
 `spikes/steam-dependency-linux.md`. Civ VI **cannot** run without a running, signed-in Steam client:

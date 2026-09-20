@@ -47,17 +47,51 @@ from civsim_harness.host.port import (
 # here, so process detection found no client at all before this was corrected.
 _PROCESS_NAMES = ("Civ6",)
 
-# UNVERIFIED: X keysyms below cover only the keys the bespoke save dialog
-# needs (R5: Escape, Enter, Tab); `xtest.fake_input` itself is a stable,
-# well-documented python-xlib API, but this repo could not exercise the
-# X11 protocol on real hardware.
+# VERIFIED against a live XTest server: `xtest.fake_input` through python-xlib
+# delivers these as events with `synthetic NO` -- i.e. they arrive as real
+# device input, not as `XSendEvent` fakes that an application is free to
+# filter out. That distinction matters for a game client.
+#
+# The original table held only enter/return/esc/tab (R5's save-dialog minimum)
+# and every other key name was silently dropped while `send_input` still
+# returned `ok`. It is widened here because a dialog needs more than three
+# keys, and because "unknown key" is now a reported failure rather than a
+# no-op -- a narrow table would turn ordinary requests into hard errors.
 _KEYSYMS: dict[str, int] = {
     "enter": 0xFF0D,
     "return": 0xFF0D,
     "esc": 0xFF1B,
     "escape": 0xFF1B,
     "tab": 0xFF09,
+    "space": 0x0020,
+    "backspace": 0xFF08,
+    "delete": 0xFFFF,
+    "home": 0xFF50,
+    "end": 0xFF57,
+    "pageup": 0xFF55,
+    "pagedown": 0xFF56,
+    "left": 0xFF51,
+    "up": 0xFF52,
+    "right": 0xFF53,
+    "down": 0xFF54,
+    "shift": 0xFFE1,
+    "ctrl": 0xFFE3,
+    "control": 0xFFE3,
+    "alt": 0xFFE9,
+    **{f"f{n}": 0xFFBE + (n - 1) for n in range(1, 13)},
 }
+
+# XTest button numbers. `button` was previously ignored entirely, so every
+# click dispatched as button 1 regardless of what was asked for.
+_BUTTONS: dict[str, int] = {
+    "left": 1,
+    "middle": 2,
+    "right": 3,
+    "scroll_up": 4,
+    "scroll_down": 5,
+}
+
+_SHIFT_KEYSYM = 0xFFE1
 
 _WAYLAND_INPUT_UNAVAILABLE_REASON = (
     "Synthetic input is not attempted on Wayland: the compositor blocks one client "
@@ -97,6 +131,64 @@ def _read_unredirect_fullscreen_windows() -> bool | None:
             answer = probe.stdout.strip().lower()
             if answer in ("true", "false"):
                 return answer == "true"
+    return None
+
+
+def _input_rejected(index: int, event: InputEvent, problem: str) -> InputResult:
+    """Fail the batch loudly rather than dropping an event and reporting `ok`.
+
+    `send_input` previously fell through several paths that did nothing at all
+    and still returned `ok`. Silent input loss is worse than a failure: the
+    harness records that it acted, the game never saw the keystroke, and the
+    resulting divergence gets attributed to the client.
+    """
+    return InputResult(
+        status=InputStatus.failed,
+        reason=(
+            f"Event {index} ({event.kind.value}) {problem}. No further events in this batch "
+            f"were dispatched; events before it were."
+        ),
+    )
+
+
+def _type_text(display: object, xtest: object, x_const: object, text: str) -> str | None:
+    """Type `text` as real keystrokes. Returns `None` on success, else a reason.
+
+    Each character is resolved to a keysym, then to a keycode, and the server's
+    own keyboard mapping decides whether Shift is required -- rather than
+    assuming a US layout, where an operator on a different layout would get
+    silently wrong characters typed into a save dialog.
+    """
+    for position, character in enumerate(text):
+        keysym = ord(character)
+        keycode = display.keysym_to_keycode(keysym)  # type: ignore[attr-defined]
+        if keycode == 0:
+            return (
+                f"character {character!r} (position {position}) has no keycode in this X "
+                "server's keyboard mapping"
+            )
+
+        # Which shift level carries this keysym on this layout?
+        unshifted = display.keycode_to_keysym(keycode, 0)  # type: ignore[attr-defined]
+        shifted = display.keycode_to_keysym(keycode, 1)  # type: ignore[attr-defined]
+        if unshifted == keysym:
+            needs_shift = False
+        elif shifted == keysym:
+            needs_shift = True
+        else:
+            return (
+                f"character {character!r} (position {position}) resolves to keycode "
+                f"{keycode}, which carries neither the unshifted nor the shifted keysym; "
+                "this adapter will not guess at a modifier combination"
+            )
+
+        shift_code = display.keysym_to_keycode(_SHIFT_KEYSYM)  # type: ignore[attr-defined]
+        if needs_shift:
+            xtest.fake_input(display, x_const.KeyPress, shift_code)  # type: ignore[attr-defined]
+        xtest.fake_input(display, x_const.KeyPress, keycode)  # type: ignore[attr-defined]
+        xtest.fake_input(display, x_const.KeyRelease, keycode)  # type: ignore[attr-defined]
+        if needs_shift:
+            xtest.fake_input(display, x_const.KeyRelease, shift_code)  # type: ignore[attr-defined]
     return None
 
 
@@ -500,23 +592,76 @@ class LinuxHostPlatform:
                     status=InputStatus.unavailable, reason="X server has no XTEST extension"
                 )
             key_kinds = (InputEventKind.key_press, InputEventKind.key_down, InputEventKind.key_up)
-            for event in events:
+            for index, event in enumerate(events):
                 has_xy = event.x is not None and event.y is not None
-                if event.kind in key_kinds and event.key:
+
+                if event.kind in key_kinds:
+                    if not event.key:
+                        return _input_rejected(index, event, "carries no `key`")
                     keysym = _KEYSYMS.get(event.key.lower())
                     if keysym is None:
-                        continue
+                        # Previously this did `continue`: an unmapped key was
+                        # silently dropped and the whole batch still reported
+                        # `ok`. Measured against a live XTest server -- sending
+                        # `F5` delivered zero events and returned success. A
+                        # save dialog that never received its keystroke while
+                        # the harness recorded "input sent" is precisely the
+                        # kind of failure that gets blamed on the game.
+                        return _input_rejected(
+                            index,
+                            event,
+                            f"names key {event.key!r}, which this adapter has no keysym for. "
+                            f"Known keys: {', '.join(sorted(_KEYSYMS))}",
+                        )
                     keycode = display.keysym_to_keycode(keysym)
+                    if keycode == 0:
+                        return _input_rejected(
+                            index,
+                            event,
+                            f"keysym for {event.key!r} maps to no keycode on this X server",
+                        )
                     if event.kind in (InputEventKind.key_press, InputEventKind.key_down):
                         xtest.fake_input(display, X.KeyPress, keycode)
                     if event.kind in (InputEventKind.key_press, InputEventKind.key_up):
                         xtest.fake_input(display, X.KeyRelease, keycode)
+
+                elif event.kind is InputEventKind.text:
+                    # `InputEventKind.text` had no branch here at all, so a
+                    # text event was dropped and reported `ok` -- verified by
+                    # sending "civsim" and observing zero events arrive. It is
+                    # the event the bespoke save path most needs, since a save
+                    # dialog wants a filename typed into it.
+                    if not event.text:
+                        return _input_rejected(index, event, "carries no `text`")
+                    failure = _type_text(display, xtest, X, event.text)
+                    if failure is not None:
+                        return _input_rejected(index, event, failure)
+
                 elif event.kind is InputEventKind.mouse_move and has_xy:
                     xtest.fake_input(display, X.MotionNotify, 0, x=event.x, y=event.y)
+
                 elif event.kind is InputEventKind.mouse_click and has_xy:
+                    # `button` was ignored outright: a right-click request
+                    # delivered button 1. Verified by sending button="right"
+                    # and reading `button 1` back off the wire.
+                    button = _BUTTONS.get((event.button or "left").lower())
+                    if button is None:
+                        return _input_rejected(
+                            index,
+                            event,
+                            f"names button {event.button!r}; known buttons: "
+                            f"{', '.join(sorted(_BUTTONS))}",
+                        )
                     xtest.fake_input(display, X.MotionNotify, 0, x=event.x, y=event.y)
-                    xtest.fake_input(display, X.ButtonPress, 1)
-                    xtest.fake_input(display, X.ButtonRelease, 1)
+                    xtest.fake_input(display, X.ButtonPress, button)
+                    xtest.fake_input(display, X.ButtonRelease, button)
+
+                else:
+                    # Falling through used to mean "silently do nothing, report
+                    # ok". A mouse event missing its coordinates lands here.
+                    return _input_rejected(
+                        index, event, "is not a dispatchable combination of kind and fields"
+                    )
             display.sync()
         except Exception as exc:
             return InputResult(status=InputStatus.failed, reason=f"XTest dispatch failed: {exc}")
