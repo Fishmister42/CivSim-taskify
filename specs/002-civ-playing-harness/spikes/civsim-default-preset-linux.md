@@ -44,19 +44,52 @@ LINUX                       <-- platform, in the file
 independent cross-check for the seed set's platform+build pin (FR-002, R20) that does not depend on
 asking the running client. Same property already noted for saves via `Saved By Version`.
 
-## Parameters recovered from the file
+## Parameters — read back authoritatively
 
-Extracted from the plaintext regions. **These are inferred from the encoded strings, not read back
-through `GameConfiguration`** — treat as strong indications pending confirmation.
+The preset was loaded through the UI (**Single Player → Create Game → Advanced Setup → Load
+Configuration → `CivSim DEFAULT`**) and every field read back through `GameConfiguration` from the
+`HostGame` Lua state. **These are observed values, not inferences from the file.**
 
-| Field | Value |
-|---|---|
-| Civilization | **`CIVILIZATION_PERSIA`** |
-| Leader | **`LEADER_CYRUS`** (the fixed leader) |
-| Map | **`LOC_MAP_PANGAEA`** — Pangaea |
-| Game speed | **`GAMESPEED_ONLINE`** |
-| Start era | **`ERA_ANCIENT`** |
-| Civ level | `CIVILIZATION_LEVEL_FULL_CIV` |
+| Field | Value | Raw |
+|---|---|---|
+| Ruleset | `RULESET_EXPANSION_2` (Gathering Storm) | string |
+| **Turn timer** | **`TURNTIMER_NONE`** ✅ | `-1525060181` |
+| Difficulty | **`DIFFICULTY_EMPEROR`** | `1499830429` |
+| Game speed | **`GAMESPEED_ONLINE`** | `-1649545904` |
+| Start era | `ERA_ANCIENT` | `-1851407529` |
+| Map script | **`Pangaea.lua`** | string |
+| Map size | Small | `-1837222328` |
+| Max turns | `0` (no limit) | |
+| AI players | **6** | |
+| Participating players | 6 | |
+| Multiplayer | `false` | |
+
+Advanced Setup additionally shows, for fields without a `GameConfiguration` getter probed here:
+**Smart-Timer `Off`**, City-States **9**, Disaster Intensity **2**, Resources **Abundant**, Strategic
+Resources **Abundant**, Natural Wonders Density Standard, Leader Pool 1 & 2 *Everything*,
+BCY affected City Centers `OFF`, BCY City Center yields `Balanced`, Settler Capture `Capture`.
+
+### ⚠️ The fixed leader is NOT set in the preset
+
+The owner described the preset as having *"a fixed leader under harness control."* **It does not, as
+loaded.** Every player slot reads back empty:
+
+```
+player[1] id=0 civ=nil leader=nil human=false
+player[2] id=1 civ=nil leader=nil human=false
+...   (6 slots, all nil)
+```
+
+and the Create Game UI shows **`Random Leader`** in every slot after loading the configuration. The
+`LEADER_CYRUS` / `CIVILIZATION_PERSIA` strings visible in the `.Civ6Cfg` plaintext are part of the
+**available-options roster**, which also contains every other leader in the installation — reading
+them as the selection was my error, and the read-back corrects it.
+
+`HumanPlayerCount = 0` likewise, so the human slot is not configured at setup time either.
+
+**This needs the owner's input before any seeded run**: V3 requires `civilization` and `leader` to
+match the seed set, and a preset that randomises the leader cannot satisfy that. Either the preset
+needs the leader pinned and re-saved, or preparation must set it explicitly after loading.
 
 `GAMESPEED_ONLINE` is the fastest speed in the game and is a deliberate-looking choice for an
 experimentation harness — turns resolve in far fewer game-years. It is **not** the `GAMESPEED_STANDARD`

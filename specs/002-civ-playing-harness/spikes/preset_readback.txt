@@ -1,0 +1,22 @@
+RuleSet = RULESET_EXPANSION_2
+TurnTimerType = -1525060181  -> nil
+  TURNTIMER_NONE hash     = -1525060181
+  TURNTIMER_STANDARD hash = 2133509568
+Difficulty = 1499830429  -> DIFFICULTY_EMPEROR
+GameSpeed = -1649545904  -> GAMESPEED_ONLINE
+StartEra = -1851407529  -> ERA_ANCIENT
+MaxTurns = 0
+StartTurn = 0
+AIPlayerCount = 6
+HumanPlayerCount = 0
+ParticipatingPlayerCount = 6
+IsAnyMultiplayer = false
+MapScript = Pangaea.lua
+MapSize = -1837222328
+CityStateCount = nil
+  player[1] id=0 civ=nil leader=nil human=false
+  player[2] id=1 civ=nil leader=nil human=false
+  player[3] id=2 civ=nil leader=nil human=false
+  player[4] id=3 civ=nil leader=nil human=false
+  player[5] id=4 civ=nil leader=nil human=false
+  player[6] id=5 civ=nil leader=nil human=false
