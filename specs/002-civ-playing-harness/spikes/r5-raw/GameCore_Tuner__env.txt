@@ -1,0 +1,8 @@
+getfenv available: false, env type: nil
+global UI : nil
+global Network : nil
+global Game : nil
+global SaveLocations : nil
+global SaveTypes : nil
+global UIManager : nil
+global Automation : nil
