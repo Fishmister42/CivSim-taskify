@@ -85,9 +85,11 @@ capture it was read from.
 
    The prefix is stripped per frame before sentinel correlation. The Linux spikes strip the
    identical prefix (`spikes/r5-raw/t077_enumerate.py`, `t077_probe2.py`, `t077_savetest.py`:
-   `^O\x00[A-Za-z_0-9]+:\s?`), so **Windows and Linux agree on this framing**; whether the empty
-   tag-3 acknowledgement is universal across builds is pending the Linux peer re-running
-   `raw_command_probe.py` (`r5-save-path-windows.md`, "Not yet verified" #1). A non-empty tag-3
+   `^O\x00[A-Za-z_0-9]+:\s?`), so **Windows and Linux agree on this framing**. The empty tag-3
+   acknowledgement is **verified universal across builds**: the Linux peer re-ran
+   `raw_command_probe.py` against `1.0.12.9` (2026-09-20, issue #1) — tag 3 literally empty,
+   sentinels on tag −1 with the same prefix, matching Windows `1.0.12.68` exactly. In the peer's
+   words: T234 is not a Windows workaround, it is the protocol. A non-empty tag-3
    payload has never been observed from a real client; the harness logs one loudly and routes it to
    telemetry rather than accepting it as a result, so a framing change cannot pass silently.
 

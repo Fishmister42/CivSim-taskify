@@ -550,3 +550,36 @@ A = T238+T240 (decision_loop/context/capture); B = T239+T241+T242+T243 (composit
 store/operator); C = T244+T245+allowlist-citation refresh (conformance tests/assemble/recovery/
 reachability). Baseline 1572/2/0 at 28dc5fe. Agents report LANDED paragraphs; hypervisor appends,
 commits per lane, pushes.
+
+### Peer live session results (issue #1, evening): contention CONFIRMED, protocol closed, 2 live bugs
+
+- **CONTENTION CONFIRMED = the "Steam relaunch loop" RECLASSIFIED.** Peer's client ran
+  continuously 17:14:38-17:35+, spanning BOTH Windows shutdowns (17:21:01, 17:32:40). One root
+  cause: contested logon. Unattended Windows runs are UNBLOCKED whenever the Windows side owns
+  the account under the handoff protocol. The 8x/day "LogonFailure" mystery is closed.
+- **Tag-3 empty is UNIVERSAL** (1.0.12.9 matches 1.0.12.68). Contract caveat removed. "T234 is
+  not a Windows workaround - it is the protocol."
+- **End-turn crash caution walked back** by the peer (did not reproduce; suspicion moved to blind
+  Return/space presses). Not a blocker.
+- **Two live bugs in shipped Windows-owned code:** LuaSaveLoader never dismisses the leader-intro
+  screen (fails every real load; strands the client) -> T248; capture_preconditions needs a real
+  port preflight seam (peer confirmed gap, ruled stays UNRESOLVED) -> T249.
+- **Start-new-game breakthrough:** CivSim DEFAULT preset LOADS FROM LUA (Network.LoadGame with
+  FileType=GAME_CONFIGURATION, no UI) - also programmatically confirms TURNTIMER_NONE, closing
+  the old turn-timer blocker for good. Remaining gap: no human player slot assigned (why
+  HostGame silently no-ops). Network.HostGame appears nowhere in src/ (quantifies T237).
+- Filed: T246 (2s post-close connection-refusal tail vs reconnect), T247 (zombie tuner invisible
+  to process/window liveness; bounded-pass rule may eat the heartbeat signal), T248-T250 above.
+
+**HYPERVISOR RULINGS (2026-09-20 evening):**
+1. **Demo records with LANDED code only.** Neither a staged failure nor unlanded patches. Path:
+   peer publishes the Escape-retry patch -> Windows transcribes into production LuaSaveLoader
+   (T248) -> peer re-verifies live -> demo.
+2. **T248 falls within the original T217-B grant** (the one authorized operation, "load a named
+   save", is not complete while the intro screen holds the port closed). Input use bounded to
+   dismissing that screen during that operation. T235 tripwire honored: wiring the consumer
+   deletes the send_input/InputEvent allowlist entries.
+3. **Peer's human-slot-assignment probe: GREENLIT.** Discovery on the live client is theirs;
+   integration into preparation/composition stays Windows-side (T237 lane).
+4. **Priority among the new work:** T248 first (blocks every real load, hence demo, branching,
+   recovery), T249 second. T250 sequenced behind the in-flight T239-T243 lane (preparation.py).
