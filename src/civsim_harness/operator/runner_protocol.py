@@ -1,6 +1,20 @@
 """`RunnerProtocol` -- the narrow seam T118's CLI and T119's HTTP API need from a
 run orchestrator.
 
+**T173 addendum (`resume_from`).** `run branch` (contracts/operator-surface.md)
+needs no new seam at all: a branch document is a run configuration plus a
+`branch_from` block (`config/run_config.py`'s `load_branch_configuration_yaml`),
+so `operator/cli.py`/`operator/api.py` route it through the *existing* `start`
+below, exactly as they would any other configuration file -- `operator/cli.py`
+pre-checks the missing-save case itself, via `saves.addressing.require_
+available_save_point`, before ever reaching a runner, and leaves resolving the
+branch's own build/catalog/host tier and actually loading the save to whatever
+`start` already does for `branch_from`-bearing configurations. `run resume-from`
+has no existing counterpart, though: it continues the *same* `run_id` from an
+earlier recorded turn rather than creating a new one, which `start` cannot
+express. `resume_from` below is the one additive method this wave needs for
+that -- nothing else in this Protocol changes shape.
+
 `src/civsim_harness/run/runner.py` (T116) does not exist yet in this wave -- it
 is a later wave's task, owned by another agent. Rather than block the operator
 surface on it, or invent a stand-in implementation this wave has no authority
@@ -122,5 +136,19 @@ class RunnerProtocol(Protocol):
         Raises `HarnessError` for an unknown `run_id`. Never returns anything
         beyond the closed `RunStatusView` shape (FR-053) -- see
         `operator/schemas.py`.
+        """
+        ...
+
+    def resume_from(self, run_id: RunId, turn: int) -> None:
+        """Resume *run_id* -- the same run, never a branch -- from its
+        recorded save at *turn*, continuing play from there (T173, FR-036).
+        An operator-invoked counterpart to automatic recovery
+        (`resilience/recovery.py`), for deliberately choosing an earlier
+        point rather than the interrupted turn's own save.
+
+        Non-blocking in the same sense as `request_pause`/`request_resume`:
+        returns once the request is accepted. Raises `HarnessError` for an
+        unknown `run_id`, a run for which this is not a legal request right
+        now, or a save at *turn* missing or removed (FR-036).
         """
         ...

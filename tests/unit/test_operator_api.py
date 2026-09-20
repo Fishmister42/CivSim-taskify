@@ -110,6 +110,20 @@ class FakeRunner:
     def request_stop(self, run_id: RunId) -> None:
         self._request("stop", run_id, LifecycleState.FINISHED)
 
+    def resume_from(self, run_id: RunId, turn: int) -> None:
+        """T173 addition to `RunnerProtocol` -- resume the same run_id from
+        an earlier recorded turn's save, as distinct from `request_resume`
+        (which only resumes a currently-paused run from where it already
+        is).
+        """
+        self.order_log.append(f"runner:resume_from:{turn}")
+        if "resume_from" in self.fail_commands or run_id not in self.statuses:
+            raise HarnessError(f"resume_from rejected for run {run_id!r} turn {turn}")
+        current = self.statuses[run_id]
+        self.statuses[run_id] = _status(
+            str(run_id), LifecycleState.PLAYING, archived=current.archived
+        )
+
     def _request(self, verb: str, run_id: RunId, requested: LifecycleState) -> None:
         self.order_log.append(f"runner:{verb}")
         if verb in self.fail_commands or run_id not in self.statuses:

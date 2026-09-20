@@ -25,6 +25,20 @@ must:
 - stop after `recovery_attempt_limit` consecutive failed recovery attempts
   rather than retrying indefinitely (FR-048, SC-021, T154).
 
+**A required save found absent is not a retryable failure (T172, FR-036).**
+Before attempting to load `turn_start_save`, `recover()` checks the same two
+fields `saves.addressing.require_available_save_point` checks --
+`missing`/`retention_status` -- directly on the `SavePoint` object the
+caller already resolved and handed in (never a second store round-trip for
+a value the caller already has). If the loader itself discovers the file
+gone only now (raising `FileNotFoundError` from `SaveLoader.load`), that
+discovery is durably recorded via `saves.addressing.report_save_missing`
+before the run fails. Either way this skips the consecutive-failure retry
+loop entirely and fails the run immediately with `SaveAddressingError` --
+retrying a load that can only ever find the same file gone serves no
+purpose, and the one thing this path must never do is retarget the same
+recovery to a *different* turn's save instead.
+
 **Nothing obtained before the interruption survives into `RecoveryResult`.**
 That is deliberate, not an oversight: FR-046 forbids acting on anything
 captured before the interruption, and the only way to make that
@@ -50,13 +64,14 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 from civsim_harness.errors import HarnessError, ObservationAssemblyError, RecoveryLimitReached
 from civsim_harness.models.common import EventId, RunId, Timestamp
-from civsim_harness.models.records import RunEvent, RunEventType, SavePoint
+from civsim_harness.models.records import RetentionStatus, RunEvent, RunEventType, SavePoint
 from civsim_harness.models.run import LifecycleState, Run, StopResolution
 from civsim_harness.run.lifecycle import transition
+from civsim_harness.saves.addressing import SaveAddressingError, report_save_missing
 from civsim_harness.store.port import MatchStore
 
 
@@ -71,7 +86,15 @@ class SaveLoader(Protocol):
     """
 
     async def load(self, save: SavePoint) -> None:
-        """Load *save* into the game client, replacing its current state."""
+        """Load *save* into the game client, replacing its current state.
+
+        Raises `FileNotFoundError` when *save*'s file is not present -- this
+        is how `RecoveryEngine.recover` (T172, FR-036) tells "the save is
+        genuinely gone" apart from every other way a load can fail (a
+        corrupt file, a client that will not respond); only the former
+        durably records `save_missing` and fails the run outright rather
+        than retrying.
+        """
         ...
 
 
@@ -182,6 +205,12 @@ class RecoveryEngine:
         limit, the underlying error propagates unchanged and the run is
         left at `resuming` for a subsequent call to retry (FR-048, T154 --
         no indefinite retry loop, but no silent swallowing either).
+
+        Raises `SaveAddressingError` instead -- immediately, bypassing the
+        retry loop above entirely -- when `turn_start_save` is (or turns out
+        to be) absent: see the module docstring's T172 paragraph. This is
+        the one failure this method never retries, since a missing file
+        cannot become present by trying the same load again.
         """
         occurred_at = self._clock()
         if turn_start_save.turn_number != turn_number:
@@ -197,6 +226,25 @@ class RecoveryEngine:
             trigger_event_type=trigger_event_type,
             trigger_detail=trigger_detail,
         )
+
+        # T172 / FR-036: a save already recorded absent (by an earlier
+        # recovery attempt's own discovery below, or by the reaper marking
+        # its file removed) is refused outright, never retried and never
+        # retargeted to a different turn -- the same `missing`/
+        # `retention_status` predicate `require_available_save_point`
+        # applies, checked here directly on the already-resolved SavePoint
+        # rather than re-resolving it from the store a second time.
+        if turn_start_save.missing or turn_start_save.retention_status == RetentionStatus.REMOVED:
+            already_known = SaveAddressingError(
+                "the save point required to resume this run is already recorded absent",
+                detail={
+                    "save_point_id": turn_start_save.save_point_id,
+                    "save_name": turn_start_save.save_name,
+                    "missing": turn_start_save.missing,
+                    "retention_status": turn_start_save.retention_status.value,
+                },
+            )
+            await self._fail_on_missing_save(resuming, occurred_at=occurred_at, cause=already_known)
 
         try:
             await self._loader.load(turn_start_save)
@@ -224,6 +272,13 @@ class RecoveryEngine:
                 resumed_from=turn_start_save,
                 events=(*phase_a_events, playing_event, resumed_event),
             )
+        except FileNotFoundError as exc:
+            # Discovered only now: durably record it (T172) before failing --
+            # see report_save_missing's own docstring for why this module,
+            # not saves/addressing.py, is the one that calls it here (this is
+            # the code that actually attempted to load the file).
+            report_save_missing(self._store, turn_start_save, occurred_at=occurred_at)
+            await self._fail_on_missing_save(resuming, occurred_at=occurred_at, cause=exc)
         except Exception as exc:
             await self._on_recovery_attempt_failed(resuming, occurred_at=occurred_at, cause=exc)
             raise
@@ -374,5 +429,47 @@ class RecoveryEngine:
 
         raise RecoveryLimitReached(
             "recovery_attempt_limit consecutive recovery attempts failed",
+            detail=detail,
+        ) from cause
+
+    async def _fail_on_missing_save(
+        self, resuming: Run, *, occurred_at: Timestamp, cause: Exception
+    ) -> NoReturn:
+        """T172, FR-036: fail *resuming* outright over a save found absent --
+        never retried, never retargeted to a different turn's save, and
+        never subject to `recovery_attempt_limit` (a missing file cannot
+        become present by trying again). *resuming* is always at `resuming`
+        here (see `_ensure_interrupted_and_resuming`'s docstring), which is
+        what guarantees this `failed` transition is always legal.
+
+        Durably recording the absence itself is the caller's job, via
+        `saves.addressing.report_save_missing` -- already done by the time
+        this is reached when discovered by `SaveLoader.load` (this module's
+        own `FileNotFoundError` handler in `recover`), and already done in a
+        *prior* call when the save was already `missing`/`removed` on entry
+        (that earlier call is what set `missing=True` in the first place) --
+        so this method itself writes no `save_missing` event of its own,
+        only the `failed` transition and the raise.
+        """
+        detail: dict[str, Any] = {"cause": str(cause), **dict(getattr(cause, "detail", {}) or {})}
+
+        failed_run, failed_event = transition(
+            resuming,
+            LifecycleState.FAILED,
+            occurred_at=occurred_at,
+            stop_resolution=StopResolution.UNRECOVERABLE_FAILURE,
+            detail=detail,
+        )
+        self._store.write_run_event(failed_event)
+        self._store.update_run(
+            resuming.run_id,
+            lifecycle_state=failed_run.lifecycle_state,
+            ended_at=failed_run.ended_at,
+            stop_resolution=failed_run.stop_resolution,
+        )
+
+        raise SaveAddressingError(
+            "the save point required to resume this run was found absent; the run has "
+            "failed outright rather than resuming from a different turn (FR-036)",
             detail=detail,
         ) from cause

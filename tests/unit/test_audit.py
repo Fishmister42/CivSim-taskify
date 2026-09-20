@@ -37,10 +37,10 @@ from civsim_harness.models.catalog import (
     IntegrationCapability,
     ParityDeclaration,
 )
-from civsim_harness.models.common import CapabilityId, DeclarationId
-from civsim_harness.models.config import RunConfiguration
+from civsim_harness.models.common import AcceptanceId, CapabilityId, DeclarationId, SeedSetId
+from civsim_harness.models.config import RunConfiguration, SeedSet
 from civsim_harness.models.decision import Decision
-from civsim_harness.models.records import ModelCall, RunEvent
+from civsim_harness.models.records import ModelCall, RunEvent, SavePoint
 from civsim_harness.models.run import Run
 from civsim_harness.models.turn import DecisionStep, Observation, TurnCycle
 from civsim_harness.operator import audit
@@ -827,6 +827,511 @@ def test_audit_capabilities_flags_a_bespoke_capability_with_no_firetuner_gap(
 # --------------------------------------------------------------------------
 # format_audit_report / exit_code_for
 # --------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------
+# T160 -- audit_recovery
+# --------------------------------------------------------------------------
+
+
+def _event(
+    run_id: str, event_id: str, event_type: str, turn: int | None, at: datetime
+) -> RunEvent:
+    return RunEvent.model_validate(
+        {
+            "event_id": event_id,
+            "run_id": run_id,
+            "event_type": event_type,
+            "turn_number": turn,
+            "occurred_at": at,
+        }
+    )
+
+
+def test_audit_recovery_insufficient_data_for_unknown_run(store: SqliteMatchStore) -> None:
+    report = audit.audit_recovery(store, "no-such-run")
+    assert report.outcome is audit.AuditOutcome.INSUFFICIENT_DATA
+
+
+def test_audit_recovery_passes_with_no_recovery_events(store: SqliteMatchStore) -> None:
+    store.create_run(_make_run("run-recov-clean"), _make_config("cfg-recov-clean"))
+    report = audit.audit_recovery(store, "run-recov-clean")
+    assert report.outcome is audit.AuditOutcome.PASSED
+    assert report.summary["turn_abandoned_events"] == 0
+    assert report.summary["resumed_events"] == 0
+
+
+def test_audit_recovery_matches_a_healthy_abandon_resume_pair(store: SqliteMatchStore) -> None:
+    run_id = "run-recov-ok"
+    store.create_run(_make_run(run_id), _make_config("cfg-" + run_id))
+    store.write_save_point(SavePoint.model_validate(_make_save_point(run_id, 3)))
+    tc = _make_turn_cycle(f"{run_id}-t3-a0", run_id, 3, step_count=1)
+    store.write_turn_cycle(
+        TurnCycleRecord(turn_cycle=tc, steps=[_make_step_bundle(run_id, f"{run_id}-t3-a0", 1)])
+    )
+    store.write_run_event(_event(run_id, "evt-abandon", "turn_abandoned", 3, NOW))
+    store.write_run_event(_event(run_id, "evt-resume", "resumed", 3, NOW + timedelta(seconds=1)))
+
+    report = audit.audit_recovery(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.PASSED
+    assert report.summary["matched_abandon_resume_pairs"] == 1
+    assert 3 in report.summary["turns_with_abandonment"]
+
+
+def test_audit_recovery_flags_a_resumed_event_with_no_prior_abandonment(
+    store: SqliteMatchStore,
+) -> None:
+    run_id = "run-recov-orphan-resume"
+    store.create_run(_make_run(run_id), _make_config("cfg-" + run_id))
+    store.write_run_event(_event(run_id, "evt-resume", "resumed", 7, NOW))
+
+    report = audit.audit_recovery(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "resumed_without_abandonment" for f in report.findings)
+
+
+def test_audit_recovery_flags_an_abandoned_turn_with_no_record_at_all(
+    store: SqliteMatchStore,
+) -> None:
+    run_id = "run-recov-no-record"
+    store.create_run(_make_run(run_id), _make_config("cfg-" + run_id))
+    store.write_run_event(_event(run_id, "evt-abandon", "turn_abandoned", 9, NOW))
+
+    report = audit.audit_recovery(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "abandoned_turn_missing_from_record" for f in report.findings)
+
+
+def test_audit_recovery_flags_an_abandoned_attempt_still_marked_authoritative(
+    store: SqliteMatchStore,
+) -> None:
+    """T152's own bookkeeping (attempt_index bookkeeping, not this module's
+    job) is what is supposed to demote an abandoned attempt once recovery
+    replays it -- this proves the audit catches it if that demotion is ever
+    skipped (invariant I9).
+    """
+    run_id = "run-recov-stuck"
+    store.create_run(_make_run(run_id), _make_config("cfg-" + run_id))
+    store.write_save_point(SavePoint.model_validate(_make_save_point(run_id, 4)))
+    stuck_tc = TurnCycle.model_validate(
+        {
+            "turn_cycle_id": f"{run_id}-t4-a0",
+            "run_id": run_id,
+            "turn_number": 4,
+            "attempt_index": 0,
+            "is_authoritative": True,
+            "save_point_id": f"{run_id}-sp4",
+            "step_count": 1,
+            "outcome": "abandoned",
+            "final_no_progress_streak": 0,
+            "visually_degraded": False,
+            "started_at": NOW,
+            "ended_at": NOW,
+            "persisted_at": NOW,
+        }
+    )
+    store.write_turn_cycle(
+        TurnCycleRecord(
+            turn_cycle=stuck_tc, steps=[_make_step_bundle(run_id, f"{run_id}-t4-a0", 1)]
+        )
+    )
+    store.write_run_event(_event(run_id, "evt-abandon", "turn_abandoned", 4, NOW))
+
+    report = audit.audit_recovery(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "abandoned_attempt_still_authoritative" for f in report.findings)
+
+
+# --------------------------------------------------------------------------
+# T160 -- audit_completeness
+# --------------------------------------------------------------------------
+
+
+def test_audit_completeness_insufficient_data_for_unknown_run(store: SqliteMatchStore) -> None:
+    report = audit.audit_completeness(store, "no-such-run")
+    assert report.outcome is audit.AuditOutcome.INSUFFICIENT_DATA
+
+
+def test_audit_completeness_passes_for_a_gap_free_run(store: SqliteMatchStore) -> None:
+    run_id = "run-complete-ok"
+    turn1 = [_make_step_bundle(run_id, f"{run_id}-t1-a0", 1)]
+    turn2 = [_make_step_bundle(run_id, f"{run_id}-t2-a0", 1)]
+    _seed_run_with_turns(store, run_id, {1: turn1, 2: turn2})
+
+    report = audit.audit_completeness(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.PASSED
+    assert report.summary["turn_gaps"] == 0
+    assert report.summary["step_gaps"] == 0
+    assert report.summary["authoritative_turns"] == "2/2"
+    assert report.summary["record_completeness_status"] == "complete"
+
+
+def test_audit_completeness_flags_a_missing_turn(store: SqliteMatchStore) -> None:
+    run_id = "run-complete-turngap"
+    turn1 = [_make_step_bundle(run_id, f"{run_id}-t1-a0", 1)]
+    turn3 = [_make_step_bundle(run_id, f"{run_id}-t3-a0", 1)]
+    _seed_run_with_turns(store, run_id, {1: turn1, 3: turn3})
+
+    report = audit.audit_completeness(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert {"kind": "turn_gap", "turn": 2} in report.findings
+    assert report.summary["record_completeness_status"] == "has_gaps"
+
+
+def test_audit_completeness_flags_a_missing_step(store: SqliteMatchStore) -> None:
+    run_id = "run-complete-stepgap"
+    turn_cycle_id = f"{run_id}-t1-a0"
+    bundles = [
+        _make_step_bundle(run_id, turn_cycle_id, 1),
+        _make_step_bundle(run_id, turn_cycle_id, 2),
+        _make_step_bundle(run_id, turn_cycle_id, 4),
+    ]
+    _seed_run_with_turns(store, run_id, {1: bundles})
+
+    report = audit.audit_completeness(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    step_gap_finding = next(f for f in report.findings if f["kind"] == "step_gap")
+    assert step_gap_finding["missing_step_indices"] == [3]
+
+
+# --------------------------------------------------------------------------
+# T176 -- audit_lineage
+# --------------------------------------------------------------------------
+
+
+def _make_branch_run(run_id: str, *, parent_run_id: str, parent_turn: int) -> Run:
+    run = _make_run(run_id)
+    return run.model_copy(update={"parent_run_id": parent_run_id, "parent_turn": parent_turn})
+
+
+def _seed_parent_with_save(store: SqliteMatchStore, parent_run_id: str, turn: int) -> None:
+    store.create_run(_make_run(parent_run_id), _make_config("cfg-" + parent_run_id))
+    store.write_save_point(SavePoint.model_validate(_make_save_point(parent_run_id, turn)))
+
+
+def test_audit_lineage_insufficient_data_for_unknown_branch(store: SqliteMatchStore) -> None:
+    report = audit.audit_lineage(store, "no-such-branch")
+    assert report.outcome is audit.AuditOutcome.INSUFFICIENT_DATA
+
+
+def test_audit_lineage_passes_for_a_well_formed_branch(store: SqliteMatchStore) -> None:
+    _seed_parent_with_save(store, "parent-a", 23)
+    store.create_run(
+        _make_branch_run("branch-a", parent_run_id="parent-a", parent_turn=23),
+        _make_config("cfg-branch-a"),
+    )
+    store.write_run_event(
+        RunEvent.model_validate(
+            {
+                "event_id": "evt-branch-a",
+                "run_id": "branch-a",
+                "event_type": "branch_created",
+                "turn_number": 23,
+                "occurred_at": NOW,
+                "detail": {"parent_run_id": "parent-a", "parent_turn": 23},
+            }
+        )
+    )
+
+    report = audit.audit_lineage(store, "branch-a")
+
+    assert report.outcome is audit.AuditOutcome.PASSED
+    assert report.summary["parent_run_on_record"] is True
+    assert report.summary["parent_save_point_on_record"] is True
+    assert report.summary["branch_created_events_matching"] == 1
+
+
+def test_audit_lineage_flags_a_run_with_no_recorded_lineage(store: SqliteMatchStore) -> None:
+    store.create_run(_make_run("run-not-a-branch"), _make_config("cfg-not-branch"))
+
+    report = audit.audit_lineage(store, "run-not-a-branch")
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "missing_lineage" for f in report.findings)
+
+
+def test_audit_lineage_flags_a_missing_parent_run(store: SqliteMatchStore) -> None:
+    store.create_run(
+        _make_branch_run("branch-orphan", parent_run_id="ghost-parent", parent_turn=1),
+        _make_config("cfg-branch-orphan"),
+    )
+
+    report = audit.audit_lineage(store, "branch-orphan")
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "parent_run_missing" for f in report.findings)
+
+
+def test_audit_lineage_flags_a_missing_parent_save_point(store: SqliteMatchStore) -> None:
+    store.create_run(_make_run("parent-nosave"), _make_config("cfg-parent-nosave"))
+    store.create_run(
+        _make_branch_run("branch-nosave", parent_run_id="parent-nosave", parent_turn=5),
+        _make_config("cfg-branch-nosave"),
+    )
+
+    report = audit.audit_lineage(store, "branch-nosave")
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "parent_save_point_missing" for f in report.findings)
+
+
+def test_audit_lineage_flags_a_missing_branch_created_event(store: SqliteMatchStore) -> None:
+    _seed_parent_with_save(store, "parent-b", 12)
+    store.create_run(
+        _make_branch_run("branch-b", parent_run_id="parent-b", parent_turn=12),
+        _make_config("cfg-branch-b"),
+    )
+
+    report = audit.audit_lineage(store, "branch-b")
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "branch_created_event_missing_or_mismatched" for f in report.findings)
+
+
+# --------------------------------------------------------------------------
+# T176 -- audit_immutability
+# --------------------------------------------------------------------------
+
+
+def test_audit_immutability_insufficient_data_for_unknown_run(store: SqliteMatchStore) -> None:
+    report = audit.audit_immutability(store, "no-such-run")
+    assert report.outcome is audit.AuditOutcome.INSUFFICIENT_DATA
+
+
+def test_audit_immutability_passes_for_a_well_owned_run(store: SqliteMatchStore) -> None:
+    run_id = "run-immut-ok"
+    _seed_run_with_turns(store, run_id, {1: [_make_step_bundle(run_id, f"{run_id}-t1-a0", 1)]})
+
+    report = audit.audit_immutability(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.PASSED
+    assert report.summary["is_branch"] is False
+    assert report.summary["save_points_examined"] == 1
+
+
+class _MismatchedOwnerStore:
+    """A minimal `MatchStore` stand-in returning a save point whose own
+    `run_id` disagrees with the run it was fetched for -- a shape a real,
+    correctly-filtering `MatchStore.list_save_points` cannot produce (see
+    `tests/unit/test_audit.py`'s own module docstring on why some tests
+    reach for a fabricated store), proving `audit_immutability` would catch
+    exactly this if it ever happened.
+    """
+
+    def __init__(self, run: Run, bad_save_point: SavePoint) -> None:
+        self._run = run
+        self._bad_save_point = bad_save_point
+
+    def get_run(self, run_id: str) -> Run | None:
+        return self._run if run_id == self._run.run_id else None
+
+    def list_save_points(self, run_id: str) -> list[SavePoint]:
+        return [self._bad_save_point] if run_id == self._run.run_id else []
+
+    def get_turn_cycle(
+        self, run_id: str, turn: int, *, authoritative_only: bool = True
+    ) -> TurnCycleRecord | None:
+        return None
+
+
+def test_audit_immutability_flags_a_save_point_owned_by_another_run() -> None:
+    run = _make_run("run-immut-bad")
+    bad_save_point = SavePoint.model_validate(_make_save_point("some-other-run", 1))
+    fake_store = _MismatchedOwnerStore(run, bad_save_point)
+
+    report = audit.audit_immutability(fake_store, "run-immut-bad")  # type: ignore[arg-type]
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "save_point_owned_by_another_run" for f in report.findings)
+
+
+# --------------------------------------------------------------------------
+# T176 -- audit_builds
+# --------------------------------------------------------------------------
+
+
+def _seed_set(**overrides: Any) -> SeedSet:
+    payload: dict[str, Any] = {
+        "seed_set_id": SeedSetId("shuffle-classic-2026q3"),
+        "name": "shuffle-classic-2026q3",
+        "seeds": ["123"],
+        "civilization": "CIVILIZATION_ROME",
+        "leader": "LEADER_TRAJAN",
+        "ruleset": "RULESET_STANDARD",
+        "mod_set": [],
+        "game_build": "win/1.0.12.9",
+        "accepted_build_changes": [],
+        "created_at": NOW,
+    }
+    payload.update(overrides)
+    return SeedSet.model_validate(payload)
+
+
+def test_audit_builds_reports_a_uniform_set_with_no_acceptances(store: SqliteMatchStore) -> None:
+    report = audit.audit_builds(store, _seed_set())
+
+    assert report.outcome is audit.AuditOutcome.PASSED
+    assert report.summary["is_uniform"] is True
+    assert report.summary["run_enumeration_supported"] is False
+
+
+def test_audit_builds_reports_a_non_uniform_set_once_any_change_is_accepted(
+    store: SqliteMatchStore,
+) -> None:
+    acceptance = {
+        "acceptance_id": AcceptanceId("acc-1"),
+        "from_build": "win/1.0.12.9",
+        "to_build": "win/1.0.12.11",
+        "accepted_by": "researcher",
+        "accepted_at": NOW,
+        "reason": "matchmaking-only patch",
+        "r20_spike_ref": None,
+    }
+    seed_set = _seed_set(accepted_build_changes=[acceptance])
+
+    report = audit.audit_builds(store, seed_set)
+
+    assert report.outcome is audit.AuditOutcome.PASSED  # a version-only acceptance needs no spike
+    assert report.summary["is_uniform"] is False
+    assert report.summary["accepted_transitions"][0]["to_build"] == "win/1.0.12.11"
+
+
+def test_audit_builds_flags_a_platform_crossing_acceptance_with_no_spike_ref(
+    store: SqliteMatchStore,
+) -> None:
+    acceptance = {
+        "acceptance_id": AcceptanceId("acc-2"),
+        "from_build": "win/1.0.12.9",
+        "to_build": "mac/1.0.12.9",
+        "accepted_by": "researcher",
+        "accepted_at": NOW,
+        "reason": "testing cross-platform",
+        "r20_spike_ref": None,
+    }
+    seed_set = _seed_set(accepted_build_changes=[acceptance])
+
+    report = audit.audit_builds(store, seed_set)
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(
+        f["kind"] == "platform_transition_acceptance_missing_spike_ref" for f in report.findings
+    )
+
+
+def test_audit_builds_partitions_supplied_runs_by_build(store: SqliteMatchStore) -> None:
+    store.create_run(_make_run("run-win-a"), _make_config("cfg-run-win-a"))
+    accepted_run = _make_run("run-win-b").model_copy(update={"game_build": "win/1.0.12.11"})
+    store.create_run(accepted_run, _make_config("cfg-run-win-b"))
+    acceptance = {
+        "acceptance_id": AcceptanceId("acc-3"),
+        "from_build": "win/1.0.12.9",
+        "to_build": "win/1.0.12.11",
+        "accepted_by": "researcher",
+        "accepted_at": NOW,
+        "reason": "patch",
+        "r20_spike_ref": None,
+    }
+    seed_set = _seed_set(accepted_build_changes=[acceptance])
+
+    report = audit.audit_builds(store, seed_set, run_ids=["run-win-a", "run-win-b"])
+
+    assert report.outcome is audit.AuditOutcome.PASSED
+    assert report.summary["run_enumeration_supported"] is True
+    assert set(report.summary["builds_seen"]["win/1.0.12.9"]) == {"run-win-a"}
+    assert set(report.summary["builds_seen"]["win/1.0.12.11"]) == {"run-win-b"}
+
+
+def test_audit_builds_flags_a_run_build_nothing_ever_accepted(store: SqliteMatchStore) -> None:
+    drifted = _make_run("run-drift").model_copy(update={"game_build": "win/9.9.9.9"})
+    store.create_run(drifted, _make_config("cfg-run-drift"))
+
+    report = audit.audit_builds(store, _seed_set(), run_ids=["run-drift"])
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "run_build_not_accounted_for" for f in report.findings)
+
+
+# --------------------------------------------------------------------------
+# T190 -- audit_models
+# --------------------------------------------------------------------------
+
+
+def test_audit_models_insufficient_data_when_run_has_no_turns(
+    store: SqliteMatchStore,
+) -> None:
+    store.create_run(_make_run("run-models-empty"), _make_config("cfg-models-empty"))
+    report = audit.audit_models(store, "run-models-empty")
+    assert report.outcome is audit.AuditOutcome.INSUFFICIENT_DATA
+
+
+def test_audit_models_rolls_up_latency_retry_cost_and_fallback_per_turn(
+    store: SqliteMatchStore,
+) -> None:
+    run_id = "run-models-ok"
+    turn_cycle_id = f"{run_id}-t1-a0"
+    step1 = _make_step_bundle(run_id, turn_cycle_id, 1)
+    step2 = _make_step_bundle(run_id, turn_cycle_id, 2)
+    fallback_call = step2.model_call.model_copy(
+        update={"fallback_occurred": True, "latency_ms": 250, "retry_count": 2}
+    )
+    step2 = step2.model_copy(update={"model_call": fallback_call})
+    _seed_run_with_turns(store, run_id, {1: [step1, step2]})
+
+    report = audit.audit_models(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.PASSED
+    per_turn = report.summary["per_turn"][1]
+    assert per_turn["latency_ms_total"] == 100 + 250
+    assert per_turn["retry_count_total"] == 0 + 2
+    assert per_turn["fallback_occurred"] is True
+    assert per_turn["models_served"] == ["openrouter/x"]
+    assert report.summary["turns_served_by_fallback"] == 1
+
+
+# --------------------------------------------------------------------------
+# T190 -- audit_secrets
+# --------------------------------------------------------------------------
+
+
+def test_audit_secrets_insufficient_data_for_unknown_run(store: SqliteMatchStore) -> None:
+    report = audit.audit_secrets(store, "no-such-run")
+    assert report.outcome is audit.AuditOutcome.INSUFFICIENT_DATA
+
+
+def test_audit_secrets_passes_for_a_clean_run(store: SqliteMatchStore) -> None:
+    run_id = "run-secrets-clean"
+    _seed_run_with_turns(store, run_id, {1: [_make_step_bundle(run_id, f"{run_id}-t1-a0", 1)]})
+
+    report = audit.audit_secrets(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.PASSED
+    assert report.summary["records_examined"] > 0
+
+
+def test_audit_secrets_flags_a_fake_planted_key_shaped_value(store: SqliteMatchStore) -> None:
+    """Only a fake, obviously-not-real key shape is ever planted here -- see
+    `operator/audit.py`'s own module docstring and this feature's credential
+    handling notes; a real key must never appear in test data.
+    """
+    run_id = "run-secrets-planted"
+    bundle = _make_step_bundle(run_id, f"{run_id}-t1-a0", 1)
+    leaky_decision = bundle.decision.model_copy(
+        update={"reasoning": "remember api_key: sk-FAKE1234567890abcdefFAKE for later"}
+    )
+    bundle = bundle.model_copy(update={"decision": leaky_decision})
+    _seed_run_with_turns(store, run_id, {1: [bundle]})
+
+    report = audit.audit_secrets(store, run_id)
+
+    assert report.outcome is audit.AuditOutcome.FAILED
+    assert any(f["kind"] == "credential_shaped_value_in_decision" for f in report.findings)
 
 
 def test_format_and_exit_code_distinguish_all_three_outcomes() -> None:

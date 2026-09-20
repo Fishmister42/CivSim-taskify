@@ -1,16 +1,12 @@
-"""Typer CLI entry point for the civsim operator surface (T118).
+"""Typer CLI entry point for the civsim operator surface (T118, T173, T174).
 
 This is the ``civsim`` console script (see ``pyproject.toml``
-``[project.scripts]``). Implements the lifecycle commands
-(``run start|pause|resume|stop|status``, ``doctor``) and the record-only
-audits (``audit parity|prompts|decisions|steps|loop|capabilities``) named in
-``contracts/operator-surface.md`` for this wave. ``run resume-from``,
-``run branch``, ``run archive``, ``seedset accept-build``, and ``saves reap``
-are later waves' additions (not this task's -- see T118's own scope) and are
-deliberately left unregistered rather than stubbed, so `--help` reflects only
-what is actually implemented; the ``run_app``/``audit_app`` sub-``Typer``
-objects below are exactly where those commands attach later without touching
-anything already here.
+``[project.scripts]``). Implements the lifecycle commands (``run
+start|pause|resume|stop|status|resume-from|branch|archive``, ``saves reap``,
+``seedset accept-build``, ``doctor``) and the record-only audits (``audit
+parity|prompts|decisions|steps|loop|capabilities|recovery|completeness|
+lineage|immutability|builds|models|secrets``) named in
+``contracts/operator-surface.md``.
 
 The CLI never presents turn records, decisions, metrics, or captures (FR-053,
 Principle VI) -- ``run status`` returns exactly ``operator.schemas.RunStatusView``,
@@ -24,28 +20,68 @@ small bootstrap ``__main__`` the eventual integration owns) to wire a real
 one; tests call it to inject a fake. Invoking a ``run`` subcommand with no
 factory configured fails with a clear, actionable message rather than an
 import error or a stack trace naming a module that does not exist.
+
+**``run branch`` needs no new seam.** A branch document is an ordinary run
+configuration plus a ``branch_from`` block (``config/run_config.py``); this
+command pre-checks the one thing it can check without a live client -- the
+parent's save at the named turn is not missing (FR-036, via
+``saves.addressing.require_available_save_point``) -- and otherwise routes
+straight through the *existing* ``RunnerProtocol.start``, exactly as ``run
+start`` does for any other configuration file. ``run resume-from`` has no
+such existing counterpart (it continues the *same* run_id from an earlier
+turn rather than creating a new one), so it is the one place this wave adds
+a method to ``RunnerProtocol`` (``resume_from`` -- see that module).
+
+**``run archive`` and ``saves reap`` need no runner at all.** Both are pure
+``MatchStore`` operations (``saves/archival.py``, ``saves/reaper.py``) --
+archival is a recorded decision that a run is no longer a branch source, not
+a live-session concern.
+
+**``seedset accept-build`` records the acceptance on the seed set's own YAML
+file only.** There is no ``run_id`` yet at the point an operator accepts a
+build change (quickstart.md Scenario 9 runs it *before* `run start`), and
+``RunEvent`` cannot be constructed without one (``models/records.py``) --
+mirroring ``operator/commands.py``'s own reasoning for why `start` records no
+`lifecycle_command_received` event of its own. The ``game_build_change_
+accepted`` event data-model.md describes as recorded "on every dependent
+run" is exactly that: recorded once a dependent run actually exists and
+relies on this acceptance, by whatever preflight code resolves it then (a
+concurrent wave's `run/preparation.py`) -- not by this command, which has
+no run to attach it to.
 """
 
 from __future__ import annotations
 
 import asyncio
+import getpass
 import os
+import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import typer
+import yaml
 
 from civsim_harness.capability.loader import Catalog, load_catalog
 from civsim_harness.capability.registry import CapabilityRegistry
+from civsim_harness.config.seed_set import load_seed_set_file
 from civsim_harness.errors import CatalogError, HarnessError
 from civsim_harness.host.factory import get_host_platform
-from civsim_harness.models.common import RunId
+from civsim_harness.models.common import AcceptanceId, BuildAcceptance, EventId, RunId, Timestamp
+from civsim_harness.models.config import SeedSet
+from civsim_harness.models.records import RunEvent, RunEventType
 from civsim_harness.models.run import LifecycleState
+from civsim_harness.observe.game_build import is_platform_transition
 from civsim_harness.operator import audit as audit_module
 from civsim_harness.operator import commands
 from civsim_harness.operator.doctor import format_doctor_report, run_doctor
 from civsim_harness.operator.runner_protocol import RunnerProtocol
 from civsim_harness.operator.schemas import RunStatusView
+from civsim_harness.saves.addressing import SaveAddressingError, require_available_save_point
+from civsim_harness.saves.archival import archive_run
+from civsim_harness.saves.reaper import reap
 from civsim_harness.store.port import MatchStore
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
 
@@ -58,8 +94,16 @@ run_app = typer.Typer(name="run", help="Lifecycle control for one run.", no_args
 audit_app = typer.Typer(
     name="audit", help="Verify a run's record from the store alone.", no_args_is_help=True
 )
+saves_app = typer.Typer(
+    name="saves", help="Operator-invoked save retention operations.", no_args_is_help=True
+)
+seedset_app = typer.Typer(
+    name="seedset", help="Seed set maintenance (build-pin acceptance).", no_args_is_help=True
+)
 app.add_typer(run_app, name="run")
 app.add_typer(audit_app, name="audit")
+app.add_typer(saves_app, name="saves")
+app.add_typer(seedset_app, name="seedset")
 
 
 @app.command()
@@ -112,6 +156,7 @@ DEFAULT_CATALOG_ROOT = Path("catalogs")
 _CatalogRootOption = typer.Option(DEFAULT_CATALOG_ROOT, "--catalog-root")
 _StorePathOption = typer.Option(None, "--store-path")
 _ConfigPathArgument = typer.Argument(..., exists=True, dir_okay=False, readable=True)
+_TurnOption = typer.Option(..., "--turn")
 
 _store_factory: Callable[[Path], MatchStore] | None = None
 
@@ -246,6 +291,299 @@ def run_status(run_id: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# run resume-from | branch | archive (T173)
+# --------------------------------------------------------------------------
+
+_BranchConfigOption = typer.Option(..., "--config", exists=True, dir_okay=False, readable=True)
+_ByOption = typer.Option(None, "--by", help="Operator identity to record (default: OS user)")
+
+
+def _new_event_id() -> EventId:
+    """Mirrors `operator/commands.py`'s own private `_new_event_id` -- that
+    module is out of this task's file ownership, so the small, stable
+    `lifecycle_command_received`-recording shape it already establishes is
+    duplicated here rather than imported past its module boundary.
+    """
+    return EventId(f"cmd-{uuid.uuid4().hex}")
+
+
+def _record_command(store: MatchStore, run_id: RunId, command: str) -> None:
+    """Every command in contracts/operator-surface.md's table -- including
+    the three below, which `operator/commands.py` does not cover -- is
+    durably recorded as `lifecycle_command_received` before it takes effect.
+    """
+    store.write_run_event(
+        RunEvent(
+            event_id=_new_event_id(),
+            run_id=run_id,
+            event_type=RunEventType.LIFECYCLE_COMMAND_RECEIVED,
+            occurred_at=datetime.now(UTC),
+            detail={"command": command},
+        )
+    )
+
+
+def _reject_missing_save(
+    store: MatchStore, run_id: str, turn: int, *, verb: str
+) -> None:
+    """Shared FR-036 pre-check for `resume-from` and `branch`: reject with
+    the missing save named, before ever reaching a runner (contracts/
+    operator-surface.md's error table: "Save missing on resume-from or
+    branch | Rejected, reporting the missing save").
+    """
+    try:
+        require_available_save_point(store, RunId(run_id), turn)
+    except SaveAddressingError as exc:
+        typer.echo(f"run {verb} failed: {exc.message}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@run_app.command("resume-from")
+def run_resume_from(
+    run_id: str,
+    turn: int = _TurnOption,
+    store_path: Path | None = _StorePathOption,
+) -> None:
+    """Resume RUN_ID -- the same run -- from its recorded save at TURN
+    (FR-036, contracts/operator-surface.md)."""
+    store = _open_store(store_path)
+    _reject_missing_save(store, run_id, turn, verb="resume-from")
+
+    runner = _get_runner()
+    _record_command(store, RunId(run_id), f"resume-from --turn {turn}")
+    try:
+        runner.resume_from(RunId(run_id), turn)
+    except HarnessError as exc:
+        typer.echo(f"run resume-from failed: {exc.message}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    status = runner.get_status(RunId(run_id))
+    _print_status(status)
+    if status.lifecycle_state == LifecycleState.FAILED:
+        raise typer.Exit(code=1)
+
+
+@run_app.command("branch")
+def run_branch(
+    run_id: str,
+    turn: int = _TurnOption,
+    config_path: Path = _BranchConfigOption,
+    store_path: Path | None = _StorePathOption,
+) -> None:
+    """Start a new run from RUN_ID's turn TURN save, using CONFIG_PATH's
+    branch configuration, recording lineage (FR-033, FR-036).
+
+    A branch document is an ordinary run configuration plus a `branch_from`
+    block naming its own `run_id`/`turn` (contracts/run-configuration.md
+    "Branch configuration") -- this command only pre-checks the missing-save
+    case itself (the one thing checkable without a live client) and
+    otherwise forwards CONFIG_PATH to `RunnerProtocol.start`, exactly like
+    `run start`; see the module docstring.
+    """
+    store = _open_store(store_path)
+    _reject_missing_save(store, run_id, turn, verb="branch")
+
+    _record_command(store, RunId(run_id), f"branch --turn {turn} --config {config_path}")
+    runner = _get_runner()
+    try:
+        new_run_id = commands.start(runner, config_path)
+    except HarnessError as exc:
+        typer.echo(f"run branch failed: {exc.message}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    status = runner.get_status(new_run_id)
+    typer.echo(f"run_id: {new_run_id}")
+    _print_status(status)
+    if status.lifecycle_state == LifecycleState.FAILED:
+        raise typer.Exit(code=1)
+
+
+@run_app.command("archive")
+def run_archive(
+    run_id: str,
+    by: str | None = _ByOption,
+    store_path: Path | None = _StorePathOption,
+) -> None:
+    """Mark RUN_ID archived -- the only thing that makes its saves eligible
+    for `saves reap` (FR-004, FR-036). Rejected on a non-terminal run.
+
+    Needs no runner: archival is a pure `MatchStore` operation
+    (`saves/archival.py`) an operator invokes explicitly, never a live-run
+    concern (see the module docstring).
+    """
+    store = _open_store(store_path)
+    operator_identity = by or getpass.getuser()
+    now = datetime.now(UTC)
+    _record_command(store, RunId(run_id), "archive")
+    try:
+        archive_run(store, RunId(run_id), by=operator_identity, at=now)
+    except HarnessError as exc:
+        typer.echo(f"run archive failed: {exc.message}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"run {run_id} archived by {operator_identity} at {now.isoformat()}")
+
+
+# --------------------------------------------------------------------------
+# saves reap (T173)
+# --------------------------------------------------------------------------
+
+_DryRunOption = typer.Option(True, "--dry-run/--no-dry-run", help="Preview only; the default")
+_ConfirmOption = typer.Option(
+    False, "--confirm", help="Actually delete eligible save files (overrides --dry-run)"
+)
+
+
+@saves_app.command("reap")
+def saves_reap(
+    dry_run: bool = _DryRunOption,
+    confirm: bool = _ConfirmOption,
+    store_path: Path | None = _StorePathOption,
+) -> None:
+    """Delete save files for already-archived runs only -- never a
+    background job, never run unattended (FR-036, research R17). Defaults
+    to `--dry-run`; pass `--confirm` to actually delete.
+    """
+    store = _open_store(store_path)
+    host = get_host_platform()
+    effective_dry_run = dry_run and not confirm
+    report = reap(store, host, dry_run=effective_dry_run)
+
+    typer.echo(f"saves reap: dry_run={effective_dry_run}")
+    typer.echo(f"  eligible save points: {len(report.items)}")
+    paths = report.deleted_paths if not effective_dry_run else report.would_delete_paths
+    verb = "deleted" if not effective_dry_run else "would delete"
+    typer.echo(f"  {verb} ({len(paths)}):")
+    for path in paths:
+        typer.echo(f"    - {path}")
+
+
+# --------------------------------------------------------------------------
+# seedset accept-build (T174)
+# --------------------------------------------------------------------------
+
+DEFAULT_SEEDSET_ROOT = Path("configs/seedsets")
+_SeedsetRootOption = typer.Option(DEFAULT_SEEDSET_ROOT, "--seedset-root")
+_ToBuildOption = typer.Option(..., "--to", help="The build to accept, e.g. win/1.0.12.11")
+_ReasonOption = typer.Option(..., "--reason")
+
+#: Resolves the recorded, **passing** R20 cross-platform save spike result
+#: (T199) to reference from a platform-crossing `BuildAcceptance`, or `None`
+#: when none is on record. No such result exists yet in this repo (T199 has
+#: not run -- specs/002-civ-playing-harness/spikes/r20-cross-platform-saves.md
+#: does not exist), so the default always returns `None`, which fails every
+#: platform-crossing acceptance closed -- exactly as research R20 requires
+#: until T199 records a pass. Overridable via
+#: :func:`configure_r20_spike_resolver` for whenever T199 lands, or for
+#: tests planting a fake passing result.
+R20SpikeResolver = Callable[[], str | None]
+
+
+def _default_r20_spike_resolver() -> str | None:
+    return None
+
+
+_r20_spike_resolver: R20SpikeResolver = _default_r20_spike_resolver
+
+
+def configure_r20_spike_resolver(resolver: R20SpikeResolver | None) -> None:
+    global _r20_spike_resolver
+    _r20_spike_resolver = resolver if resolver is not None else _default_r20_spike_resolver
+
+
+def _seed_set_path(seedset_root: Path, name: str) -> Path:
+    return seedset_root / f"{name}.yaml"
+
+
+def _seed_set_to_yaml_dict(seed_set: SeedSet) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "name": seed_set.name,
+        "civilization": seed_set.civilization,
+        "leader": seed_set.leader,
+        "ruleset": seed_set.ruleset,
+        "mod_set": [m.model_dump(mode="json") for m in seed_set.mod_set],
+        "game_build": seed_set.game_build,
+        "seeds": list(seed_set.seeds),
+        "created_at": seed_set.created_at.isoformat(),
+        "accepted_build_changes": [
+            a.model_dump(mode="json") for a in seed_set.accepted_build_changes
+        ],
+    }
+
+
+def _write_seed_set_file(path: Path, seed_set: SeedSet) -> None:
+    path.write_text(
+        yaml.safe_dump(_seed_set_to_yaml_dict(seed_set), sort_keys=False), encoding="utf-8"
+    )
+
+
+@seedset_app.command("accept-build")
+def seedset_accept_build(
+    name: str,
+    to_build: str = _ToBuildOption,
+    reason: str = _ReasonOption,
+    by: str | None = _ByOption,
+    seedset_root: Path = _SeedsetRootOption,
+) -> None:
+    """Accept exactly one `from_build -> to_build` transition for seed set
+    NAME (FR-002). Scoped to this one composite transition only -- there is
+    no global override, and accepting a version bump never implicitly
+    accepts a platform change (research R18, R20): the acceptance this
+    writes covers `NAME.game_build -> --to` and nothing else.
+
+    A version-only transition needs no spike result. A platform-crossing
+    transition is refused unless a passing R20 spike result is on record
+    (T199) -- see :data:`R20SpikeResolver`.
+    """
+    path = _seed_set_path(seedset_root, name)
+    if not path.is_file():
+        typer.echo(f"seedset accept-build failed: no seed set file at {path}", err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        seed_set = load_seed_set_file(path)
+    except HarnessError as exc:
+        typer.echo(f"seedset accept-build failed: {exc.message}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    from_build = seed_set.game_build
+    platform_transition = is_platform_transition(from_build, to_build)
+    spike_ref: str | None = None
+    if platform_transition:
+        spike_ref = _r20_spike_resolver()
+        if not spike_ref:
+            typer.echo(
+                "seedset accept-build failed: "
+                f"{from_build} -> {to_build} crosses platform and no passing R20 "
+                "cross-platform save spike result is on record (T199); accepting a "
+                "version bump never implicitly accepts a platform change (research R20)",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    accepted_at: Timestamp = datetime.now(UTC)
+    acceptance = BuildAcceptance(
+        acceptance_id=AcceptanceId(f"acc_{uuid.uuid4().hex}"),
+        from_build=from_build,
+        to_build=to_build,
+        accepted_by=by or getpass.getuser(),
+        accepted_at=accepted_at,
+        reason=reason,
+        r20_spike_ref=spike_ref,
+    )
+    updated = seed_set.model_copy(
+        update={"accepted_build_changes": [*seed_set.accepted_build_changes, acceptance]}
+    )
+    _write_seed_set_file(path, updated)
+
+    typer.echo(f"accepted {from_build} -> {to_build} for seed set {name!r}")
+    typer.echo(f"acceptance_id      : {acceptance.acceptance_id}")
+    typer.echo(f"is_platform_transition : {acceptance.is_platform_transition}")
+    typer.echo(f"r20_spike_ref      : {acceptance.r20_spike_ref or '-'}")
+    typer.echo(f"set is now non-uniform : {not updated.is_uniform}")
+
+
+# --------------------------------------------------------------------------
 # doctor
 # --------------------------------------------------------------------------
 
@@ -270,11 +608,9 @@ def doctor(
 
 
 # --------------------------------------------------------------------------
-# audit parity | prompts | decisions | steps | loop | capabilities
+# audit parity | prompts | decisions | steps | loop | capabilities |
+# recovery | completeness | lineage | immutability | builds | models | secrets
 # --------------------------------------------------------------------------
-
-_TurnOption = typer.Option(..., "--turn")
-
 
 def _run_registry_audit(
     audit_fn: Callable[[MatchStore, CapabilityRegistry, RunId], audit_module.AuditReport],
@@ -358,6 +694,77 @@ def audit_capabilities(
     _run_registry_audit(
         audit_module.audit_capabilities, "capabilities", run_id, catalog_root, store_path
     )
+
+
+@audit_app.command("recovery")
+def audit_recovery(run_id: str, store_path: Path | None = _StorePathOption) -> None:
+    """Crash/resume event pairs, and abandoned-vs-authoritative attempts per
+    turn (SC-003, SC-011, SC-021)."""
+    _run_store_only_audit(audit_module.audit_recovery, "recovery", run_id, store_path)
+
+
+@audit_app.command("completeness")
+def audit_completeness(run_id: str, store_path: Path | None = _StorePathOption) -> None:
+    """Zero silently missing turns or steps in RUN_ID (SC-003, SC-011)."""
+    _run_store_only_audit(audit_module.audit_completeness, "completeness", run_id, store_path)
+
+
+@audit_app.command("lineage")
+def audit_lineage(branch_id: str, store_path: Path | None = _StorePathOption) -> None:
+    """BRANCH_ID records its parent run and turn, a matching branch_created
+    event, and the parent actually has a save point there (FR-033)."""
+    _run_store_only_audit(audit_module.audit_lineage, "lineage", branch_id, store_path)
+
+
+@audit_app.command("immutability")
+def audit_immutability(run_id: str, store_path: Path | None = _StorePathOption) -> None:
+    """Every record RUN_ID owns still names RUN_ID, never a child's
+    (invariant I12, FR-034)."""
+    _run_store_only_audit(audit_module.audit_immutability, "immutability", run_id, store_path)
+
+
+@audit_app.command("builds")
+def audit_builds(
+    seed_set: str,
+    seedset_root: Path = _SeedsetRootOption,
+    store_path: Path | None = _StorePathOption,
+) -> None:
+    """A set carrying any accepted build change reports as non-uniform
+    (FR-031, quickstart.md Scenarios 5 and 9).
+
+    `MatchStore` has no accessor from a seed set to the runs that used it
+    (see `operator/audit.py`'s module docstring) -- this command therefore
+    reports the set's own uniformity and accepted transitions honestly,
+    with `run_enumeration_supported: False`, rather than fabricating a
+    partition of runs it has no way to look up.
+    """
+    path = _seed_set_path(seedset_root, seed_set)
+    if not path.is_file():
+        typer.echo(f"audit builds failed: no seed set file at {path}", err=True)
+        raise typer.Exit(code=2)
+    try:
+        loaded = load_seed_set_file(path)
+    except HarnessError as exc:
+        typer.echo(f"audit builds failed: {exc.message}", err=True)
+        raise typer.Exit(code=1) from exc
+    store = _open_store(store_path)
+    report = audit_module.audit_builds(store, loaded)
+    typer.echo(audit_module.format_audit_report("builds", report))
+    raise typer.Exit(code=audit_module.exit_code_for(report))
+
+
+@audit_app.command("models")
+def audit_models(run_id: str, store_path: Path | None = _StorePathOption) -> None:
+    """Every call names its served model with latency, cost, and retry
+    count, rolled up per turn (SC-016)."""
+    _run_store_only_audit(audit_module.audit_models, "models", run_id, store_path)
+
+
+@audit_app.command("secrets")
+def audit_secrets(run_id: str, store_path: Path | None = _StorePathOption) -> None:
+    """Zero credential-shaped values appear in RUN_ID's records or captures
+    (SC-016, SC-018)."""
+    _run_store_only_audit(audit_module.audit_secrets, "secrets", run_id, store_path)
 
 
 if __name__ == "__main__":
