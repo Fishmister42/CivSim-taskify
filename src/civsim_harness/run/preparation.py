@@ -32,6 +32,30 @@ reading one back are both genuinely declared-observation/action concerns
 accept the actual apply/read mechanism as an injected callable, matching the
 seam pattern already used throughout this codebase (``HostPlatform``,
 ``ModelProvider``, ``observe.game_build``'s tuner/host readers).
+
+3. :func:`catalog_preflight` (**T135 / T136 / FR-022 / FR-023 / V5 / SC-006 / SC-007**): the
+   catalog-side counterpart to the two responsibilities above, following the same "self-contained
+   function another wave's module calls" shape :func:`~civsim_harness.observe.host_gate.
+   evaluate_host_gate` (T101) already established for this same file. Two things, one function,
+   because they are two views of the same loaded :class:`~civsim_harness.capability.loader.Catalog`
+   and always run together at preflight:
+
+   - **T136, the gate**: every *capability* the run could use must be governed by at least one
+     parity declaration, or the run does not start, naming the offending ``capability_id``. This is
+     deliberately the *reverse* of what :func:`~civsim_harness.capability.loader.load_catalog`
+     already checks at load time (its validation 2 confirms every *declaration*'s ``capability_id``
+     resolves to a loaded capability -- declaration -> capability). FR-023's "any observation or
+     action available to it lacks a declared parity basis" is the other direction: a loaded,
+     invokable capability with **zero** declarations pointing to it would be reachable machinery
+     with no parity basis governing it at all, and nothing at load time catches that, because the
+     loader only ever walks declarations outward to their capability, never capabilities inward to
+     their declarations.
+   - **T135, the record**: the version and content hash of the one loaded catalog, packaged as the
+     ``CatalogVersionRef`` pair ``Run.observation_catalog_version`` / ``Run.action_catalog_version``
+     both need (FR-022). One catalog root, one ``catalogs/VERSION``, one computed content hash
+     (:func:`~civsim_harness.capability.version.compute_content_hash`) -- so both fields get the
+     identical reference; a future split into independently-versioned observation/action catalogs
+     would need this function's own return shape to change, not merely its call site.
 """
 
 from __future__ import annotations
@@ -40,8 +64,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from civsim_harness.errors import BuildMismatchError
-from civsim_harness.models.common import BuildAcceptance
+from civsim_harness.capability.loader import Catalog
+from civsim_harness.errors import BuildMismatchError, PreflightError
+from civsim_harness.models.common import BuildAcceptance, CapabilityId, CatalogVersionRef
 from civsim_harness.models.config import RunConfiguration, SeedSet
 from civsim_harness.observe.game_build import is_platform_transition
 
@@ -242,3 +267,59 @@ def verify_configuration(
         if actual != expected:
             mismatches.append(SettingMismatch(field=name, expected=expected, actual=actual))
     return PreparationResult(applied_fields=tuple(fields.keys()), mismatches=tuple(mismatches))
+
+
+# --------------------------------------------------------------------------
+# T135 / T136 -- catalog preflight: capability-resolution gate + version record
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CatalogPreflightResult:
+    """T135's deliverable: the ``CatalogVersionRef`` pair to set on the ``Run`` under
+    construction, returned only once :func:`catalog_preflight`'s T136 gate has already passed --
+    there is no way to obtain one of these for a catalog carrying an ungoverned capability.
+    """
+
+    observation_catalog_version: CatalogVersionRef
+    action_catalog_version: CatalogVersionRef
+
+
+def _capabilities_without_declarations(catalog: Catalog) -> list[CapabilityId]:
+    """Every ``capability_id`` in *catalog* that no loaded ``ParityDeclaration`` points to.
+
+    The reverse of ``capability.loader.load_catalog``'s own validation 2 (see module docstring) --
+    sorted so a raised :class:`~civsim_harness.errors.PreflightError`'s ``detail`` is deterministic
+    across runs, not dependent on dict iteration order.
+    """
+    governed = {declaration.capability_id for declaration in catalog.declarations.values()}
+    return sorted(
+        capability_id for capability_id in catalog.capabilities if capability_id not in governed
+    )
+
+
+def catalog_preflight(catalog: Catalog) -> CatalogPreflightResult:
+    """**T135 + T136** (FR-022, FR-023, V5, SC-006, SC-007): the run does not start unless every
+    capability *catalog* implements is governed by at least one parity declaration; once that
+    holds, returns the ``CatalogVersionRef`` pair to record on the ``Run`` under construction.
+
+    Raises :class:`~civsim_harness.errors.PreflightError` naming every offending
+    ``capability_id`` at once (never just the first) when
+    :func:`_capabilities_without_declarations` finds any -- mirroring
+    :func:`~civsim_harness.provider.preflight.preflight_chain`'s "describe every model, name every
+    failure" discipline rather than stopping at the first bad capability. A run whose catalog fails
+    this gate has no ``Run`` record at all yet (same failure shape as :func:`build_pin_preflight`):
+    this is a hard preflight failure, not something recorded on an already-created run.
+    """
+    offending = _capabilities_without_declarations(catalog)
+    if offending:
+        raise PreflightError(
+            "a capability this run could use has no governing parity declaration; "
+            "the run does not start (FR-023, V5, SC-006)",
+            detail={"capability_ids": [str(capability_id) for capability_id in offending]},
+        )
+
+    ref = CatalogVersionRef(
+        version=catalog.version.version, content_hash=catalog.version.content_hash
+    )
+    return CatalogPreflightResult(observation_catalog_version=ref, action_catalog_version=ref)

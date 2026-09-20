@@ -12,6 +12,16 @@ A rejection here is exactly the signal the no-progress backstop (``run/no_progre
 later wave) increments its counter on (FR-014) -- this module does not touch that counter itself
 (it has no turn-attempt state to hold one), it only produces the :class:`DispatchOutcome` the run
 loop feeds into it.
+
+**T137 -- declaration attribution on this record path, including end-turn.** This module resolves
+``action_declaration_id`` through ``registry.resolve`` (and ``registry.authorize``) exactly the
+same way for every action -- ``turn.end_turn`` included; there is no special-cased branch that
+skips catalog resolution for the end-turn decision. The ``Decision`` a caller eventually builds
+from an authorized ``DispatchOutcome`` (``agent/decisions.py``'s ``build_decision``) sets
+``action_declaration_id=raw.action_declaration_id`` from the same resolved id, and
+``Decision.action_declaration_id`` (``models/decision.py``) has no default, so a ``Decision``
+without one -- end-turn or otherwise -- cannot be constructed at all. Nothing in this module
+invents a shortcut around that.
 """
 
 from __future__ import annotations

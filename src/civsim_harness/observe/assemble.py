@@ -14,6 +14,14 @@ with stale ``results``, which is a caller discipline this module cannot and does
 enforce on its own -- it is enforced by there being no other entry point into an ``Observation``
 at all.
 
+**T137 -- declaration attribution on this record path.** Every ``ObservationEntry`` this module
+builds carries ``declaration_id=declaration.declaration_id``, where ``declaration`` is what
+``registry.resolve(result.declaration_id)`` (via :func:`_resolve_observable`) actually returned --
+never a caller-supplied string threaded through unchecked. Structurally, this could not be
+otherwise: ``ObservationEntry.declaration_id`` (``models/turn.py``) has no default, so an entry
+without one cannot be constructed at all, by this module or any other caller of that model. There
+is no separate code path for an unattributed value to take.
+
 **T096 -- assembly failure.** A failure at decision step *n* > 1, after earlier steps have already
 executed and verified, is not recoverable in place: the turn cannot be finished from a stale
 board, because the whole reason the observe-decide-execute-verify loop exists is to show the
