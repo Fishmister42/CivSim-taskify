@@ -1,0 +1,64 @@
+# Panel Registry freeze record -- rule P6 ("declarations are immutable within a
+# version", contracts/panel-registry.md).
+#
+# Until this file existed, P6's second half was not in force: a declaration
+# could be edited in place with nothing objecting. That was deliberate while
+# Phases 3-6 authored the four YAML files concurrently -- freezing mid-authorship
+# would have recorded build churn as schema history. Phases 3-6 are closed and
+# the set is stable at 37 panels, all `introduced_in_version: "1"`, so version 1
+# is frozen here.
+#
+# Read by `registry/loader.py::_validate_p6`. Each hash is
+# `_hash(_declaration_payload(declaration))` -- sha256 over the declaration's
+# canonical JSON with `declared_in` excluded, so relocating a panel between
+# `live.yaml` and `shared.yaml` is inert but changing what it declares is not.
+#
+# **Adding, removing, or changing any declaration now means bumping
+# `panels/VERSION` and adding that version's own block below.** Editing the
+# hashes to match an edited declaration defeats the entire mechanism.
+#
+# `content_hash` is the registry-level digest (`PanelRegistry.content_hash`),
+# recorded for human cross-reference; the loader compares the per-panel map.
+
+"1":
+  frozen_on: "2026-09-20"
+  panel_count: 37
+  content_hash: c0247f1fa61d8ff50f31a9d755f1f8d7e83b32502c9414cefadadd996b0f19dd
+  panels:
+    action.turn.end_turn: 3ebeaed01042295ae9272a53a35e5a9bf6f170048a6e7cfec1fd26005ff4f513
+    action.units.found_city: ffdaaab98d4a99adb1eaad308f3b2f87ae89c1d941c97390a68a2b1fc67441c1
+    action.units.move_to: ea66eb23c9b80716994cf35ce8c0e7cd33a30e89472349a62a3a1e74d619ff69
+    action.units.promote: d59e9157de3cf25a340f3b9931318b515e4a5630c4f3dab844d9c67840238819
+    capture.screen: 5bcf9b03de77559eea443aa57427c46517985721863ed792ddb3282826fc4fac
+    capture.screening: 707b6e3eca65cfed3e9a5966fa53c49fe91301854fe13e51f64a2045353454c8
+    catalog.comparison_basis: f7312a35bd4701ec1f90c9690771ddf6ca1ed905f85dc823e2b0dbe7840d5eed
+    catalog.run_row: 4b5d4f858a159dbc6cd5b60b8bb99e9c395c9bb5470f34a5ec7cf8906cb4a4f2
+    catalog.trend_eligibility: 03ae2585991907002ce0638817122428416fcc22da36365142304e9bca045bf2
+    comparison.divergence_points: e4a76b44798ea9f081c071a425a5406cbbc5f01c3adfe60c6433bffaabe2a972
+    comparison.metric_series: f3426435c0064133f568ab8bcb894e044ee504a79f98ba0ebc45e1a09b7c091b
+    current_turn.number: c50d58e148b67cc0eb209316e58e59b4b8b710cc203abde615c8b79546b665a6
+    current_turn.yields: 3e78e9c808a5d99fccd47ed83378646db9bba518918ef54e754de11aeb140aa0
+    decision.action: f97859c0458791471583b190a1e00c1e9f773efaaef5aab0c433424f14d40d6a
+    decision.model_call: a341d1c8762a8ef41580ad2e619a414926a3da0db78ca71bb371b7a904320a8b
+    decision.reasoning: 30a79f1f8a99ea4b3b3204bba553ade1e3060909ffc0d87c151c131a3db00c19
+    history.attempt_marker: eb7a8cd88dbc5f3aa8d1981f52e0230a84e7b0a30f48f407bb3c6e8a33e9ee4f
+    history.gap_marker: 1ee03c614fd988c803454a9fda8fb641836109da0943727cb2dcb8afe0ac8e9f
+    history.turn_yields: 2aebdc14e4fcf7f0cdce2d029efbe4badcacb3168cae4f0273400994f176980f
+    observation.cities: 59d5fcc7135fa712a5ef18b2a83fc4303b35185a6bbf7fc224c342e9797e0628
+    observation.congress: b514bb23619762c25e89e03da050d99f3663ed05d3c6c93dc1791f133aed3674
+    observation.diplomacy: 5f754dd094f22dd0abdda89ff4180c79bb25d6fcba76d82886aa2ab45ccb9384
+    observation.espionage: 98e476de4f1a6b411200f994b458834022853e5d05d118a65e5b7488f734a020
+    observation.government: 6b5ed2dabc341da5a799228f8607089b3a346dd79a5b9ea8e1f4b350532da7ad
+    observation.great_people: 569b1ae0e3c05b21fc658262622dd81e2d86e6888c0e61bbc203559c0b3318ff
+    observation.map: 37d2057a1636a030641c87c97973a1fe405f8a4d6339e1ca1f536d9a5e62dc3c
+    observation.religion: 22734e8e11358ca916539c1c61c8514cd28d30c130dec70679fee65bc074d0d6
+    observation.research: ea947bbd43d66dfc07fb05a639c47127a29a27ce191b2cc5813b2ea8905e834e
+    observation.screen_state: 98a391ef9fff59f9941db194a194a909420be85dba1955194a5cc0ae462e0d37
+    observation.turn_state: eafe9b30a0522e1b3df64d354cc4b93270733a73ef9a4c7815742a2397bccba6
+    observation.units: 71586730861ad2e7724d3012c2c0bbb9529ada3b2deaac67d887b6ce042e353f
+    run.configuration: 3b8a4ea4e0dea28fa3758476bcdf6eb716b3ba2298b81eb5662849f09c91b59b
+    run.header: 13348b39cc44a8b15c801726a46be32a6908cd274df2bca23fa37ed62d8825b0
+    run.intervention: 2fd80a89cd28459f83a81d0266c95fedc6fdf10b1bb80b7cd4f96ef43ef7a8ca
+    run.timeline: 46433355944ad41d9b0479de2de96968008fef635e3b1fe84ff4319bbb1aed62
+    step.record: 03fd8c98b0d68c37511f28032284fd2fb3edcb1d65b7f809cc8e46579e67feef
+    turn.record: 804f8f8154e05b4204bf57ab3e7c8fbbf5175b72f8be1385c3351565671065e4

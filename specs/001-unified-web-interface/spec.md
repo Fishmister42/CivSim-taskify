@@ -4,6 +4,8 @@
 
 **Created**: 2026-09-19
 
+**Amended**: 2026-09-20 — see [Amendments](#amendments) for what changed and why.
+
 **Status**: Draft
 
 **Input**: User description: "feature 1 web interface / UI principles"
@@ -185,7 +187,10 @@ rest, using only the interface.
 - **FR-002**: The interface MUST update the live view as new turns are recorded, without the user
   reloading or re-navigating, and MUST indicate when its view was last confirmed current.
 - **FR-003**: The interface MUST surface run health — running, waiting on the model, waiting on the
-  game, stalled, crashed, resumed, or finished — and MUST distinguish a stalled run from a slow turn.
+  game, stalled, crashed, resumed, paused, or finished — and MUST distinguish a stalled run from a
+  slow turn. A lifecycle state the interface does not recognise MUST surface as an explicit *unknown*
+  health rather than being mapped onto the nearest familiar value. *(Amended 2026-09-20 — see
+  [Amendment C](#amendment-c--fr-003s-health-vocabulary-was-two-values-short).)*
 - **FR-004**: The interface MUST show harness-level operational events as part of the run timeline,
   including model-provider failures, retries, provider fallbacks, crash detection, and save/resume
   points.
@@ -236,10 +241,25 @@ rest, using only the interface.
 - **FR-019**: Users MUST be able to filter and sort the run catalog by any listed attribute.
 - **FR-020**: Users MUST be able to select multiple runs and view their key metric trajectories —
   including science and culture output per turn — on common axes.
-- **FR-021**: Runs with incomplete records MUST be excluded from or visibly quarantined within any
-  comparison or trend view.
+- **FR-021**: Runs whose record is not **provably** complete MUST be excluded from or visibly
+  quarantined within any comparison or trend view. A run's record is provably complete only when the
+  store reports its record-completeness status as complete **and** reports no gaps in its
+  turn-by-turn record. Either signal alone is enough to quarantine: a run the store calls complete
+  while also listing gapped turns is quarantined, and so is a run that lists no gaps but carries a
+  completeness status that is anything other than complete — including a value this interface does
+  not recognise. The interface MUST read both signals verbatim and MUST NOT re-derive either, and a
+  signal it could not read at all counts as absent, not as clean. *(Amended 2026-09-20 — see
+  [Amendment A](#amendment-a--fr-021-now-fails-closed-on-either-signal-constitution-principle-iii).)*
 - **FR-022**: From a point on a comparison view, users MUST be able to open the corresponding turn in
   each compared run.
+- **FR-037**: Any comparison or trend view MUST state the basis on which the runs it shows are
+  comparable — whether they share a seed, civilization, ruleset, and model — and MUST report any of
+  those dimensions it cannot establish as **unverifiable** rather than as uniform. A comparison whose
+  runs differ on one of those dimensions MUST say so alongside the comparison rather than presenting
+  the trajectories as like-for-like. *(Added 2026-09-20 — see
+  [Amendment B](#amendment-b--fr-037-added-constitution-principle-iv-had-no-requirement-behind-it).
+  Numbered after FR-036 to continue the document's sequence; the existing numbers are referenced
+  from the plan, the contracts, the data model, and the test suite and are not renumbered.)*
 
 **Data boundaries**
 
@@ -329,6 +349,10 @@ is stated so that a specific screen can be judged compliant or not.
   action a human would take to obtain it — and a stable reference.
 - **View Reference**: A stable identifier resolving to a run, a turn, and a panel, shared between the
   user and the directing session.
+- **Comparison Basis**: The statement of *why* a set of runs is comparable — whether they share a
+  seed, civilization, ruleset, and model — with each dimension reported as uniform, differing, or
+  unverifiable. Carried by every comparison view (FR-037, Constitution Principle IV). *(Added
+  2026-09-20 with FR-037.)*
 
 ## Success Criteria *(mandatory)*
 
@@ -396,3 +420,132 @@ is stated so that a specific screen can be judged compliant or not.
 - "Science and culture output" are the headline tracked metrics because of the turn-50 goal, but the
   comparison view is expected to handle any per-turn metric the store records.
 
+
+## Amendments
+
+Changes made to this specification after its user stories were implemented, each recorded with
+what changed and why, so the diff reads as a decision rather than as a rewrite.
+
+The rule applied throughout: **where a requirement and the constitution diverged, the constitution
+won and this document was amended up to it.** No code was weakened to agree with a requirement as
+written. Where an implementation choice disagreed with an artifact and the artifact was right, the
+code was fixed instead and no amendment was made.
+
+### Amendment A — FR-021 now fails closed on either signal (Constitution Principle III)
+
+**Amended**: 2026-09-20. **Owner-authorised.**
+
+FR-021 originally read: *"Runs with incomplete records MUST be excluded from or visibly quarantined
+within any comparison or trend view."* In practice that meant one signal, the store's
+`record_completeness_status`.
+
+Constitution Principle III says something different and stricter: *"A run's results MUST NOT be used
+for trending, datamining, or optimization input if its turn-by-turn record has gaps."* The store
+publishes `turn_gaps()` as a separate read of exactly that, so a store can answer the two questions
+differently — it can report a run complete while also listing gapped turns, and nothing in the
+published port makes that contradiction impossible.
+
+The implementation resolved this fail-closed from the start: `derive_trend_eligibility()` quarantines
+on *either* signal, on a completeness value it does not recognise, and on the gap read not having
+happened at all, and `ComparisonView`'s own validator refuses to construct a model in which a
+quarantined run has acquired a series, an axis, or a leadership claim. There is a test for the exact
+contradiction case (`test_a_run_the_store_calls_complete_while_listing_gaps_is_still_quarantined`).
+
+So the code was right and this requirement was wrong. FR-021 is amended up to the constitution rather
+than the code being relaxed down to FR-021. The practical effect of the old wording, had anyone
+implemented it literally, would have been a run with holes in its record quietly contributing to a
+trend on the strength of one status column — the single failure Principle III exists to prevent.
+
+### Amendment B — FR-037 added (Constitution Principle IV had no requirement behind it)
+
+**Added**: 2026-09-20. **Owner-authorised.**
+
+Constitution Principle IV requires that comparison work *"run against a fixed set of initial seeds
+under a consistent civilization and ruleset"*, because comparing strategies across differing starting
+conditions is not meaningful. FR-018 – FR-022 never asked the comparison view to say anything about
+this: nothing required it to state that the runs on the chart share a seed, a civilization, a ruleset,
+or a model, and nothing required it to admit when it cannot tell.
+
+The implementation built `ComparisonBasis` anyway and reports `unverifiable` — not `uniform` — for any
+dimension the published store port cannot reach. That is correct behaviour with no requirement
+traceability: it satisfied the constitution while discharging no FR, which means a later contributor
+could have removed it without any requirement noticing.
+
+FR-037 states the obligation, so the behaviour is now traceable from constitution to requirement to
+implementation to test. Two details in its wording are deliberate:
+
+- **"unverifiable rather than uniform"** — a basis the interface cannot establish must not be reported
+  as agreement. Silence read as sameness is how an incomparable comparison looks exactly like a
+  comparable one.
+- **"MUST say so alongside the comparison"** — differing runs are not refused. Comparing across a
+  differing dimension is sometimes exactly the question being asked; what must never happen is
+  presenting it as like-for-like.
+
+It is numbered FR-037 rather than inserted at FR-023 because the existing numbers are referenced from
+plan.md, both contracts, data-model.md, tasks.md and the test suite. Renumbering would have made every
+one of those references silently wrong, which is a far worse outcome than a section whose numbers are
+not contiguous.
+
+### Amendment C — FR-003's health vocabulary was two values short
+
+**Amended**: 2026-09-20.
+
+FR-003 enumerated seven health states. The interface renders nine, and both additions are correct:
+
+- **`paused`** is one of 002's own `Run.lifecycle_state` values. The derivation rule in
+  `data-model.md` §2 maps every lifecycle state onto a health state and had nowhere to put this one.
+  Rendering a paused run as `running` would have been a false statement about the run; rendering it
+  as `stalled` would have been worse, since `stalled` is the word the interface uses for a run that
+  has stopped responding and that a human should go look at.
+- **`unknown`** is the fail-closed answer for a lifecycle state this feature has not been taught. 002
+  owns that vocabulary and may extend it; mapping an unrecognised value onto the nearest familiar one
+  would make a future harness state silently indistinguishable from a state this interface actually
+  understands.
+
+Neither is a new capability — both shipped from the foundation phase and were recorded as a finding
+against this requirement at the time. FR-003 is amended to name them, so the rendered vocabulary and
+the requirement agree and the enumeration is no longer quietly a lie about what the screen can show.
+
+### Amendments to the other artifacts
+
+Made in the same pass and recorded in the artifacts themselves rather than repeated here:
+
+- **`contracts/web-read-api.md`** — the three collection routes (`GET /runs`, `GET
+  /runs/{id}/events`, `GET /runs/{id}/metrics`) return wrapper objects, not bare lists; the
+  step-level panel shape added to the view-reference table; two error-table rows for the
+  step-window and `?series=` conventions; the turn route's query parameters stated.
+- **`data-model.md`** — `HealthStatus.state` gains `paused`/`unknown` (with FR-003, Amendment C);
+  `TurnCompleteness.is_gap`; `CaptureView.unavailable_reason` gains `unrecognized_status`;
+  `DecisionView.action_label_is_declaration_id`; `DivergencePoint.kind`; `ComparisonView.basis`
+  (with FR-037); and V10's enumeration now states why `DecisionStepView` is excluded from it.
+
+One thing was fixed in **code** rather than amended, and is noted here because the reasoning is the
+same one: the turn route's default response was returning *every* step, while `data-model.md` §5 is
+explicit that "`steps` on the default response is a bounded window ... with the full ordered list
+available by paging". The artifact was right and the implementation was not, so the default is now
+bounded. The recorded reason for the unbounded default — that a window "would make every turn look
+shorter than it is" — is answered by `StepWindow`, which states `total`, `has_more`, and every index
+the page left out.
+
+### What was deliberately *not* amended
+
+Recorded here so their absence reads as a decision rather than an oversight.
+
+- **The four optional probed store capabilities** (`RunConfigurationReader`, `CaptureBlobReader`,
+  `RunCatalogReader`, `TurnAttemptReader`). These exist because
+  `specs/002-civ-playing-harness/contracts/match-store-port.md` publishes no read that resolves a run
+  configuration, returns capture bytes, enumerates terminal runs, or addresses a turn attempt by
+  index. Four probed capabilities is not four local workarounds; it is an unpublished half of a port.
+  But that port is **deliverable 2's contract, not this feature's**, and amending another
+  deliverable's contract to make this one's tasks look closed is precisely the move that would bury
+  the finding. They stay recorded as notes in `tasks.md` (Foundation note 2, US1 notes 1 and 3, US2
+  note 1, US4 notes 2 and 3) and remain open against deliverable 3.
+- **`SEPARATION_RATIO = 0.25`** — data-model.md §11 says divergence includes values separating
+  "beyond a threshold" and names no number. The implementation chose 0.25 relative to the leading
+  value. Writing that number into this spec would convert an implementation default into a product
+  decision nobody has actually made. It stays a recorded, labelled default (US4 note 7).
+- **`ViewReference` has no attempt component** (US2 note 5). An attempt-qualified reference travels as
+  a query parameter, so data-model.md §12's "the reference *is* the URL path" holds for five of the
+  six shapes and not for that one. Real, recorded, and not worth a spec change: the contract already
+  makes `?attempt=` a query rather than a path segment, so the two artifacts are consistent with each
+  other even though the prose overstates its own generality.

@@ -14,14 +14,18 @@ in CI rather than by hand per release.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
 import yaml
 
+from civsim_web.registry.coverage import assess_registry_coverage
+from civsim_web.registry.harness_schema import load_harness_schema
 from civsim_web.registry.loader import (
     REGISTRY_FILENAMES,
     PanelRegistryLoadError,
+    default_harness_data_model_path,
     default_panels_dir,
     load_panel_registry,
 )
@@ -308,3 +312,140 @@ def _hashes(registry) -> dict[str, str]:
     from civsim_web.registry.loader import _declaration_payload, _hash
 
     return {d.panel_id: _hash(_declaration_payload(d)) for d in registry.declarations}
+
+
+# --------------------------------------------------------------------------
+# T059 -- the shipped freeze, and the coverage rule
+# --------------------------------------------------------------------------
+
+
+def test_the_shipped_registry_is_frozen_by_version_lock():
+    """`panels/VERSION.lock` exists and matches, so P6 is in force on ship.
+
+    P6's second half only bites when a lock file records the version. Every
+    test above exercises it against a temporary registry, which proves the
+    *mechanism* and says nothing about whether the shipped registry is actually
+    frozen -- and until Phase 7 it was not: a declaration could be edited in
+    place with nothing objecting. This asserts the lock is there, covers the
+    version in force, and agrees with what ships.
+
+    A deliberate edit therefore fails here *and* at startup, and the fix is the
+    one P6 prescribes: bump `panels/VERSION` and record the new version's
+    hashes. Re-hashing version 1 in place to match an edit is the one thing
+    that must not happen, and is why this asserts the panel set too.
+    """
+    panels_dir = default_panels_dir()
+    lock_path = panels_dir / "VERSION.lock"
+    assert lock_path.is_file(), (
+        f"{lock_path} is missing -- without it rule P6's immutability check is "
+        f"not in force and a declaration can be edited in place silently"
+    )
+
+    registry = load_panel_registry(panels_dir)
+    lock = yaml.safe_load(lock_path.read_text(encoding="utf-8")) or {}
+    assert registry.version in lock, (
+        f"VERSION.lock records {sorted(lock)} but the registry is at version "
+        f"{registry.version!r}; a bumped VERSION needs its own block"
+    )
+    recorded = lock[registry.version]["panels"]
+    assert recorded == _hashes(registry)
+    assert lock[registry.version]["content_hash"] == registry.content_hash
+
+
+def test_an_edit_to_a_shipped_declaration_is_refused_by_the_shipped_lock(tmp_path):
+    """The shipped lock actually bites -- asserted by editing under it.
+
+    The test above compares the lock to the registry, which passes just as
+    happily if `_validate_p6` never read the file. This copies the shipped
+    `panels/` wholesale, edits one real declaration, and requires the load to
+    fail naming P6.
+    """
+    source = default_panels_dir()
+    root = tmp_path / "panels"
+    root.mkdir()
+    for name in (*REGISTRY_FILENAMES, "VERSION", "VERSION.lock"):
+        (root / name).write_text((source / name).read_text(encoding="utf-8"), encoding="utf-8")
+
+    live = yaml.safe_load((root / "live.yaml").read_text(encoding="utf-8"))
+    live[0]["title"] = live[0]["title"] + " (edited in place)"
+    (root / "live.yaml").write_text(yaml.safe_dump(live, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(PanelRegistryLoadError) as excinfo:
+        load_panel_registry(root)
+    assert excinfo.value.rule == "P6"
+    assert "immutable" in str(excinfo.value)
+
+
+def _shipped_coverage():
+    return assess_registry_coverage(
+        load_panel_registry(default_panels_dir()),
+        load_harness_schema(default_harness_data_model_path()),
+    )
+
+
+def test_no_unregistered_store_field_is_reachable_from_any_view_model():
+    """The coverage rule (contracts/panel-registry.md, Conformance).
+
+    Every field 002 publishes and does not mark out-of-game either has a panel
+    or is absent from every view model. A new store field therefore defaults to
+    *invisible*; becoming visible takes a deliberate registry edit, which after
+    the freeze above also takes a version bump.
+    """
+    report = _shipped_coverage()
+    assert report.scanned > 0, "the 002 data-model scan found nothing -- parse drift"
+    assert report.reachable_but_unregistered == (), (
+        "these 002 fields render with no Panel Registry declaration permitting "
+        "them, which is visible-by-omission: "
+        + ", ".join(
+            f"{f} as {f.rendered_as} on the {'/'.join(f.views)} view"
+            for f in report.reachable_but_unregistered
+        )
+    )
+
+
+def test_every_scanned_field_lands_in_exactly_one_bucket():
+    """The four buckets partition the scan -- no field quietly unaccounted for.
+
+    Without this, a parse that silently dropped an entity would report zero
+    violations and look like a pass.
+    """
+    report = _shipped_coverage()
+    total = (
+        len(report.out_of_game)
+        + len(report.registered)
+        + len(report.invisible)
+        + len(report.reachable_but_unregistered)
+    )
+    assert total == report.scanned
+    assert report.ok
+
+
+@pytest.mark.parametrize(
+    "dropped",
+    [("TurnCycle", "turn_number"), ("Decision", "reasoning"), ("Observation", "entries")],
+    ids=["turn_number", "reasoning", "observation_entries"],
+)
+def test_the_coverage_check_fails_when_a_rendered_field_loses_its_panel(dropped):
+    """The negative control: this check is not vacuously green.
+
+    A coverage test that passes because it computes nothing is the exact defect
+    shape this project keeps finding -- a guard with no reach. Removing the
+    registration of a field the views demonstrably render must make the check
+    fail, and does.
+
+    `Observation.entries` is included because an `ObservationEntry` renders
+    *through* it (coverage.REACHED_THROUGH); dropping the collection's panel
+    must surface the entry's own value as unregistered rather than leave it
+    classed invisible.
+    """
+    registry = load_panel_registry(default_panels_dir())
+    schema = load_harness_schema(default_harness_data_model_path())
+    thinned = dataclasses.replace(
+        registry,
+        by_source_field={k: v for k, v in registry.by_source_field.items() if k != dropped},
+    )
+
+    report = assess_registry_coverage(thinned, schema)
+    assert not report.ok
+    surfaced = {f.entity for f in report.reachable_but_unregistered}
+    assert surfaced & {dropped[0], "ObservationEntry"}

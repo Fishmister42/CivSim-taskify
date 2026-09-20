@@ -87,7 +87,7 @@ FR-001).
 
 | Field | Type | Notes |
 |---|---|---|
-| `state` | enum | `running` \| `waiting_on_model` \| `waiting_on_game` \| `stalled` \| `crashed` \| `resumed` \| `finished` (FR-003, verbatim vocabulary) |
+| `state` | enum | `running` \| `waiting_on_model` \| `waiting_on_game` \| `stalled` \| `crashed` \| `resumed` \| `paused` \| `finished` \| `unknown` (FR-003, verbatim vocabulary). `paused` is 002's own lifecycle state, which the derivation rule below has no other landing place for; `unknown` is the fail-closed answer for a lifecycle state this feature does not recognise, so a future 002 addition surfaces as unrecognised rather than being quietly mapped onto the nearest familiar value. Templates render both. *(Amended 2026-09-20 with FR-003.)* |
 | `reason_event_id` | id? | The `RunEvent` that justifies a non-`running`/`finished` state, e.g. the `crash_detected` or `hang_detected` event |
 | `since` | timestamp | When the current `state` began |
 
@@ -164,6 +164,7 @@ to accidentally wire a control to (FR-026, UP-010).
 | Field | Type | Notes |
 |---|---|---|
 | `is_complete` | bool | `true` only if this turn number is absent from `turn_gaps(run_id)` and has no entries in `step_gaps(run_id, turn_number)` |
+| `is_gap` | bool | `true` when this turn number is itself present in `turn_gaps(run_id)` — distinct from `is_complete: false`, which also covers a turn that was recorded but is missing steps. Only reachable through a reference that names an attempt: a *bare* turn reference to a gapped turn is refused outright rather than answered as a turn (see Validation). *(Amended 2026-09-20 — the field shipped in the model from the start and the table omitted it.)* |
 | `missing_step_indices` | list[int] | Verbatim from `step_gaps` |
 
 **Validation**:
@@ -218,7 +219,7 @@ the rule holds regardless of how rare, since "rare" is not "never."
 |---|---|---|
 | `available` | bool | `true` only if the source record's `screening_status == "screened_clean"` |
 | `image_url` | string? | Present only when `available`; a lazy-loadable route, never inlined as a data URI (FR-036 — viewing a turn must not require loading captures beyond those being viewed) |
-| `unavailable_reason` | enum? | Set only when `!available`: `withheld` \| `capture_failed` \| `never_captured` \| `missing_record` — out-of-game telemetry, safe to display (FR-013) |
+| `unavailable_reason` | enum? | Set only when `!available`: `withheld` \| `capture_failed` \| `never_captured` \| `missing_record` \| `unrecognized_status` — out-of-game telemetry, safe to display (FR-013). *(Amended 2026-09-20: `unrecognized_status` added. The Validation rule below requires an unrecognised `screening_status` to fail closed, but every one of the original four asserts something somebody actually recorded — saying `withheld` about a status nobody understood would be a fabrication in the same breath as a fail-closed default. Same spirit as `HealthState.unknown` in §2.)* |
 | `captured_at` | timestamp? | Present only when `available` |
 
 **Validation — the load-bearing rule of this whole model**: `available` is computed as
@@ -237,7 +238,8 @@ only when explicitly `screened_clean`).
 
 | Field | Type | Notes |
 |---|---|---|
-| `action_label` | string | From the Panel Registry / underlying `ParityDeclaration.summary`, not the raw `action_declaration_id` |
+| `action_label` | string | From the Panel Registry / underlying `ParityDeclaration.summary`, where a panel declares this action through a `[declaration_id=…]` selector; otherwise the raw `action_declaration_id`, with `action_label_is_declaration_id` set |
+| `action_label_is_declaration_id` | bool | *(Amended 2026-09-20.)* `true` when no registry entry supplies a label for this action and the raw declaration id is standing in. The panel schema has no per-action label field, so the registry can only label an action a panel names explicitly; inventing a prose label for the rest would have made a fabricated string indistinguishable from a declared one. This flag is what keeps the two tellable apart — it is the honest half of the fallback, not a debugging aid. |
 | `parameters` | json | Verbatim |
 | `reasoning` | string | Verbatim `Decision.reasoning`; rendered even when empty or very long — see Validation |
 | `is_end_turn` | bool | Verbatim |
@@ -307,8 +309,9 @@ break in the line) or explicitly flagged, never interpolated or zero-filled (FR-
 |---|---|---|
 | `runs` | list[RunSummaryView] | The compared set, in the order selected |
 | `series` | dict[metric_name, list[MetricSeriesView]] | One series per compared run, per metric |
-| `quarantined_run_ids` | list[id] | Runs excluded or flagged for `record_completeness_status != complete` (FR-021) |
+| `quarantined_run_ids` | list[id] | Runs excluded or flagged because their record is not provably complete — `record_completeness_status != complete` **or** a non-empty `turn_gaps()`, either one alone (FR-021 as amended 2026-09-20; Constitution Principle III) |
 | `divergence_points` | list[DivergencePoint] | Precomputed turns where the leading run changes, or values separate beyond a threshold |
+| `basis` | ComparisonBasis | Why these runs are comparable at all: seed, civilization, ruleset and model each reported uniform, differing, or unverifiable (FR-037, Constitution Principle IV). *(Amended 2026-09-20 with FR-037.)* |
 
 ### DivergencePoint
 
@@ -316,6 +319,7 @@ break in the line) or explicitly flagged, never interpolated or zero-filled (FR-
 |---|---|---|
 | `turn` | int | |
 | `metric_name` | string | |
+| `kind` | enum | `leader_change` \| `separation` — which of the two causes named in the prose above produced this point. *(Amended 2026-09-20: the prose named two distinct causes and the table had no discriminator between them. A user navigating to a point needs to know which they are looking at — "the leader changed here" and "the field spread out here" call for different follow-up questions.)* |
 | `leader_run_id` | id | |
 | `refs` | dict[run_id, ViewReference] | One ready-to-navigate reference per compared run at this turn, so a client can jump to "this turn, in each compared run" (FR-022) with no extra round trip |
 
@@ -371,11 +375,19 @@ entity graph.
 | `content_hash` | string | Hash over all registry files |
 | `panel_ids` | list[string] | The full set in force |
 
-Every top-level response (`RunDetailView`, `TurnCycleView`, `ComparisonView`, catalog listings)
-includes this version alongside the underlying run's own `observation_catalog_version` /
-`action_catalog_version` from 002, so a panel can always be traced to *both* the game-side catalog
-version that produced the underlying data and the registry version that decided how to display it
-(plan Constitution Check, Principle I — "boundary is auditable after the fact").
+Every top-level response (`RunDetailView`, `TurnCycleView`, `ComparisonView`, catalog listings,
+`MetricSeriesPage`, `RunEventPage`, `PanelView`) includes this version alongside the underlying run's
+own `observation_catalog_version` / `action_catalog_version` from 002, so a panel can always be
+traced to *both* the game-side catalog version that produced the underlying data and the registry
+version that decided how to display it (plan Constitution Check, Principle I — "boundary is auditable
+after the fact").
+
+*(Amended 2026-09-20.)* **`DecisionStepView` is the deliberate exception.** It is addressable at
+`/runs/{id}/turns/{n}/steps/{i}`, so it is a top-level response in the routing sense and this
+enumeration omitted it. It stays omitted: a step is always a slice of a turn that carries the stamp,
+its own `reference` names the turn it belongs to, and a reader auditing which registry version
+rendered a value can reach it in one hop. Adding the stamp to every step of a 200-step turn would
+repeat the same four strings 200 times in a body already paged for size (§5's step window).
 
 ---
 

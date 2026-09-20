@@ -24,17 +24,35 @@ uv sync
 uv run civsim-web doctor      # preflight: store reachable, Panel Registry loads clean, bind address resolved
 ```
 
-`doctor` must report all green:
+`doctor` must report all green (five lines; addresses will differ):
 
 ```text
 store             : ok (ping succeeded)
-panel registry    : ok (version 1, 0 unregistered fields found in data-model.md scan)
+panel registry    : ok (version 1, 37 panels, frozen)
+registry coverage : ok (167 fields scanned, 91 marked out-of-game, 27 registered, 49 unregistered and unrendered, 0 unregistered fields reachable from a view model)
+routes            : ok (13 registered, all 13 contract routes present)
 bind address(es)  : 192.168.1.42:8420, 127.0.0.1:8420   (LAN + loopback — no wildcard)
 ```
 
 A registry that fails to load (a panel missing `parity_basis`, a duplicate `panel_id`, a
 `source_fields` entry that no longer exists in 002's data model) aborts startup rather than serving a
 partially-validated registry — the same discipline 002's `doctor` applies to its own catalog.
+
+The **coverage** count is computed, not asserted: `registry/coverage.py` walks 002's `data-model.md`
+and this feature's view models and reports how many fields 002 records could render with no panel
+permitting them. That number must be `0`; `doctor` exits non-zero if it is not. (Before T062 the line
+printed a literal `0`, which is the kind of self-confirming preflight this project has learned to
+distrust.)
+
+**`frozen`** means `panels/VERSION.lock` exists and the shipped declarations still hash to what it
+records — registry rule P6 in force. If it says `NOT FROZEN`, a warning line follows and declarations
+can be edited in place with nothing objecting; that is legitimate only while a version is still under
+authorship. Adding or changing a panel after the freeze means bumping `panels/VERSION` and recording
+the new version's block in `VERSION.lock`.
+
+The **routes** line builds the application and checks every path `contracts/web-read-api.md` names is
+actually registered. It is the end-to-end half of the preflight: a router that fails to import is a
+`doctor` failure rather than a 404 discovered later.
 
 ```bash
 uv run civsim-web serve       # starts the service; logs every bound address

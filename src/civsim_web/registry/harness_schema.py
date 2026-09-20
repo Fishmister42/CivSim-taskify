@@ -28,6 +28,12 @@ __all__ = [
     "load_harness_schema",
 ]
 
+#: The marker 002's ``data-model.md`` puts on the italic line under an entity
+#: heading, and in a field's Notes cell, to say the data is not game
+#: information. Read case-insensitively; ``Out-of-game`` and ``out-of-game``
+#: both appear in that document.
+OUT_OF_GAME_MARKER = "out-of-game"
+
 #: Panel scopes, coarsest first. A panel may declare fields at or coarser than
 #: its own scope, never finer: a ``run``-scoped panel listing a
 #: ``DecisionStep``-level field is exactly the aggregation P5 forbids, because
@@ -65,6 +71,16 @@ ENTITY_SCOPES: dict[str, str] = {
     "ModelCall": "step",
 }
 
+#: An entity whose *whole* section is marked out-of-game. Deliberately anchored
+#: on ``*Out-of-game.*`` closing immediately: 002 also writes
+#: ``*Mixed -- in-game content, out-of-game timing.*``,
+#: ``*In-game (the image) with out-of-game provenance.*`` and
+#: ``*Out-of-game in provenance, in-context for the agent.*``, none of which is
+#: a blanket exemption. Those fall through to the per-field Notes check, which
+#: is the fail-closed direction: a field nobody marked is treated as game
+#: information and must therefore be registered or provably unrendered.
+_OUT_OF_GAME_ENTITY = re.compile(r"^\*Out-of-game\.\*")
+
 _NUMBERED_ENTITY = re.compile(r"^##\s+\d+\.\s+(\w+)\s*$")
 _OTHER_H2 = re.compile(r"^##\s+")
 _SUB_ENTITY = re.compile(r"^###\s+(\w+)\s*$")
@@ -78,6 +94,11 @@ class HarnessSchema:
 
     source: Path
     fields_by_entity: dict[str, frozenset[str]]
+    out_of_game_entities: frozenset[str] = frozenset()
+    """Entities whose section opens ``*Out-of-game.*`` -- the blanket marking."""
+
+    out_of_game_fields: frozenset[tuple[str, str]] = frozenset()
+    """``(entity, field)`` pairs whose own Notes cell says out-of-game."""
 
     def has_entity(self, entity: str) -> bool:
         return entity in self.fields_by_entity
@@ -89,18 +110,31 @@ class HarnessSchema:
         """The scope this entity's fields belong to, or ``None`` if unmapped."""
         return ENTITY_SCOPES.get(entity)
 
+    def is_out_of_game(self, entity: str, field: str) -> bool:
+        """Is this field *explicitly* marked out-of-game by 002's document?
+
+        The coverage rule in ``contracts/panel-registry.md`` exempts exactly
+        these from needing a panel. Anything not marked is treated as game
+        information, which is the direction that fails closed: a field 002
+        forgets to mark must still be either registered or provably unrendered.
+        """
+        return entity in self.out_of_game_entities or (entity, field) in self.out_of_game_fields
+
+
+def _row_cells(line: str) -> list[str] | None:
+    """A markdown table data row's cells, or ``None`` if not a data row."""
+    if not line.startswith("|"):
+        return None
+    cells = [cell.strip() for cell in line.split("|")[1:-1]]
+    if not cells or not cells[0] or set(cells[0]) <= {"-", ":", " "}:
+        return None  # the header separator row
+    return cells
+
 
 def _first_cell(line: str) -> str | None:
     """The first cell of a markdown table row, or ``None`` if not a data row."""
-    if not line.startswith("|"):
-        return None
-    cells = line.split("|")
-    if len(cells) < 3:
-        return None
-    cell = cells[1].strip()
-    if not cell or set(cell) <= {"-", ":", " "}:
-        return None  # the header separator row
-    return cell
+    cells = _row_cells(line)
+    return cells[0] if cells else None
 
 
 def load_harness_schema(path: Path) -> HarnessSchema:
@@ -116,9 +150,17 @@ def load_harness_schema(path: Path) -> HarnessSchema:
 
     A table cell may name two fields at once (``` `started_at` / `ended_at` ```);
     every backticked identifier in the first cell is taken as a field name.
+
+    The out-of-game marking is read at the same time, from two places: the
+    italic line under an entity heading, and a field's own Notes cell. It is
+    what ``contracts/panel-registry.md``'s coverage rule exempts from needing a
+    panel, so the coverage reflection test (T059) needs it as data rather than
+    as a hand-maintained list that could drift from the document it describes.
     """
     text = path.read_text(encoding="utf-8")
     fields: dict[str, set[str]] = {}
+    out_of_game_entities: set[str] = set()
+    out_of_game_fields: set[tuple[str, str]] = set()
     current: str | None = None
 
     for raw in text.splitlines():
@@ -128,6 +170,10 @@ def load_harness_schema(path: Path) -> HarnessSchema:
         if matched:
             current = matched.group(1)
             fields.setdefault(current, set())
+            continue
+
+        if current is not None and _OUT_OF_GAME_ENTITY.match(line):
+            out_of_game_entities.add(current)
             continue
         if _OTHER_H2.match(line):
             # A non-entity section (`## Entity overview`, `## Cross-cutting
@@ -160,14 +206,20 @@ def load_harness_schema(path: Path) -> HarnessSchema:
 
         if current is None:
             continue
-        cell = _first_cell(line)
-        if cell is None:
+        cells = _row_cells(line)
+        if cells is None:
             continue
-        names = _BACKTICKED.findall(cell)
-        if names:
-            fields[current].update(names)
+        row_names = _BACKTICKED.findall(cells[0])
+        if not row_names:
+            continue
+        fields[current].update(row_names)
+        notes = " ".join(cells[1:]).lower()
+        if OUT_OF_GAME_MARKER in notes:
+            out_of_game_fields.update((current, name) for name in row_names)
 
     return HarnessSchema(
         source=path,
         fields_by_entity={k: frozenset(v) for k, v in fields.items() if v},
+        out_of_game_entities=frozenset(out_of_game_entities),
+        out_of_game_fields=frozenset(out_of_game_fields),
     )

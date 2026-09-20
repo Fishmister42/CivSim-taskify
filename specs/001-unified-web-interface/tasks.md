@@ -882,39 +882,165 @@ note on `segments`.
 **Purpose**: Release-blocking audits named directly in spec.md's Success Criteria, plus scale
 validation and operator-facing wiring.
 
-**Freeze the panel set first.** With Phases 3–6 closed, every story's
-declarations exist: **37 panels, all `introduced_in_version: "1"`**, and
-`panels/VERSION` has never been bumped by design — the standing decision was
-that the set stays unfrozen while the stories are authored, so the freeze would
-record real schema evolution rather than build churn. It is now stable.
-Whoever opens Phase 7 should write `panels/VERSION.lock` recording version 1's
-per-panel hashes (`registry/loader.py::_validate_p6` reads it, and
-`_declaration_payload` is the hash it compares); until that file exists, **rule
-P6's immutability check is not in force** and a declaration can be edited in
-place with nothing objecting. After the lock, adding or changing a panel means
-bumping `panels/VERSION`. T059's coverage reflection test is the natural place
-to assert the lock exists and matches.
+**Freeze the panel set first. — ✅ DONE, 2026-09-20.** `panels/VERSION.lock`
+now records version 1's 37 per-panel hashes plus the registry `content_hash`.
+**Rule P6's immutability check is in force from here on**, and two tests in
+`tests/contract/test_panel_registry.py` prove it rather than assert it:
+`test_the_shipped_registry_is_frozen_by_version_lock` (the lock exists, covers
+the version in force, and matches) and
+`test_an_edit_to_a_shipped_declaration_is_refused_by_the_shipped_lock` (copies
+the shipped `panels/` wholesale, edits one *real* declaration under the
+*shipped* lock, and requires the load to fail naming P6 — so the check bites on
+what ships, not only on a fixture).
 
-- [ ] T059 [P] Panel Registry coverage reflection test in `tests/contract/test_panel_registry.py`:
+**Adding or changing a panel now means bumping `panels/VERSION` and adding that
+version's block to `VERSION.lock`.** Re-hashing version 1 in place to match an
+edited declaration defeats the whole mechanism; the lock file says so at the
+top of itself.
+
+- [X] T059 [P] Panel Registry coverage reflection test in `tests/contract/test_panel_registry.py`:
   every field in `specs/002-civ-playing-harness/data-model.md` not explicitly marked out-of-game either
   has a corresponding panel or is confirmed absent from every view model by reflection — a new store
   field defaults to invisible until deliberately registered (contracts/panel-registry.md Conformance
   tests).
-- [ ] T060 [P] Performance test in `tests/integration/test_scale.py`: a synthetic fixture of 300+
+- [X] T060 [P] Performance test in `tests/integration/test_scale.py`: a synthetic fixture of 300+
   turns per run (with late-game turns running into hundreds of steps) and 50+ catalog runs; asserts
   every route exercised in Phases 3–6 reaches a usable response within 2 seconds (SC-008).
-- [ ] T061 [P] Schema-evolution contract test in `tests/contract/test_web_read_api.py`,
+- [X] T061 [P] Schema-evolution contract test in `tests/contract/test_web_read_api.py`,
   `schema_evolution` case: a fixture record predating a field renders that field with an explicit
   "unavailable for this run's recorded schema version" marker, never as zero or a silently omitted
   value (FR-025).
-- [ ] T062 Wire `civsim-web doctor`'s full preflight output end-to-end in `src/civsim_web/cli.py`
+- [X] T062 Wire `civsim-web doctor`'s full preflight output end-to-end in `src/civsim_web/cli.py`
   against the routes built in Phases 3–6, matching quickstart.md's expected output shape verbatim.
   Depends on T015, T051.
-- [ ] T063 [P] Scripted smoke test of quickstart.md Scenarios 1–5 against the `MatchStore` fake in
+- [X] T063 [P] Scripted smoke test of quickstart.md Scenarios 1–5 against the `MatchStore` fake in
   `tests/integration/test_quickstart_scenarios.py`.
-- [ ] T064 [P] Add a usage section (bind address, `doctor`, `serve`) for `civsim_web` to the project's
+- [X] T064 [P] Add a usage section (bind address, `doctor`, `serve`) for `civsim_web` to the project's
   existing top-level documentation, coordinating placement so it does not collide with
   `002-civ-playing-harness`'s own operator documentation.
+
+### Phase 7 notes — what closed, what was fixed, and what stays a note
+
+Written when T059–T064 landed, together with the owner-authorised spec
+amendment. **All 64 tasks are now `[X]`.**
+
+**The panel set is frozen.** See the note at the top of this phase.
+
+**`civsim-web doctor` was printing a number it had not computed.** Its panel
+registry line ended `0 unregistered fields reachable from a view model`, and
+that `0` was a string literal — the same shape as 002's `_read_setting` defect
+(a check that compared a value to itself and passed vacuously, forever). T062
+replaced it with `registry/coverage.py`, which walks 002's `data-model.md` and
+this feature's view models and *counts*. `doctor` now exits non-zero when the
+count is not zero, and T059's parametrised negative control is what keeps the
+count honest: removing the registration of a field the views demonstrably render
+must make the check fail, and does.
+
+**`doctor` now reaches the routes.** T062's preflight builds the application and
+checks every path `contracts/web-read-api.md` names is registered. `cli.py`'s
+`CONTRACT_ROUTES` is transcribed from the contract deliberately rather than
+derived from `ROUTER_MODULES` — deriving it would compare the application to
+itself and pass forever.
+
+**T060 found a real defect, and it was fixed in code, not amended away.** The
+turn route's *default* response was returning every step of a turn:
+`step_limit` defaulted to `None`. `data-model.md` §5 is explicit that "`steps`
+on the default response is a bounded window ... with the full ordered list
+available by paging", and T043's own task text quotes that verbatim. The
+recorded reason for the unbounded default — that a window "would make every turn
+look shorter than it is" — is exactly what `StepWindow` answers: it carries
+`total`, `has_more`, and every `skipped_step_indices`. The default is now
+`DEFAULT_STEP_PAGE_SIZE = 50`. `build_step_view` still builds its enclosing turn
+with the full list, so a step opened directly is never missing because of
+someone else's page size. **No other test in the tree changed behaviour**, which
+is itself worth noting: nothing was depending on the unbounded default.
+
+**US3 note 3 asked the artifacts to pick one, so Phase 7 picked.** T044's
+"inline single-run SVG metric trajectory" shipped as a link plus a progressive
+enhancement, not a chart composed into the turn response, because composing one
+costs `yields_by_turn` (one `get_turn_cycle` per turn) on *every* turn page.
+T060 measured both against a 320-turn run: `/runs/{id}/metrics` renders its own
+server-side chart within budget, and the turn page stays cheap by not paying for
+it. **That is the resolution — the link, not the composition.** Both readers
+reach identical content at an identical URL, so Principle VI holds.
+
+#### The amendment (owner-authorised)
+
+Recorded in the artifacts themselves, each with its rationale, so the diff reads
+as a decision. Summary of what moved:
+
+- **`spec.md`** — FR-021 amended up to Constitution Principle III (quarantine on
+  *either* completeness status or a non-empty `turn_gaps()`, fail closed on
+  both, never re-derive either); **FR-037 added**, giving Principle IV the
+  requirement it never had (`ComparisonBasis` existed and discharged no FR);
+  FR-003's health vocabulary grew `paused` and `unknown`; `ComparisonBasis`
+  added to Key Entities; a new **Amendments** section carries the reasoning.
+- **`contracts/web-read-api.md`** — the three collection routes now say they
+  return wrappers, because three routes differing from one table in one way is a
+  defect in the table; the step-level panel shape added to the view-reference
+  table (22 of 37 shipped panels are `scope: step` and had no documented URL);
+  two error-table rows for the `step_window_out_of_range` and `?series=`
+  conventions, both of which were decided in code and written down nowhere a
+  machine caller could read them; the turn route's query parameters stated.
+- **`data-model.md`** — `HealthStatus.state` gains `paused`/`unknown`;
+  `TurnCompleteness.is_gap` (shipped from T020, absent from the table);
+  `CaptureView.unavailable_reason` gains `unrecognized_status`;
+  `DecisionView.action_label_is_declaration_id`; `DivergencePoint.kind` (the
+  prose named two causes and the table had no discriminator);
+  `ComparisonView.basis`; and V10's enumeration now states *why*
+  `DecisionStepView` is excluded rather than leaving it an apparent omission.
+- **`quickstart.md`** — `doctor`'s documented output matches what it prints.
+
+#### Deliberately left as notes, not amended
+
+**The four probed store capabilities** (`RunConfigurationReader`,
+`CaptureBlobReader`, `RunCatalogReader`, `TurnAttemptReader`) — Foundation note
+2, US1 notes 1 and 3, US2 note 1, US4 notes 2 and 3. They exist because
+`specs/002-civ-playing-harness/contracts/match-store-port.md` publishes no read
+that resolves a run configuration, returns capture bytes, enumerates terminal
+runs, or addresses a turn attempt by index. **That contract belongs to
+deliverable 2 and was not edited here.** Amending another deliverable's contract
+to make this one's tasks look closed is the move that would bury the finding.
+They stay open against deliverable 3.
+
+Also left as notes, each for its own reason:
+
+- **`SEPARATION_RATIO = 0.25`** (US4 note 7). §11 says "beyond a threshold" and
+  names no number. Writing this implementation default into the spec would
+  convert it into a product decision nobody has made. It stays labelled.
+- **`ViewReference` has no attempt component** (US2 note 5). The contract
+  already makes `?attempt=` a query rather than a path segment, so the artifacts
+  agree with each other; only §12's prose overstates its own generality.
+- **`static/trajectory.js` is guarded, not tested** (US3 note 4). Unchanged and
+  still true: plan.md's dependencies decline npm (research R2), the behavioural
+  guard lives on the server where the load-bearing chart lives, and two
+  source-level guards in `test_web_parity_boundary.py` cover the JS copy of the
+  break rule.
+- **Task-text inaccuracies** — T005's read list was two operations short
+  (Foundation note 1), T039(b) named the wrong `Accept` header (US2 note 6),
+  T039(a)'s "so far" was ambiguous under parallel staffing (US2 note 4), and
+  T053's dependency crossed a boundary the parallelism note denied (US4 note 1).
+  All four were found, worked around correctly, and recorded at the time. They
+  are defects in *this file*, now closed, and rewriting the task text after the
+  fact would erase the record of what the contributor actually hit.
+
+#### One parse limitation found and not fixed
+
+`registry/harness_schema.py` cannot see `ParityDeclaration`: 002 heads that
+section `## 10. ParityDeclaration (catalog entry)`, and the entity-heading
+pattern requires the name to end the line. The consequence is that a panel
+declaring `ParityDeclaration.<field>` would be **rejected** by rule P3 rather
+than admitted — it fails closed, no panel declares one, and the fix belongs with
+whoever next touches that parser. Recorded rather than fixed because widening
+the pattern to accept trailing prose is exactly the kind of loosening that
+should be done deliberately, not in passing.
+
+#### Three unnumbered files were added
+
+`src/civsim_web/registry/coverage.py` (T059's rule, and T062's computed
+`doctor` line), `tests/integration/test_scale.py` (T060) and
+`tests/integration/test_quickstart_scenarios.py` (T063). `panels/VERSION.lock`
+is data, not code, and is described above.
 
 ---
 

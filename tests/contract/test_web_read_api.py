@@ -1459,3 +1459,177 @@ def test_no_us4_page_renders_a_control(path):
 
     for element in ("<form", "<button", "<input", "<textarea", "<select", 'method="post"'):
         assert element not in markup, f"{path} renders {element}"
+
+
+# ==========================================================================
+# Polish (T061) -- schema evolution
+# ==========================================================================
+
+
+class PredatingRecord:
+    """A stored record from before a field existed.
+
+    FR-025's subject is a *real* situation: 002's schema evolves, and a run
+    recorded under an earlier version simply has no column for a field added
+    later. `GatedReader.get` distinguishes that case from "the registry does not
+    permit this field" by asking `hasattr` -- so a record that predates a field
+    is exactly a record that does not have the attribute, and this is the
+    smallest honest way to produce one.
+
+    Building a second set of fixture dataclasses per historical schema version
+    was the alternative and is worse: it would make the fake's record shapes a
+    moving target for every other suite in the tree, to test a property that is
+    about attribute presence and nothing else.
+    """
+
+    def __init__(self, wrapped: Any, *missing: str) -> None:
+        object.__setattr__(self, "_wrapped", wrapped)
+        object.__setattr__(self, "_missing", frozenset(missing))
+
+    def __getattr__(self, name: str) -> Any:
+        if name in object.__getattribute__(self, "_missing"):
+            raise AttributeError(
+                f"{name} -- this record predates the field (FR-025 fixture)"
+            )
+        return getattr(object.__getattribute__(self, "_wrapped"), name)
+
+    def __repr__(self) -> str:
+        wrapped = object.__getattribute__(self, "_wrapped")
+        missing = sorted(object.__getattribute__(self, "_missing"))
+        return f"PredatingRecord({wrapped!r}, missing={missing})"
+
+
+def _store_missing_configuration_field(field_name: str) -> Any:
+    from civsim_web.store_client.fake import FakeMatchStore
+    from web_support.fixtures import (
+        make_configuration,
+        make_run,
+        make_save_point,
+        make_turn_cycle,
+    )
+
+    configuration = make_configuration()
+    return FakeMatchStore(
+        runs=[make_run("run-1", config_id=configuration.config_id)],
+        configurations=[PredatingRecord(configuration, field_name)],
+        turn_cycles=[make_turn_cycle(1), make_turn_cycle(2)],
+        save_points=[make_save_point(1), make_save_point(2)],
+        captures=[],
+    )
+
+
+def test_schema_evolution_a_field_the_record_predates_is_named_not_zeroed():
+    """FR-025, the contract's error table, last row.
+
+    "The field renders `null`/absent with an explicit 'unavailable for this
+    run's recorded schema version' marker, never `200` with a silently zeroed
+    value."
+
+    All three halves of that sentence are asserted: the response is still a
+    `200` (an old run is readable, not an error), the value is `null` rather
+    than a plausible default, and the reason is stated in words the reader can
+    act on.
+    """
+    from civsim_web.viewmodels.gate import Reason
+    from web_support.fixtures import make_client
+
+    with make_client(_store_missing_configuration_field("leader")) as client:
+        response = client.get("/runs/run-1", headers={"Accept": "application/json"})
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["leader"] is None, "a silently zeroed value is the failure mode"
+
+    reasons = {entry["field"]: entry["reason"] for entry in summary["unavailable"]}
+    assert "RunConfiguration.leader" in reasons, (
+        "a field the record predates must be *named*; omitting the key entirely "
+        "is indistinguishable from a field nobody thought about (UP-005)"
+    )
+    assert reasons["RunConfiguration.leader"] == Reason.NOT_IN_RECORD
+    assert "recorded schema version" in reasons["RunConfiguration.leader"]
+
+
+def test_schema_evolution_says_something_different_from_an_unregistered_field():
+    """The two absences are different facts and must not share a sentence.
+
+    "This run predates the field" is a property of the record; "no panel
+    permits this field" is a property of the registry. A reader who cannot tell
+    them apart will go looking in the wrong place, and the three reasons in
+    `gate.Reason` exist precisely so they never collapse into one.
+    """
+    from civsim_web.viewmodels.gate import Reason
+
+    assert Reason.NOT_IN_RECORD != Reason.UNREGISTERED != Reason.PORT_CANNOT_REACH
+    assert "FR-025" in Reason.NOT_IN_RECORD
+    assert "UP-001" in Reason.UNREGISTERED
+    assert "C1" in Reason.PORT_CANNOT_REACH
+
+
+def test_schema_evolution_the_marker_reaches_both_readers():
+    """Principle VI: the browser is told what the JSON caller is told.
+
+    A marker that only the machine reader sees would leave the user looking at
+    an empty cell with no explanation -- the asymmetry the whole feature exists
+    to prevent.
+    """
+    from web_support.fixtures import make_client
+
+    with make_client(_store_missing_configuration_field("civilization")) as client:
+        body, markup = fetch_both(client, "/runs/run-1")
+
+    assert body["summary"]["civilization"] is None
+    assert "summary.unavailable" in " ".join(html_fields(markup)), (
+        "the rendered page must cite the unavailable list, not drop it"
+    )
+    assert "recorded schema version" in markup
+
+
+def test_schema_evolution_of_a_turn_field_is_reported_on_the_turn():
+    """The same rule one scope down -- it is not a `RunSummaryView` special case."""
+    import dataclasses
+
+    from civsim_web.store_client.fake import FakeMatchStore
+    from civsim_web.viewmodels.gate import Reason
+    from web_support.fixtures import (
+        make_client,
+        make_configuration,
+        make_run,
+        make_save_point,
+        make_turn_cycle,
+    )
+
+    configuration = make_configuration()
+    record = dataclasses.replace(
+        make_turn_cycle(1),
+        turn_cycle=PredatingRecord(make_turn_cycle(1).turn_cycle, "yields"),
+    )
+    store = FakeMatchStore(
+        runs=[make_run("run-1", config_id=configuration.config_id)],
+        configurations=[configuration],
+        turn_cycles=[record],
+        save_points=[make_save_point(1)],
+        captures=[],
+    )
+
+    with make_client(store) as client:
+        response = client.get("/runs/run-1/turns/1", headers={"Accept": "application/json"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["yields"] == {}, "an absent yields object is empty, never invented"
+    reasons = {entry["field"]: entry["reason"] for entry in body["unavailable"]}
+    assert reasons.get("TurnCycle.yields") == Reason.NOT_IN_RECORD
+
+
+def test_schema_evolution_the_marker_is_absent_when_the_record_has_the_field(web_client):
+    """The negative control: this marker means something.
+
+    A test that only ever looks at a broken record cannot tell "reports
+    unavailable correctly" from "reports unavailable always".
+    """
+    body = web_client.get("/runs/run-1", headers={"Accept": "application/json"}).json()
+    summary = body["summary"]
+
+    assert summary["leader"] is not None
+    assert summary["civilization"] is not None
+    assert "RunConfiguration.leader" not in {e["field"] for e in summary["unavailable"]}

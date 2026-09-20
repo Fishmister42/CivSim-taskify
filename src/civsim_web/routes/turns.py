@@ -84,6 +84,26 @@ STEP_TEMPLATE = "turns/step.html"
 #: one request rather than to bound a turn.
 MAX_STEP_PAGE_SIZE = 500
 
+#: The window a caller gets without asking (T060, data-model.md SS5).
+#:
+#: This was ``None`` -- the whole ordered list -- until Phase 7's scale test
+#: measured a 200-step turn and found the default response carrying all 200.
+#: SS5 is explicit that "``steps`` on the default response is a bounded window
+#: (e.g., first N and a cursor), with the full ordered list available by
+#: paging", and research R6 chose lazy step loading for exactly this case.
+#:
+#: The rationale recorded for the unbounded default was that a window "would
+#: make every turn look shorter than it is". ``StepWindow`` is what answers
+#: that: it carries ``total``, ``has_more`` and ``skipped_step_indices``, so a
+#: bounded page states its own bounds and SS5's "no page may skip an index
+#: without marking it" holds by construction. A turn never looks shorter than
+#: it is; it looks exactly as long as it is, with fewer of its steps inlined.
+#:
+#: ``build_step_view`` still builds its enclosing turn with the *full* list
+#: (``step_limit=None``), so a step opened directly is never missing because of
+#: someone else's page size.
+DEFAULT_STEP_PAGE_SIZE = 50
+
 
 @router.get("/runs/{run_id}/turns/{turn_number}")
 def get_turn(
@@ -92,7 +112,7 @@ def get_turn(
     turn_number: int,
     attempt: int | None = Query(default=None, ge=0),
     step_offset: int = Query(default=0, ge=0),
-    step_limit: int | None = Query(default=None, ge=1, le=MAX_STEP_PAGE_SIZE),
+    step_limit: int = Query(default=DEFAULT_STEP_PAGE_SIZE, ge=1, le=MAX_STEP_PAGE_SIZE),
     focus: str | None = Query(default=None),
 ) -> Response:
     """One turn's full record (FR-014), or one named attempt of it (FR-009).
@@ -103,9 +123,9 @@ def get_turn(
     and a ``superseded_by`` pointer when it has been overtaken.
 
     ``?step_offset=`` / ``?step_limit=`` are T043's step window (research R6,
-    data-model.md SS5). The default is still the whole ordered list: paging is
-    something a caller opts into for a turn of hundreds of steps, not a default
-    that would make every turn look shorter than it is. Whatever the window,
+    data-model.md SS5). The default window is ``DEFAULT_STEP_PAGE_SIZE`` steps,
+    not the whole list -- see that constant for why it changed in Phase 7.
+    Whatever the window, ``step_window`` carries ``total`` and ``has_more``, and
     ``step_window.skipped_step_indices`` names every index this page left out,
     so a page boundary can never be mistaken for a record gap.
 

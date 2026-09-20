@@ -1,6 +1,7 @@
 # Contract: Web Read API
 
-**Feature**: `001-unified-web-interface` | **Schema version**: 1
+**Feature**: `001-unified-web-interface` | **Schema version**: 1 | **Amended**: 2026-09-20
+(see [Amendment: collection responses](#amendment-2026-09-20--collection-responses-are-wrappers-not-bare-lists))
 
 This is the one surface this feature exposes. It is read-only, LAN-bound, and unauthenticated (FR-023,
 FR-024, FR-026, FR-028 – FR-030). Every route below is reachable two ways from the same URL: a browser
@@ -28,16 +29,45 @@ field the JSON body lacks.
 | Route | Returns | Serves |
 |---|---|---|
 | `GET /` | Landing view: the single active run (or a chooser, if several are active — spec edge case "several runs are recorded concurrently") | US1 |
-| `GET /runs` | `list[RunSummaryView]`, paginated, filterable and sortable by any `RunSummaryView` field via query params (`?civilization=`, `?model=`, `?sort=turn_count`, `?page=`) | US4, FR-018, FR-019 |
+| `GET /runs` | `CatalogListingView` — `runs: list[RunSummaryView]` plus the page state (`page`, `page_size`, `total`, `has_more`), the applied `sort`/`order`/`filters`, `sortable_fields`, `quarantined_run_ids`, `listing_is_partial`/`partial_reason`, and provenance. Filterable and sortable by any `RunSummaryView` field via query params (`?civilization=`, `?model=`, `?sort=turn_count`, `?page=`) | US4, FR-018, FR-019 |
 | `GET /runs/{run_id}` | `RunDetailView` — the live/glance view for one run (UP-003) | US1, US2 |
-| `GET /runs/{run_id}/turns/{turn_number}` | `TurnCycleView` for the authoritative attempt; `?attempt={n}` selects a specific (including abandoned) attempt | US2, US3 |
+| `GET /runs/{run_id}/turns/{turn_number}` | `TurnCycleView` for the authoritative attempt; `?attempt={n}` selects a specific (including abandoned) attempt; `?step_offset=`/`?step_limit=` page the step window (`data-model.md` §5 — the default response carries a **bounded** window, with `step_window` stating `total`, `has_more` and every `skipped_step_indices`); `?focus={panel_id}` carries panel focus across navigation | US2, US3 |
 | `GET /runs/{run_id}/turns/{turn_number}/steps/{step_index}` | `DecisionStepView` | US2, US3 |
 | `GET /runs/{run_id}/turns/{turn_number}/panels/{panel_id}` | The single named panel's data, scoped to that turn (the canonical `ViewReference` resolution target) | US2 |
-| `GET /runs/{run_id}/events` | Paginated `list[RunEventView]` — the full timeline | US1, US3 |
-| `GET /runs/{run_id}/metrics` | `list[MetricSeriesView]`, `?series=science_output,culture_output` to narrow | US3, US4 |
+| `GET /runs/{run_id}/events` | `RunEventPage` — `events: list[RunEventView]` plus `run_id`, the page state (`page`, `page_size`, `total`, `has_more`), and provenance. The full timeline, paginated | US1, US3 |
+| `GET /runs/{run_id}/metrics` | `MetricSeriesPage` — `series: list[MetricSeriesView]` plus `run_id`, the common `axes` each series must be drawn to, `metric_names`, the `requested_series`/`unrecorded_series` split for `?series=science_output,culture_output`, `turn_count`, `gapped_turns`, `trend_eligibility`, and provenance | US3, US4 |
 | `GET /captures/{capture_id}/image` | The image bytes, **only if** `CaptureView.available` for that capture; otherwise `404` with a body naming `unavailable_reason` | US1, US3 |
 | `GET /compare?runs={id,id,...}&metrics={name,name,...}` | `ComparisonView` | US4 |
 | `GET /healthz` | This service's own liveness plus the configured store's `ping()` result — operational, not a run-state route | Operability |
+
+### Amendment 2026-09-20 — collection responses are wrappers, not bare lists
+
+The three rows above that return a collection previously read `list[RunSummaryView]`,
+`Paginated list[RunEventView]`, and `list[MetricSeriesView]`. All three shipped as wrapper objects
+instead, and each was recorded as a local deviation by the story that built it (US1 note 4, US4
+note 5, US3 note 1). **Three routes differing from the same table in the same way is a defect in the
+table, not three independent deviations**, so the table is amended to say what these routes must
+actually return.
+
+A bare list cannot carry:
+
+- **the pagination the same table asked for in prose.** `GET /runs` is specified as paginated and
+  `GET /runs/{id}/events` literally says "Paginated"; a JSON array has nowhere to put `page`,
+  `total`, or `has_more`, so a caller could not tell a last page from a truncated one.
+- **the provenance stamp `data-model.md` §13 requires.** Invariant V10 requires every top-level
+  response to carry the Panel Registry version and the catalog versions it was rendered under, and
+  "catalog listings" are named there explicitly. A bare array has no top level to stamp.
+- **the interpretation the collection is meaningless without.** `axes` is the clearest case: a metric
+  series drawn to axes the client recomputed is a chart that can disagree with the response that
+  produced it, so the axes belong in the same body as the points.
+- **the honest statement of what the store could not do.** `listing_is_partial` says out loud that
+  the published port could only enumerate *active* runs. Dropping it would leave a truncated catalog
+  looking exactly like a complete one — which is the one failure here capable of quietly shrinking
+  the population a trend is drawn from.
+
+Only these three routes changed shape. Every single-object route still returns its view model
+directly, and this amendment does not introduce an envelope convention: a wrapper exists where a
+collection genuinely needs one, and nowhere else.
 
 **`GET /` is the one route with no `Accept: application/json` equivalent of its own** — it is a
 redirect to whichever `/runs/{run_id}` is currently active (or to `/runs` if none is), and machine
@@ -59,6 +89,14 @@ to serve, rather than an indirection layer that could itself drift or expire.
 | Step | `/runs/{run_id}/turns/{turn_number}/steps/{step_index}` |
 | Panel | `/runs/{run_id}/turns/{turn_number}/panels/{panel_id}` |
 | Run-level panel (e.g. intervention info, catalog row) | `/runs/{run_id}/panels/{panel_id}` |
+| Step-level panel | `/runs/{run_id}/turns/{turn_number}/steps/{step_index}/panels/{panel_id}` |
+
+*(Amended 2026-09-20.)* The step-level panel shape was described in `data-model.md` §12 and appeared
+in neither table here. It is not optional: **twenty-two of the registry's thirty-seven shipped panels
+are `scope: step`**, so without this row a `ViewReference` to a step-scoped panel — the majority of
+them —
+has no resolvable URL, which would break FR-008 for exactly the panels that carry the agent's own
+observations. The route exists; the table now says so.
 
 **FR-009 — superseded turns**: `GET /runs/{run_id}/turns/{turn_number}` with no `?attempt=` always
 resolves to the current authoritative attempt. If the *specific* attempt a reference names (via
@@ -87,6 +125,12 @@ quietly point somewhere else.
 | Store unreachable (`ping()` fails) | `503` on every route except `/healthz`, with a body distinguishing "store unreachable" from "run not found" so a client does not confuse the two |
 | Capture requested that is not `screened_clean` | `404` on `/captures/{id}/image`, naming `unavailable_reason`; never a 200 with a placeholder image standing in for the real one, which could be mistaken for content |
 | A route's underlying record predates a field in the current schema version | The field renders `null`/absent with an explicit "unavailable for this run's recorded schema version" marker, never `200` with a silently zeroed value (FR-025) |
+| `?step_offset=` starts past the last step of a turn that has steps | `404 step_window_out_of_range`, naming the turn's step count — **not** an empty page. A page of no steps for a turn that has steps is indistinguishable from a turn whose steps were never recorded, and `data-model.md` §5 spends its whole Validation clause on those two never being confusable. `?step_offset=0` on a turn with genuinely no recorded steps is *not* this error |
+| `?series=` names a metric this run recorded no values under | `200`, with the name listed in `unrecorded_series` — **not** a `400`. spec Assumptions make the metric set open-ended, so a name this run has nothing under is a fact about the run rather than a client error. Deliberately unlike `GET /runs`'s unknown *filter field*, which is a `400`: there the field set is closed (whatever `RunSummaryView` carries), so a name outside it is provably a mistake. The alternative — drawing an empty chart — would read as a score of zero |
+
+*(The last two rows added 2026-09-20.)* Both conventions were decided at implementation time and
+recorded only in the code; a machine caller cannot be expected to infer from a route's silence that
+one unknown name is a `400` and another is a `200`.
 
 ## Conformance tests
 

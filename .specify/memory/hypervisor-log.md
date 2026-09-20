@@ -248,3 +248,89 @@ the hypervisor before escalating, rather than raised as a false blocker.
 
 Also standing from that spike: **never compare save bytes** in branch or replay verification.
 Saves are not byte-stable across save -> load -> save; identical position, almost no shared bytes.
+
+---
+
+## Run 4 — 2026-09-20 (owner away, full machine autonomy)
+
+Two agents were killed mid-edit by a **monthly spend limit**; both were resumed from transcript
+rather than restarted, since they held the context. Tree was briefly RED (14 failures) and is now
+**GREEN: 1449 passed, 2 skipped, 0 failed.** T233 landed; **T226 left honestly open** under the
+standing instruction that a green tree outranks a complete feature.
+
+### Reporting delegated
+
+GitHub comms now belong to a **Scribe agent**, on the owner's instruction ("use an agent to report
+to me, I don't want you wasting context on it"). Two channels:
+- **Issue #1** — technical peer coordination with the Linux hypervisor. House style: `from:/re:/status:` header.
+- **Issue #2** — owner-facing status. Created this run. Readable progress, decisions awaiting the
+  owner, honest blockers.
+
+The Scribe is instructed never to inflate and to verify counts and hashes against the repo before
+publishing. **On its first run it corrected five errors in the hypervisor's own picture** — that
+validated the delegation immediately and is the reason it is a standing role, not a one-shot.
+
+### 🚨 Corrections to the hypervisor's picture (from the Scribe's first audit)
+
+1. **Tree was GREEN, not red** — the hypervisor was working from a stale test run.
+2. **002 counts were stale**: not 211/222 but **212 done / 21 open of 233**. Phase 11's convergence
+   appended through T233. (001's 58/64 was correct.)
+3. **🔴 Eight commits were never pushed.** Remote sat at `8c3d8f8`; local `HEAD` was `1b980e2`.
+   Everything from Phase 9 forward — the entire composition root, Phases 10 and 11, and all four
+   spec-001 user stories — existed **only on this machine**. The Linux peer merging the remote
+   integration branch would have gotten a tree with none of it, and every evidence-image link would
+   have 404ed. **Fixed: pushed.** *Lesson: commit discipline was tight, push discipline was absent.
+   On a two-machine loop, an unpushed commit is an uncommitted one.*
+4. **🔴 No OpenRouter key on this machine** — `civsim doctor`: `provider key : MISSING`. No real
+   model decisions are possible today, and the owner is away.
+5. Windows live-host status was **in flight, not landed** — no `r5-save-path-windows.md` or
+   `r6-capture-hygiene-windows.md` exists yet. Windows `civsim doctor` still reads
+   `tier UNSUPPORTED`, `capture path: none`.
+
+### Hypervisor ruling: the missing API key does NOT block the demo
+
+The owner's ask is that **the harness drives a real game** — tuner transport, capability catalog,
+Lua execution via `implementation_ref`, observation sweeps, turn advancement, quicksaves. **None of
+that needs an LLM.** The provider is an orthogonal axis, and proving it costs money we cannot spend
+unattended anyway.
+
+Directed approach, in preference order: (1) drive a real `Runner` against the **live client** with
+`FakeModelProvider` injected via `build_runner_dependencies(provider=...)` — genuine transport,
+catalog, dispatch and persistence, with scripted decisions standing in for model output; (2) if the
+runner will not come up, connect `NexusClient` directly and execute real capabilities by hand.
+
+**Binding on the write-up: state plainly that decisions were scripted and no live model call was
+made.** A demo that lets a reader infer the agent played the game would be this loop's own defining
+defect — a confident claim unbacked by reality — reproduced in a new medium.
+
+### OBS
+
+Owner volunteered OBS on both machines. Bring-up agent records the demo attempt, **starting before
+the attempt** (a first attempt cannot be re-run; a captured failure is still evidence), producing a
+GIF or key frames under `spikes/demo-evidence/` since GitHub will not play an mp4 from a raw URL.
+
+**Distinction that must never be garbled:** OBS full-screen recording is a **human-facing artifact**
+and is fine. The **harness** must still never take a root or full-screen grab, not even as a
+fallback — Principle I, evidenced by the peer's `root-scoped-same-region-LEAKS.png`. A screen
+recorder in the room is not a reason to relax capture hygiene.
+
+### Linux peer's standing finding (highest-value structural idea so far)
+
+Its reachability audit found **the entire synthetic input layer has no production caller** —
+`InputEvent(` constructs zero times outside the port's own definition; `send_input` has no caller on
+any platform. Three platform implementations, no entry point. Its own honest note: that morning's
+three `send_input` fixes were, in production terms, **fixes to dead code**.
+
+Consequence for the T217 ruling: **option B is not merely "build a UI driver" — it is "build a
+driver AND wire the input layer beneath it."** That raises B's cost and makes option C worth more
+than when the ruling was made.
+
+**Peer's proposed rule, adopted:** *for anything crossing a process or protocol boundary, assert on
+what the far side received, never on what our side returned.*
+
+**Peer's proposed CI check, adopted and queued:** every `HostPlatform` port method and every
+`Runner` collaborator must have at least one non-test caller, enforced mechanically. **That single
+check would have caught seven distinct defects** found this loop: the input layer,
+`capture_preconditions`, the fabricated V2 comparison, the dead Lua `return`s, both unwired
+Principle I guards, the unredacted logger, and the unbuilt detection layer. Build it once the tree
+is green and stays green — not into a red suite.

@@ -194,9 +194,76 @@ uv run mypy src
 - `tests/{unit,contract,integration,fakes,live}/` — the four test tiers described above.
 - `specs/002-civ-playing-harness/` — the full spec, plan, data model, contracts, research notes,
   and validation results for this deliverable.
+- `src/civsim_web/` — deliverable 1, the read-only web interface (`civsim-web`). Imports nothing
+  from `civsim_harness`; reads the match store through a port and nothing else.
+- `panels/` — the Panel Registry the web interface renders through, versioned and frozen by
+  `panels/VERSION.lock`. See [`civsim-web`](#civsim-web-the-unified-web-interface) above.
+
+## `civsim-web`: the unified web interface
+
+Deliverable 1 (`001-unified-web-interface`) ships alongside the harness in this repository as a
+second console script, `civsim-web`. It is a **read-only** view of run data: it never talks to the
+game client, never writes to the match store, and offers no control of any kind — starting,
+stopping, or intervening in a run is `civsim`'s job and stays there. Its whole purpose is
+Principle VI: the user and the directing Claude Code session see the *same* run state, from the
+same URLs, so neither has to read the other's screen.
+
+```bash
+uv run civsim-web doctor      # preflight: store, panel registry, coverage, routes, bind addresses
+uv run civsim-web serve       # start the service; logs every bound address
+```
+
+`doctor` must report all green before `serve` is worth running:
+
+```text
+store             : ok (ping succeeded)
+panel registry    : ok (version 1, 37 panels, frozen)
+registry coverage : ok (167 fields scanned, 91 marked out-of-game, 27 registered, 49 unregistered and unrendered, 0 unregistered fields reachable from a view model)
+routes            : ok (13 registered, all 13 contract routes present)
+bind address(es)  : 192.168.1.42:8420, 127.0.0.1:8420   (LAN + loopback — no wildcard)
+```
+
+As with `civsim doctor`, every line is a check that ran — a failure is reported, not raised, and
+the exit code is non-zero so it works as a CI gate. Three of these lines are worth more than a
+glance:
+
+- **`panel registry: ... frozen`** — the Panel Registry (`panels/*.yaml`) is this feature's own
+  parity gate, the second one behind the harness's capability catalog: a store field with no panel
+  declared over it is never read by any view model, so a field 002 fails to filter still cannot
+  reach a screen here. `frozen` means `panels/VERSION.lock` records the current version's
+  declaration hashes, so a declaration cannot be edited in place — changing one means bumping
+  `panels/VERSION`. `NOT FROZEN` is legitimate only while a registry version is still being
+  authored, and says so.
+- **`registry coverage: ... 0 unregistered fields reachable`** — computed, not asserted. It walks
+  002's `data-model.md` and this feature's view models and counts fields that could render with no
+  panel permitting them. Anything but `0` fails the preflight.
+- **`bind address(es)`** — resolved by enumerating the host's own interfaces and keeping the
+  RFC1918 private ranges plus loopback. **A wildcard (`0.0.0.0`) bind is refused outright**, not
+  merely discouraged: this service is unauthenticated by design (it is a LAN tool on the machine
+  running the game), so the bind address is the entire access boundary. Override with `--bind`
+  (repeatable) and `--port`; the default port is `8420`.
+
+```bash
+uv run civsim-web --store fake serve          # the bundled read-only fake; no harness needed
+uv run civsim-web --store mypkg:make_store serve
+```
+
+Which store to read is **configuration, not code** (`--store`, or `CIVSIM_WEB_STORE`): `fake` for
+the bundled in-memory store, or `module:attribute` resolving to anything satisfying the read-only
+`MatchStore` protocol. Every route and view model is written against that protocol, so pointing
+this at a real store should never require editing `viewmodels/` or `routes/` — if it does, that is
+a finding, not a configuration problem.
+
+This feature's tests run in the same CI-runnable subset as the harness's
+(`uv run pytest tests/unit tests/contract tests/integration`) and need no game client and no
+running harness — they all run against the fake. Its own walkthrough, including what each route is
+for, is [`specs/001-unified-web-interface/quickstart.md`](specs/001-unified-web-interface/quickstart.md).
 
 ## Further reading
 
+- [`specs/001-unified-web-interface/spec.md`](specs/001-unified-web-interface/spec.md) and
+  [`quickstart.md`](specs/001-unified-web-interface/quickstart.md) — the web interface's
+  requirements and its scenario walkthrough.
 - [`specs/002-civ-playing-harness/spec.md`](specs/002-civ-playing-harness/spec.md) — requirements
   and success criteria.
 - [`specs/002-civ-playing-harness/quickstart.md`](specs/002-civ-playing-harness/quickstart.md) —
