@@ -5,9 +5,10 @@ run listed with its seed, civilization, ruleset, model, turn count, outcome
 metrics, completeness status and start/end times, filterable and sortable by any
 of them. ``specs/002-civ-playing-harness/contracts/match-store-port.md``
 publishes **no catalog-listing read**: ``list_active_runs`` is documented for
-*active* runs (recovery and run identity), ``get_run`` resolves one id, and
-nothing resolves a ``Run.config_id`` to the ``RunConfiguration`` that carries
-four of those columns.
+*active* runs (recovery and run identity), and ``get_run`` resolves one id.
+(The configuration half of the gap has since closed: the amended contract
+publishes ``get_run_configuration``, keyed by ``run_id``, which is how a row's
+seed / civilization / ruleset / model columns are reached.)
 
 So this module composes the projection out of what the port does publish, and it
 is deliberately the *only* place that does. Routes and view models above it take

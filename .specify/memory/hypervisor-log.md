@@ -515,3 +515,20 @@ B - no cold-client-to-turn-1 path -> FILED as T237 (DEFERRED-LIVE; the old T217-
 authorization is SPENT, a new one needs an owner ruling). C - V2 getters would fail vs an
 arbitrary loaded save (major_count 16-vs-majors, map_type "Continents.lua", RANDOM_SEED vs
 GAME_SYNC_RANDOM_SEED) - corroborates T218, relayed to the peer who owns it. Suite: 1569/2/0.
+
+### Owner-authorized spec amendment: EXECUTED (4ef22f6)
+
+Items 1+2 (001 FR-021/Principle III fail-closed statement; FR-037 behind ComparisonBasis) were
+found ALREADY LANDED in 9c1e87b - verified against code truth this pass, not re-amended. Item 3
+landed now: match-store-port.md "Capability extensions" E1-E5 (four probed reads binding on
+deliverable 3, no stub exposure, honest degradation, capture-withheld => None, run-id keying) +
+get_turn_cycle flag-off = most recent attempt, previously implementation-defined. The ruling's
+scope is now fully discharged.
+
+**Deferred findings from the amendment pass:**
+- get_run_configuration MIS-KEYING in 001's consumer (reads.py passes config_id where the
+  published read takes run_id - wrong-configuration risk on collision) + stale port.py prose +
+  READ_OPERATIONS omission + fixture stricter than contract -> FIX AGENT LAUNCHED (001 lane).
+- Two further C1-family candidates if the contract grows (NOT amended, outside scope): no
+  latest-turn/turn-count read (highest_recorded_turn forward-probes), no metric-series read
+  (yields_by_turn is O(turns)). Parked - compositions over published reads are legal today.

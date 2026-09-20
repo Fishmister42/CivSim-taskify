@@ -470,11 +470,20 @@ def make_catalog_store(
 class _PublishedPortOnly:
     """A store exposing *only* the reads `match-store-port.md` publishes.
 
+    Published now includes `get_run_configuration`, keyed by `run_id` -- the
+    2026-09-20 amendment to `match-store-port.md` moved it into the port's
+    Operations block (Capability extensions, E5), so this wrapper forwards it
+    like any other `READ_OPERATIONS` entry rather than hiding it. Hiding it
+    would model a store *stricter* than the actual published contract, which
+    is exactly the drift this fixture existed to prevent in the other
+    direction.
+
     `FakeMatchStore` also offers the three optional capabilities this feature
-    probes for (`get_run_configuration`, `get_capture_blob`, `list_runs`), which
-    is what lets most tests exercise fully-populated pages. This wrapper is the
-    other case, and it is the *realistic* one until deliverable 3 lands: a store
-    that implements the published contract and nothing more.
+    still probes for (`list_runs`, `get_capture_blob`,
+    `get_turn_cycle_attempt`), which is what lets most tests exercise
+    fully-populated pages. This wrapper is the other case, and it is the
+    *realistic* one until deliverable 3 lands: a store that implements the
+    published contract and nothing more.
 
     Forwarding by an explicit name list rather than `__getattr__` is the point --
     `getattr(store, "list_runs", None)` must genuinely find nothing, which a
