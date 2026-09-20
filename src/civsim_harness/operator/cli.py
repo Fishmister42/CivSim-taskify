@@ -57,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import getpass
 import os
+import sys
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -87,6 +88,7 @@ from civsim_harness.saves.archival import archive_run
 from civsim_harness.saves.reaper import reap
 from civsim_harness.store.port import MatchStore
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
+from civsim_harness.telemetry.logging import configure_logging
 
 app = typer.Typer(
     name="civsim",
@@ -107,6 +109,27 @@ app.add_typer(run_app, name="run")
 app.add_typer(audit_app, name="audit")
 app.add_typer(saves_app, name="saves")
 app.add_typer(seedset_app, name="seedset")
+
+
+@app.callback()
+def _configure_harness_logging() -> None:
+    """T228, FR-020, T015: wire the redacting log handler before any command runs.
+
+    ``telemetry/logging.py`` makes redaction structural -- ``configure_logging`` and
+    ``attach_handler`` force the redacting formatter *and* filter onto every handler they hand
+    out, so "bypassing redaction requires going around this module entirely". Nothing in ``src/``
+    called either one, which meant the ``civsim_harness.*`` loggers that do emit
+    (``nexus/client.py``, ``nexus/sentinels.py``) propagated to whatever root handler the host
+    process happened to have -- with no redaction filter on it at all. Configuring the package
+    logger here catches those by propagation, since both are its children.
+
+    A **Typer callback**, not module import: this is the process entry point for an operator
+    command, and doing it at import would reach into the logging configuration of anything that
+    merely imports this module (the test suite included), which is the caller's business, not
+    this module's. Stderr rather than stdout, so structured telemetry never interleaves with the
+    command output an operator is reading or piping.
+    """
+    configure_logging(stream=sys.stderr)
 
 
 @app.command()

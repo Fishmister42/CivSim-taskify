@@ -22,8 +22,9 @@ import pytest
 
 from civsim_harness.capability.loader import Catalog
 from civsim_harness.capability.registry import CapabilityRegistry
+from civsim_harness.errors import DiskHeadroomError
 from civsim_harness.host.detect import HostInfo, LinuxSessionType, OperatingSystem
-from civsim_harness.host.port import HostPlatform
+from civsim_harness.host.port import DiskSpace, HostPlatform
 from civsim_harness.models.catalog import CapabilityPath as CatalogCapabilityPath
 from civsim_harness.models.catalog import (
     CatalogVersion,
@@ -43,7 +44,7 @@ from civsim_harness.models.common import (
     TurnCycleId,
 )
 from civsim_harness.models.config import ModelConfig, RunConfiguration, TurnReachedStopCondition
-from civsim_harness.models.records import SavePoint
+from civsim_harness.models.records import RunEventType, SavePoint
 from civsim_harness.models.run import (
     ComparabilityStatus,
     HostSupportTier,
@@ -213,9 +214,10 @@ def _make_deps(
     store: SqliteMatchStore,
     game: _FakeGame,
     provider: FakeModelProvider,
+    host: FakeHostPlatform | None = None,
 ) -> TurnCycleDependencies:
     registry = _build_registry()
-    host = FakeHostPlatform()
+    host = host if host is not None else FakeHostPlatform()
     host_info = HostInfo(
         os=OperatingSystem.linux, os_version="test", session_type=LinuxSessionType.x11
     )
@@ -350,3 +352,58 @@ async def test_fifty_turns_land_fully_authoritative_with_no_turn_or_step_gaps(
     assert evaluate_stop(
         stop_condition, StopEvaluation(current_turn=TOTAL_TURNS, game_outcome=GameOutcome.VICTORY)
     ).resolution is StopResolution.VICTORY
+
+
+async def test_a_headroom_halt_puts_its_own_warning_on_the_run_timeline(tmp_path: Path) -> None:
+    """T229 / Principle III: a run that halts on disk headroom records *why*, in the run's record.
+
+    data-model.md SS14 calls `disk_headroom_low` "the warning before the halt ... without it the
+    halt looks arbitrary". `saves/headroom.py`'s `check_headroom` is deliberately a pure check
+    (R17: it never deletes and never records), and its `build_disk_headroom_event` companion had
+    **no caller in `src/`** -- so `RunEventType.DISK_HEADROOM_LOW` was emitted nowhere in
+    production and every headroom halt left the timeline silent about its cause.
+
+    Driven through `run_turn_cycle` rather than by calling the two functions in sequence here:
+    the existing unit coverage does exactly that sequence in its own test body, which asserts the
+    store works and says nothing about whether the harness ever performs it.
+    """
+    run_id = RunId("run-headroom-halt")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    # Below `_make_deps`' own `min_free_disk_gb=1.0` floor.
+    host = FakeHostPlatform()
+    host.set_disk_space(
+        DiskSpace(path=tmp_path, free_bytes=512 * 1024 * 1024, total_bytes=100 * 1024**3)
+    )
+
+    provider = FakeModelProvider()
+    provider.set_default_decision_factory(_two_step_factory)
+    deps = _make_deps(
+        tmp_path=tmp_path,
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        game=_FakeGame(),
+        provider=provider,
+        host=host,
+    )
+
+    try:
+        with pytest.raises(DiskHeadroomError):
+            await run_turn_cycle(deps, run=run)
+
+        events = store.list_run_events(run_id, event_types=[RunEventType.DISK_HEADROOM_LOW])
+        assert len(events) == 1, "the halt left no recorded reason on the run's timeline"
+        assert events[0].turn_number == 1
+        # The detail names the floor that was breached, not merely that something went wrong.
+        assert events[0].detail["min_free_disk_gb"] == 1.0
+        assert events[0].detail["free_bytes"] == 512 * 1024 * 1024
+
+        # R17: the halt deletes nothing and the turn never came into existence as an attempt
+        # (data-model.md SS5's failure table) -- no quicksave was taken, so none was recorded.
+        assert store.get_turn_cycle(run_id, 1, authoritative_only=False) is None
+        assert store.list_save_points(run_id) == []
+    finally:
+        store.close()

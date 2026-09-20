@@ -119,6 +119,7 @@ from civsim_harness.provider.port import (
 from civsim_harness.provider.preflight import preflight_chain
 from civsim_harness.resilience.recovery import RecoveryEngine, SaveLoader
 from civsim_harness.run.decision_loop import DecisionLoopContext
+from civsim_harness.run.identity_lock import RunIdentityLock
 from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
 from civsim_harness.run.preparation import (
     GameSetupSnapshot,
@@ -481,7 +482,7 @@ def _resolve_capture_path(
 
 
 async def _release_terminal_run_clients(
-    store: MatchStore, run_contexts: dict[RunId, _RunContext]
+    store: MatchStore, run_contexts: dict[RunId, _RunContext], run_lock: RunIdentityLock
 ) -> None:
     """Close and drop the `NexusClient` of every run this process is still holding a context for
     that has since reached a terminal state (T214, FR-006).
@@ -507,6 +508,11 @@ async def _release_terminal_run_clients(
         is_terminal = run is None or run.lifecycle_state in TERMINAL_STATES
         if is_terminal or not context.nexus_client.is_connected:
             run_contexts.pop(run_id, None)
+            # T227: the run identity is released with the client it was claimed alongside --
+            # same sweep, same reason (this is the one place every terminal path is visible
+            # from). A lock whose recorded PID has since died is cleared by the lock module
+            # itself on the next `acquire`, so a crashed harness never wedges its own run id.
+            run_lock.release(run_id)
             await _close_quietly(context.nexus_client)
 
 
@@ -546,6 +552,7 @@ async def _prepare_run(
     home: Path | None,
     clock: Callable[[], Timestamp],
     run_contexts: dict[RunId, _RunContext],
+    run_lock: RunIdentityLock,
 ) -> PreparedRun:
     """T210: chain every preparation step this codebase has, in an order deliberately justified
     below, ending either in a raised `HarnessError` (nothing constructed -- `Runner.start` wraps
@@ -659,6 +666,7 @@ async def _prepare_run(
             window_provider=window_provider,
             clock=clock,
             run_contexts=run_contexts,
+            run_lock=run_lock,
         )
     except BaseException:
         await _close_quietly(nexus_client)
@@ -682,6 +690,7 @@ async def _prepare_connected_run(
     window_provider: Callable[[], GameWindow | None],
     clock: Callable[[], Timestamp],
     run_contexts: dict[RunId, _RunContext],
+    run_lock: RunIdentityLock,
 ) -> PreparedRun:
     """Steps 3b-8 of :func:`_prepare_run`, split out purely so its caller can own one
     ``try``/``except`` around the whole post-connect sequence (T214).
@@ -759,6 +768,19 @@ async def _prepare_connected_run(
     )
     store.create_run(run, config)
 
+    # T227, FR-006/V8, research R4: claim this run identity before a single turn is played.
+    # The game's own one-tuner-at-a-time limit already stops two harnesses attaching to the
+    # *same* client; what it cannot see is two harness processes playing the *same* `run_id`
+    # against *different* clients, writing two divergent records under one run id. Keyed to the
+    # located client's PID, which is exactly the fact the lock module was designed around and
+    # which nothing in `src/` had ever supplied it. A host that cannot locate a client process
+    # has no PID to key on -- the lock is skipped rather than keyed to a fabricated one, and the
+    # run proceeds (it has already passed the host gate, which is what decides whether a host
+    # may run at all).
+    client_process = host.locate_game_process()
+    if client_process is not None:
+        run_lock.acquire(run_id=run.run_id, client_pid=client_process.pid, now=clock())
+
     if leader_result is not None and leader_result.outcome is not LeaderSelectionOutcome.VERIFIED:
         return await _fail_preparation(
             store=store,
@@ -768,6 +790,7 @@ async def _prepare_connected_run(
             mismatches=leader_result.mismatches,
             clock=clock,
             nexus_client=nexus_client,
+            run_lock=run_lock,
         )
 
     # -- 8. one snapshot, feeding both of preparation.py's synchronous read seams --------------
@@ -804,6 +827,7 @@ async def _prepare_connected_run(
             mismatches=verify_result.mismatches,
             clock=clock,
             nexus_client=nexus_client,
+            run_lock=run_lock,
         )
 
     playing_run, event = transition(
@@ -846,6 +870,7 @@ async def _fail_preparation(
     mismatches: Sequence[SettingMismatch],
     clock: Callable[[], Timestamp],
     nexus_client: NexusClient,
+    run_lock: RunIdentityLock | None = None,
 ) -> PreparedRun:
     """A `Run` already exists (`preparing`) -- record why it cannot proceed and transition it to
     `failed`, per contracts/operator-surface.md's "run created in failed state ... no turn 1"
@@ -854,6 +879,10 @@ async def _fail_preparation(
     *nexus_client* is closed here (T214): `failed` is terminal, this run will never play a turn,
     and nothing else will ever close it -- no `_RunContext` is registered on this path, so the
     tuner's single connection slot would otherwise stay held for the life of the process.
+
+    *run_lock* is released here for the same reason (T227): the run identity was claimed in step 7
+    and this run will never play, so holding the claim would refuse a corrected re-run of the very
+    configuration this failure is telling the operator to fix.
     """
     store.write_run_event(
         RunEvent(
@@ -883,6 +912,8 @@ async def _fail_preparation(
         lifecycle_state=failed_run.lifecycle_state,
         ended_at=failed_run.ended_at,
     )
+    if run_lock is not None:
+        run_lock.release(failed_run.run_id)
     await _close_quietly(nexus_client)
     return PreparedRun(run=failed_run, stop_condition=stop_condition)
 
@@ -904,6 +935,7 @@ def build_runner_dependencies(
     observation_declaration_ids: Sequence[DeclarationId] | None = None,
     window_provider: Callable[[], GameWindow | None] | None = None,
     save_loader: SaveLoader | None = None,
+    run_lock: RunIdentityLock | None = None,
     disk_check_path: Path | None = None,
     home: Path | None = None,
     screening_profiles: ScreeningProfiles | None = None,
@@ -935,6 +967,13 @@ def build_runner_dependencies(
     *support_probe* still wins, which is what lets a test (or a host whose spike has since been
     run) supply its own evidence.
 
+    *run_lock* defaults to a :class:`~civsim_harness.run.identity_lock.RunIdentityLock` over its
+    module default directory (T227, FR-006/V8). It is claimed once per run, keyed to the located
+    client's PID, and released on every terminal path alongside T214's client close. Nothing in
+    `src/` constructed one before this task, so the guard against two harness processes playing
+    one `run_id` against two different clients existed only in tests. A caller supplying its own
+    (a test, or a machine wanting the locks somewhere specific) overrides the directory.
+
     *guidance_root* is where `RunConfiguration.guidance_set_id`'s source reference resolves from
     (T219); it is read once per run during preparation, never per turn.
 
@@ -957,6 +996,7 @@ def build_runner_dependencies(
     resolved_save_loader: SaveLoader = (
         save_loader if save_loader is not None else _NoLiveSaveLoader()
     )
+    resolved_run_lock = run_lock if run_lock is not None else RunIdentityLock()
     resolved_disk_check_path = disk_check_path if disk_check_path is not None else Path.cwd()
     resolved_screening_profiles = (
         screening_profiles if screening_profiles is not None else load_screening_profiles()
@@ -972,7 +1012,7 @@ def build_runner_dependencies(
     async def prepare_run(config: RunConfiguration) -> PreparedRun:
         # T214: release any client still held by an already-terminal run before asking the tuner
         # for its single connection slot again -- see `_release_terminal_run_clients`.
-        await _release_terminal_run_clients(store, run_contexts)
+        await _release_terminal_run_clients(store, run_contexts, resolved_run_lock)
 
         nexus_client = resolved_client_factory()
         return await _prepare_run(
@@ -993,7 +1033,30 @@ def build_runner_dependencies(
             home=home,
             clock=clock,
             run_contexts=run_contexts,
+            run_lock=resolved_run_lock,
         )
+
+    def _next_attempt_index(run_id: RunId, turn_number: int) -> int:
+        """T223 (FR-004, FR-047): the `attempt_index` this play of *turn_number* must start at.
+
+        Zero unless this `(run_id, turn_number)` already has attempts on record, which happens
+        exactly when the turn is being played a second time -- a `resume-from` rewind or a branch
+        replay. Those mark the earlier attempts non-authoritative, but superseding does **not**
+        free their `(run_id, turn_number, attempt_index)` triples: `store/sqlite_adapter.py`'s D4
+        idempotency check rejects a second write of the same triple carrying different content, so
+        a replay starting at 0 would fail to persist and, under FR-013, halt the run instead of
+        advancing. One index past the highest attempt on record is the smallest value that keeps
+        **both** attempts readable, which is what FR-047 asks for.
+
+        Read through the port's existing `get_turn_cycle(..., authoritative_only=False)`, which
+        already returns the highest-`attempt_index` record for the turn -- deliberately not a new
+        store method, and deliberately resolved here rather than inside `run/turn_cycle.py`, so
+        this stays the single auditable place that decides a replay's index.
+        """
+        record = store.get_turn_cycle(run_id, turn_number, authoritative_only=False)
+        if record is None:
+            return 0
+        return record.turn_cycle.attempt_index + 1
 
     def build_turn_dependencies(prepared: PreparedRun, turn_number: int) -> TurnCycleDependencies:
         run_id = prepared.run.run_id
@@ -1056,6 +1119,7 @@ def build_runner_dependencies(
             ),
             home=home,
             clock=clock,
+            attempt_index_base=_next_attempt_index(run_id, turn_number),
         )
 
     def evaluate_stop_facts(prepared: PreparedRun, turn_number: int) -> StopEvaluation:
@@ -1097,6 +1161,7 @@ def build_runner_dependencies(
 
         if ctx is not None and evaluate_stop(prepared.stop_condition, facts).resolution is not None:
             run_contexts.pop(prepared.run.run_id, None)
+            resolved_run_lock.release(prepared.run.run_id)  # T227, alongside T214's close
             try:
                 asyncio.get_running_loop().create_task(_close_quietly(ctx.nexus_client))
             except RuntimeError:  # pragma: no cover - only if called off the runner's own loop

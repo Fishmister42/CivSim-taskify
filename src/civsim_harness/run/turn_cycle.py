@@ -82,7 +82,7 @@ from typing import Any
 
 from civsim_harness.act.dispatch import DispatchStatus, dispatch_action
 from civsim_harness.act.verify import verify_execution
-from civsim_harness.errors import HarnessError, NexusError
+from civsim_harness.errors import DiskHeadroomError, HarnessError, NexusError
 from civsim_harness.host.port import HostPlatform
 from civsim_harness.models.common import (
     DecisionStepId,
@@ -107,7 +107,7 @@ from civsim_harness.run.decision_loop import (
     MidTurnObservationFailure,
     run_decision_loop,
 )
-from civsim_harness.saves.headroom import check_headroom
+from civsim_harness.saves.headroom import build_disk_headroom_event, check_headroom
 from civsim_harness.saves.save_game import SaveCapability
 from civsim_harness.saves.save_point import build_save_point, save_name_for, write_save_point
 from civsim_harness.saves.verify import SaveVerificationError, verify_save
@@ -160,6 +160,30 @@ class TurnCycleDependencies:
     compute_yields: Callable[[DecisionLoopResult], dict[str, Any]] = field(default=_no_yields)
     home: Path | None = None
     clock: Callable[[], Timestamp] = field(default=_utcnow)
+    attempt_index_base: int = 0
+    """T223, FR-004/FR-047: the ``attempt_index`` this turn's **first** attempt is written under.
+
+    Zero for a turn being played for the first time, which is every ordinary forward turn. It is
+    non-zero only when this ``(run_id, turn_number)`` already carries attempts on record and is
+    being played again -- a rewind (``Runner.resume_from``) or a branch replay, both of which mark
+    the earlier attempts non-authoritative but do **not** free their
+    ``(run_id, turn_number, attempt_index)`` triples: ``store/sqlite_adapter.py``'s D4 idempotency
+    check rejects a second write of a triple whose content differs. Replaying turn N at index 0
+    would therefore collide with the very attempt the rewind just superseded, and FR-047's "record
+    both the abandoned attempt and the replayed attempt" would be unsatisfiable.
+
+    Resolved by the caller, not here: this module deliberately has no store query of its own for
+    it, so that the one place that decides what a replay's index should be
+    (``run/composition.py``'s ``build_turn_dependencies``) stays the one place to audit. Replays
+    *within* a single :func:`run_turn_cycle` call (T152's mid-turn observation failure) still count
+    up from this base, so the two mechanisms compose rather than competing.
+    """
+
+    def __post_init__(self) -> None:
+        if self.attempt_index_base < 0:
+            raise ValueError(
+                f"attempt_index_base must be >= 0, got {self.attempt_index_base}"
+            )
 
 
 @dataclass(frozen=True)
@@ -291,9 +315,25 @@ async def _dispatch_backstop_end_turn(
 async def _take_quicksave(deps: TurnCycleDependencies) -> SavePoint:
     """FR-007, invariant I2: a named, filesystem-verified quicksave before anything else for this
     turn. Raises on any failure -- the turn attempt never comes into existence."""
-    check_headroom(
-        host=deps.host, path=deps.disk_check_path, min_free_disk_gb=deps.min_free_disk_gb
-    )
+    try:
+        check_headroom(
+            host=deps.host, path=deps.disk_check_path, min_free_disk_gb=deps.min_free_disk_gb
+        )
+    except DiskHeadroomError as exc:
+        # T229, Principle III, data-model.md SS14: "the warning before the halt ... without it
+        # the halt looks arbitrary". `check_headroom` is a pure check by design (R17 -- it never
+        # deletes and never records), so the event is this module's to write, and it is written
+        # *before* the re-raise: the run is about to halt, and a halt whose cause is absent from
+        # the turn-by-turn record is exactly the gap that disqualifies a run from trending.
+        deps.store.write_run_event(
+            build_disk_headroom_event(
+                run_id=deps.run_id,
+                turn_number=deps.turn_number,
+                occurred_at=deps.clock(),
+                detail=dict(exc.detail),
+            )
+        )
+        raise
 
     save_name = save_name_for(deps.run_id, deps.turn_number)
     taken_at = deps.clock()
@@ -396,7 +436,10 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
     save_point = await _take_quicksave(deps)
 
     current_run = run
-    attempt_index = 0
+    # T223: the base is 0 for an ordinary forward turn and past the highest attempt already on
+    # record when this turn is being replayed, so a rewind's replay never collides with the
+    # attempt it superseded (FR-047, and sqlite_adapter's D4 check).
+    attempt_index = deps.attempt_index_base
     result: DecisionLoopResult
     while True:
         turn_cycle_id = TurnCycleId(uuid.uuid4().hex)

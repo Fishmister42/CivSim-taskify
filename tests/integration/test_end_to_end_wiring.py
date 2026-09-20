@@ -38,19 +38,22 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from civsim_harness.config.run_config import load_run_configuration_file
 from civsim_harness.host.detect import (
     HostInfo,
     LinuxSessionType,
     OperatingSystem,
     SupportProbeResult,
 )
-from civsim_harness.models.common import CapturePath, DeclarationId, ModelRef
+from civsim_harness.models.common import CapturePath, DeclarationId, ModelRef, RunId
 from civsim_harness.models.run import LifecycleState, StopResolution
 from civsim_harness.nexus.client import NexusClient
 from civsim_harness.operator import cli
 from civsim_harness.provider.port import ModelCapabilities, RawDecision
 from civsim_harness.run.composition import build_runner_dependencies
+from civsim_harness.run.identity_lock import RunIdentityLock
 from civsim_harness.run.runner import Runner
+from civsim_harness.run.turn_cycle import run_turn_cycle
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
 from fakes.fake_host import FakeHostPlatform
 from fakes.fake_nexus import FakeNexusServer, ReceivedCommand
@@ -349,8 +352,27 @@ def _restore_cli_wiring() -> Any:
     cli.configure_runner_factory(cli.default_runner_factory)
 
 
-def _compose(tmp_path: Path, *, port: int, provider: FakeModelProvider) -> tuple[Runner, Any]:
+def _compose(
+    tmp_path: Path,
+    *,
+    port: int,
+    provider: FakeModelProvider,
+    run_lock: RunIdentityLock | None = None,
+) -> tuple[Runner, Any]:
     """Build a real `Runner` through the real composition root, against fakes."""
+    deps, store = _compose_dependencies(
+        tmp_path, port=port, provider=provider, run_lock=run_lock
+    )
+    return Runner(deps), store
+
+
+def _compose_dependencies(
+    tmp_path: Path,
+    *,
+    port: int,
+    provider: FakeModelProvider,
+    run_lock: RunIdentityLock | None = None,
+) -> tuple[Any, SqliteMatchStore]:
     store = SqliteMatchStore(tmp_path / "match-store.db")
     host = FakeHostPlatform()
     deps = build_runner_dependencies(
@@ -373,10 +395,11 @@ def _compose(tmp_path: Path, *, port: int, provider: FakeModelProvider) -> tuple
         ),
         observation_declaration_ids=(TURN_STATE, SCREEN_STATE),
         window_provider=lambda: None,
+        run_lock=run_lock if run_lock is not None else RunIdentityLock(tmp_path / "run-locks"),
         disk_check_path=tmp_path,
         home=tmp_path,
     )
-    return Runner(deps), store
+    return deps, store
 
 
 # --------------------------------------------------------------------------
@@ -545,6 +568,98 @@ def test_unreadable_configured_field_fails_the_run_closed_rather_than_passing_v2
     assert "difficulty" in fields
 
 
+def test_a_replayed_turn_is_recorded_alongside_the_attempt_it_superseded(
+    tmp_path: Path,
+) -> None:
+    """T223 / FR-047: the composition root gives a replayed turn a fresh `attempt_index`.
+
+    A rewind (`Runner.resume_from`) marks the attempt at its target turn non-authoritative and
+    plays that turn again. Superseding does **not** free the attempt's
+    `(run_id, turn_number, attempt_index)` triple, and `run_turn_cycle` used to open every turn at
+    a hard-coded `attempt_index = 0` -- so the replay's own persist hit
+    `sqlite_adapter.write_turn_cycle`'s D4 check ("different content for the same triple") and, per
+    FR-013, halted the run instead of advancing it. FR-047 requires **both** attempts on record.
+
+    Driven through the real composition root deliberately. Passing an `attempt_index_base` by hand
+    to `run_turn_cycle` would prove only that the seam exists; what this asserts is that the
+    production wiring actually resolves it from what the store already holds -- the difference the
+    integration audit was written about.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+    provider = _build_provider()
+
+    loop = asyncio.new_event_loop()
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        deps, store = _compose_dependencies(tmp_path, port=server.port, provider=provider)
+        config = load_run_configuration_file(config_path)
+        try:
+            # One loop for the whole test: `prepare_run` connects the `NexusClient` whose lock and
+            # streams bind to whichever loop first awaits them, and every per-turn dispatch below
+            # goes through that same client (composition.py's "one cross-loop hazard").
+            prepared = loop.run_until_complete(deps.prepare_run(config))
+            run_id = prepared.run.run_id
+
+            first = deps.build_turn_dependencies(prepared, 1)
+            assert first.attempt_index_base == 0, (
+                "a turn with nothing on record is not a replay; it must open at attempt 0"
+            )
+            outcome = loop.run_until_complete(run_turn_cycle(first, run=prepared.run))
+
+            # What a rewind to turn 1 does to the record, before replaying it (FR-047, I9).
+            store.mark_turn_superseded(run_id, 1, 0)
+
+            replay = deps.build_turn_dependencies(prepared, 1)
+            assert replay.attempt_index_base == 1, (
+                "the replay reused the superseded attempt's index; its persist would be "
+                "rejected by the store's D4 check and the run would halt (T223)"
+            )
+            loop.run_until_complete(run_turn_cycle(replay, run=outcome.run))
+        finally:
+            loop.close()
+
+    # Both attempts are readable, and exactly one is authoritative (FR-047, invariant I9).
+    attempts = _attempt_rows(tmp_path / "match-store.db", run_id, turn_number=1)
+    assert [row[0] for row in attempts] == [0, 1]
+    assert [row[1] for row in attempts] == [0, 1], (
+        "the superseded attempt must stay on record as non-authoritative and the replay must be "
+        f"the authoritative one; got {attempts!r}"
+    )
+    # The replay is genuinely the turn as replayed, not a duplicate row of the abandoned one.
+    record = store.get_turn_cycle(run_id, 1)
+    assert record is not None
+    assert record.turn_cycle.attempt_index == 1
+    assert record.steps, "the replayed attempt recorded no decision steps"
+    assert store.turn_gaps(run_id) == []
+
+
+def _attempt_rows(db_path: Path, run_id: str, *, turn_number: int) -> list[tuple[int, int]]:
+    """Every attempt row for one turn, read straight from SQLite.
+
+    `get_turn_cycle` answers with one record at a time by design, so it cannot show that two
+    attempts coexist -- which is the whole claim FR-047 makes.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return [
+            (int(index), int(authoritative))
+            for index, authoritative in conn.execute(
+                "SELECT attempt_index, is_authoritative FROM turn_cycles "
+                "WHERE run_id = ? AND turn_number = ? ORDER BY attempt_index",
+                (run_id, turn_number),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
 def test_run_start_reaches_a_runner_without_any_bootstrap_wiring() -> None:
     """The audit's headline failure, guarded directly: importing the CLI is enough.
 
@@ -572,3 +687,69 @@ def test_run_start_reaches_a_runner_without_any_bootstrap_wiring() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "wired" in result.stdout
+
+
+class _RecordingRunIdentityLock(RunIdentityLock):
+    """A real lock (same files, same refusals) that also records what it was asked to do.
+
+    Subclassed rather than faked on purpose: the claim under test is that the *production*
+    preparation path claims and releases a run identity, so the lock's own filesystem behaviour
+    must stay real -- a stand-in would only prove this test can call `acquire` itself, which is
+    precisely the shape of assurance T227 was filed about.
+    """
+
+    def __init__(self, lock_dir: Path) -> None:
+        super().__init__(lock_dir)
+        self.acquired: list[tuple[str, int]] = []
+        self.released: list[str] = []
+
+    def acquire(self, *, run_id: Any, client_pid: int, now: Any) -> Any:
+        lock = super().acquire(run_id=run_id, client_pid=client_pid, now=now)
+        self.acquired.append((str(run_id), client_pid))
+        return lock
+
+    def release(self, run_id: Any) -> None:
+        super().release(run_id)
+        self.released.append(str(run_id))
+
+
+def test_a_run_claims_and_releases_its_run_identity(tmp_path: Path) -> None:
+    """T227 / FR-006, V8, research R4: the run-identity lock is claimed in production.
+
+    `run/identity_lock.py` was complete from the day it was written and **constructed nowhere in
+    `src/`**, so the case it exists for -- two harness processes playing one `run_id` against two
+    *different* clients, writing two divergent records under one run id -- was unguarded. The
+    game's own one-tuner-at-a-time limit does not cover it; that is the case the lock module
+    explicitly says it does not duplicate.
+
+    Also asserts the release, because a claim that is never given up is its own defect: a finished
+    run would refuse its own `resume-from`, and an operator would have to delete a file by hand.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+    lock = _RecordingRunIdentityLock(tmp_path / "run-locks")
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        runner, store = _compose(
+            tmp_path, port=server.port, provider=_build_provider(), run_lock=lock
+        )
+        cli.configure_runner_factory(lambda: runner)
+        result = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert result.exit_code == 0, _failure_report(result.output, store)
+        run_id = _wait_for_terminal_run(runner, store, result.output)
+
+    # Claimed exactly once, for this run, keyed to the PID the host actually located -- never a
+    # fabricated or placeholder one.
+    located = FakeHostPlatform().locate_game_process()
+    assert located is not None
+    assert lock.acquired == [(run_id, located.pid)]
+
+    # ...and given up once the run reached a terminal state.
+    assert run_id in lock.released
+    assert not lock.is_active(RunId(run_id))
+    assert list((tmp_path / "run-locks").glob("*.lock.json")) == []

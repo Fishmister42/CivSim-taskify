@@ -57,6 +57,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from civsim_harness.act.camera import CAMERA_ACTION_DECLARATION_IDS, validate_camera_action
 from civsim_harness.act.dispatch import (
     DispatchStatus,
     dispatch_action,
@@ -84,12 +85,13 @@ from civsim_harness.models.common import (
     TurnCycleId,
 )
 from civsim_harness.models.config import GuidanceSet
-from civsim_harness.models.decision import DecisionTrigger
+from civsim_harness.models.decision import DecisionTrigger, RejectionReason
 from civsim_harness.models.records import CallOutcome, ModelCall, RunEvent
 from civsim_harness.models.turn import DecisionStep, Observation, StepProgress, TurnOutcome
 from civsim_harness.observe.assemble import CapabilityResult, assemble_observation
 from civsim_harness.observe.capture import capture_for_step
 from civsim_harness.observe.screen_identity import interpret_screen_state
+from civsim_harness.parity.forbidden import enforce_parity_boundary
 from civsim_harness.parity.screening import ScreeningProfiles
 from civsim_harness.provider.port import ModelProvider
 from civsim_harness.run.no_progress import NoProgressTracker, build_no_progress_event
@@ -221,6 +223,37 @@ class DecisionLoopContext:
     """
 
     clock: Callable[[], Timestamp] = field(default=_utcnow)
+
+
+#: T225: the shortest literal this loop will hand :func:`enforce_parity_boundary` as a
+#: run-specific forbidden value. ``find_literal_leaks`` matches by plain substring, so a short
+#: value is not evidence of anything -- a two-character provider name, or a model called
+#: ``test``, would match ordinary prose ("latest") and fail every run on a coincidence. A guard
+#: that cries wolf is a guard someone switches off, which would cost more than the narrow class
+#: of leak a short literal could have caught. Long identifiers (a 32-hex ``run_id`` or
+#: ``turn_cycle_id``, a real vendor-qualified model name) are distinctive enough that a match is
+#: a genuine finding, and those are exactly the values FR-020 names.
+_MIN_DISTINCTIVE_LITERAL_LEN = 8
+
+
+def _run_forbidden_literals(ctx: DecisionLoopContext) -> tuple[str, ...]:
+    """The run-specific values FR-020 forbids from ever appearing in the agent's context.
+
+    Model identity, run identity, and this attempt's own identifiers are harness telemetry: they
+    belong in the run record and nowhere near the prompt. They are checked as literals (the
+    structural scan in :func:`enforce_parity_boundary` only sees the ``Observation``'s keys, not
+    the rendered request text), filtered to the distinctive ones per
+    :data:`_MIN_DISTINCTIVE_LITERAL_LEN`.
+    """
+    candidates = (
+        str(ctx.run_id),
+        str(ctx.turn_cycle_id),
+        str(ctx.model.model),
+        str(ctx.model.provider),
+    )
+    return tuple(
+        value for value in candidates if len(value.strip()) >= _MIN_DISTINCTIVE_LITERAL_LEN
+    )
 
 
 @dataclass(frozen=True)
@@ -445,6 +478,27 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             step_index=step_index,
             response_schema=RESPONSE_SCHEMA,
         )
+
+        # T225 / Constitution Principle I (NON-NEGOTIABLE), FR-019, FR-020: the detective
+        # red-team guard, run on the fully assembled context for THIS step, at the last moment
+        # before it leaves the harness. Everything upstream of here -- catalog validation, the
+        # attributed-entry construction in `observe/assemble.py`, the four screening gates in
+        # `parity/screening.py` -- is preventive; this is the belt-and-braces check that a leak
+        # slipping past all of them still fails loudly instead of silently reaching the agent.
+        # It was written (T128) and then never called from anywhere in `src/`, which meant every
+        # assurance SC-006/SC-008 rest on came from tests invoking it directly rather than from
+        # the path the agent's context actually travels.
+        #
+        # `ParityViolation` is a `HarnessError` and is deliberately NOT caught here or anywhere
+        # below: `run/runner.py` turns it into a recorded run failure. Principle I says a failure
+        # to satisfy it must be *blocked*, not shipped with a caveat -- so the run stops rather
+        # than continuing with the offending step withheld.
+        enforce_parity_boundary(
+            observation=observation,
+            decision_request=request,
+            extra_forbidden_values=_run_forbidden_literals(ctx),
+        )
+
         response = ctx.provider.complete(request)
 
         model_call = ModelCall(
@@ -479,13 +533,40 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             # the harness determined was open.
             raw_decision = replace(raw_decision, prompt_type=prompt_type)
 
+        target = raw_decision.parameters.get("target")
         dispatch_outcome = dispatch_action(
             registry=ctx.registry,
             context=LuaContext.IN_GAME,
             action_declaration_id=raw_decision.action_declaration_id,
             observation=observation,
-            target=raw_decision.parameters.get("target"),
+            target=target,
         )
+        # T230, FR-026/FR-027, research R8: a camera request is an *information-channel* request.
+        # Pointing the camera at an unrevealed plot and capturing it would hand the agent
+        # fog-of-war contents through the image channel, bypassing the structured filter
+        # entirely -- which is why FR-026 gives it its own rejection reason rather than folding
+        # it into the generic "not available right now". `act/camera.py` (T132) is the only
+        # producer of `OUT_OF_PARITY_CAMERA`, and it had no caller in `src/`, so the reason was
+        # unreachable in production and every refused camera move was recorded as an ordinary
+        # unavailability.
+        #
+        # Layered on top of `dispatch_action` rather than replacing it: the generic call still
+        # owns catalog resolution and Lua-context authorization (`NOT_IN_CATALOG`,
+        # `ILLEGAL_IN_CONTEXT`), neither of which `validate_camera_action` performs. Only once
+        # those pass does the camera validator get to classify the parity question, so a camera
+        # action can never *gain* authorization here -- it can only be re-refused with the more
+        # specific reason, or confirmed by the same catalog predicate `dispatch_action` just
+        # evaluated.
+        if (
+            raw_decision.action_declaration_id in CAMERA_ACTION_DECLARATION_IDS
+            and dispatch_outcome.rejection_reason
+            not in (RejectionReason.NOT_IN_CATALOG, RejectionReason.ILLEGAL_IN_CONTEXT)
+        ):
+            dispatch_outcome = validate_camera_action(
+                registry=ctx.registry,
+                action_declaration_id=raw_decision.action_declaration_id,
+                target=target,
+            )
 
         next_step_id = DecisionStepId(uuid.uuid4().hex)
         next_step_index = step_index + 1

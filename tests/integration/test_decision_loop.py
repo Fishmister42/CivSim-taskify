@@ -24,8 +24,10 @@ from typing import Any
 
 import pytest
 
+from civsim_harness.act.camera import CAMERA_SET_VIEW_MODE
 from civsim_harness.capability.loader import Catalog
 from civsim_harness.capability.registry import CapabilityRegistry
+from civsim_harness.errors import ParityViolation
 from civsim_harness.host.detect import HostInfo, LinuxSessionType, OperatingSystem
 from civsim_harness.host.port import HostPlatform
 from civsim_harness.models.catalog import CapabilityPath as CatalogCapabilityPath
@@ -47,6 +49,7 @@ from civsim_harness.models.common import (
     TurnCycleId,
 )
 from civsim_harness.models.config import ModelConfig, RunConfiguration, TurnReachedStopCondition
+from civsim_harness.models.decision import RejectionReason
 from civsim_harness.models.records import ModelCall, SavePoint
 from civsim_harness.models.run import (
     ComparabilityStatus,
@@ -55,7 +58,7 @@ from civsim_harness.models.run import (
     RecordCompletenessStatus,
     Run,
 )
-from civsim_harness.models.turn import ScreenCapture, TurnOutcome
+from civsim_harness.models.turn import ScreenCapture, StepProgress, TurnOutcome
 from civsim_harness.observe.assemble import CapabilityResult
 from civsim_harness.parity.screening import load_screening_profiles
 from civsim_harness.provider.port import RawDecision
@@ -133,7 +136,23 @@ def _build_registry() -> CapabilityRegistry:
         reads=["turn state"],
         writes=["turn state"],
     )
-    declarations = (turn_state, tick, untick, stuck)
+    # T230: a real camera declaration, copied verbatim from `catalogs/actions/camera.yaml`, so
+    # the parity bound under test is the catalog's own and not a convenience restatement of it.
+    set_view_mode = ParityDeclaration(
+        declaration_id=CAMERA_SET_VIEW_MODE,
+        kind=DeclarationKind.ACTION,
+        summary="Toggle between the world view and the strategic (zoomed-out) view.",
+        parity_basis=(
+            "Press the strategic-view hotkey (or its menu toggle) to switch between world and "
+            "strategic view."
+        ),
+        context=LuaContext.IN_GAME,
+        capability_id=CapabilityId("test.turn_control"),
+        availability_predicate='target == "world" or target == "strategic"',
+        verification_predicate="camera.mode == target",
+        introduced_in_version="test",
+    )
+    declarations = (turn_state, tick, untick, stuck, set_view_mode)
     catalog = Catalog(
         root=Path("."),
         version=CatalogVersion(
@@ -452,3 +471,170 @@ async def test_self_cancellation_both_steps_recorded_and_yields_reflect_resultin
         assert record.turn_cycle.yields == {"final_turn_number": 1}
     finally:
         store2.close()
+
+
+class _LeakingGame(_FakeGame):
+    """A client whose declared capability returns one field it had no business returning.
+
+    Exactly the case the preventive controls do **not** stop: `test.turn_state`'s own
+    `output_schema` sets no `additionalProperties: false`, so an extra key validates, resolves
+    against a real declaration, and is attributed to it like any legitimate field. Only the
+    forbidden-field guard notices that `unrevealed_tiles` is not something a human could read
+    off the top bar (FR-019).
+    """
+
+    async def read(self) -> tuple[Sequence[CapabilityResult], str]:
+        results, screen = await super().read()
+        value = dict(results[0].value)
+        value["unrevealed_tiles"] = [{"x": 12, "y": 7, "resource": "RESOURCE_IRON"}]
+        return ([CapabilityResult(declaration_id=results[0].declaration_id, value=value)], screen)
+
+
+async def test_a_leaked_field_halts_the_run_instead_of_reaching_the_agent(
+    tmp_path: Path,
+) -> None:
+    """T225 / Constitution Principle I: the forbidden-field guard runs on the real loop's context.
+
+    The guard (`parity/forbidden.py`, T128) was complete and tested from the day it was written,
+    and was called from **nowhere in `src/`** -- so every assurance it provided came from tests
+    invoking it directly, never from the path the agent's context actually travels. Asserting it
+    here, through `run_turn_cycle` against a leaking client, is the difference.
+
+    Principle I is non-negotiable and admits no partial compliance, so the expected behaviour is
+    that the run **stops**: the `ParityViolation` propagates uncaught (for `run/runner.py` to
+    record as a run failure) and no provider call is ever made with the leaked context.
+    """
+    run_id = RunId("run-parity-leak")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    game = _LeakingGame()
+    provider = FakeModelProvider()
+    provider.queue_decision(_plain_decision(TICK_DECLARATION_ID, is_end_turn=True))
+
+    deps = _make_deps(
+        tmp_path=tmp_path,
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        game=game,
+        provider=provider,
+        no_progress_step_limit=5,
+    )
+
+    try:
+        with pytest.raises(ParityViolation) as excinfo:
+            await run_turn_cycle(deps, run=run)
+
+        assert excinfo.value.detail["by_category"] == {"game_state_leakage": 1}
+
+        # The leak never reached the model: the guard runs before `provider.complete`.
+        assert provider.calls == []
+
+        # And the turn never came into existence as a record, so nothing downstream can mistake
+        # this for a turn that merely lacked images (FR-050) -- it is a halted run (Principle I).
+        assert store.get_turn_cycle(run_id, 1, authoritative_only=False) is None
+    finally:
+        store.close()
+
+
+async def test_a_clean_observation_passes_the_guard_untouched(tmp_path: Path) -> None:
+    """The guard's own false-positive floor: the ordinary path must not trip it.
+
+    A detective control that fires on legitimate traffic gets switched off, so this asserts the
+    complement of the test above against the same registry and the same loop -- the plain
+    `_FakeGame` plays its turn and the guard is silent.
+    """
+    run_id = RunId("run-parity-clean")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    provider = FakeModelProvider()
+    provider.queue_decision(_plain_decision(TICK_DECLARATION_ID, is_end_turn=True))
+
+    deps = _make_deps(
+        tmp_path=tmp_path,
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        game=_FakeGame(),
+        provider=provider,
+        no_progress_step_limit=5,
+    )
+
+    try:
+        outcome = await run_turn_cycle(deps, run=run)
+        assert outcome.outcome is TurnOutcome.ENDED_BY_AGENT
+        assert len(provider.calls) == 1
+    finally:
+        store.close()
+
+
+async def test_an_out_of_parity_camera_request_is_recorded_as_exactly_that(
+    tmp_path: Path,
+) -> None:
+    """T230 / FR-026, FR-027, research R8: a refused camera move carries its own reason.
+
+    A camera request is an information-channel request wearing a movement request's clothes:
+    pointing the camera somewhere the run has not revealed and capturing it would hand the agent
+    fog-of-war contents through the image channel. FR-026 gives that its own rejection reason,
+    `OUT_OF_PARITY_CAMERA`, and `act/camera.py` (T132) is its only producer -- with no caller in
+    `src/`, the reason was unreachable in production and every refused camera action was recorded
+    as an ordinary `UNAVAILABLE_TO_HUMAN_NOW`, indistinguishable in the audit from "the button
+    was greyed out".
+
+    The refusal itself is not new (`dispatch_action` evaluates the same catalog predicate); what
+    this asserts is that the *record* now says which kind of refusal it was, which is the whole
+    point of SC-006/SC-020-style after-the-fact auditability.
+    """
+    run_id = RunId("run-camera-parity")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    provider = FakeModelProvider()
+    provider.queue_decision(
+        RawDecision(
+            action_declaration_id=CAMERA_SET_VIEW_MODE,
+            reasoning="look at the whole map",
+            # Not one of the two modes a human can toggle directly (the catalog's own bound).
+            parameters={"target": "omniscient"},
+            is_end_turn=False,
+            prompt_type=None,
+        )
+    )
+    provider.queue_decision(_plain_decision(TICK_DECLARATION_ID, is_end_turn=True))
+
+    deps = _make_deps(
+        tmp_path=tmp_path,
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        game=_FakeGame(),
+        provider=provider,
+        no_progress_step_limit=5,
+    )
+
+    try:
+        outcome = await run_turn_cycle(deps, run=run)
+        assert outcome.outcome is TurnOutcome.ENDED_BY_AGENT
+
+        record = store.get_turn_cycle(run_id, 1)
+        assert record is not None
+        camera_step = record.steps[0]
+        assert camera_step.decision.action_declaration_id == CAMERA_SET_VIEW_MODE
+        assert (
+            camera_step.decision.execution.rejection_reason
+            is RejectionReason.OUT_OF_PARITY_CAMERA
+        ), (
+            "a refused camera request was recorded under the generic availability reason; the "
+            "audit cannot tell an attempted image-channel leak from a greyed-out button"
+        )
+        # Rejected, never executed -- and the turn still completed normally afterwards, so the
+        # refusal is a recorded step rather than a halted run.
+        assert camera_step.step.progress is StepProgress.REJECTED
+        assert len(record.steps) == 2
+    finally:
+        store.close()

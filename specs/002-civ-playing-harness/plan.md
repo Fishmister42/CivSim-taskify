@@ -9,7 +9,9 @@ four load-bearing decisions: the turn became an interactive within-turn decision
 one batched decision (FR-008), the per-turn time budget was removed in favour of a no-progress step
 count (FR-014), save retention became explicit-archival-only (FR-036), and the Civilization VI build
 became a pinned, overridable part of a seed set (FR-002, FR-031). All Phase 0 and Phase 1 artifacts
-were updated; `tasks.md` predates this revision and must be regenerated.
+were updated; `tasks.md` was subsequently regenerated against this revision and reflects all four
+changes (the decision-step loop in T110–T114, the no-progress backstop in T111/T113, archival-only
+retention in T168–T171, and the build pin in T071/T174–T175).
 
 **Revision 3** — corrected a factual error about platform support. Revision 1 pinned Windows 11 and
 declared Linux unsupported, conflating the Windows-only FireTuner **GUI** with the tuner
@@ -291,6 +293,14 @@ schema makes `firetuner_gap` a required field when `path: bespoke`, so an undocu
 cannot validate. One bespoke capability is planned at the outset — save/load dialog driving (R5) —
 and is recorded in Complexity Tracking C1.
 
+**Resolved by the R5 spike (T077): there is now no bespoke capability at all.**
+`spikes/r5-save-path.md` recorded **Outcome A** against a real client — `Network.SaveGame(gameFile)`
+in the `InGame` context writes a real, named `.Civ6Save`. Under Principle II a working Firetuner
+path means the planned dialog driver is **forbidden rather than merely unnecessary**; it was never
+written, `catalogs/` carries zero `path: bespoke` entries, and every `firetuner_gap` in
+`catalogs/capabilities.yaml` is `null`. Complexity Tracking **C1 is therefore discharged**, and is
+kept below as the record of a deviation that was planned for and then did not have to be taken.
+
 **Revision 3 strengthens rather than weakens this.** Firetuner-first is now also the *portability*
 argument: everything on the FireTuner path is portable for free, because the tuner interface exists
 in all three native builds and the protocol is plain TCP. Only the bespoke path has to be written
@@ -464,7 +474,7 @@ enforcing it is cheap; the CI matrix catches what the lint rule misses.
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| **C1** — A bespoke input-automation path (save/load dialog driving) alongside the Firetuner-first rule of Principle II | Reliable named per-turn quicksave is required by Principle IV and FR-007, and no documented Civ VI Lua call performs a save-to-named-file from the tuner contexts (R5). A turn cannot proceed without its quicksave, so this is load-bearing, not convenience. | Pure Firetuner rejected because the capability appears absent, not merely awkward — the spike in R5 keeps the Firetuner-first order by requiring a documented negative result before the bespoke path is enabled. Relying on the game's own autosave rotation rejected because autosaves are neither named nor addressable per turn, which breaks FR-032 and branch identity (FR-034). |
+| **C1** — *(DISCHARGED — the R5 spike returned Outcome A: `Network.SaveGame` works from `InGame`, so this deviation was never taken and the bespoke driver is now forbidden. Retained as the planning record.)* A bespoke input-automation path (save/load dialog driving) alongside the Firetuner-first rule of Principle II | Reliable named per-turn quicksave is required by Principle IV and FR-007, and no documented Civ VI Lua call performs a save-to-named-file from the tuner contexts (R5). A turn cannot proceed without its quicksave, so this is load-bearing, not convenience. | Pure Firetuner rejected because the capability appears absent, not merely awkward — the spike in R5 keeps the Firetuner-first order by requiring a documented negative result before the bespoke path is enabled. Relying on the game's own autosave rotation rejected because autosaves are neither named nor addressable per turn, which breaks FR-032 and branch identity (FR-034). |
 | **C2** — A local SQLite + blob reference adapter for a store that deliverable 3 owns | FR-013 and FR-051 make persistence a precondition of every turn advance, so the harness cannot be built or tested before deliverable 3 exists. The port keeps the dependency direction correct: the harness depends on a contract, not on an implementation. | Blocking on deliverable 3 rejected because it serializes two deliverables that a published contract lets proceed in parallel. Writing local files directly rejected because it would be exactly the bypassing path Principle III forbids — the adapter is behind the same port the real store will implement, and port conformance tests run against both. |
 | **C3** — An operator control surface on a harness whose presentation belongs to deliverable 1 | FR-004 requires lifecycle commands without touching the game client, and deliverable 1 is deliberately read-only (its FR-026), so lifecycle control has nowhere else to live. | A shared surface rejected because FR-053 and Principle VI forbid a second presentation of run state that could diverge. Mitigation is structural rather than a rule: loopback-only binding and a command/diagnostics-only schema that carries no turn records, decisions, metrics, or captures. |
 | **C4** — Three implementations of the host layer, and a support tier that admits some platforms are weaker | No principle requires cross-platform support, so this is complexity taken on deliberately rather than forced. It is justified by what it removes: revision 1's Windows pin was based on a factual error (R1), and leaving it in place would have hard-coded a false constraint into the one deliverable everything else depends on. Capture and synthetic input genuinely differ per OS and cannot be abstracted away, only isolated. | **Windows-only** rejected because the constraint was never real — the tuner interface ships in all three native builds and the harness already bypasses the Windows-only GUI. **A single cross-platform automation framework** rejected because it would pull a large uninspectable surface into the most parity-sensitive path for six narrow capabilities. **Claiming uniform support** rejected as the actively harmful option: Wayland blocks synthetic input and gates capture behind an interactive grant, so a uniform claim would produce silently worse runs on some platforms — the tiers exist so a weaker platform is less capable without being less honest. |

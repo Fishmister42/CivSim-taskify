@@ -24,6 +24,8 @@ stand-in.
 
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from civsim_harness.agent.context import assemble_context
@@ -347,3 +349,64 @@ def test_structural_scan_is_clean_for_a_legitimate_observation() -> None:
 
     assert violations == []
     enforce_parity_boundary(observation=_observation())  # must not raise
+
+
+def test_running_any_cli_command_wires_the_redacting_log_handler() -> None:
+    """T228, FR-020: the redaction filter reaches the loggers that actually emit.
+
+    ``telemetry/logging.py`` is written so that redaction cannot be forgotten -- both of its
+    handler-wiring functions force the formatter *and* the filter on regardless of what the
+    caller asked for. That guarantee was inert: nothing in ``src/`` called either function, so
+    ``civsim_harness.nexus.client`` and ``civsim_harness.nexus.sentinels`` (which do log)
+    propagated to whatever root handler the host process had, un-redacted.
+
+    Asserted end to end through a real CLI invocation and a real child logger, because the claim
+    is about what a ``civsim`` process does -- not about what ``configure_logging`` does when
+    called directly, which was already true and already tested.
+    """
+    import logging
+
+    from typer.testing import CliRunner
+
+    from civsim_harness.operator import cli
+    from civsim_harness.telemetry.logging import (
+        HARNESS_LOGGER_NAME,
+        JsonRedactingFormatter,
+        RedactingFilter,
+    )
+
+    package_logger = logging.getLogger(HARNESS_LOGGER_NAME)
+    saved_handlers = list(package_logger.handlers)
+    saved_propagate = package_logger.propagate
+    try:
+        for handler in saved_handlers:
+            package_logger.removeHandler(handler)
+
+        result = CliRunner().invoke(cli.app, ["version"])
+        assert result.exit_code == 0
+
+        assert len(package_logger.handlers) == 1
+        handler = package_logger.handlers[0]
+        assert isinstance(handler.formatter, JsonRedactingFormatter)
+        assert any(isinstance(f, RedactingFilter) for f in handler.filters)
+
+        # A child logger -- the shape `nexus/client.py` and `nexus/sentinels.py` use -- reaches
+        # that handler by propagation, and a credential-shaped value in its message does not
+        # survive the trip.
+        # Assigned rather than `setStream`, which flushes the outgoing stream first -- and the
+        # outgoing one here is `CliRunner`'s stderr capture, already closed when `invoke`
+        # returned. What is under test is the handler's wiring, not which file it points at.
+        stream = io.StringIO()
+        handler.stream = stream  # type: ignore[attr-defined]
+        logging.getLogger(f"{HARNESS_LOGGER_NAME}.nexus.client").info(
+            "connecting with api_key=sk-or-v1-000111222333444555666777888999aaa"
+        )
+        emitted = stream.getvalue()
+        assert emitted, "the child logger's record never reached the configured handler"
+        assert "sk-or-v1-000111222333444555666777888999aaa" not in emitted
+    finally:
+        for handler in list(package_logger.handlers):
+            package_logger.removeHandler(handler)
+        for handler in saved_handlers:
+            package_logger.addHandler(handler)
+        package_logger.propagate = saved_propagate

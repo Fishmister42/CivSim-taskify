@@ -453,14 +453,16 @@ class Runner(RunnerProtocol):
         ``spikes/load-path-linux.md``), so every real ``civsim run resume-from`` fails at the load.
         Ordering the supersede after it is what keeps that failure non-destructive.
 
-        **Known downstream gap (T217's neighbour, not fixed here).** Once a working ``SaveLoader``
-        exists, the replayed turn's own persist will still collide: ``run/turn_cycle.py``'s
-        ``run_turn_cycle`` starts every turn at ``attempt_index = 0``, and
-        ``store/sqlite_adapter.py``'s D4 idempotency check rejects a second write of
-        ``(run_id, turn_number, attempt_index)`` whose content differs. A replay needs an
-        ``attempt_index`` past the superseded attempt's; there is no seam on
-        ``TurnCycleDependencies`` to supply one, and adding it belongs to ``run/turn_cycle.py``,
-        not here.
+        **Why the replayed turn can persist at all (T223).** Superseding an attempt does not free
+        its ``(run_id, turn_number, attempt_index)`` triple -- ``store/sqlite_adapter.py``'s D4
+        idempotency check rejects a second write of that triple carrying different content -- so a
+        replay that started at ``attempt_index = 0``, as ``run/turn_cycle.py`` once unconditionally
+        did, would collide with the very attempt this rewind just superseded and halt the run at
+        its first persist. The index is now supplied by ``TurnCycleDependencies.
+        attempt_index_base``, resolved per turn in ``run/composition.py``'s
+        ``build_turn_dependencies`` as one past the highest attempt already on record. Nothing here
+        computes it: this method's ordering (supersede *after* the load) is what leaves those
+        records in place for that resolution to see.
 
         Raises :class:`ResumeFromRefused` when the request is not legal right now,
         :class:`~civsim_harness.saves.addressing.SaveAddressingError` when the save at *turn* is
