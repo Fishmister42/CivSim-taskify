@@ -1,0 +1,154 @@
+# catalogs/actions/prompts.yaml
+# T093 (US1). Backed by lua/ingame/screens.lua (capability_id: prompts.orders — the `respond`
+# function; `probe` backs game.screen_state in catalogs/observations/game.yaml). Every entry here
+# is a `prompt_response` decision (data-model.md §9's `trigger` field), answered at its own
+# decision step, per FR-010 and research R13.
+#
+# Dependency note: each availability_predicate below checks `target in prompt.options`, but
+# lua/ingame/screens.lua's current CivSim_Screens_Probe() returns an empty prompt_options list as
+# an explicitly flagged placeholder (per-prompt option enumeration is not yet implemented). These
+# predicates are written for the completed probe, not the current stub — evaluating them today
+# would make every prompt action unavailable until that gap is closed. This is the honest
+# state of things, not a hidden inconsistency: see lua/ingame/screens.lua's header.
+#
+# "AI diplomatic approach" and "declaration of war" are both diplomacy-initiated modal prompts but
+# distinct moments (the AI announcing its posture vs. the AI declaring war on the local player),
+# so they get separate declarations. "World Congress vote" here (prompts.congress_vote) is the
+# modal, forced-response vote moment; catalogs/actions/congress.yaml's congress.cast_vote is the
+# separate, proactive vote a player may cast while a session is open but not yet forcing a
+# response — the two are deliberately not merged.
+
+- declaration_id: prompts.unit_promotion
+  kind: action
+  summary: Respond to a unit-promotion prompt.
+  parity_basis: >
+    A promotion-available prompt appears for a unit that gained a promotion; pick a promotion
+    or dismiss it in that prompt.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.unit_promotion"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.unit_promotion"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: prompts.pantheon_selection
+  kind: action
+  summary: Respond to a pantheon-selection prompt.
+  parity_basis: >
+    A pantheon-selection prompt appears once enough faith has accumulated; pick a belief in
+    that prompt.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.pantheon_selection"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.pantheon_selection"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: prompts.religion_selection
+  kind: action
+  summary: Respond to a religion-founding prompt.
+  parity_basis: >
+    A religion-founding prompt appears when a Great Prophet founds a religion in a holy site;
+    pick the religion's name and founder belief in that prompt.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.religion_selection"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.religion_selection"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: prompts.great_person_selection
+  kind: action
+  summary: Respond to a great-person-selection prompt.
+  parity_basis: >
+    A great-person prompt appears when enough points have accumulated to claim a great person;
+    pick one in that prompt.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.great_person_selection"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.great_person_selection"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: prompts.ai_diplomatic_approach
+  kind: action
+  summary: Respond to an AI civilization's diplomatic-approach prompt.
+  parity_basis: >
+    An AI leader's diplomatic-approach prompt appears when they open a diplomatic conversation;
+    pick a response in that prompt.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.diplomatic_approach"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.diplomatic_approach"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: prompts.declare_war_response
+  kind: action
+  summary: Respond to a declaration-of-war notification prompt.
+  parity_basis: >
+    A war-declared prompt appears when another civilization declares war on the local player;
+    acknowledge or respond in that prompt.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.declare_war_response"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.declare_war_response"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: prompts.city_state_quest
+  kind: action
+  summary: Respond to a city-state quest prompt.
+  parity_basis: >
+    A city-state quest prompt appears when a met city-state offers a quest; accept or decline
+    it in that prompt.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.city_state_quest"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.city_state_quest"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: prompts.congress_vote
+  kind: action
+  summary: Respond to a forced World Congress vote prompt.
+  parity_basis: >
+    A World Congress vote prompt forces a response on the currently proposed resolution before
+    the session can proceed; cast a vote in that prompt.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.congress_vote"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.congress_vote"
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: prompts.era_transition
+  kind: action
+  summary: Acknowledge an era-transition prompt.
+  parity_basis: >
+    An era-transition prompt appears when the local player advances to a new era, optionally
+    offering a dedication; choose or dismiss it in that prompt.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.era_transition"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.era_transition"
+  introduced_in_version: "2026.09.1"

@@ -1,0 +1,46 @@
+# catalogs/actions/religion.yaml
+# Backed by lua/ingame/religion.lua (capability_id: religion.orders). Verification re-reads
+# religion.state (lua/gamecore/religion.lua) after execution.
+
+- declaration_id: religion.select_pantheon
+  kind: action
+  summary: Choose a pantheon belief.
+  parity_basis: >
+    Open the pantheon-selection prompt (or the Religion overview before a pantheon is chosen)
+    and click an available belief.
+  context: InGame
+  capability_id: religion.orders
+  availability_predicate: >
+    not player.pantheon_selected and target in player.available_beliefs
+  verification_predicate: >
+    player.pantheon_selected
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: religion.found_religion
+  kind: action
+  summary: Found a religion with a founder belief, once eligible.
+  parity_basis: >
+    Use a Great Prophet (or an eligible unit) in a holy site to found a religion and pick its
+    first belief in the religion-founding screen.
+  context: InGame
+  capability_id: religion.orders
+  availability_predicate: >
+    player.pantheon_selected and not player.religion_founded
+    and target in player.available_beliefs
+  verification_predicate: >
+    player.religion_founded
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: religion.select_belief
+  kind: action
+  summary: Add an additional belief to the local player's founded religion.
+  parity_basis: >
+    Open the religion-enhancement prompt (e.g. after reaching Theology or using a Great Prophet)
+    and click an available belief.
+  context: InGame
+  capability_id: religion.orders
+  availability_predicate: >
+    player.religion_founded and target in player.available_beliefs
+  verification_predicate: >
+    not (target in player.available_beliefs)
+  introduced_in_version: "2026.09.1"

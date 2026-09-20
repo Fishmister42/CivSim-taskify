@@ -1,0 +1,44 @@
+# catalogs/actions/camera.yaml
+# T131 (US2). Backed by lua/ingame/camera.lua (capability_id: camera.control). Camera changes are
+# information requests wearing a movement request's clothes (research R8) — validated and
+# rejectable exactly like any other action, never harness plumbing.
+
+- declaration_id: camera.move
+  kind: action
+  summary: Move the camera to look at a target plot.
+  parity_basis: >
+    Click or drag the map (or use a notification's "go to" link) to pan the camera to a plot.
+  context: InGame
+  capability_id: camera.control
+  availability_predicate: >
+    target.is_revealed
+  verification_predicate: >
+    camera.target_plot == target and camera.target_is_revealed
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: camera.zoom
+  kind: action
+  summary: Change the camera's zoom level.
+  parity_basis: >
+    Use the mouse wheel (or the zoom control) to zoom the standard map view in or out.
+  context: InGame
+  capability_id: camera.control
+  availability_predicate: >
+    target >= 0.05 and target <= 1.0
+  verification_predicate: >
+    camera.zoom == target
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: camera.set_view_mode
+  kind: action
+  summary: Toggle between the world view and the strategic (zoomed-out) view.
+  parity_basis: >
+    Press the strategic-view hotkey (or its menu toggle) to switch between world and strategic
+    view.
+  context: InGame
+  capability_id: camera.control
+  availability_predicate: >
+    target == "world" or target == "strategic"
+  verification_predicate: >
+    camera.mode == target
+  introduced_in_version: "2026.09.1"

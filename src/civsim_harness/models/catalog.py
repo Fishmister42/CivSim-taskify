@@ -135,8 +135,14 @@ class IntegrationCapability(HarnessModel):
     reads: list[str] = Field(default_factory=list)
     writes: list[str] = Field(default_factory=list)
     firetuner_gap: str | None = None
-    # Inherited from the declaration(s) it implements, or restated.
-    parity_basis: str = Field(min_length=1)
+    # Optional (data-model.md SS11): "inherited or restated". Every
+    # ParityDeclaration this capability implements already carries its own
+    # required, non-empty parity_basis (enforced above in
+    # ParityDeclaration), so omitting it here means the capability's parity
+    # basis is inherited from those declarations. A value present here is a
+    # restatement and, like the declaration-level field, must be non-empty --
+    # never an empty string standing in for "absent".
+    parity_basis: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _bespoke_requires_gap(self) -> IntegrationCapability:

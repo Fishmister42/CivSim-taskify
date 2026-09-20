@@ -1,0 +1,46 @@
+# catalogs/actions/cities.yaml
+# Backed by lua/ingame/city_orders.lua (capability_id: cities.orders). Verification re-reads
+# cities.state (lua/gamecore/cities.lua) after execution.
+
+- declaration_id: cities.set_production
+  kind: action
+  summary: Set a city's current production to an available item.
+  parity_basis: >
+    Open the city's production panel and click an available production item.
+  context: InGame
+  capability_id: cities.orders
+  availability_predicate: >
+    city.is_selected and city.owner_is_local_player and target in city.available_productions
+  verification_predicate: >
+    target in city.production_queue
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: cities.purchase_with_gold
+  kind: action
+  summary: Purchase an available production item with gold.
+  parity_basis: >
+    Open the city's production panel, switch to the gold-purchase tab, and click a purchasable
+    item.
+  context: InGame
+  capability_id: cities.orders
+  availability_predicate: >
+    city.is_selected and city.owner_is_local_player and city.can_buy_with_gold
+    and target in city.purchasable_with_gold
+  verification_predicate: >
+    not (target in city.purchasable_with_gold)
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: cities.purchase_with_faith
+  kind: action
+  summary: Purchase an available production item with faith.
+  parity_basis: >
+    Open the city's production panel, switch to the faith-purchase tab, and click a purchasable
+    item.
+  context: InGame
+  capability_id: cities.orders
+  availability_predicate: >
+    city.is_selected and city.owner_is_local_player and city.can_buy_with_faith
+    and target in city.purchasable_with_faith
+  verification_predicate: >
+    not (target in city.purchasable_with_faith)
+  introduced_in_version: "2026.09.1"

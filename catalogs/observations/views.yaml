@@ -1,0 +1,141 @@
+# catalogs/observations/views.yaml
+# T130 (US2). Visual observations (kind: view). Each view is a camera state plus what it shows;
+# the actual screen capture is produced by the harness's capture pipeline once a view resolves and
+# the four screening gates (T129) pass — no Lua backs a view directly, since a view's "output" is
+# an image, not a JSON document. capability_id here documents which capability positions the
+# camera for that view (shared with catalogs/actions/camera.yaml's camera.control), not a data
+# producer.
+#
+# Per contracts/capability-catalog.md, every view carries camera_requirements
+# (mode ∈ {world, strategic, city_screen, diplomacy, congress}, a zoom_range within what the
+# standard UI allows, target_must_be_revealed: true) and a screening_profile naming a platform
+# profile key in catalogs/screening_profiles.yaml (FR-024, FR-026).
+
+- declaration_id: views.world
+  kind: view
+  summary: The main map view centered on the current camera target.
+  parity_basis: Look at the main map view.
+  context: InGame
+  capability_id: camera.control
+  camera_requirements:
+    mode: world
+    zoom_range: [0.2, 1.0]
+    target_must_be_revealed: true
+  screening_profile: default
+  output_schema:
+    type: object
+    required: [view_declaration_id, camera_state]
+    properties:
+      view_declaration_id: { type: string }
+      camera_state:
+        type: object
+        required: [mode, zoom, target_plot]
+        properties:
+          mode: { type: string }
+          zoom: { type: number }
+          target_plot:
+            type: object
+            properties: { x: { type: integer }, y: { type: integer } }
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: views.strategic
+  kind: view
+  summary: The strategic (zoomed-out, icon) map view centered on the current camera target.
+  parity_basis: Toggle to the strategic view (its standard hotkey/menu toggle) and look at it.
+  context: InGame
+  capability_id: camera.control
+  camera_requirements:
+    mode: strategic
+    zoom_range: [0.05, 0.3]
+    target_must_be_revealed: true
+  screening_profile: default
+  output_schema:
+    type: object
+    required: [view_declaration_id, camera_state]
+    properties:
+      view_declaration_id: { type: string }
+      camera_state:
+        type: object
+        required: [mode, zoom, target_plot]
+        properties:
+          mode: { type: string }
+          zoom: { type: number }
+          target_plot:
+            type: object
+            properties: { x: { type: integer }, y: { type: integer } }
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: views.city_screen
+  kind: view
+  summary: A city's own city-screen view (production, purchase, and citizen management panel).
+  parity_basis: Click a city banner to open its city screen and look at it.
+  context: InGame
+  capability_id: camera.control
+  camera_requirements:
+    mode: city_screen
+    zoom_range: [0.3, 0.6]
+    target_must_be_revealed: true
+  screening_profile: default
+  output_schema:
+    type: object
+    required: [view_declaration_id, camera_state, city_id]
+    properties:
+      view_declaration_id: { type: string }
+      city_id: { type: integer }
+      camera_state:
+        type: object
+        required: [mode, zoom, target_plot]
+        properties:
+          mode: { type: string }
+          zoom: { type: number }
+          target_plot:
+            type: object
+            properties: { x: { type: integer }, y: { type: integer } }
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: views.diplomacy
+  kind: view
+  summary: The diplomacy screen for a met civilization.
+  parity_basis: Open the Diplomacy screen for a met civilization and look at it.
+  context: InGame
+  capability_id: camera.control
+  camera_requirements:
+    mode: diplomacy
+    zoom_range: [1.0, 1.0]
+    target_must_be_revealed: true
+  screening_profile: default
+  output_schema:
+    type: object
+    required: [view_declaration_id, camera_state, other_player_id]
+    properties:
+      view_declaration_id: { type: string }
+      other_player_id: { type: integer }
+      camera_state:
+        type: object
+        required: [mode]
+        properties:
+          mode: { type: string }
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: views.congress
+  kind: view
+  summary: The World Congress screen during an active session.
+  parity_basis: Open the World Congress screen while a session is active and look at it.
+  context: InGame
+  capability_id: camera.control
+  camera_requirements:
+    mode: congress
+    zoom_range: [1.0, 1.0]
+    target_must_be_revealed: true
+  screening_profile: default
+  output_schema:
+    type: object
+    required: [view_declaration_id, camera_state]
+    properties:
+      view_declaration_id: { type: string }
+      camera_state:
+        type: object
+        required: [mode]
+        properties:
+          mode: { type: string }
+  introduced_in_version: "2026.09.1"

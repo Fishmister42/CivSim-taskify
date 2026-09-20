@@ -1,0 +1,33 @@
+# catalogs/observations/religion.yaml
+# Backed by lua/gamecore/religion.lua (capability_id: religion.read).
+
+- declaration_id: religion.state
+  kind: observation
+  summary: >
+    The local player's own pantheon/religion status and available beliefs, plus the majority
+    religion of every city currently visible to the local player.
+  parity_basis: >
+    Open the Religion overview screen for the local player's own pantheon/religion/beliefs, and
+    read a city banner or the religion overview's per-city breakdown for a visible city's
+    majority religion.
+  context: GameCore_Tuner
+  capability_id: religion.read
+  output_schema:
+    type: object
+    required: [pantheon_selected, religion_founded, available_beliefs, city_majority_religions]
+    properties:
+      pantheon_selected: { type: boolean }
+      religion_founded: { type: boolean }
+      own_religion: { type: [string, "null"] }
+      available_beliefs:
+        type: array
+        items: { type: string }
+      city_majority_religions:
+        type: array
+        items:
+          type: object
+          required: [city_id, majority_religion]
+          properties:
+            city_id: { type: integer }
+            majority_religion: { type: [string, "null"] }
+  introduced_in_version: "2026.09.1"

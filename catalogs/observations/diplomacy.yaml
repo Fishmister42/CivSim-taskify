@@ -1,0 +1,31 @@
+# catalogs/observations/diplomacy.yaml
+# Backed by lua/gamecore/diplomacy.lua (capability_id: diplomacy.read). See that file's header for
+# the R3 caution: some of this may need to move to an InGame-context read if a live spike finds
+# GameCore_Tuner cannot reach it.
+
+- declaration_id: diplomacy.state
+  kind: observation
+  summary: >
+    Which civilizations the local player has met, and the public diplomatic state and identity
+    of each.
+  parity_basis: >
+    Open the Diplomacy overview (or the leader list) and read each met civilization's
+    relationship status.
+  context: GameCore_Tuner
+  capability_id: diplomacy.read
+  output_schema:
+    type: object
+    required: [relations]
+    properties:
+      relations:
+        type: array
+        items:
+          type: object
+          required: [player_id, has_met]
+          properties:
+            player_id: { type: integer }
+            has_met: { type: boolean }
+            diplomatic_state: { type: [string, "null"] }
+            has_delegation: { type: boolean }
+            civilization: { type: [string, "null"] }
+  introduced_in_version: "2026.09.1"

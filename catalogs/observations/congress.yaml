@@ -1,0 +1,29 @@
+# catalogs/observations/congress.yaml
+# Backed by lua/gamecore/congress.lua (capability_id: congress.read). See that file's header for
+# the significant API uncertainty around the whole World Congress surface.
+
+- declaration_id: congress.state
+  kind: observation
+  summary: >
+    Whether a World Congress session is currently active, and its active resolutions.
+  parity_basis: >
+    Open the World Congress screen while a session is active and read the currently proposed
+    resolutions.
+  context: GameCore_Tuner
+  capability_id: congress.read
+  output_schema:
+    type: object
+    required: [is_in_session, local_player_favor, active_resolutions]
+    properties:
+      is_in_session: { type: boolean }
+      local_player_favor: { type: number }
+      active_resolutions:
+        type: array
+        items:
+          type: object
+          required: [resolution_id, resolution_type]
+          properties:
+            resolution_id: { type: integer }
+            resolution_type: { type: string }
+            proposer_player_id: { type: [integer, "null"] }
+  introduced_in_version: "2026.09.1"

@@ -1,0 +1,119 @@
+-- lua/ingame/camera.lua
+-- Context: InGame (write/act). Verification reads back through this file's own read_state
+-- function.
+-- Backs declaration_ids: camera.move, camera.zoom, camera.set_view_mode
+-- (catalogs/actions/camera.yaml), capability_id: camera.control.
+--
+-- Not separately assigned a task ID (T082-T089 name the domain files explicitly), but required
+-- for T131's camera action declarations to resolve a real Lua implementation per research R8
+-- ("Camera moves, zoom changes, and view-mode toggles are entries in catalogs/actions/camera.yaml,
+-- executed through InGame Lua"). Added as necessary supporting infrastructure within this
+-- assignment's owned lua/ directory.
+--
+-- Parity note (FR-026, R8): every move/zoom/toggle here is validated by the harness before this
+-- file is invoked — target plot must already be revealed, zoom must be within the standard UI's
+-- range, and the view mode must be one a human can toggle to. This file performs the camera change
+-- and reads it back; it does not itself decide whether the request was legal.
+
+local function CivSim_JsonEncode(value)
+    local t = type(value)
+    if value == nil then
+        return "null"
+    elseif t == "boolean" then
+        return value and "true" or "false"
+    elseif t == "number" then
+        if value ~= value then return "null" end
+        return tostring(value)
+    elseif t == "string" then
+        local escaped = value:gsub('[%c"\\]', function(c)
+            if c == '"' then return '\\"'
+            elseif c == '\\' then return '\\\\'
+            elseif c == '\n' then return '\\n'
+            elseif c == '\r' then return '\\r'
+            elseif c == '\t' then return '\\t'
+            else return string.format('\\u%04x', string.byte(c)) end
+        end)
+        return '"' .. escaped .. '"'
+    elseif t == "table" then
+        local n = 0
+        for _ in pairs(value) do n = n + 1 end
+        if n == 0 then return "[]" end
+        local isArray = true
+        for i = 1, n do if value[i] == nil then isArray = false break end end
+        if isArray then
+            local parts = {}
+            for i = 1, n do parts[i] = CivSim_JsonEncode(value[i]) end
+            return "[" .. table.concat(parts, ",") .. "]"
+        else
+            local parts = {}
+            for k, v in pairs(value) do
+                parts[#parts + 1] = CivSim_JsonEncode(tostring(k)) .. ":" .. CivSim_JsonEncode(v)
+            end
+            return "{" .. table.concat(parts, ",") .. "}"
+        end
+    else
+        return "null"
+    end
+end
+
+-- UNVERIFIED: `UI.LookAtPlot(x, y)` is recalled as the standard camera-pan call used by Civ VI's
+-- own UI Lua (e.g. jumping to a notification's location); exact signature not confirmed.
+local function CivSim_Camera_Move(x, y)
+    local ok, result = pcall(function() return UI.LookAtPlot(x, y) end) -- UNVERIFIED
+    return { ok = (ok and result ~= false), target_plot = { x = x, y = y } }
+end
+
+-- UNVERIFIED: no confirmed direct "set zoom to value" call; `UI.SetCameraZoom` is a placeholder
+-- name, not a confirmed one.
+local function CivSim_Camera_Zoom(zoomLevel)
+    local ok, result = pcall(function() return UI.SetCameraZoom(zoomLevel) end) -- UNVERIFIED
+    return { ok = (ok and result ~= false), zoom = zoomLevel }
+end
+
+-- UNVERIFIED: view-mode toggle (world <-> strategic view) is known in the base game as a hotkey
+-- action; `UI.RequestAction(ActionTypeIndex["ToggleStrategicView"])` is a placeholder pending
+-- confirmation of the actual action-type key.
+local function CivSim_Camera_SetViewMode(mode)
+    local ok, result = pcall(function()
+        if mode == "strategic" then
+            return UI.RequestAction(ActionTypeIndex["ToggleStrategicView"]) -- UNVERIFIED
+        else
+            return UI.RequestAction(ActionTypeIndex["ToggleStrategicView"]) -- UNVERIFIED: same
+            -- hotkey is assumed to toggle back; a client that requires two distinct action types
+            -- would need this branch corrected against the live client.
+        end
+    end)
+    return { ok = (ok and result ~= false), mode = mode }
+end
+
+-- Read back current camera state for the verification_predicate.
+local function CivSim_Camera_ReadState()
+    local x, y, zoom, mode = nil, nil, nil, "world"
+    local ok, cx, cy = pcall(function() return UI.GetCameraTargetPlot() end) -- UNVERIFIED
+    if ok then x, y = cx, cy end
+    local okZoom, z = pcall(function() return UI.GetCameraZoom() end) -- UNVERIFIED
+    if okZoom then zoom = z end
+    local okMode, m = pcall(function() return UI.IsStrategicView() and "strategic" or "world" end) -- UNVERIFIED
+    if okMode then mode = m end
+    local revealed = false
+    if x ~= nil and y ~= nil then
+        local plot = Map.GetPlot(x, y)
+        revealed = (plot ~= nil and plot:IsRevealed(Game.GetLocalPlayer()))
+    end
+    return {
+        mode = mode,
+        zoom = zoom,
+        target_plot = (x ~= nil and { x = x, y = y } or nil),
+        target_is_revealed = revealed,
+    }
+end
+
+CivSim_Camera = {
+    move = CivSim_Camera_Move,
+    zoom = CivSim_Camera_Zoom,
+    set_view_mode = CivSim_Camera_SetViewMode,
+    read_state = CivSim_Camera_ReadState,
+}
+
+-- Example dispatch (performed by the Nexus dispatcher, not by this file):
+--   print(CivSim_JsonEncode(CivSim_Camera.move(24, 30)))

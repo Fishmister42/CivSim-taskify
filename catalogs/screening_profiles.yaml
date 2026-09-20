@@ -1,0 +1,99 @@
+# catalogs/screening_profiles.yaml
+# T100 (US2). Per-platform non-player-chrome screening profiles, referenced by a view's
+# `screening_profile` field (catalogs/observations/views.yaml) and read by the content gate
+# (T129, src/civsim_harness/parity/screening.py — not this assignment's scope). This file is
+# data only: it enumerates what the content gate must reject per platform; it contains no
+# detector logic (FR-025, FR-030, SC-009, SC-019).
+#
+# Resolution rule (must be enforced by whatever reads this file): a platform identifier with no
+# key under `profiles` below MUST resolve to `profiles.default` — the strictest profile — never
+# to an absent check or a permissive default. `profiles.default`'s reject list is deliberately
+# the union of every named platform's reject list plus the universal set, so it is always at
+# least as strict as any named profile, satisfying that rule structurally rather than by
+# convention.
+
+schema_version: 1
+
+reject_definitions:
+  firetuner_window: >
+    The FireTuner window or any of its child dialogs. Universal — FireTuner runs identically on
+    every supported platform (contracts/nexus-protocol.md).
+  developer_console: >
+    Any developer/debug console window (including the game's own in-engine console). Universal.
+  debug_overlay: >
+    Any in-engine debug overlay — FPS counters, debug draw, entity/collision visualizers.
+    Universal.
+  harness_owned_ui: >
+    Any window, overlay, or control surface owned by this harness itself (e.g. an operator
+    dashboard rendered on the same desktop). Universal.
+  windows_taskbar: The Windows taskbar.
+  windows_capture_border: >
+    The Windows.Graphics.Capture yellow recording-indicator border drawn on captured visuals
+    (research R6); harness-caused, non-player UI.
+  macos_menu_bar: The macOS global menu bar.
+  macos_dock: The macOS Dock.
+  linux_panel: >
+    A Linux desktop-environment panel or taskbar (e.g. the GNOME top bar, a KDE Plasma panel, an
+    XFCE panel).
+  linux_notification_toast: A Linux desktop-environment notification toast/popup.
+
+universal_reject:
+  - firetuner_window
+  - developer_console
+  - debug_overlay
+  - harness_owned_ui
+
+profiles:
+  windows:
+    description: Windows non-player chrome, plus the universal reject set.
+    reject:
+      - firetuner_window
+      - developer_console
+      - debug_overlay
+      - harness_owned_ui
+      - windows_taskbar
+      - windows_capture_border
+
+  macos:
+    description: macOS non-player chrome, plus the universal reject set.
+    reject:
+      - firetuner_window
+      - developer_console
+      - debug_overlay
+      - harness_owned_ui
+      - macos_menu_bar
+      - macos_dock
+
+  linux:
+    description: Linux non-player chrome, plus the universal reject set.
+    reject:
+      - firetuner_window
+      - developer_console
+      - debug_overlay
+      - harness_owned_ui
+      - linux_panel
+      - linux_notification_toast
+
+  default:
+    description: >
+      Strictest available profile: the union of every named platform's reject set plus the
+      universal set. Used whenever a platform has no dedicated profile above, and never relaxed
+      below any single named platform's requirements.
+    reject:
+      - firetuner_window
+      - developer_console
+      - debug_overlay
+      - harness_owned_ui
+      - windows_taskbar
+      - windows_capture_border
+      - macos_menu_bar
+      - macos_dock
+      - linux_panel
+      - linux_notification_toast
+
+resolution_rule: >
+  Look up the running host's platform identifier ("windows" | "macos" | "linux") under
+  `profiles`. If absent, use `profiles.default`. A `view`'s declared `screening_profile: default`
+  always means `profiles.default` regardless of host platform, since a view may be evaluated
+  before the host platform is known (e.g. at catalog-load time) or may deliberately want the
+  strictest check available.

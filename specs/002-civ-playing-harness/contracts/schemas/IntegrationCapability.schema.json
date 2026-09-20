@@ -33,9 +33,17 @@
       "type": "string"
     },
     "parity_basis": {
-      "minLength": 1,
-      "title": "Parity Basis",
-      "type": "string"
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parity Basis"
     },
     "path": {
       "$ref": "#/$defs/CapabilityPath"
@@ -58,8 +66,7 @@
   "required": [
     "capability_id",
     "path",
-    "implementation_ref",
-    "parity_basis"
+    "implementation_ref"
   ],
   "schemaVersion": 1,
   "title": "IntegrationCapability",

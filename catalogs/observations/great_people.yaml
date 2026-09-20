@@ -1,0 +1,41 @@
+# catalogs/observations/great_people.yaml
+# Backed by lua/gamecore/great_people.lua (capability_id: great_people.read).
+#
+# Not named in tasks.md T090's literal file list (which enumerates map/cities/units/research/
+# diplomacy/religion/government/congress/espionage), but required so that lua/gamecore/
+# great_people.lua (T083) and catalogs/actions/great_people.yaml (T091) both resolve a real
+# observation declaration rather than a dangling capability. Added as a necessary, narrowly
+# scoped completion of T090's intent, called out in the authoring report.
+
+- declaration_id: great_people.state
+  kind: observation
+  summary: >
+    Great people currently recruitable by the local player, and the local player's own
+    accumulated points per great-person class.
+  parity_basis: >
+    Open the Great People screen and read the currently recruitable individuals and the local
+    player's own point totals per class.
+  context: GameCore_Tuner
+  capability_id: great_people.read
+  output_schema:
+    type: object
+    required: [recruitable_individuals, points_by_class]
+    properties:
+      recruitable_individuals:
+        type: array
+        items:
+          type: object
+          required: [individual_id, class_type, name]
+          properties:
+            individual_id: { type: integer }
+            class_type: { type: string }
+            name: { type: string }
+      points_by_class:
+        type: array
+        items:
+          type: object
+          required: [class_type, points]
+          properties:
+            class_type: { type: string }
+            points: { type: number }
+  introduced_in_version: "2026.09.1"

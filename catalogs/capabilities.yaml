@@ -1,0 +1,166 @@
+# catalogs/capabilities.yaml
+# T094 (US1). IntegrationCapability declarations binding every declaration_id in
+# catalogs/observations/ and catalogs/actions/ to its lua/ implementation.
+#
+# Every entry below is path: firetuner. Nothing in this assignment's scope (T082-T094, T100,
+# T130-T131) needed a bespoke capability: every declared observation, view, and action this
+# author wrote has a Lua implementation reachable through the Nexus contexts (Principle II,
+# Firetuner-first, is satisfied by default here, not as an exception). The one bespoke capability
+# named in contracts/capability-catalog.md's own worked example — saves.save_game — belongs to
+# T077/T078 (owned by a different task range and gated on the R5 save-path spike, neither of
+# which is in this assignment) and is intentionally NOT declared here; whoever completes T078
+# adds that single entry to this file once R5's outcome is known.
+
+- capability_id: map.read
+  path: firetuner
+  implementation_ref: lua/gamecore/map.lua
+  reads: [revealed map plots, terrain, features, visible resources, improvements]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: units.read
+  path: firetuner
+  implementation_ref: lua/gamecore/units.lua
+  reads: [unit state, movement, reachable plots, promotions]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: cities.read
+  path: firetuner
+  implementation_ref: lua/gamecore/cities.lua
+  reads: [city state, production queue, purchasable items]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: research.read
+  path: firetuner
+  implementation_ref: lua/gamecore/research.lua
+  reads: [local player's tech and civic progress and researchable options]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: government.read
+  path: firetuner
+  implementation_ref: lua/gamecore/government.lua
+  reads: [local player's government, policy slots, governor assignments]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: religion.read
+  path: firetuner
+  implementation_ref: lua/gamecore/religion.lua
+  reads: [local player's pantheon/religion state, available beliefs, visible cities' majority religion]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: diplomacy.read
+  path: firetuner
+  implementation_ref: lua/gamecore/diplomacy.lua
+  reads: [met civilizations, public diplomatic state, delegation status]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: congress.read
+  path: firetuner
+  implementation_ref: lua/gamecore/congress.lua
+  reads: [World Congress session state, active resolutions, local player's diplomatic favor]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: espionage.read
+  path: firetuner
+  implementation_ref: lua/gamecore/espionage.lua
+  reads: [local player's own spies, missions, availability]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: great_people.read
+  path: firetuner
+  implementation_ref: lua/gamecore/great_people.lua
+  reads: [recruitable great people, local player's points per class]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: screens.probe
+  path: firetuner
+  implementation_ref: lua/ingame/screens.lua
+  reads: [currently open screen or prompt identifier]
+  writes: []
+  firetuner_gap: null
+
+- capability_id: turn.control
+  path: firetuner
+  implementation_ref: lua/ingame/turn_control.lua
+  reads: [current turn number, whose turn it is]
+  writes: [end-turn request]
+  firetuner_gap: null
+
+- capability_id: units.orders
+  path: firetuner
+  implementation_ref: lua/ingame/unit_orders.lua
+  reads: [unit state, plot reachability]
+  writes: [unit orders]
+  firetuner_gap: null
+
+- capability_id: cities.orders
+  path: firetuner
+  implementation_ref: lua/ingame/city_orders.lua
+  reads: [city state, available/purchasable production]
+  writes: [city production and purchase orders]
+  firetuner_gap: null
+
+- capability_id: empire.orders
+  path: firetuner
+  implementation_ref: lua/ingame/empire_orders.lua
+  reads: [researchable techs/civics, available policies/governments/governors]
+  writes: [research, civic, policy, government, and governor choices]
+  firetuner_gap: null
+
+- capability_id: religion.orders
+  path: firetuner
+  implementation_ref: lua/ingame/religion.lua
+  reads: [available beliefs]
+  writes: [pantheon, religion founding, and belief choices]
+  firetuner_gap: null
+
+- capability_id: diplomacy.orders
+  path: firetuner
+  implementation_ref: lua/ingame/diplomacy.lua
+  reads: [met civilizations, diplomatic state]
+  writes: [declare war, make peace, send delegation]
+  firetuner_gap: null
+
+- capability_id: congress.orders
+  path: firetuner
+  implementation_ref: lua/ingame/congress.lua
+  reads: [active resolutions, local player's diplomatic favor]
+  writes: [World Congress votes]
+  firetuner_gap: null
+
+- capability_id: great_people.orders
+  path: firetuner
+  implementation_ref: lua/ingame/great_people.lua
+  reads: [recruitable great people]
+  writes: [great person recruitment]
+  firetuner_gap: null
+
+- capability_id: espionage.orders
+  path: firetuner
+  implementation_ref: lua/ingame/espionage.lua
+  reads: [local player's own spies and availability]
+  writes: [spy mission assignment]
+  firetuner_gap: null
+
+- capability_id: prompts.orders
+  path: firetuner
+  implementation_ref: lua/ingame/screens.lua
+  reads: [currently open prompt and its offered options]
+  writes: [prompt responses]
+  firetuner_gap: null
+
+- capability_id: camera.control
+  path: firetuner
+  implementation_ref: lua/ingame/camera.lua
+  reads: [current camera state]
+  writes: [camera move, zoom, and view-mode changes]
+  firetuner_gap: null

@@ -9,11 +9,11 @@ secrets.yml
 # Game saves copied or created by the harness (Principle IV keeps these on disk,
 # but they are per-machine state, not source).
 *.Civ6Save
-saves/
+/saves/
 
 # Screen captures written by the capture pipeline (one per decision step adds up fast).
-captures/
-blobs/
+/captures/
+/blobs/
 
 # The local reference match-store adapter's database (plan Complexity Tracking C2).
 *.sqlite
@@ -42,3 +42,9 @@ uv.lock.bak
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Credential files (defense in depth; the real key lives outside the repo)
+openRouterKey.txt
+*.token
+*_key.txt
+*apikey*

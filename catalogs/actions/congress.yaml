@@ -1,0 +1,22 @@
+# catalogs/actions/congress.yaml
+# Backed by lua/ingame/congress.lua (capability_id: congress.orders). Verification re-reads
+# congress.state (lua/gamecore/congress.lua) after execution. `target` is the resolution_id;
+# `congress.*` (catalogs/README.md §4) is the harness-bound state for that resolution.
+#
+# See lua/gamecore/congress.lua and lua/ingame/congress.lua for the significant unresolved API
+# uncertainty around the whole World Congress surface — this declaration is written against the
+# best-available guess, not a confirmed API.
+
+- declaration_id: congress.cast_vote
+  kind: action
+  summary: Cast a vote (spending diplomatic favor) on an active World Congress resolution.
+  parity_basis: >
+    Open the World Congress screen during an active session and cast a vote, spending
+    diplomatic favor, on one of the currently proposed resolutions.
+  context: InGame
+  capability_id: congress.orders
+  availability_predicate: >
+    congress.is_in_session and congress.exists and player.diplomatic_favor > 0
+  verification_predicate: >
+    player.diplomatic_favor < observed_diplomatic_favor
+  introduced_in_version: "2026.09.1"

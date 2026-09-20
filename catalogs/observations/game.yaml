@@ -1,0 +1,52 @@
+# catalogs/observations/game.yaml
+# Backed by lua/ingame/screens.lua (capability_id: screens.probe) and lua/ingame/turn_control.lua
+# (capability_id: turn.control).
+#
+# Not named in tasks.md T090's literal file list. Added because lua/ingame/screens.lua (T088) and
+# the `game.*` predicate symbols this catalog's own README defines (used by turn.end_turn's
+# availability_predicate and by every prompt-response action's availability check) need a
+# resolving observation declaration; without one, `game.has_blocking_prompt` and
+# `game.current_screen` would be predicate symbols with no declared source, which the loader
+# cannot accept as a parity boundary. Added as a necessary, narrowly scoped completion of T090's
+# intent, called out in the authoring report.
+
+- declaration_id: game.screen_state
+  kind: observation
+  summary: >
+    Which screen or panel is currently open, and whether a blocking prompt requiring a decision
+    is up.
+  parity_basis: >
+    Look at whichever screen or panel is currently open on the local player's own display —
+    obvious to any human player observing their own screen.
+  context: InGame
+  capability_id: screens.probe
+  output_schema:
+    type: object
+    required: [screen, recognized, has_blocking_prompt]
+    properties:
+      screen: { type: string }
+      raw_screen_id: { type: string }
+      recognized: { type: boolean }
+      has_blocking_prompt: { type: boolean }
+      prompt_options:
+        type: array
+        items: { type: string }
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: game.turn_state
+  kind: observation
+  summary: >
+    The current turn number and whose turn it is.
+  parity_basis: >
+    Look at the turn counter in the top bar and whether the end-turn button is enabled (it is
+    only enabled during the local player's own turn).
+  context: InGame
+  capability_id: turn.control
+  output_schema:
+    type: object
+    required: [turn_number, is_local_player_turn, is_waiting_for_other_players]
+    properties:
+      turn_number: { type: integer, minimum: 1 }
+      is_local_player_turn: { type: boolean }
+      is_waiting_for_other_players: { type: boolean }
+  introduced_in_version: "2026.09.1"

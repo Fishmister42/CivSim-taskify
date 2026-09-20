@@ -1,0 +1,46 @@
+# catalogs/actions/units.yaml
+# Backed by lua/ingame/unit_orders.lua (capability_id: units.orders). Verification re-reads
+# units.state (lua/gamecore/units.lua) after execution. See catalogs/README.md §4 for the `unit.*`
+# and `target` predicate symbols used below.
+
+- declaration_id: units.move_to
+  kind: action
+  summary: Order a selected unit to move to a target plot.
+  parity_basis: >
+    Select the unit, then left-click a reachable plot within its movement range (or its
+    multi-turn path indicator).
+  context: InGame
+  capability_id: units.orders
+  availability_predicate: >
+    unit.is_selected and unit.owner_is_local_player and unit.movement_remaining > 0
+    and target in unit.reachable_plots
+  verification_predicate: >
+    unit.plot == target or (unit.queued_path != null and unit.queued_path.destination == target)
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: units.found_city
+  kind: action
+  summary: Found a city with a settler unit at its current plot.
+  parity_basis: >
+    Select a settler unit and click the "Found City" command in its unit action panel.
+  context: InGame
+  capability_id: units.orders
+  availability_predicate: >
+    unit.is_selected and unit.owner_is_local_player and unit.can_found_city
+  verification_predicate: >
+    not unit.exists
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: units.promote
+  kind: action
+  summary: Apply an available promotion to a unit.
+  parity_basis: >
+    Select a unit with an available promotion and click that promotion in its promotion tree
+    panel.
+  context: InGame
+  capability_id: units.orders
+  availability_predicate: >
+    unit.is_selected and unit.owner_is_local_player and target in unit.available_promotions
+  verification_predicate: >
+    not (target in unit.available_promotions)
+  introduced_in_version: "2026.09.1"

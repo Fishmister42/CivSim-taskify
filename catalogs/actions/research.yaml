@@ -1,0 +1,29 @@
+# catalogs/actions/research.yaml
+# Backed by lua/ingame/empire_orders.lua (capability_id: empire.orders). Verification re-reads
+# research.state (lua/gamecore/research.lua) after execution.
+
+- declaration_id: research.set_tech
+  kind: action
+  summary: Set the local player's current research to an available technology.
+  parity_basis: >
+    Open the Research tree screen and click a currently researchable technology.
+  context: InGame
+  capability_id: empire.orders
+  availability_predicate: >
+    target in player.researchable_techs
+  verification_predicate: >
+    player.current_research == target
+  introduced_in_version: "2026.09.1"
+
+- declaration_id: research.set_civic
+  kind: action
+  summary: Set the local player's current civic to an available civic.
+  parity_basis: >
+    Open the Civics tree screen and click a currently researchable civic.
+  context: InGame
+  capability_id: empire.orders
+  availability_predicate: >
+    target in player.researchable_civics
+  verification_predicate: >
+    player.current_civic == target
+  introduced_in_version: "2026.09.1"

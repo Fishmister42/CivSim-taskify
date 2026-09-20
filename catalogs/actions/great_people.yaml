@@ -1,0 +1,18 @@
+# catalogs/actions/great_people.yaml
+# Backed by lua/ingame/great_people.lua (capability_id: great_people.orders). Verification
+# re-reads great_people.state (lua/gamecore/great_people.lua) after execution. `target` is the
+# individual_id; `great_person.*` (catalogs/README.md §4) is the harness-bound state for that
+# individual.
+
+- declaration_id: great_people.recruit
+  kind: action
+  summary: Recruit (patronize) a currently recruitable great person.
+  parity_basis: >
+    Open the Great People screen and click "Recruit" on a currently recruitable individual.
+  context: InGame
+  capability_id: great_people.orders
+  availability_predicate: >
+    great_person.is_recruitable
+  verification_predicate: >
+    not great_person.is_recruitable
+  introduced_in_version: "2026.09.1"
