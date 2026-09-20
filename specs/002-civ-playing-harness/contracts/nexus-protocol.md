@@ -45,15 +45,64 @@ Every message is a header followed by a null-terminated UTF-8 payload.
 
 | Tag | Name | Payload |
 |---|---|---|
-| 4 | `TAG_HANDSHAKE` | `APP:<name>` — identify; `LSQ:` — enumerate available Lua states |
-| 3 | `TAG_COMMAND` | `CMD:<state_index>:<lua_code>` — execute Lua in that state |
+| 4 | `TAG_HANDSHAKE` | Sent: `APP:<name>` — identify; `LSQ:` — enumerate available Lua states. Received: the reply to either (see "Reply framing" below) |
+| 3 | `TAG_COMMAND` | Sent: `CMD:<state_index>:<lua_code>` — execute Lua in that state. Received: an **empty** acknowledgement frame — a command's output never arrives on this tag |
+| −1 | `TAG_ASYNC_OUTPUT` | Received only: one frame per printed/logged line, payload `O\0<LuaStateName>: <line>`. Carries **all** print output, including every command's sentinel-bracketed result, and arrives unsolicited at any point in the stream |
+
+## Reply framing — verified against a live client (2026-09-20)
+
+None of this section was documented before the first live run of the harness's own transport
+(Windows client 1.0.12.68, Steam, BBG 7.5.0 — `spikes/r5-save-path-windows.md`, "The three protocol
+defects"). The pre-live implementation guessed all three of the following wrong, and the guesses
+were mutually reinforced by a fake that spoke the same guesses. Every claim below cites the raw
+capture it was read from.
+
+1. **`APP:<name>` is answered.** The client replies with one `TAG_HANDSHAKE` frame identifying
+   itself: `"Civ6\0Sid Meier's Civilization 6\0<binary directory>"` — three NUL-separated fields
+   (`spikes/r5-raw-windows/raw_protocol_transcript.txt`, "after APP:"). That reply **must be read
+   and consumed before `LSQ:`'s reply is parsed**: its odd field count fails the state-list parser,
+   so a client that treats "the next frame" as the `LSQ:` reply cannot complete a handshake at all.
+   The harness treats the payload as opaque (logged, nothing parsed from it). The Linux raw probe
+   drains and discards frames after `APP:` before sending `LSQ:` (`spikes/r5-raw/nexus_probe.py`,
+   `handshake()`), consistent with this framing.
+2. **The `LSQ:` reply is the next `TAG_HANDSHAKE` frame — not the next frame.** Unsolicited
+   `TAG_ASYNC_OUTPUT` (tag −1) log frames interleave into the same stream at any point, including
+   between `LSQ:` and its reply — observed live: `O\0StagingRoom: RefreshStatus()\t...\tfalse`
+   arriving with the front-end state list (`raw_protocol_transcript.txt`, "after LSQ:"), and
+   `O\0PausePanel: CheckPausedState()...` frames mid-session
+   (`spikes/r5-raw-windows/demo_live_results.json`). Interleaved frames are routed to telemetry and
+   skipped, never a protocol error.
+3. **A command's printed output arrives on tag −1, one frame per printed line, each prefixed
+   `O\0<LuaStateName>: `; the tag-3 reply is an empty acknowledgement.** Measured directly
+   (`spikes/r5-raw-windows/raw_command_transcript.txt`):
+
+   ```text
+   tag=-1 payload='O\x00InGame: ---BEGIN:57a06e82...---'
+   tag=-1 payload='O\x00InGame: {"probe":"tag-hunt","lua_version":"2013.2.0 r13768"}'
+   tag=-1 payload='O\x00InGame: ---END:57a06e82...---'
+   tag=3  payload=''
+   ```
+
+   The prefix is stripped per frame before sentinel correlation. The Linux spikes strip the
+   identical prefix (`spikes/r5-raw/t077_enumerate.py`, `t077_probe2.py`, `t077_savetest.py`:
+   `^O\x00[A-Za-z_0-9]+:\s?`), so **Windows and Linux agree on this framing**; whether the empty
+   tag-3 acknowledgement is universal across builds is pending the Linux peer re-running
+   `raw_command_probe.py` (`r5-save-path-windows.md`, "Not yet verified" #1). A non-empty tag-3
+   payload has never been observed from a real client; the harness logs one loudly and routes it to
+   telemetry rather than accepting it as a result, so a framing change cannot pass silently.
+
+**Consequence for timeout semantics:** a command timeout means *the answer was not read*, not *the
+Lua did not run*. Live proof: a `Network.LoadGame` issued through the pre-fix client "timed out" —
+and loaded the game (`r5-save-path-windows.md`, defect 3). Callers must never infer from a timeout
+that the command had no effect.
 
 ## Connection sequence
 
 1. Connect to `127.0.0.1:4318`. Connection refused ⇒ the client is not running or the tuner is not
    enabled — a preparation failure, not a run failure.
-2. Send `APP:` to identify.
-3. Send `LSQ:` to enumerate Lua states.
+2. Send `APP:` to identify; read and consume its identification reply (see "Reply framing" #1).
+3. Send `LSQ:` to enumerate Lua states; the reply is the next `TAG_HANDSHAKE` frame, with any
+   interleaved tag −1 frames routed to telemetry (see "Reply framing" #2).
 4. Resolve `GameCore_Tuner` and `InGame` to their state indices.
 5. **Record the resolved indices on the run.** Indices are positional and not guaranteed stable
    across game versions or mod sets, so they are run data rather than constants.
@@ -107,8 +156,10 @@ one — a mismatch is a catalog-load error rather than a mid-run surprise (R3).
 
 ## Request/response discipline
 
-The protocol has **no native return values**. Results come back as `print` output, asynchronously,
-fragmented across packets. Two rules make that usable:
+The protocol has **no native return values**. Results come back as `print` output, asynchronously —
+delivered as `TAG_ASYNC_OUTPUT` (tag −1) frames, one per printed line, each carrying the
+`O\0<LuaStateName>: ` prefix, while the tag-3 reply is an empty acknowledgement (see "Reply
+framing" #3). Two rules make that usable:
 
 ### 1. Correlated sentinels
 
@@ -137,7 +188,7 @@ job, so the Python side never parses prose, and a capability's output validates 
 |---|---|---|
 | Connection refused at startup | Immediate | Preparation fails; the run does not start |
 | Connection dropped mid-run | Socket error | `crash_detected` or `hang_detected` run event; recovery path (FR-044, FR-045) |
-| Command exceeds its timeout | Per-command bound | Treated as unresponsive; contributes to the 60 s detection budget (SC-010) |
+| Command exceeds its timeout | Per-command bound | Treated as unresponsive; contributes to the 60 s detection budget (SC-010). A timeout does **not** mean the Lua did not run — see "Reply framing", consequence note |
 | Heartbeat nonce fails to round-trip | Periodic `GameCore_Tuner` probe | `hang_detected` — catches a game that is alive but stuck (R12) |
 | Output arrives with no matching nonce | Sentinel mismatch | Discarded to telemetry; never returned as a result |
 

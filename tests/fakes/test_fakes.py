@@ -11,6 +11,8 @@ server over a real socket.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -404,6 +406,78 @@ async def test_fake_server_can_transition_from_menu_to_a_loaded_game_mid_session
         assert game_indices.has_game_states is True
     finally:
         await client.close()
+        await server.stop()
+
+
+async def test_fake_server_speaks_the_live_verified_reply_framing_on_the_wire() -> None:
+    """Raw-socket audit of the fake's own frames, no NexusClient in the loop.
+
+    The fake must speak the framing a real client was measured speaking
+    (specs/002-civ-playing-harness/spikes/r5-raw-windows/
+    raw_protocol_transcript.txt + raw_command_transcript.txt), not the
+    framing the harness client expects -- a fake written to the client's
+    expectations confirms that client forever, which is exactly how the
+    pre-live protocol defects survived 1500+ green tests. Asserted here:
+
+    - `APP:` is answered with a TAG_HANDSHAKE identification frame whose
+      payload has an odd NUL-field count (three fields);
+    - a command's result arrives as tag -1 frames, one per printed line,
+      each prefixed `O\\0<StateName>: `;
+    - the TAG_COMMAND reply frame is empty.
+    """
+    from civsim_harness.nexus.codec import TAG_ASYNC_OUTPUT, NexusFrameDecoder, encode_frame
+    from civsim_harness.nexus.codec import TAG_COMMAND as TC
+    from civsim_harness.nexus.codec import TAG_HANDSHAKE as TH
+    from civsim_harness.nexus.sentinels import wrap_lua
+
+    server = FakeNexusServer()
+    server.queue_response({"ok": True}, match="print(true)")
+    await server.start()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
+        decoder = NexusFrameDecoder()
+
+        async def read_frames(count: int) -> list:
+            frames: list = []
+            while len(frames) < count:
+                chunk = await asyncio.wait_for(reader.read(4096), timeout=5.0)
+                assert chunk, "fake server closed the connection unexpectedly"
+                frames.extend(decoder.feed(chunk))
+            return frames
+
+        writer.write(encode_frame(TH, "APP:wire-audit"))
+        await writer.drain()
+        (app_reply,) = await read_frames(1)
+        assert app_reply.tag == TH
+        # Three NUL-separated fields -- the odd count that must break a
+        # client which misreads this frame as the LSQ: reply.
+        assert len(app_reply.payload.split("\x00")) == 3
+
+        writer.write(encode_frame(TH, "LSQ:"))
+        await writer.drain()
+        (lsq_reply,) = await read_frames(1)
+        assert lsq_reply.tag == TH
+        assert "GameCore_Tuner" in lsq_reply.payload
+
+        writer.write(encode_frame(TC, f"CMD:1:{wrap_lua('cafe01', 'print(true)')}"))
+        await writer.drain()
+        frames = await read_frames(4)
+
+        assert [f.tag for f in frames] == [
+            TAG_ASYNC_OUTPUT,
+            TAG_ASYNC_OUTPUT,
+            TAG_ASYNC_OUTPUT,
+            TC,
+        ]
+        assert frames[0].payload == "O\x00InGame: ---BEGIN:cafe01---"
+        assert frames[1].payload == 'O\x00InGame: {"ok": true}'
+        assert frames[2].payload == "O\x00InGame: ---END:cafe01---"
+        assert frames[3].payload == ""  # the empty tag-3 acknowledgement
+
+        writer.close()
+        with contextlib.suppress(OSError):
+            await writer.wait_closed()
+    finally:
         await server.stop()
 
 

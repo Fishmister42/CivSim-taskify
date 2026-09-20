@@ -26,7 +26,22 @@ from civsim_harness.errors import NexusError
 TAG_HANDSHAKE = 4
 
 #: Executes Lua in a resolved state (``CMD:<state_index>:<lua_code>`` payload).
+#: Verified live (2026-09-20, specs/002-civ-playing-harness/spikes/r5-raw-windows/
+#: raw_command_transcript.txt): the client's *reply* on this tag is an **empty**
+#: acknowledgement frame -- a command's actual printed output arrives on
+#: :data:`TAG_ASYNC_OUTPUT` instead.
 TAG_COMMAND = 3
+
+#: Asynchronous output from the game client: every ``print()`` line (and every
+#: engine log line) arrives as its own frame on this tag, payload prefixed
+#: ``O\0<LuaStateName>: ``. This is the only tag that ever carries a command's
+#: printed result -- verified live on Windows (specs/002-civ-playing-harness/
+#: spikes/r5-raw-windows/raw_command_transcript.txt: sentinels came back on
+#: tag -1 while the tag-3 reply was empty) and consistent with the Linux
+#: spikes, which strip the identical prefix (specs/002-civ-playing-harness/
+#: spikes/r5-raw/t077_enumerate.py). These frames also interleave unsolicited
+#: into handshake traffic (r5-raw-windows/raw_protocol_transcript.txt).
+TAG_ASYNC_OUTPUT = -1
 
 # length: uint32 little-endian, tag: int32 little-endian.
 _HEADER = struct.Struct("<Ii")

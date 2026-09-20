@@ -85,6 +85,29 @@ distinguishes "this failed because the index is stale" from an ordinary
 Lua error, so any such heuristic would either miss real staleness or mask
 genuine bugs behind a silent retry -- worse than today's opaque failure,
 not better.
+
+A third live verification (2026-09-20, Windows client 1.0.12.68 -- the first
+time this client's *command* path ever ran against a real game on any
+platform) established the reply framing, which the pre-live implementation
+had guessed wrong in three places:
+
+- ``APP:<name>`` is *answered*: one ``TAG_HANDSHAKE`` identification frame
+  (``"Civ6\\0<title>\\0<binary dir>"``) that must be consumed before the
+  ``LSQ:`` reply is read (:meth:`NexusClient._handshake`).
+- Unsolicited ``TAG_ASYNC_OUTPUT`` (tag -1) log frames interleave into the
+  stream at any point, including between ``LSQ:`` and its reply
+  (:meth:`NexusClient._read_handshake_frame` skips them).
+- A command's printed output arrives on tag -1, one frame per printed line,
+  each prefixed ``O\\0<StateName>: ``; the tag-3 reply is an **empty**
+  acknowledgement (:meth:`NexusClient._await_result`, :func:`_strip_print_prefix`).
+
+Evidence: specs/002-civ-playing-harness/spikes/r5-raw-windows/
+(raw_protocol_transcript.txt, raw_command_transcript.txt) and
+specs/002-civ-playing-harness/spikes/r5-save-path-windows.md; the Linux
+spikes agree on the prefix and on draining the ``APP:`` reply
+(specs/002-civ-playing-harness/spikes/r5-raw/t077_enumerate.py,
+nexus_probe.py). contracts/nexus-protocol.md "Reply framing" is the
+normative write-up.
 """
 
 from __future__ import annotations
@@ -99,6 +122,7 @@ from typing import Any
 
 from civsim_harness.errors import NexusError, PreflightError
 from civsim_harness.nexus.codec import (
+    TAG_ASYNC_OUTPUT,
     TAG_COMMAND,
     TAG_HANDSHAKE,
     NexusFrame,
@@ -158,6 +182,31 @@ def _default_telemetry_sink(text: str) -> None:
     passes its own sink via ``NexusClient(on_unmatched_output=...)``.
     """
     _logger.warning("nexus: discarding unmatched output: %s", text)
+
+
+def _strip_print_prefix(payload: str) -> str:
+    """Strip the ``O\\0<LuaStateName>: `` prefix from one async output frame.
+
+    **Verified against a real client** (2026-09-20 Windows live session,
+    specs/002-civ-playing-harness/spikes/r5-raw-windows/
+    raw_command_transcript.txt; the Linux spikes strip the identical prefix
+    -- specs/002-civ-playing-harness/spikes/r5-raw/t077_enumerate.py): every
+    ``print()`` line arrives as its own ``TAG_ASYNC_OUTPUT`` frame whose
+    payload is prefixed ``O\\0<StateName>: ``, e.g.::
+
+        "O\\x00InGame: ---BEGIN:57a06e82...---"  ->  "---BEGIN:57a06e82...---"
+
+    A payload without the prefix is returned unchanged -- feeding it through
+    verbatim keeps any unrecognized async line visible to telemetry rather
+    than silently eaten.
+    """
+    if payload.startswith("O\x00"):
+        payload = payload[2:]
+        head, sep, tail = payload.partition(": ")
+        if sep and "\x00" not in head:
+            return tail
+        return payload
+    return payload
 
 
 def _parse_state_list(payload: str) -> dict[str, int]:
@@ -383,12 +432,26 @@ class NexusClient:
     # -- handshake --------------------------------------------------------
 
     async def _handshake(self) -> StateIndices:
-        """``APP:`` to identify, then resolve whatever Lua states currently exist.
+        """``APP:`` to identify, consume its reply, then resolve the Lua states.
+
+        **Verified against a real client** (2026-09-20 Windows live session,
+        specs/002-civ-playing-harness/spikes/r5-raw-windows/
+        raw_protocol_transcript.txt): the client answers ``APP:<name>`` with
+        one ``TAG_HANDSHAKE`` identification frame of its own, e.g.
+        ``"Civ6\\0Sid Meier's Civilization 6\\0<binary dir>"``. That reply
+        MUST be read and consumed here -- an earlier implementation skipped
+        straight to ``LSQ:`` and parsed the identification frame as the
+        state list, so ``connect()`` failed against every real client
+        ("odd number of NUL-separated fields": the greeting has three).
+        The payload is treated as opaque and logged for the transcript;
+        nothing downstream depends on its contents.
 
         Does not require ``GameCore_Tuner`` / ``InGame`` -- see
         :meth:`resolve_game_states` for the step that does.
         """
         await self._send_raw(TAG_HANDSHAKE, f"APP:{self._app_name}")
+        greeting = await self._read_handshake_frame()
+        _logger.debug("nexus: APP: handshake reply: %r", greeting.payload[:200])
         return await self._query_states()
 
     async def _query_states(self) -> StateIndices:
@@ -397,15 +460,19 @@ class NexusClient:
         Shared by :meth:`_handshake` (the initial connect) and
         :meth:`resolve_game_states` (the later, explicit step): both need
         "the current state table," just at different points in the run.
+
+        The reply is the next ``TAG_HANDSHAKE`` frame -- **not** the next
+        frame of any tag. Verified against a real client (2026-09-20,
+        raw_protocol_transcript.txt): the client interleaves unsolicited
+        ``TAG_ASYNC_OUTPUT`` (tag -1) log frames into the same stream, e.g.
+        ``O\\0StagingRoom: RefreshStatus()...`` arriving around the ``LSQ:``
+        reply. An earlier implementation read exactly one frame and raised
+        on any other tag, so any log line emitted in that window aborted
+        the query. :meth:`_read_handshake_frame` skips those frames (routing
+        print output to telemetry) instead of failing on them.
         """
         await self._send_raw(TAG_HANDSHAKE, "LSQ:")
-
-        frame = await self._read_frame()
-        if frame.tag != TAG_HANDSHAKE:
-            raise NexusError(
-                "Expected a TAG_HANDSHAKE response to LSQ:, got a different tag",
-                detail={"reason": REASON_HANDSHAKE_FAILED, "tag": frame.tag},
-            )
+        frame = await self._read_handshake_frame()
 
         by_name = _parse_state_list(frame.payload)
         return StateIndices(
@@ -413,6 +480,42 @@ class NexusClient:
             game_core_tuner=by_name.get("GameCore_Tuner"),
             in_game=by_name.get("InGame"),
         )
+
+    async def _read_handshake_frame(self) -> NexusFrame:
+        """Read frames until the next ``TAG_HANDSHAKE`` one, skipping async noise.
+
+        Interleaved ``TAG_ASYNC_OUTPUT`` print/log frames are routed to the
+        unmatched-output telemetry sink (prefix stripped), never raised on
+        and never parsed as a handshake payload. A ``TAG_COMMAND`` frame here
+        is a stale empty acknowledgement from an earlier command (the real
+        client acknowledges every command with an empty tag-3 frame, which
+        can still be unread when the sentinels already completed the result)
+        -- skipped; a *non-empty* one would be the pre-live-verification
+        framing no real client has ever exhibited, so it is logged loudly
+        (which framing was seen) and still not treated as a result or a
+        state list. Callers bound this loop with their own timeout
+        (:meth:`connect`'s connect timeout, or the command timeout in
+        :meth:`resolve_game_states` / :meth:`refresh_state_indices`).
+        """
+        while True:
+            frame = await self._read_frame()
+            if frame.tag == TAG_HANDSHAKE:
+                return frame
+            if frame.tag == TAG_ASYNC_OUTPUT:
+                stripped = _strip_print_prefix(frame.payload)
+                if stripped.strip():
+                    self._on_unmatched_output(stripped)
+                continue
+            if frame.tag == TAG_COMMAND and not frame.payload:
+                continue  # a previous command's empty acknowledgement, late
+            _logger.warning(
+                "nexus: skipping unexpected frame while awaiting a handshake "
+                "reply (tag=%d, payload=%r) -- the live-verified protocol "
+                "delivers print output on tag -1 and only empty "
+                "acknowledgements on tag 3",
+                frame.tag,
+                frame.payload[:200],
+            )
 
     def _require_connected(self) -> None:
         if self._writer is None or self._reader is None:
@@ -454,7 +557,7 @@ class NexusClient:
         self._require_connected()
 
         async with self._lock:
-            indices = await self._query_states()
+            indices = await self._bounded_query_states()
 
         missing = [name for name in _REQUIRED_STATES if name not in indices.by_name]
         if missing:
@@ -498,10 +601,29 @@ class NexusClient:
         self._require_connected()
 
         async with self._lock:
-            indices = await self._query_states()
+            indices = await self._bounded_query_states()
 
         self._state_indices = indices
         return indices
+
+    async def _bounded_query_states(self) -> StateIndices:
+        """One ``LSQ:`` round-trip under the per-command timeout.
+
+        :meth:`_query_states` now skips interleaved async frames while
+        waiting for the ``TAG_HANDSHAKE`` reply (see
+        :meth:`_read_handshake_frame`), so a client that keeps emitting log
+        frames but never answers ``LSQ:`` must be bounded here rather than
+        looping forever. :meth:`connect` already bounds its handshake with
+        the connect timeout; this is the equivalent bound for the later
+        re-resolution calls.
+        """
+        try:
+            return await asyncio.wait_for(self._query_states(), timeout=self._command_timeout_s)
+        except TimeoutError as exc:
+            raise NexusError(
+                "Nexus LSQ: state query exceeded the per-operation timeout",
+                detail={"reason": REASON_TIMEOUT, "timeout_s": self._command_timeout_s},
+            ) from exc
 
     # -- request/response discipline --------------------------------------
 
@@ -587,16 +709,42 @@ class NexusClient:
             ) from exc
 
     async def _await_result(self, nonce: str) -> str:
+        """Collect *nonce*'s sentinel-bracketed result from the async output stream.
+
+        **Verified against a real client** (2026-09-20 Windows live session,
+        specs/002-civ-playing-harness/spikes/r5-raw-windows/
+        raw_command_transcript.txt): a command's printed output arrives as
+        ``TAG_ASYNC_OUTPUT`` (tag -1) frames, one per printed line, each
+        prefixed ``O\\0<StateName>: `` -- and the ``TAG_COMMAND`` (tag 3)
+        reply is an **empty acknowledgement** carrying no output at all. An
+        earlier implementation fed only tag-3 payloads to the correlator, so
+        against a real client every command timed out while its Lua ran to
+        completion (the ``Network.LoadGame`` that "timed out" had loaded the
+        game). Only tag -1 frames are fed to the correlator, prefix
+        stripped, one line each; a *non-empty* tag-3 payload would be that
+        never-observed pre-live framing, so it is logged loudly (which
+        framing was seen) and routed to telemetry rather than silently
+        accepted as a result -- its command then times out visibly instead
+        of a wrong framing being masked.
+        """
         while True:
             result = self._correlator.take_result(nonce)
             if result is not None:
                 return result
             frame = await self._read_frame()
-            if frame.tag == TAG_COMMAND:
-                self._correlator.feed(frame.payload)
-            # Frames of any other tag are not print output and are not fed
-            # to the correlator, which only ever interprets TAG_COMMAND
-            # payloads as game print output.
+            if frame.tag == TAG_ASYNC_OUTPUT:
+                self._correlator.feed(_strip_print_prefix(frame.payload) + "\n")
+            elif frame.tag == TAG_COMMAND and frame.payload:
+                _logger.warning(
+                    "nexus: discarding non-empty TAG_COMMAND payload -- the "
+                    "live-verified protocol delivers results on tag -1 and "
+                    "an empty tag-3 acknowledgement only (payload=%r)",
+                    frame.payload[:200],
+                )
+                self._on_unmatched_output(frame.payload)
+            # An empty TAG_COMMAND frame is the client's bare acknowledgement
+            # (it usually arrives after the sentinels); frames of any other
+            # tag are not print output. Neither is fed to the correlator.
 
     # -- wire plumbing ------------------------------------------------------
 

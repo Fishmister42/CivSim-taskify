@@ -8,6 +8,28 @@ without a running Civilization VI client, and so an unmodified
 and exchange commands against this server exactly as it would the real
 game.
 
+**This fake speaks the live-verified reply framing** (2026-09-20 Windows
+live session, `specs/002-civ-playing-harness/spikes/r5-raw-windows/`
+`raw_protocol_transcript.txt` + `raw_command_transcript.txt`; the Linux
+spikes agree on the prefix -- `spikes/r5-raw/t077_enumerate.py` -- and on
+draining the `APP:` reply -- `spikes/r5-raw/nexus_probe.py`), not the
+framing the pre-live client implementation *expected*. An earlier version
+of this fake spoke the expected framing, which is exactly how 1500+ green
+tests coexisted with a client that could not drive any real game:
+
+- `APP:<name>` is **answered** with a `TAG_HANDSHAKE` identification frame
+  (`"Civ6\\0<title>\\0<binary dir>"` -- three NUL-separated fields, the
+  exact odd-field-count payload that broke `_parse_state_list` when the old
+  client misread it as the `LSQ:` reply).
+- A command's result is delivered as `TAG_ASYNC_OUTPUT` (tag -1) frames,
+  **one per printed line**, each prefixed `O\\0<StateName>: `, followed by
+  an **empty** `TAG_COMMAND` (tag 3) acknowledgement frame. Nothing ever
+  comes back as a non-empty tag-3 payload.
+- Unsolicited tag -1 log frames can interleave anywhere in the stream --
+  `inject_async_frame_before_next_lsq` forces one into the handshake window
+  the real client was observed emitting into
+  (`O\\0StagingRoom: RefreshStatus()...` around the `LSQ:` reply).
+
 **What this fake can do (contracts/nexus-protocol.md, research R15):**
 
 - A normal request/response exchange, matched against a scripted
@@ -24,6 +46,9 @@ game.
   telemetry instead of returning it as a result (contract: "Output arrives
   with no matching nonce -> Discarded to telemetry; never returned as a
   result").
+- Interleave an unsolicited async log frame into the handshake window
+  (`inject_async_frame_before_next_lsq`), proving a real `NexusClient`
+  skips it instead of aborting the state query.
 - Present either Lua state table a real client can see (`set_state_table`):
   a "main menu" table with no game-play states, or a "game loaded" table
   with `GameCore_Tuner`/`InGame` at any (including non-contiguous or
@@ -62,6 +87,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from civsim_harness.nexus.codec import (
+    TAG_ASYNC_OUTPUT,
     TAG_COMMAND,
     TAG_HANDSHAKE,
     NexusFrame,
@@ -77,6 +103,25 @@ STATE_INDEX_IN_GAME = 1
 
 _CMD_PREFIX = "CMD:"
 _BEGIN_LINE_RE = re.compile(r'print\("---BEGIN:(.+?)---"\)')
+
+#: The `APP:` handshake reply, shaped exactly like the live capture
+#: (r5-raw-windows/raw_protocol_transcript.txt): three NUL-separated fields
+#: -- id, title, binary directory. Keeping the odd field count is the point:
+#: a client that misreads this frame as the `LSQ:` reply must fail the same
+#: way it failed against the real game ("odd number of NUL-separated fields").
+APP_REPLY_PAYLOAD = "Civ6\x00Sid Meier's Civilization 6\x00C:\\FakeNexus\\Base\\Binaries\\Debug"
+
+#: Default state name stamped on an unsolicited interleaved log frame --
+#: matching the live capture's `O\0StagingRoom: RefreshStatus()...`.
+DEFAULT_ASYNC_STATE_NAME = "StagingRoom"
+
+
+def print_frame(state_name: str, line: str) -> bytes:
+    """One async output frame, exactly as the real client emits a printed line:
+    tag -1, payload ``O\\0<StateName>: <line>`` (r5-raw-windows/
+    raw_command_transcript.txt). Module-level so a test can also assert on
+    the raw wire shape without a client in the loop."""
+    return encode_frame(TAG_ASYNC_OUTPUT, f"O\x00{state_name}: {line}")
 
 
 # --------------------------------------------------------------------------
@@ -338,6 +383,7 @@ class FakeNexusServer:
         self._stall_at: set[int] = set()
         self._stall_matches: list[str] = []
         self._stray_before: dict[int, list[str]] = {}
+        self._async_before_lsq: list[tuple[str, str]] = []  # (state_name, line)
 
         # Audit trail: what this fake actually saw and did, independent of
         # the transcript it was handed.
@@ -437,11 +483,26 @@ class FakeNexusServer:
     def inject_stray_text(self, before_command_index: int, text: str) -> None:
         """Schedule `text` to be written on the wire, outside any BEGIN/END
         sentinel pair, immediately before the response to the
-        `before_command_index`-th command (1-based). `text` is written
-        verbatim -- pass something with no sentinel of its own (stray
-        engine prints) or one carrying a stale/foreign nonce, matching the
-        two "unmatched output" shapes the wire contract names."""
+        `before_command_index`-th command (1-based). Emitted the way a real
+        client emits stray prints: one tag -1 frame per line of `text`,
+        each prefixed `O\\0<StateName>: ` (the target command's own state).
+        Pass something with no sentinel of its own (stray engine prints) or
+        text carrying a stale/foreign nonce, matching the two "unmatched
+        output" shapes the wire contract names."""
         self._stray_before.setdefault(before_command_index, []).append(text)
+
+    def inject_async_frame_before_next_lsq(
+        self, line: str, *, state_name: str = DEFAULT_ASYNC_STATE_NAME
+    ) -> None:
+        """Interleave one unsolicited async log frame (tag -1, `O\\0<state_name>: `
+        prefixed) immediately before the reply to the next `LSQ:` query --
+        the exact window the live capture shows the real client emitting
+        into (r5-raw-windows/raw_protocol_transcript.txt:
+        `O\\0StagingRoom: RefreshStatus()...` around the `LSQ:` reply). A
+        client that reads "the next frame" as the state list instead of
+        "the next TAG_HANDSHAKE frame" fails against this. Call repeatedly
+        to queue several; all queued frames drain before that one reply."""
+        self._async_before_lsq.append((state_name, line))
 
     def queue_response(
         self,
@@ -520,7 +581,17 @@ class FakeNexusServer:
                     # must get a real reply too (see `set_state_table`).
                     if frame.payload.startswith("APP:"):
                         self.app_names.append(frame.payload[len("APP:") :])
+                        # The real client answers APP: with an identification
+                        # frame of its own (r5-raw-windows/
+                        # raw_protocol_transcript.txt) -- a client that never
+                        # consumes it misparses it as the LSQ: reply.
+                        writer.write(encode_frame(TAG_HANDSHAKE, APP_REPLY_PAYLOAD))
+                        await writer.drain()
                     elif frame.payload == "LSQ:":
+                        for state_name, line in self._async_before_lsq:
+                            # See `inject_async_frame_before_next_lsq`.
+                            writer.write(print_frame(state_name, line))
+                        self._async_before_lsq.clear()
                         writer.write(
                             encode_frame(TAG_HANDSHAKE, _encode_state_table(self._state_table))
                         )
@@ -547,13 +618,22 @@ class FakeNexusServer:
                 ):
                     continue  # never respond to this one; later commands still get served
 
+                state_name = self._state_name_for(state_index)
+
                 for stray in self._stray_before.pop(commands_seen, []):
-                    writer.write(encode_frame(TAG_COMMAND, stray))
+                    for stray_line in stray.split("\n"):
+                        writer.write(print_frame(state_name, stray_line))
                     await writer.drain()
 
+                # The live-verified reply framing (r5-raw-windows/
+                # raw_command_transcript.txt): each printed line is its own
+                # tag -1 frame, prefixed `O\0<StateName>: `, and the tag-3
+                # reply is an EMPTY acknowledgement. The result never rides
+                # on tag 3.
                 response = self._resolve_response(state_index, lua_body, received)
-                payload = f"{begin_marker(nonce)}\n{json.dumps(response)}\n{end_marker(nonce)}"
-                writer.write(encode_frame(TAG_COMMAND, payload))
+                for line in (begin_marker(nonce), json.dumps(response), end_marker(nonce)):
+                    writer.write(print_frame(state_name, line))
+                writer.write(encode_frame(TAG_COMMAND, ""))
                 await writer.drain()
 
                 if self._drop_after is not None and commands_seen == self._drop_after:
@@ -566,6 +646,17 @@ class FakeNexusServer:
             writer.close()
             with contextlib.suppress(OSError):
                 await writer.wait_closed()
+
+    def _state_name_for(self, state_index: int) -> str:
+        """The Lua state name stamped into the `O\\0<StateName>: ` print prefix
+        -- resolved from the current state table, the way the real client
+        stamps the state that ran the Lua (`O\\0InGame: ...`). A command
+        addressed to an index absent from the table (a scripted-staleness
+        scenario) still gets a syntactically real prefix."""
+        for name, index in self._state_table.items():
+            if index == state_index:
+                return name
+        return f"State{state_index}"
 
     def _resolve_response(
         self, state_index: int, lua_body: str, received: ReceivedCommand

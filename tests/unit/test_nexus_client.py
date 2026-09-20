@@ -38,20 +38,25 @@ defect 3's tests below need instead.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 import pytest
 
 from civsim_harness.errors import NexusError, PreflightError
 from civsim_harness.nexus.client import (
+    REASON_CONNECTION_CLOSED,
     REASON_GAME_STATES_UNAVAILABLE,
     REASON_HANDSHAKE_FAILED,
     REASON_STALE_STATE_INDEX,
+    REASON_TIMEOUT,
     NexusClient,
     StateIndices,
     _parse_state_list,
+    _strip_print_prefix,
 )
 from civsim_harness.nexus.codec import (
+    TAG_ASYNC_OUTPUT,
     TAG_COMMAND,
     TAG_HANDSHAKE,
     NexusFrameDecoder,
@@ -185,17 +190,23 @@ _MENU_ONLY_LSQ_PAYLOAD = "0\x00Main State\x001\x00DebugHotloadCache"
 class _ScriptedTuner:
     """A minimal in-process TCP double for the Nexus wire protocol.
 
-    Not ``tests/fakes/fake_nexus.py`` (a separate, shared double another
-    agent is writing concurrently, still scripted against the pre-fix
-    newline LSQ format) -- this is a small, self-contained stand-in local to
-    this module, just enough to drive connect()/resolve_game_states()
-    sequencing against a scriptable state table.
+    Not ``tests/fakes/fake_nexus.py`` -- this is a small, self-contained
+    stand-in local to this module, just enough to drive
+    connect()/resolve_game_states() sequencing against a scriptable state
+    table.
 
-    Answers only ``LSQ:``; like the real client (and like the concurrent
-    fake), it never waits for a reply to ``APP:`` before sending ``LSQ:``,
-    so a double that answered ``APP:`` too would make the client misread
-    that acknowledgement as the ``LSQ:`` result.
+    Speaks the live-verified handshake framing (2026-09-20 Windows capture,
+    specs/002-civ-playing-harness/spikes/r5-raw-windows/
+    raw_protocol_transcript.txt): ``APP:`` is *answered* with a
+    ``TAG_HANDSHAKE`` identification frame of its own -- the real reply has
+    three NUL-separated fields, an odd count that ``_parse_state_list``
+    rejects, so a client that fails to consume it cannot connect at all
+    (that was live defect 1). ``LSQ:`` is answered from the scripted payload
+    list.
     """
+
+    #: The identification payload shape a real client sent back to ``APP:``.
+    APP_REPLY = "Civ6\x00Sid Meier's Civilization 6\x00C:\\ScriptedTuner\\Binaries\\Debug"
 
     def __init__(self, lsq_payloads: list[str]) -> None:
         self._lsq_payloads = lsq_payloads
@@ -220,7 +231,10 @@ class _ScriptedTuner:
                 if not chunk:
                     return
                 for frame in decoder.feed(chunk):
-                    if frame.tag == TAG_HANDSHAKE and frame.payload == "LSQ:":
+                    if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
+                        writer.write(encode_frame(TAG_HANDSHAKE, self.APP_REPLY))
+                        await writer.drain()
+                    elif frame.tag == TAG_HANDSHAKE and frame.payload == "LSQ:":
                         position = min(self._lsq_calls, len(self._lsq_payloads) - 1)
                         response = self._lsq_payloads[position]
                         self._lsq_calls += 1
@@ -497,7 +511,21 @@ async def test_connect_raises_preflight_error_when_connection_is_refused() -> No
     assert excinfo.value.detail["port"] == port
 
 
-async def test_connect_raises_nexus_error_when_lsq_response_has_the_wrong_tag() -> None:
+async def test_a_non_handshake_frame_is_never_parsed_as_the_state_list() -> None:
+    """Rewritten with the live-protocol fix.
+
+    The pre-live version of this test asserted the exact opposite behaviour
+    -- that a non-``TAG_HANDSHAKE`` frame arriving after ``LSQ:`` raises
+    ``REASON_HANDSHAKE_FAILED``. Against a real client that assertion is the
+    defect: unsolicited tag -1 log frames interleave into the handshake
+    window routinely (live defect 2), so a wrong-tag frame must be
+    *skipped*, not fatal. What must survive from the old test is the
+    property that such a frame is never parsed as the state list: here the
+    server sends only junk on a command tag and closes, so a correct client
+    reports the dead connection rather than ever handing back a state table
+    built from a non-handshake payload.
+    """
+
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         decoder = NexusFrameDecoder()
         while True:
@@ -505,7 +533,10 @@ async def test_connect_raises_nexus_error_when_lsq_response_has_the_wrong_tag() 
             if not chunk:
                 return
             for frame in decoder.feed(chunk):
-                if frame.tag == TAG_HANDSHAKE and frame.payload == "LSQ:":
+                if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
+                    writer.write(encode_frame(TAG_HANDSHAKE, _ScriptedTuner.APP_REPLY))
+                    await writer.drain()
+                elif frame.tag == TAG_HANDSHAKE and frame.payload == "LSQ:":
                     writer.write(encode_frame(TAG_COMMAND, "not a handshake response"))
                     await writer.drain()
                     writer.close()
@@ -521,4 +552,222 @@ async def test_connect_raises_nexus_error_when_lsq_response_has_the_wrong_tag() 
         server.close()
         await server.wait_closed()
 
-    assert excinfo.value.detail["reason"] == REASON_HANDSHAKE_FAILED
+    assert excinfo.value.detail["reason"] == REASON_CONNECTION_CLOSED
+    assert client.state_indices is None
+
+
+# --------------------------------------------------------------------------
+# Live-protocol regressions -- the three defects found driving a real client
+# (2026-09-20 Windows session; specs/002-civ-playing-harness/spikes/
+# r5-save-path-windows.md "The three protocol defects"). Each test below
+# fails against the pre-live implementation of exactly one fix; the framings
+# are transcribed from r5-raw-windows/raw_protocol_transcript.txt and
+# raw_command_transcript.txt, not invented.
+# --------------------------------------------------------------------------
+
+# The APP: reply a real client sent, verbatim from raw_protocol_transcript.txt.
+_REAL_APP_REPLY_PAYLOAD = (
+    "Civ6\x00Sid Meier's Civilization 6\x00C:\\Program Files (x86)\\Steam\\steamapps"
+    "\\common\\Sid Meier's Civilization VI\\Base\\Binaries\\Debug"
+)
+
+
+async def test_live_defect_1_handshake_consumes_the_app_reply_before_the_state_list() -> None:
+    """`APP:` is answered, and that reply must be consumed -- not parsed as LSQ's.
+
+    The identification payload has three NUL-separated fields (an odd
+    count), so the pre-live client -- which sent `APP:` and then read the
+    very next frame as the `LSQ:` reply -- failed every connect with "odd
+    number of NUL-separated fields". Uses the verbatim captured payload.
+    """
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        decoder = NexusFrameDecoder()
+        while True:
+            chunk = await reader.read(4096)
+            if not chunk:
+                return
+            for frame in decoder.feed(chunk):
+                if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
+                    writer.write(encode_frame(TAG_HANDSHAKE, _REAL_APP_REPLY_PAYLOAD))
+                    await writer.drain()
+                elif frame.tag == TAG_HANDSHAKE and frame.payload == "LSQ:":
+                    writer.write(encode_frame(TAG_HANDSHAKE, _MENU_ONLY_LSQ_PAYLOAD))
+                    await writer.drain()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = NexusClient(host="127.0.0.1", port=port, connect_timeout_s=5.0)
+    try:
+        indices = await client.connect()
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+    assert indices.by_name == {"Main State": 0, "DebugHotloadCache": 1}
+
+
+async def test_live_defect_2_interleaved_async_frames_do_not_abort_a_state_query() -> None:
+    """Unsolicited tag -1 log frames mid-query are telemetry, not a failure.
+
+    Live capture: `O\\0StagingRoom: RefreshStatus()...` interleaved around
+    the `LSQ:` reply; the pre-live client read exactly one frame and raised
+    "Expected a TAG_HANDSHAKE response to LSQ:, got a different tag" with
+    detail tag=-1 on the first real refresh_state_indices().
+    """
+    captured: list[str] = []
+    async with FakeNexusServer() as server:
+        server.inject_async_frame_before_next_lsq(
+            "RefreshStatus()\tSun Sep 20 15:19:10 2026\tfalse"
+        )
+        client = NexusClient(
+            host="127.0.0.1", port=server.port, on_unmatched_output=captured.append
+        )
+        try:
+            indices = await client.connect()
+            assert indices.has_game_states is True
+
+            # And again mid-session: the exact call the live session saw fail.
+            server.inject_async_frame_before_next_lsq("CheckPausedState()\t1789932309")
+            refreshed = await client.refresh_state_indices()
+        finally:
+            await client.close()
+
+    assert refreshed.by_name == indices.by_name
+    assert captured == [
+        "RefreshStatus()\tSun Sep 20 15:19:10 2026\tfalse",
+        "CheckPausedState()\t1789932309",
+    ]
+
+
+async def test_live_defect_3_result_arrives_on_tag_minus_1_prints_with_an_empty_tag_3() -> None:
+    """A command's result rides tag -1 print frames; tag 3 is an empty ack.
+
+    Framing transcribed from raw_command_transcript.txt: three tag -1
+    frames (`O\\0InGame: ---BEGIN:<nonce>---`, the JSON line, the END line),
+    then `tag=3 payload=''`. The pre-live client fed only tag-3 payloads to
+    the correlator, so every command timed out while its Lua actually ran
+    (the "timed-out" Network.LoadGame had loaded the game). This server
+    speaks that captured framing byte for byte -- independently of
+    tests/fakes/fake_nexus.py, so a change to the shared fake cannot
+    silently weaken this regression.
+    """
+    lsq_payload = "10\x00GameCore_Tuner\x00132\x00InGame"
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        decoder = NexusFrameDecoder()
+        while True:
+            chunk = await reader.read(4096)
+            if not chunk:
+                return
+            for frame in decoder.feed(chunk):
+                if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
+                    writer.write(encode_frame(TAG_HANDSHAKE, _REAL_APP_REPLY_PAYLOAD))
+                elif frame.tag == TAG_HANDSHAKE and frame.payload == "LSQ:":
+                    writer.write(encode_frame(TAG_HANDSHAKE, lsq_payload))
+                elif frame.tag == TAG_COMMAND:
+                    begin_match = re.search(r"---BEGIN:([0-9a-f]+)---", frame.payload)
+                    assert begin_match is not None
+                    nonce = begin_match.group(1)
+                    json_line = '{"probe":"tag-hunt","lua_version":"2013.2.0 r13768"}'
+                    for line in (
+                        f"---BEGIN:{nonce}---",
+                        json_line,
+                        f"---END:{nonce}---",
+                    ):
+                        writer.write(
+                            encode_frame(TAG_ASYNC_OUTPUT, f"O\x00InGame: {line}")
+                        )
+                    writer.write(encode_frame(TAG_COMMAND, ""))
+                await writer.drain()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = NexusClient(host="127.0.0.1", port=port, command_timeout_s=5.0)
+    try:
+        indices = await client.connect()
+        assert indices.in_game == 132
+        result = await client.execute_command(state_index=132, lua_body="print(true)")
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+    assert result == {"probe": "tag-hunt", "lua_version": "2013.2.0 r13768"}
+
+
+async def test_a_non_empty_tag_3_payload_is_telemetry_not_a_result() -> None:
+    """The never-observed pre-live framing must fail loudly, not quietly work.
+
+    If a client ever did deliver a sentinel-bracketed result as a non-empty
+    tag-3 payload (the framing the old implementation assumed and no real
+    client has exhibited), accepting it silently would mask a protocol
+    regression -- the command must time out and the payload must be routed
+    to telemetry instead, per the "no silent dual-protocol tolerance" rule.
+    """
+    captured: list[str] = []
+    lsq_payload = "0\x00GameCore_Tuner\x001\x00InGame"
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        decoder = NexusFrameDecoder()
+        while True:
+            chunk = await reader.read(4096)
+            if not chunk:
+                return
+            for frame in decoder.feed(chunk):
+                if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
+                    writer.write(encode_frame(TAG_HANDSHAKE, _REAL_APP_REPLY_PAYLOAD))
+                elif frame.tag == TAG_HANDSHAKE and frame.payload == "LSQ:":
+                    writer.write(encode_frame(TAG_HANDSHAKE, lsq_payload))
+                elif frame.tag == TAG_COMMAND:
+                    begin_match = re.search(r"---BEGIN:([0-9a-f]+)---", frame.payload)
+                    assert begin_match is not None
+                    nonce = begin_match.group(1)
+                    writer.write(
+                        encode_frame(
+                            TAG_COMMAND,
+                            f"---BEGIN:{nonce}---\ntrue\n---END:{nonce}---",
+                        )
+                    )
+                await writer.drain()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = NexusClient(
+        host="127.0.0.1",
+        port=port,
+        command_timeout_s=0.3,
+        on_unmatched_output=captured.append,
+    )
+    try:
+        await client.connect()
+        with pytest.raises(NexusError) as excinfo:
+            await client.execute_command(state_index=1, lua_body="print(true)")
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+    assert excinfo.value.detail["reason"] == REASON_TIMEOUT
+    assert any("---BEGIN:" in text for text in captured)
+
+
+def test_strip_print_prefix_removes_the_state_prefix_from_a_print_line() -> None:
+    # Verbatim shapes from raw_command_transcript.txt.
+    assert _strip_print_prefix("O\x00InGame: ---BEGIN:57a06e82---") == "---BEGIN:57a06e82---"
+    assert _strip_print_prefix('O\x00InGame: {"probe":"tag-hunt"}') == '{"probe":"tag-hunt"}'
+    assert (
+        _strip_print_prefix("O\x00StagingRoom: RefreshStatus()\tfalse")
+        == "RefreshStatus()\tfalse"
+    )
+
+
+def test_strip_print_prefix_passes_unprefixed_payloads_through_unchanged() -> None:
+    assert _strip_print_prefix("---BEGIN:abc---") == "---BEGIN:abc---"
+    assert _strip_print_prefix("") == ""
+
+
+def test_strip_print_prefix_tolerates_a_marker_with_no_state_separator() -> None:
+    # "O\0" marker but no ": " separator -- strip only the marker, keep the rest.
+    assert _strip_print_prefix("O\x00Weird") == "Weird"
