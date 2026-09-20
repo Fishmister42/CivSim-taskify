@@ -49,6 +49,17 @@ tests coexisted with a client that could not drive any real game:
 - Interleave an unsolicited async log frame into the handshake window
   (`inject_async_frame_before_next_lsq`), proving a real `NexusClient`
   skips it instead of aborting the state query.
+- Refuse every connection for a wall-clock window *after the previous one
+  closes* (`refuse_connections_for_after_close`), reproducing the live
+  post-close connection-refusal tail (T246, issue #1) a `reconnect()` must
+  ride out with bounded retry rather than misread as a dead client. Distinct
+  from `refuse_next_connections`, which refuses a fixed count regardless of
+  timing.
+- Answer the handshake and then go permanently silent
+  (`go_silent_after_handshake`), reproducing the live zombie tuner (T247,
+  issue #1): a client alive and painting frames whose tuner port services no
+  command ever again -- what the heartbeat must catch as a *sustained* failure,
+  not a single busy pass.
 - Present either Lua state table a real client can see (`set_state_table`):
   a "main menu" table with no game-play states, or a "game loaded" table
   with `GameCore_Tuner`/`InGame` at any (including non-contiguous or
@@ -380,6 +391,9 @@ class FakeNexusServer:
         self._drop_at: int | None = None
         self._drop_after: int | None = None
         self._refuse_connections = 0
+        self._refuse_after_close_window_s: float | None = None
+        self._refuse_after_close_deadline: float | None = None
+        self._silent_after_handshake = False
         self._stall_at: set[int] = set()
         self._stall_matches: list[str] = []
         self._stray_before: dict[int, list[str]] = {}
@@ -391,6 +405,10 @@ class FakeNexusServer:
         self.unmatched_requests: list[ReceivedCommand] = []
         self.app_names: list[str] = []
         self.connection_count = 0
+        #: How many incoming connections this fake refused because they arrived
+        #: inside the post-close refusal tail (see `refuse_connections_for_after_close`).
+        #: A cumulative audit counter, independent of the transcript.
+        self.post_close_refusals = 0
 
     @property
     def port(self) -> int:
@@ -459,11 +477,50 @@ class FakeNexusServer:
         measurement."""
         self._refuse_connections = count
 
+    def refuse_connections_for_after_close(self, window_s: float) -> None:
+        """Model the live post-close connection-refusal tail (T246; contracts/
+        nexus-protocol.md "The post-close connection-refusal tail"; live finding
+        Linux 1.0.12.9, 2026-09-20, issue #1 -- the peer's session): for
+        `window_s` seconds *after the current session's connection closes*, refuse
+        every incoming connection during its handshake, then accept normally once
+        the window has elapsed. This is the exact wall-clock window a
+        `NexusClient.reconnect()` races -- a reconnect that concludes "client dead"
+        on the first refusal inside this window is wrong, the client is fine and
+        merely still releasing the previous socket.
+
+        Distinct from `refuse_next_connections`, which refuses a fixed *count*
+        regardless of timing: this one is *time-based* (the ~2s tail the peer
+        measured), and every connection refused this way is tallied on
+        `post_close_refusals`."""
+        self._refuse_after_close_window_s = window_s
+
     def stall_at(self, command_index: int) -> None:
         """Never respond to the `command_index`-th command (1-based); every
         other command, before or after -- including on the same connection
         -- is served normally."""
         self._stall_at.add(command_index)
+
+    def go_silent_after_handshake(self) -> None:
+        """Model the live zombie tuner (T247; live finding reproduced twice, 2026-09-20,
+        issue #1): a refused `Network.HostGame` leaves the client process alive and
+        painting frames, but its tuner port answers the handshake and then **never
+        services another command** -- every subsequent command silently hangs.
+
+        Two behaviours were reproduced live, and this models the one that matters for
+        detection: the port "holds closed for subsequent *connects*" (modelled by
+        `refuse_next_connections` / `refuse_connections_for_after_close`), **and** the
+        already-open connection the run drives goes silent. It is that already-open,
+        silent connection the run's heartbeat probes, so it is what makes a
+        dead-forever port indistinguishable from a slow client to a single pass -- the
+        exact blind spot T247 closes. Answering the handshake first (rather than
+        refusing outright) is deliberate: it reproduces a client that *looks*
+        connected and alive to every non-heartbeat check.
+
+        Every command after this is called silently hangs, exactly like a global
+        `stall_on("")`, but named for what it models. Combine with a distinct,
+        non-stalled entry only if a test needs the "alive for one probe, silent for
+        another" shape; the zombie is silent for all."""
+        self._silent_after_handshake = True
 
     def stall_on(self, match: str) -> None:
         """Never respond to any command whose Lua body contains `match`,
@@ -545,6 +602,19 @@ class FakeNexusServer:
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        if self._refuse_after_close_deadline is not None:
+            # See `refuse_connections_for_after_close`: the client refuses new
+            # tuner connections for a short wall-clock window after the previous
+            # one closes (T246). A connection arriving inside that window is
+            # refused exactly like the load-window refusal below -- the reconnect
+            # racing it must retry, not conclude the client is dead.
+            if asyncio.get_running_loop().time() < self._refuse_after_close_deadline:
+                self.post_close_refusals += 1
+                writer.close()
+                with contextlib.suppress(OSError):
+                    await writer.wait_closed()
+                return
+
         if self._refuse_connections > 0:
             # See `refuse_next_connections`: the tuner port is "closed" while a
             # load is in flight. Closing during the handshake is how a fake TCP
@@ -613,6 +683,9 @@ class FakeNexusServer:
                 if self._drop_at is not None and commands_seen == self._drop_at:
                     return  # simulate a crash: the connection dies mid-operation
 
+                if self._silent_after_handshake:
+                    continue  # zombie tuner (T247): connected, alive, servicing nothing
+
                 if commands_seen in self._stall_at or any(
                     m in lua_body for m in self._stall_matches
                 ):
@@ -643,6 +716,12 @@ class FakeNexusServer:
                     return
         finally:
             self._session_active = False
+            if self._refuse_after_close_window_s is not None:
+                # Arm (or re-arm) the post-close refusal tail relative to *this*
+                # close (T246): connections in the next `window_s` are refused.
+                self._refuse_after_close_deadline = (
+                    asyncio.get_running_loop().time() + self._refuse_after_close_window_s
+                )
             writer.close()
             with contextlib.suppress(OSError):
                 await writer.wait_closed()

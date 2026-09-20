@@ -1,4 +1,4 @@
-"""Wiring research R12's detection signals into the run loop (T233).
+"""Wiring research R12's detection signals into the run loop (T233, T247).
 
 `resilience/detector.py` (T150), `resilience/heartbeat_monitor.py` (T148),
 `resilience/liveness.py` (T147) and `resilience/operation_bounds.py` (T149) were each built and
@@ -49,6 +49,20 @@ fault from slowness is exactly the turn-timer-by-the-back-door R12 rejects. Live
 separately and first, before that bounded pass, precisely so the authoritative crash signal can
 never be lost to a pass that wedged on the lock.
 
+**But a *sustained* run of eaten passes is not a busy client (T247).** A refused
+``Network.HostGame`` can leave the client process alive and painting frames with a permanently dead
+tuner port (live finding, reproduced twice, 2026-09-20 issue #1): process and window liveness see
+health forever, and a single timed-out pass cannot tell that dead-forever port from a momentarily
+busy one -- which is exactly the FR-014 tolerance above, turned into a blind spot. So
+:meth:`DetectionWatch.check_now` counts *consecutive* eaten passes and, once the streak reaches
+:data:`DEFAULT_SUSTAINED_HEARTBEAT_FAILURES`, classifies the pattern as ``unresponsive_detected``
+and routes it into the same recovery path a tripped detection takes. One eaten pass still reports
+nothing; only the sustained pattern trips. A genuinely busy-but-healthy client services *some*
+command between passes -- the lock frees, a heartbeat round-trips -- so at least one pass in any
+streak completes and resets the counter; a zombie tuner never completes one. See
+:data:`DEFAULT_SUSTAINED_HEARTBEAT_FAILURES` for why the default streak is 2 and why the pass bound
+cannot simply be shrunk to make this path fit SC-010's window faster.
+
 **The screen-identity probe is deliberately not wired in here.** R12 lists it as the fourth signal
 and `DetectionAggregator` accepts it, but `run/decision_loop.py` already polls the declared
 ``game.screen_state`` observation between decision steps and raises
@@ -70,7 +84,11 @@ from typing import Any
 from civsim_harness.errors import HarnessError
 from civsim_harness.models.common import RunId, Timestamp
 from civsim_harness.models.records import RunEvent, RunEventType
-from civsim_harness.resilience.detector import DetectionAggregator, check_process_liveness
+from civsim_harness.resilience.detector import (
+    DetectionAggregator,
+    check_process_liveness,
+    make_event,
+)
 from civsim_harness.resilience.liveness import ProcessLivenessMonitor
 from civsim_harness.resilience.operation_bounds import (
     OperationKind,
@@ -90,8 +108,40 @@ DEFAULT_DETECTION_INTERVAL_S: float = 10.0
 #: Bound on one whole aggregate detection pass (see this module's docstring on why the pass needs
 #: one at all). Generous enough to cover a wait on `NexusClient`'s command lock plus the
 #: heartbeat's own re-probe sequence, and short enough that a wedged pass cannot swallow the
-#: detection budget. A pass that exceeds it is reported as nothing at all -- never as a fault.
+#: detection budget. A pass that exceeds it is reported as nothing at all -- never as a fault
+#: **on its own** (a busy client is not a faulty one, FR-014); a *sustained* run of such passes is
+#: a different matter -- see :data:`DEFAULT_SUSTAINED_HEARTBEAT_FAILURES`.
+#:
+#: This value is effectively floored by FR-014: it must exceed the longest per-command bound
+#: `NexusClient` will enforce (`DEFAULT_COMMAND_TIMEOUT_S`, 30 s) plus the heartbeat's own
+#: `DEFAULT_HEARTBEAT_TIMEOUT_S` (10 s), so that a pass which merely *waited* on a legitimately
+#: long-but-terminating command still completes with a real heartbeat result rather than being
+#: eaten. That is why it cannot simply be shrunk to make the sustained-failure path (below) fit
+#: SC-010's window faster.
 DEFAULT_DETECTION_PASS_BOUND_S: float = 45.0
+
+#: How many *consecutive* aggregate passes must exceed their own bound (T247, FR-044/SC-010) before
+#: the sustained pattern is treated as a real ``unresponsive_detected`` fault and routed into
+#: recovery -- as opposed to a single busy pass, which is still reported as nothing (FR-014). A
+#: refused ``Network.HostGame`` can leave the client process alive and painting frames with a
+#: permanently dead tuner port (live finding, reproduced twice, 2026-09-20 issue #1): process and
+#: window liveness see health forever, and a single timed-out pass cannot tell a dead-forever port
+#: from a momentarily busy client. Two consecutive can: a genuinely busy-but-healthy client
+#: services *some* command between passes (the lock frees, a heartbeat round-trips), so at least
+#: one pass in any two completes and resets the streak; a zombie tuner never completes one.
+#:
+#: **Why 2, against SC-010's 60 s budget and the ~10 s pass cadence.** The common zombie is caught
+#: on the *first* pass, not by this counter at all: the heartbeat probe times out at its own 10 s
+#: bound and the pass completes with a ``hang_detected`` event well inside the 45 s pass bound (the
+#: blocking command, if any, self-times-out at 30 s, leaving 10 s for the heartbeat -- 40 s < 45 s),
+#: so detection lands at ~one interval + ~40 s, inside 60 s. This counter is the *backstop* for the
+#: residual case where the pass itself is eaten (a command whose own bound exceeds the pass window
+#: wedges the lock): there, one eaten pass is deliberately not a fault (FR-014), and the smallest
+#: "sustained" that still means something is 2. A larger N cannot be justified -- each eaten pass
+#: costs up to the full pass bound, so N=2 is already the largest streak that keeps the backstop's
+#: worst case bounded rather than unbounded, while N=1 would forbid the very "one slow pass is not
+#: a fault" tolerance FR-014 requires.
+DEFAULT_SUSTAINED_HEARTBEAT_FAILURES: int = 2
 
 #: The detected faults that route into `RecoveryEngine`, most authoritative first. ``crash`` ranks
 #: above ``hang`` ranks above ``unresponsive`` for the same reason `detector.check_heartbeat`
@@ -176,6 +226,7 @@ class DetectionWatch:
         clock: Callable[[], Timestamp],
         liveness: ProcessLivenessMonitor | None = None,
         pass_bound_s: float = DEFAULT_DETECTION_PASS_BOUND_S,
+        sustained_failure_threshold: int = DEFAULT_SUSTAINED_HEARTBEAT_FAILURES,
     ) -> None:
         self._aggregator = aggregator
         self._store = store
@@ -183,6 +234,14 @@ class DetectionWatch:
         self._clock = clock
         self._liveness = liveness
         self._pass_bound_s = pass_bound_s
+        if sustained_failure_threshold < 1:
+            raise ValueError("sustained_failure_threshold must be at least 1")
+        self._sustained_failure_threshold = sustained_failure_threshold
+        #: Consecutive aggregate passes that exceeded their own bound. Reset to zero the moment any
+        #: pass completes (T247): a completed pass -- healthy or faulty -- proves the heartbeat
+        #: mechanism is being serviced, so the client is not the dead-forever zombie this counter
+        #: exists to catch. Only :meth:`check_now`'s bounded aggregate pass touches it.
+        self._consecutive_pass_timeouts = 0
 
     @property
     def run_id(self) -> RunId:
@@ -220,9 +279,12 @@ class DetectionWatch:
 
         Returns every event that tripped, each already written to the store. An empty tuple means
         either that nothing tripped or that the aggregate pass could not complete within its bound
-        -- see this module's docstring: a pass that ran out of time is reported as nothing, never
-        as a fault, because a `NexusClient` lock held by a long legitimate command is evidence of a
-        busy client and of nothing else.
+        -- see this module's docstring: a *single* pass that ran out of time is reported as nothing,
+        never as a fault, because a `NexusClient` lock held by a long legitimate command is evidence
+        of a busy client and of nothing else. A *sustained* run of such passes is different (T247):
+        once :attr:`_sustained_failure_threshold` of them occur back to back, the pattern is
+        classified ``unresponsive_detected`` and returned -- the dead-forever tuner a single pass
+        cannot distinguish from a busy client.
         """
         liveness_events = await self.check_liveness_now(
             turn_number=turn_number, step_index=step_index
@@ -243,22 +305,84 @@ class DetectionWatch:
             bound_s=self._pass_bound_s,
         )
         if isinstance(outcome, OperationTimedOut):
+            return self._on_pass_timed_out(
+                outcome, turn_number=turn_number, step_index=step_index
+            )
+
+        # A completed pass -- healthy or faulty -- proves the client is servicing the watchdog, so
+        # the sustained-failure streak (T247) resets. A faulty pass already trips on its own event.
+        self._consecutive_pass_timeouts = 0
+        for event in outcome:
+            self._store.write_run_event(event)
+        return tuple(outcome)
+
+    def _on_pass_timed_out(
+        self,
+        outcome: OperationTimedOut,
+        *,
+        turn_number: int | None,
+        step_index: int | None,
+    ) -> tuple[RunEvent, ...]:
+        """One aggregate pass exceeded its own bound. Report nothing -- unless the pattern is now
+        *sustained* (T247, FR-044/SC-010).
+
+        A single eaten pass is a busy client, not a faulty one (FR-014), and is discarded. But a
+        refused ``Network.HostGame`` can leave the client alive with a permanently dead tuner port
+        (live finding, reproduced twice, issue #1): every pass is then eaten, forever, and process
+        and window liveness never notice. So consecutive eaten passes are counted, and once the
+        streak reaches :attr:`_sustained_failure_threshold` the pattern is classified as
+        ``unresponsive_detected`` -- routed into the same recovery path a tripped detection takes
+        (it is in :data:`RECOVERABLE_DETECTIONS`) -- and the streak is reset so recovery starts it
+        fresh.
+        """
+        self._consecutive_pass_timeouts += 1
+        if self._consecutive_pass_timeouts >= self._sustained_failure_threshold:
+            event = make_event(
+                run_id=self._run_id,
+                event_type=RunEventType.UNRESPONSIVE_DETECTED,
+                occurred_at=self._clock(),
+                turn_number=turn_number,
+                step_index=step_index,
+                detail={
+                    "reason": "sustained_heartbeat_failure",
+                    "consecutive_pass_timeouts": self._consecutive_pass_timeouts,
+                    "sustained_failure_threshold": self._sustained_failure_threshold,
+                    "bound_s": outcome.bound_s,
+                },
+            )
             log_event(
                 get_harness_logger(),
                 logging.WARNING,
-                "run/detection: a detection pass did not complete within its own bound and was "
-                "discarded; a busy client is not a faulty one (research R12, FR-014)",
+                "run/detection: consecutive detection passes each exceeded their own bound; a "
+                "sustained pattern is a dead-forever tuner, not a busy client -- classified "
+                "unresponsive and routed into recovery (T247, FR-044/SC-010)",
                 extra={
                     "run_id": str(self._run_id),
                     "turn_number": turn_number,
                     "bound_s": outcome.bound_s,
+                    "consecutive_pass_timeouts": self._consecutive_pass_timeouts,
+                    "sustained_failure_threshold": self._sustained_failure_threshold,
                 },
             )
-            return ()
-
-        for event in outcome:
             self._store.write_run_event(event)
-        return tuple(outcome)
+            self._consecutive_pass_timeouts = 0
+            return (event,)
+
+        log_event(
+            get_harness_logger(),
+            logging.WARNING,
+            "run/detection: a detection pass did not complete within its own bound and was "
+            "discarded; a busy client is not a faulty one (research R12, FR-014) -- not yet a "
+            "sustained streak",
+            extra={
+                "run_id": str(self._run_id),
+                "turn_number": turn_number,
+                "bound_s": outcome.bound_s,
+                "consecutive_pass_timeouts": self._consecutive_pass_timeouts,
+                "sustained_failure_threshold": self._sustained_failure_threshold,
+            },
+        )
+        return ()
 
 
 async def run_under_detection[T](
@@ -334,6 +458,7 @@ async def run_under_detection[T](
 __all__ = [
     "DEFAULT_DETECTION_INTERVAL_S",
     "DEFAULT_DETECTION_PASS_BOUND_S",
+    "DEFAULT_SUSTAINED_HEARTBEAT_FAILURES",
     "RECOVERABLE_DETECTIONS",
     "ClientFaultDetected",
     "DetectionWatch",

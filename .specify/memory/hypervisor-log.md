@@ -583,3 +583,33 @@ commits per lane, pushes.
    integration into preparation/composition stays Windows-side (T237 lane).
 4. **Priority among the new work:** T248 first (blocks every real load, hence demo, branching,
    recovery), T249 second. T250 sequenced behind the in-flight T239-T243 lane (preparation.py).
+
+### PHASE 12 COMPLETE (b5dcb51). Suite 1607/2/0; ruff + strict mypy clean; wave verified whole.
+
+All eight audit findings landed, every fix revert-confirmed against its live symptom: T238 images
+attach through the T134 chokepoint and shown_to_agent means attachment (R6 gate enforced via
+Run.host_support_tier, fails closed); T239 completeness is the derivation at creation/persist/
+read (first_owed_turn floors branches); T240 mid-run capture degradation downgrades comparability
+via existing update_run; T241 civsim run abandon exists and BRANCH_ABANDONED is finally emitted
+by production; T242 V2 fallback closed for the reference config + fallback-accepted fields
+recorded on the preparing->playing event; T243 V11 refuses for free at preflight; T244 E5
+conformance pinned (sqlite adapter passed untouched); T245 one assembly-failure builder in the
+named home. 002 open: the DEFERRED-LIVE roster + T237 + T246-T250 (T248 blocked on the peer
+publishing their Escape-retry patch; T250 now unblocked - the preparation.py lane landed).
+
+NEXT HEADLESS CANDIDATES: T246 (reconnect tail), T247 (zombie tuner), T250 (in-game-only
+getters), T249 seam half. T248 the moment the peer's patch appears. Then re-converge.
+
+### Peer-findings wave COMPLETE. Suite 1637/2/0 verified whole by the hypervisor.
+
+T246 (reconnect rides the post-close tail; first connect still fails fast), T247 (zombie tuner
+detected via sustained heartbeat streak N=2, FR-014 respected, arithmetic asserted in-code),
+T249 seam half (port preflight; peer's capture_preconditions is the wired Linux code; their
+allowlist finding closed), T250 (in-game-only getters; major_count uses the spike's Players
+derivation; resources recorded unobservable, not run-killing). Commits: 38903b4, cf0552c, +
+the T246/T247 commit. Day total: 1539 -> 1637 (+98 tests), every fix revert-confirmed.
+
+**002 remaining open:** DEFERRED-LIVE roster (T050-T202 live items, T213 extension, T218 Lua
+shapes, T224 halves, T226 live half, T237) + T248 (BLOCKED on peer publishing the Escape-retry
+patch) + T249 per-platform live halves. NOTHING headless-implementable remains unassigned.
+Next converge pass after T248 lands. Peer still holds the Steam account.
