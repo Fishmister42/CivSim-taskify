@@ -192,6 +192,9 @@ def resolve_support_tier(probe: SupportProbeResult) -> SupportTier:
 #: The two live spike documents this probe reports. Both are real, executed results in this
 #: repository, each recorded against the one platform it actually ran on -- never generalised.
 R5_SAVE_PATH_SPIKE: Final[str] = "specs/002-civ-playing-harness/spikes/r5-save-path.md"
+R5_SAVE_PATH_SPIKE_WINDOWS: Final[str] = (
+    "specs/002-civ-playing-harness/spikes/r5-save-path-windows.md"
+)
 R6_CAPTURE_HYGIENE_SPIKE: Final[str] = (
     "specs/002-civ-playing-harness/spikes/r6-capture-hygiene-linux.md"
 )
@@ -230,14 +233,16 @@ _QUICKSAVE_EVIDENCE: Final[Mapping[OperatingSystem, SpikeEvidence]] = {
         ),
     ),
     OperatingSystem.windows: SpikeEvidence(
-        passed=False,
-        spike_ref=None,
+        passed=True,
+        spike_ref=R5_SAVE_PATH_SPIKE_WINDOWS,
         note=(
-            "no R5 save-path spike has been run on Windows. R5/T077's verified result is a Linux "
-            "one, and that spike's own 'Not yet verified' item 5 states that Windows and macOS "
-            "each confirm their own (research R19). The Lua API is unlikely to differ, but "
-            "'unlikely to differ' is not the evidence FR-054 asks for -- run T077's probe "
-            "against a live Windows client to clear this"
+            "R5 ran against a live Windows client (Steam build 1.0.12.68 (1023995), BBG 7.5.0, "
+            "2026-09-20): Network.SaveGame in the InGame context wrote four consecutive "
+            "size-stable .Civ6Save files, verified on disk, and the two-root Windows directory "
+            "layout (saves under Documents, AppOptions.txt under %LOCALAPPDATA%\\Firaxis Games\\) "
+            "was confirmed live. Capture hygiene remains separately unverified on Windows -- the "
+            "R6 windows spike PASSED occlusion but FAILED on in-frame third-party overlay "
+            "chrome, so this evidence deliberately does not touch the capture flag"
         ),
     ),
     OperatingSystem.macos: SpikeEvidence(

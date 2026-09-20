@@ -123,7 +123,7 @@ def test_linux_earns_a_verified_quicksave_path_from_the_recorded_r5_spike() -> N
     assert "r5-save-path.md" in probe.reason
 
 
-@pytest.mark.parametrize("host_info", [_WINDOWS, _MACOS], ids=["windows", "macos"])
+@pytest.mark.parametrize("host_info", [_MACOS], ids=["macos"])
 def test_a_platform_with_no_recorded_save_spike_is_never_credited_with_linuxs(
     host_info: HostInfo,
 ) -> None:
@@ -132,6 +132,9 @@ def test_a_platform_with_no_recorded_save_spike_is_never_credited_with_linuxs(
     The Lua API is very unlikely to differ -- and that is exactly the reasoning this assertion
     exists to forbid. `resolve_support_tier` must land on `unsupported`, and the reason must name
     the platform rather than saying "not yet probed", which reads as host-specific and is not.
+
+    Windows left this parametrization on 2026-09-20, when its own R5 spike ran against a live
+    Steam client and passed -- see the test below, which holds Windows to the sharper rule.
     """
     probe = probe_host_support(_DirectoryOnlyHost(), host_info)
 
@@ -139,6 +142,23 @@ def test_a_platform_with_no_recorded_save_spike_is_never_credited_with_linuxs(
     assert resolve_support_tier(probe) is SupportTier.unsupported
     assert probe.reason.startswith(f"{host_info.os.value}:")
     assert "not yet probed" not in probe.reason
+
+
+def test_windows_is_credited_with_its_own_spike_never_linuxs() -> None:
+    """Windows R5 passed live (2026-09-20), so Windows is credited -- but the evidence must cite
+    the *Windows* spike file. Crediting it via `r5-save-path.md` (the Linux record) would be the
+    exact cross-platform generalisation R19 forbids, laundered through a passing tier.
+
+    Capture hygiene is asserted separately un-credited: the Windows R6 spike passed occlusion but
+    FAILED on in-frame overlay chrome, so a SUPPORTED-but-degraded tier is the honest one.
+    """
+    probe = probe_host_support(_DirectoryOnlyHost(), _WINDOWS)
+
+    assert probe.quicksave_path_verified is True
+    assert "r5-save-path-windows.md" in probe.reason
+    assert "spikes/r5-save-path.md" not in probe.reason
+    assert probe.capture_hygiene_spike_passed is False
+    assert resolve_support_tier(probe) is SupportTier.supported
 
 
 def test_an_unresolvable_save_directory_refuses_even_on_a_spiked_platform() -> None:

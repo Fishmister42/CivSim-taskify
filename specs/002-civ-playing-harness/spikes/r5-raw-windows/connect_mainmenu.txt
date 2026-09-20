@@ -1,0 +1,58 @@
+connecting to 127.0.0.1:4318 via civsim_harness.nexus.NexusClient ...
+Traceback (most recent call last):
+  File "C:\Users\Matthew LAne\CivSim\taskify\src\civsim_harness\nexus\client.py", line 320, in connect
+    reader, writer = await asyncio.wait_for(
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    )
+    ^
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\streams.py", line 48, in open_connection
+    transport, _ = await loop.create_connection(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        lambda: protocol, host, port, **kwds)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\base_events.py", line 1171, in create_connection
+    raise exceptions[0]
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\base_events.py", line 1146, in create_connection
+    sock = await self._connect_sock(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+        exceptions, addrinfo, laddr_infos)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\base_events.py", line 1045, in _connect_sock
+    await self.sock_connect(sock, address)
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\proactor_events.py", line 728, in sock_connect
+    return await self._proactor.connect(sock, address)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\windows_events.py", line 804, in _poll
+    value = callback(transferred, key, ov)
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\windows_events.py", line 600, in finish_connect
+    ov.getresult()
+    ~~~~~~~~~~~~^^
+ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Matthew LAne\CivSim\taskify\specs\002-civ-playing-harness\spikes\r5-raw-windows\probe_connect.py", line 57, in <module>
+    sys.exit(asyncio.run(main()))
+             ~~~~~~~~~~~^^^^^^^^
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\Matthew LAne\AppData\Local\Programs\Python\Python313\Lib\asyncio\base_events.py", line 725, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "C:\Users\Matthew LAne\CivSim\taskify\specs\002-civ-playing-harness\spikes\r5-raw-windows\probe_connect.py", line 26, in main
+    indices = await client.connect()
+              ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Matthew LAne\CivSim\taskify\src\civsim_harness\nexus\client.py", line 325, in connect
+    raise PreflightError(
+    ...<2 lines>...
+    ) from exc
+civsim_harness.errors.PreflightError: Could not connect to the Nexus tuner interface | detail={'host': '127.0.0.1', 'port': 4318, 'reason': '[WinError 1225] The remote computer refused the network connection'}

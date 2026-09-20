@@ -1,0 +1,69 @@
+{
+  "app_hello": "Civ6\u0000Sid Meier's Civilization 6\u0000C:\\Program Files (x86)\\Steam\\steamapps\\common\\Sid Meier's Civilization VI\\Base\\Binaries\\Debug",
+  "states_at_connect": {
+    "Main State": 0,
+    "DebugHotloadCache": 1,
+    "Options": 2,
+    "CreditsScreen": 3,
+    "My2K": 4,
+    "PBCNotifyRemind": 6,
+    "Lobby": 7,
+    "Mods": 8,
+    "MultiSelectWindow": 11,
+    "CityStatePicker": 12,
+    "LeaderPicker": 13,
+    "HostGame": 14,
+    "ConfirmKick": 15,
+    "EditHotseatPlayer": 16,
+    "StagingRoom": 17,
+    "LoadGameMenu": 18,
+    "SaveGameMenu": 19,
+    "FrontEndPopup": 20,
+    "CivRoyaleIntro": 21,
+    "PiratesIntro": 22,
+    "CrossPlayLogin": 23,
+    "MainMenu": 24,
+    "StateTransition": 25,
+    "JoiningRoom": 26,
+    "UserSetupWarning": 27,
+    "SwitchLayoutPopup": 28,
+    "Test": 29,
+    "FrontEnd": 30,
+    "InvitePopup": 31
+  },
+  "roundtrip": {
+    "__error__": "NexusError: Nexus command exceeded its per-operation timeout | detail={'reason': 'timeout', 'state_index': 24, 'timeout_s': 20.0}"
+  },
+  "frontend_surface": {
+    "__error__": "NexusError: Nexus command exceeded its per-operation timeout | detail={'reason': 'timeout', 'state_index': 24, 'timeout_s': 20.0}"
+  },
+  "autosaves_found": [
+    "AutoSave_0008.Civ6Save",
+    "AutoSave_0007.Civ6Save",
+    "AutoSave_0006.Civ6Save",
+    "AutoSave_0005.Civ6Save",
+    "AutoSave_0004.Civ6Save"
+  ],
+  "load_result": {
+    "__error__": "NexusError: Nexus command exceeded its per-operation timeout | detail={'reason': 'timeout', 'state_index': 24, 'timeout_s': 30.0}"
+  },
+  "transcript": [
+    "[15:19:32] saves dir  : C:\\Users\\Matthew LAne\\Documents\\My Games\\Sid Meier's Civilization VI\\Saves\\Single",
+    "[15:19:32] AppOptions : C:\\Users\\Matthew LAne\\AppData\\Local\\Firaxis Games\\Sid Meier's Civilization VI\\AppOptions.txt (exists=True)",
+    "[15:19:32] APP: reply (tag=4) -> \"Civ6\\x00Sid Meier's Civilization 6\\x00C:\\\\Program Files (x86)\\\\Steam\\\\steamapps\\\\common\\\\Sid Meier's Civilization VI\\\\Base\\\\Binaries\\\\Debug\"",
+    "[15:19:32] CONNECTED via harness NexusClient; 29 Lua states",
+    "[15:19:32]   has_game_states=False",
+    "[15:19:52]   lua in MainMenu FAILED: NexusError: Nexus command exceeded its per-operation timeout | detail={'reason': 'timeout', 'state_index': 24, 'timeout_s': 20.0}",
+    "[15:19:52] ROUND TRIP in MainMenu -> {\"__error__\": \"NexusError: Nexus command exceeded its per-operation timeout | detail={'reason': 'timeout', 'state_index': 24, 'timeout_s': 20.0}\"}",
+    "[15:20:12]   lua in MainMenu FAILED: NexusError: Nexus command exceeded its per-operation timeout | detail={'reason': 'timeout', 'state_index': 24, 'timeout_s': 20.0}",
+    "[15:20:12] FRONT-END SURFACE -> {\"__error__\": \"NexusError: Nexus command exceeded its per-operation timeout | detail={'reason': 'timeout', 'state_index': 24, 'timeout_s': 20.0}\"}",
+    "[15:20:12] attempting Network.LoadGame on 'AutoSave_0008'",
+    "[15:20:42]   lua in MainMenu FAILED: NexusError: Nexus command exceeded its per-operation timeout | detail={'reason': 'timeout', 'state_index': 24, 'timeout_s': 30.0}",
+    "[15:20:42] LOAD issued -> {\"__error__\": \"NexusError: Nexus command exceeded its per-operation timeout | detail={'reason': 'timeout', 'state_index': 24, 'timeout_s': 30.0}\"}",
+    "[15:25:09]   (skipping async frame tag=-1: 'O\\x00PausePanel: CheckPausedState()\\t1789932309')",
+    "[15:25:09]   (skipping async frame tag=-1: 'O\\x00PausePanel: ClosePausePanel()\\t1789932309')",
+    "[15:25:09]   (skipping async frame tag=-1: 'O\\x00MPHOptions: OnLoadScreenClose()')",
+    "[15:25:09]   (skipping async frame tag=-1: 'O\\x00MPHOptions: m\\t-908607926\\tg\\tnil')",
+    "[15:25:09]   refresh failed: ConnectionResetError: [WinError 64] The specified network name is no longer available"
+  ]
+}

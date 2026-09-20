@@ -334,3 +334,61 @@ check would have caught seven distinct defects** found this loop: the input laye
 `capture_preconditions`, the fabricated V2 comparison, the dead Lua `return`s, both unwired
 Principle I guards, the unredacted logger, and the unbuilt detection layer. Build it once the tree
 is green and stays green — not into a red suite.
+
+**Scribe's refinement (adopted into the check's design):** the string-literal doctor defect HAD a
+caller — reachability alone would not catch the *fabricated-answer* variant of the family. The
+full guard is two rules: reachability (a non-test caller exists) + negative controls (a test
+proving each check can fail). Either alone leaves half the family alive.
+
+---
+
+## Run 5 — 2026-09-20
+
+**SPEC 001 COMPLETE: 64/64** (`9c1e87b`, pushed). Deliverable 1 done. P6 freeze in force via
+`panels/VERSION.lock` (load-bearing, twice-tested). Owner amendment landed; 002's port contract
+deliberately untouched (amended by owner, not consumer). Two polish finds fixed in code: doctor's
+string-literal coverage line (fabricated-answer family) and the unbounded turn route.
+
+**Repair agent landed** (`fe5df53`, pushed): tree GREEN 1528/2/0 twice consecutively. T233 done
+(killed client detected, revert-verified twice). T226 headless half (branch honesty **by
+construction** — no defaults on comparability/host fields). T231/T232 done. T224 Windows GetDIBits
+done. Bonus unfiled fix: `civsim doctor` crashed against a live client (unguarded NexusError paths
+reachable only with a client running). It refused to flip the Windows R5 evidence flag on the
+strength of an adapter comment — "a comment is not evidence" — correct call.
+
+**🔑 T217 RESOLVED — merged from live/linux (`bf0b14a`, pushed).** `Network.LoadGame` is
+**FrontEnd-only**; all three failed rounds called it from InGame where it returns `false` meaning
+"not from here". Peer proved the precondition from Firaxis's own `automation_dailysmoketest.lua:241`
+(`UI.IsInFrontEnd()` guard), loaded a save end-to-end from a one-shot tuner command, verified far-side
+on a fresh connection. Working shape: `{Location=1, Type=1, Directory=0, Name=<save>}` → `true`.
+**Option B dead — no bespoke driver, ever. Wayland concession never invoked. T177, branch load, all
+resume-from unblocked.** Also merged: XComposite real pixels (evidence committed), XTest input fixed,
+first live T218 result — **`major_count` reads wrong in-game** (first genuine V2 mismatch).
+
+**In flight:** production SaveLoader build (T217 impl, headless, spike as spec); Windows bring-up
+(r5/r6 raw evidence dirs appearing; spike .md files not yet written; demo attempt pending);
+scribe publishing both items.
+
+**Model note:** hypervisor now runs on Fable 5 (owner switched via /model mid-run).
+
+### ⚠️ Open tension — resolve when the Windows bring-up agent reports
+
+The uncommitted adapter comment says the Windows live verification ran against a **Steam** client
+("build 1.0.12.68 (1023995), Steam"), and claims an options root under
+`%LOCALAPPDATA%\Firaxis Games\`. Both sit oddly with the earlier direct finding that the **Epic**
+profile (under `Documents\My Games\...(Epic)\`) is the configured one and the Steam Documents
+profile is empty of options and mods.
+
+Two candidate readings, NOT yet decided:
+1. The agent enabled the tuner on the Steam profile (explicitly authorised) and drove the Steam
+   install — the owner did say "playing steam". If so, no BBG → any demo run is **technical proof
+   only, not charter-compliant**, and must be labelled so (instruction already given).
+2. The Steam build reads its options from `%LOCALAPPDATA%\Firaxis Games\`, not Documents — which
+   would mean the earlier "Steam profile has no options" conclusion was drawn from looking in the
+   wrong root, and "Epic is the live one" was under-evidenced. The hypervisor's own finding may be
+   the wrong one here.
+
+**Do not summarise `r5-save-path-windows.md` (when it lands) without first checking which install
+and which options root it actually evidences.** Scribe holds the same instruction. The R5 evidence
+flag in `host/detect.py` stays un-flipped until the spike file exists (repair agent's correct call:
+a comment is not evidence).
