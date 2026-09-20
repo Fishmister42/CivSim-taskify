@@ -1,0 +1,157 @@
+name: Release Parity Audit Gate
+
+# T203: the per-release gate the constitution's Governance section and SC-006, SC-008, SC-009,
+# SC-018, SC-019, and SC-020 all require -- every one of those success criteria is worded
+# "audited per release, and any finding blocks release." This workflow is that audit, modelled on
+# ci.yml's structure (same uv setup, same matrix idea) but answering a different question: not
+# "does the portable core still build on every OS" but "does a specific, already-completed,
+# already-validated run's record still clear every zero-tolerance parity/security bar."
+#
+# IMPORTANT -- this cannot fabricate its own evidence. There is no Civ VI client on a GitHub-hosted
+# runner (quickstart.md Prerequisites: "a native Windows, macOS, or Linux desktop... not
+# Proton/Wine"), so this workflow cannot itself play a run to audit. It audits a run that has
+# already been played and persisted -- e.g. by the live-validation host recording T200-T202's
+# results in specs/002-civ-playing-harness/validation-results.md -- and whose MatchStore file is
+# supplied as an artifact or an accessible path. See the `run_id` / `store_path` inputs below.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: >
+          The RunId of the completed run this release is certified against -- normally the run
+          named in specs/002-civ-playing-harness/validation-results.md's most recent soak/validation
+          entry (T201/T202). Required: this gate audits one specific run's record, not "a" run.
+        required: true
+        type: string
+      store_path:
+        description: >
+          Filesystem path (after checkout/download, below) to the SQLite MatchStore file holding
+          that run's full record. This workflow does not produce this file itself -- it must come
+          from a live-validation run, e.g. via actions/download-artifact from the job that produced
+          it, or a path checked into a release-evidence location. See the "Fetch validation
+          evidence" step below, which is deliberately left as a placeholder for that source.
+        required: true
+        type: string
+
+jobs:
+  # Same portable-tier gate as ci.yml, run again here so a release is never cut from a build that
+  # hasn't itself passed the full three-platform matrix -- this job is a repeat of ci.yml's `test`
+  # job, not a stand-in for it; branch protection on `main` is what ci.yml itself gates.
+  portable-tests:
+    name: portable tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            uv-extra: windows
+          - os: macos-latest
+            uv-extra: macos
+          - os: ubuntu-latest
+            uv-extra: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (portable core + this host's platform extra)
+        run: uv sync --extra ${{ matrix.uv-extra }}
+
+      - name: Run portable test tiers
+        run: uv run pytest tests/unit tests/contract tests/integration
+
+  # The parity/security audit itself. Store-only reads plus catalog loading -- no host adapter is
+  # involved in an audit, so this runs once, not per platform.
+  parity-audit:
+    name: parity and security audit
+    needs: portable-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --extra linux
+
+      # Placeholder: wire this to wherever the validated run's store actually lives once that
+      # pipeline exists (e.g. `actions/download-artifact` from the live-validation node's job, or
+      # a release-asset fetch). Left explicit rather than silently assuming a local file, so a
+      # release run fails loudly here -- "no evidence supplied" -- instead of the audit steps below
+      # failing confusingly against a store path that was never populated.
+      - name: Fetch validation evidence
+        run: |
+          if [ ! -f "${{ inputs.store_path }}" ]; then
+            echo "::error::store_path '${{ inputs.store_path }}' does not exist after checkout." \
+                 "This workflow does not generate run evidence itself -- see the workflow's own" \
+                 "header comment. Populate it (artifact download, release asset, etc.) before" \
+                 "this job runs, or the parity gate below has nothing to audit."
+            exit 1
+          fi
+
+      # The parity red-team suite (T122, research R15): a fixture list of forbidden values --
+      # unrevealed map contents, opponent internal state, hidden AI intent, undisclosed opponent
+      # research/civics, RNG state, debug/provenance data -- asserted absent from realistic,
+      # catalog-driven contexts at every decision step, not once per turn (SC-006, SC-008). This
+      # is the suite quickstart.md Scenario 3 names as running "per release" alongside `audit
+      # parity`; it also already runs on every build via ci.yml's portable tiers, but is re-run
+      # here explicitly since a finding here is exactly what this gate exists to catch.
+      - name: Red-team suite (parity)
+        run: uv run pytest tests/contract/test_parity_redteam.py -v
+
+      # Credential red-team: a planted key must appear in no serialized record, log line, or raised
+      # exception (P8, FR-043, SC-018) -- the model-provider-port conformance suite's own red-team
+      # cases (T181), re-asserted here for the same reason as the parity suite above.
+      - name: Red-team suite (credentials)
+        run: uv run pytest tests/contract/test_model_provider_port.py -v -k "t181 or t180"
+
+      # Every observation and action the named run used resolves to a parity declaration in the
+      # catalog version recorded on the run; zero without a declared basis (SC-006, SC-007).
+      - name: audit parity
+        run: >
+          uv run civsim audit parity "${{ inputs.run_id }}"
+          --store-path "${{ inputs.store_path }}"
+          --catalog-root catalogs
+
+      # Every capability the run used is path: firetuner, or carries a recorded firetuner_gap
+      # (FR-028, SC-020).
+      - name: audit capabilities
+        run: >
+          uv run civsim audit capabilities "${{ inputs.run_id }}"
+          --store-path "${{ inputs.store_path }}"
+          --catalog-root catalogs
+
+      # One decision + one model call + one observation per step, contiguous step_index, no reused
+      # observation or capture (SC-003, invariants I13/I14) -- catches a batched decision or a
+      # step that quietly reused the prior step's board.
+      - name: audit steps
+        run: >
+          uv run civsim audit steps "${{ inputs.run_id }}"
+          --store-path "${{ inputs.store_path }}"
+
+      # KNOWN GAP as of this writing: `civsim audit secrets <run_id>` (T190, SC-018 -- zero
+      # credential-shaped values in any record, capture, or log) is implemented as a function in
+      # src/civsim_harness/operator/audit.py, but is not yet registered as a Typer command in
+      # src/civsim_harness/operator/cli.py (only `parity | prompts | decisions | steps | loop |
+      # capabilities` are wired -- see that module's own docstring, which documents later-wave
+      # commands as "deliberately left unregistered rather than stubbed"). This step is included
+      # because T203 requires it in the gate and the underlying check already exists; it will fail
+      # with "no such command" until that CLI wiring lands. Do not delete this step to make the
+      # workflow pass -- wire the command instead. In the meantime, the credential red-team suite
+      # above covers the same SC-018 guarantee at the record layer this step cannot yet reach.
+      - name: audit secrets
+        run: >
+          uv run civsim audit secrets "${{ inputs.run_id }}"
+          --store-path "${{ inputs.store_path }}"

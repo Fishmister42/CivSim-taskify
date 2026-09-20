@@ -1,0 +1,556 @@
+"""The within-turn decision-step loop (T110, T112; research R14).
+
+For step *n* = 1, 2, 3 ... **unbounded**: assemble a fresh observation and capture, obtain one
+decision and its reasoning from the model provider, execute it, verify its effect, then assemble a
+*new* observation reflecting that effect before asking for the next decision. The agent is never
+asked to commit to a later decision before it has seen the result of the earlier one (FR-008,
+invariants I13, I14).
+
+**The loop exits on exactly two conditions and no others** (T112): the agent's own decision names
+the declared end-turn action (``outcome = ended_by_agent``), or the no-progress backstop
+(``run/no_progress.py``) trips (``outcome = ended_on_no_progress``). :func:`run_decision_loop`'s
+body is a single ``while True:`` with exactly two ``return`` statements, both guarded by one of
+those two conditions -- there is no wall-clock check, no step-count check, and no cost check
+anywhere in this module, and there must never be one added. ``tests/unit/test_no_truncation.py``
+(T061) is the negative test that a 500-step productive turn completes untouched; every
+plausible-sounding guard rail it would catch (a turn timeout "for safety", a step cap "to bound
+cost") is a regression, not a feature (invariant I16).
+
+**One observation assembly serves two purposes, which is what makes the loop a loop.** After a
+step's decision is dispatched (and, if authorized, executed), the loop takes exactly one fresh
+observation: it is handed to :func:`~civsim_harness.act.verify.verify_execution` as that step's
+``post_observation`` (research R14's "verify" phase: reads back game state against the action's
+declared predicate) *and* it becomes the **next** step's own ``observation`` -- the board the agent
+looks at before its next decision, already reflecting the effect of the one it just made. This
+holds even when the decision was rejected at dispatch (never executed): invariant I14 still
+requires a genuinely fresh read for the next step, so no branch here ever reuses a prior step's
+observation, capture, or their ids.
+
+**Injected collaborators.** Two things this module needs have no existing bound API in this
+codebase to call directly, because "how do you actually read live game state" and "how do you
+actually dispatch an authorized action" are Nexus/fake-transport concerns outside this wave's
+ownership (``observe/``, ``act/`` supply the *pure* pieces -- schema validation, availability/
+verification predicate evaluation -- not the I/O). Both are accepted as injected async callables
+(:class:`ObservationReader`, :class:`ActionExecutor`), matching this codebase's established seam
+pattern (``saves.save_game.SaveCapability``, ``resilience.recovery.SaveLoader``,
+``run.preparation``'s ``apply_setting``/``read_setting``). Tests and real callers alike wire in
+whatever they need -- a scripted in-memory game, or eventually a real ``NexusClient`` --
+implementing these two narrow shapes.
+
+**FR-042 -- no fabricated decision when none can be obtained.** When the provider (or whatever
+retry/fallback chain sits in front of it -- that layer is ``provider/chain.py``, a different
+wave's task; this module treats the ``ModelProvider`` it is handed as already representing "the
+one call for this step") returns anything other than ``CallOutcome.DECISION_RETURNED``, this
+module writes the failed ``ModelCall`` directly (it will never ride along in a persisted
+``TurnCycleRecord``, since no ``DecisionStep`` was produced -- ``store.port``'s own docstring:
+"independent of whether it produced a decision step") and raises
+:class:`~civsim_harness.errors.ProviderChainExhausted`. Nothing in this module ever substitutes a
+default or heuristic move for the missing decision.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from typing import Any, Protocol
+
+from civsim_harness.act.dispatch import (
+    DispatchStatus,
+    dispatch_action,
+    rejection_to_execution,
+)
+from civsim_harness.act.prompts import PromptRouteStatus, route_prompt
+from civsim_harness.act.verify import verify_execution
+from civsim_harness.agent.context import assemble_context
+from civsim_harness.agent.decisions import RESPONSE_SCHEMA, build_decision
+from civsim_harness.capability.registry import CapabilityRegistry
+from civsim_harness.errors import HarnessError, ObservationAssemblyError, ProviderChainExhausted
+from civsim_harness.host.detect import HostInfo
+from civsim_harness.host.port import GameWindow, HostPlatform
+from civsim_harness.models.common import (
+    CatalogVersionRef,
+    DecisionId,
+    DecisionStepId,
+    DeclarationId,
+    LuaContext,
+    ModelCallId,
+    ModelRef,
+    ObservationId,
+    RunId,
+    Timestamp,
+    TurnCycleId,
+)
+from civsim_harness.models.config import GuidanceSet
+from civsim_harness.models.decision import DecisionTrigger
+from civsim_harness.models.records import CallOutcome, ModelCall, RunEvent
+from civsim_harness.models.turn import DecisionStep, Observation, StepProgress, TurnOutcome
+from civsim_harness.observe.assemble import CapabilityResult, assemble_observation
+from civsim_harness.observe.capture import capture_for_step
+from civsim_harness.observe.screen_identity import interpret_screen_state
+from civsim_harness.parity.screening import ScreeningProfiles
+from civsim_harness.provider.port import ModelProvider
+from civsim_harness.run.no_progress import NoProgressTracker, build_no_progress_event
+from civsim_harness.store.port import DecisionStepBundle, MatchStore
+
+#: The catalog's own convention (``catalogs/observations/game.yaml``, ``act.predicates``): the
+#: observation carrying "which screen is up" and whether a blocking prompt is open. Looked up by
+#: this well-known id in whatever `CapabilityResult`\ s a step's :class:`ObservationReader`
+#: returned -- optional by construction: a caller (or test catalog) that never produces this
+#: declaration simply never triggers prompt routing below, rather than failing.
+SCREEN_STATE_DECLARATION_ID = DeclarationId("game.screen_state")
+
+
+def _utcnow() -> Timestamp:
+    return datetime.now(UTC)
+
+
+class MidTurnObservationFailure(HarnessError):
+    """A fresh observation could not be assembled mid-attempt (T096, research R14).
+
+    Wraps the underlying :class:`~civsim_harness.errors.ObservationAssemblyError` and carries
+    every step that *did* complete in this attempt before the failure (``steps``, ``events``) --
+    T152 requires an abandoned attempt to be retained with all the steps it completed, and the
+    only place that count is known is right here, at the moment the loop cannot continue. The
+    caller (``run/turn_cycle.py``) is expected to persist ``steps``/``events`` as an
+    ``outcome=abandoned`` attempt (when non-empty) and replay a fresh attempt from the turn's
+    start quicksave -- never finish this attempt from the last good view (invariant I14).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        cause: ObservationAssemblyError,
+        steps: tuple[DecisionStepBundle, ...],
+        events: tuple[RunEvent, ...],
+        no_progress_streak: int,
+    ) -> None:
+        super().__init__(message, detail=dict(cause.detail))
+        self.cause = cause
+        self.steps = steps
+        self.events = events
+        self.no_progress_streak = no_progress_streak
+
+
+class UnknownScreenEncountered(HarnessError):
+    """The current screen does not resolve to any declared one (research R13, FR-049).
+
+    Raised instead of guessing, clicking through, or dismissing -- "the run must stall visibly"
+    (spec edge case). Carries the ready-to-persist ``unknown_screen`` event this module already
+    built via :func:`~civsim_harness.act.prompts.route_prompt`; the caller
+    (``run/turn_cycle.py``/``run/runner.py``) decides how the run's lifecycle responds.
+    """
+
+    def __init__(self, message: str, *, event: RunEvent) -> None:
+        super().__init__(message, detail={"raw_screen_id": event.detail.get("raw_screen_id")})
+        self.event = event
+
+
+class ObservationReader(Protocol):
+    """Read every catalog capability this decision step needs, fresh from the live game (or a
+    fake standing in for it).
+
+    Returns ``(results, screen_identity)`` -- the raw capability results
+    :func:`~civsim_harness.observe.assemble.assemble_observation` consumes, plus the plain
+    ``screen_identity`` string it records verbatim on the resulting
+    :class:`~civsim_harness.models.turn.Observation`. Never cached, never reused across steps
+    (FR-008, invariant I14): the loop calls this exactly once per fresh read, always after the
+    previous step's effect (if any) has already been executed.
+    """
+
+    async def __call__(self) -> tuple[Sequence[CapabilityResult], str]: ...
+
+
+class ActionExecutor(Protocol):
+    """Actually perform one authorized action's effect in the game (e.g. via the Nexus client's
+    ``execute_command``, or a fake standing in for it).
+
+    ``act.dispatch.dispatch_action`` only decides whether an action *may* proceed; this is what
+    makes it happen. Its return value, if any, is not consumed by the loop -- the effect is
+    confirmed by re-observing and re-verifying afterward, never by trusting this call's own
+    return (research R14's "verify" phase).
+    """
+
+    async def __call__(
+        self, declaration_id: DeclarationId, parameters: Mapping[str, Any], target: Any
+    ) -> Any: ...
+
+
+@dataclass(frozen=True)
+class DecisionLoopContext:
+    """Everything one turn attempt's decision-step loop needs, fixed for the whole loop.
+
+    Identity fields (``run_id``/``turn_number``/``turn_cycle_id``) are supplied by the caller
+    (``run/turn_cycle.py``), which owns quicksave-before-loop and persist-after-loop sequencing
+    (T114). Everything else is either a pure collaborator already owned by another wave
+    (``registry``, ``provider``, ``host``) or one of this module's own two injected seams
+    (``read_observation_inputs``, ``execute_action``).
+    """
+
+    run_id: RunId
+    turn_number: int
+    turn_cycle_id: TurnCycleId
+    registry: CapabilityRegistry
+    catalog_version: CatalogVersionRef
+    model: ModelRef
+    guidance: GuidanceSet | None
+    provider: ModelProvider
+    no_progress_step_limit: int
+    read_observation_inputs: ObservationReader
+    execute_action: ActionExecutor
+    host: HostPlatform
+    host_info: HostInfo
+    view_declaration_id: DeclarationId
+    screening_profiles: ScreeningProfiles
+    store: MatchStore
+    window_provider: Callable[[], GameWindow | None] = field(default=lambda: None)
+    camera_state_provider: Callable[[], Mapping[str, Any]] = field(default=dict)
+    clock: Callable[[], Timestamp] = field(default=_utcnow)
+
+
+@dataclass(frozen=True)
+class DecisionLoopResult:
+    """The finished loop's output, ready for ``run/turn_cycle.py`` to persist as one
+    ``TurnCycleRecord`` (T117). ``outcome`` is exactly one of the two T112 permits."""
+
+    outcome: TurnOutcome
+    steps: tuple[DecisionStepBundle, ...]
+    final_no_progress_streak: int
+    events: tuple[RunEvent, ...]
+
+
+@dataclass(frozen=True)
+class _FreshObservation:
+    """One ``_observe`` call's full result: the assembled ``Observation``, whether *this* step's
+    own capture was clean enough to show the agent (T157's ``visually_degraded``, carried forward
+    into the ``DecisionStep`` this observation eventually belongs to), and every event the capture
+    attempt produced."""
+
+    observation: Observation
+    visually_degraded: bool
+    events: tuple[RunEvent, ...]
+
+
+async def _observe(
+    ctx: DecisionLoopContext, *, step_id: DecisionStepId, step_index: int
+) -> _FreshObservation:
+    """One fresh read + one fresh capture, assembled into one fresh ``Observation`` (FR-008,
+    FR-015, invariant I14). Called once before the first decision, and once again after every
+    executed (or rejected) decision -- see module docstring.
+
+    The capture (clean or withheld) and its blob, if any, are durably written through
+    ``ctx.store.write_capture`` right here -- ``observe.capture``'s own docstring names
+    ``run/turn_cycle.py`` as the writer, and this module is the part of that turn cycle that
+    actually produces one, sharing the same store handle (FR-051, D5).
+    """
+    results, screen_identity = await ctx.read_observation_inputs()
+
+    window = ctx.window_provider()
+    step_capture = capture_for_step(
+        host=ctx.host,
+        host_info=ctx.host_info,
+        window=window,
+        view_declaration_id=ctx.view_declaration_id,
+        camera_state=dict(ctx.camera_state_provider()),
+        run_id=ctx.run_id,
+        turn_number=ctx.turn_number,
+        decision_step_id=step_id,
+        step_index=step_index,
+        captured_at=ctx.clock(),
+        registry=ctx.registry,
+        profiles=ctx.screening_profiles,
+    )
+    ctx.store.write_capture(step_capture.capture, step_capture.blob)
+    captures = (step_capture.capture.capture_id,) if step_capture.capture.shown_to_agent else ()
+
+    observation = assemble_observation(
+        observation_id=ObservationId(uuid.uuid4().hex),
+        decision_step_id=step_id,
+        catalog_version=ctx.catalog_version,
+        registry=ctx.registry,
+        results=results,
+        screen_identity=screen_identity,
+        assembled_at=ctx.clock(),
+        captures=captures,
+    )
+    return _FreshObservation(
+        observation=observation,
+        visually_degraded=step_capture.visually_degraded,
+        events=step_capture.events,
+    )
+
+
+async def _observe_or_wrap(
+    ctx: DecisionLoopContext,
+    *,
+    step_id: DecisionStepId,
+    step_index: int,
+    completed_steps: tuple[DecisionStepBundle, ...],
+    completed_events: tuple[RunEvent, ...],
+    no_progress_streak: int,
+) -> _FreshObservation:
+    """:func:`_observe`, with an :class:`~civsim_harness.errors.ObservationAssemblyError` wrapped
+    into :class:`MidTurnObservationFailure` carrying whatever steps already completed in this
+    attempt (T096, T152)."""
+    try:
+        return await _observe(ctx, step_id=step_id, step_index=step_index)
+    except ObservationAssemblyError as exc:
+        raise MidTurnObservationFailure(
+            "a fresh observation could not be assembled; this attempt cannot continue on a "
+            "stale board and must be abandoned and replayed from its start quicksave "
+            f"(step_index context: {len(completed_steps)} step(s) already completed)",
+            cause=exc,
+            steps=completed_steps,
+            events=completed_events,
+            no_progress_streak=no_progress_streak,
+        ) from exc
+
+
+def _resolve_trigger(
+    observation: Observation,
+    *,
+    ctx: DecisionLoopContext,
+    step_index: int,
+    occurred_at: Timestamp,
+) -> tuple[DecisionTrigger, str | None]:
+    """Derive this step's ``trigger``/``prompt_type`` from the screen-identity observation, if the
+    running catalog declares one (research R13, FR-010). Optional by construction: a test catalog
+    (or a real one, mid-authoring) that never produces ``game.screen_state`` simply always resolves
+    to ``proactive`` here rather than failing -- see ``SCREEN_STATE_DECLARATION_ID``'s docstring.
+
+    Raises :class:`UnknownScreenEncountered` when the screen is recognised as *not* recognised
+    (FR-049) -- the one path in this module that deliberately does not return a value, since
+    guessing what to do next is exactly what the spec forbids here.
+    """
+    screen_value = next(
+        (
+            entry.value
+            for entry in observation.entries
+            if entry.declaration_id == SCREEN_STATE_DECLARATION_ID
+        ),
+        None,
+    )
+    if screen_value is None:
+        return DecisionTrigger.PROACTIVE, None
+
+    try:
+        screen = interpret_screen_state(screen_value)
+    except ObservationAssemblyError:
+        # A malformed game.screen_state value is a genuine assembly defect that
+        # observe.assemble's own output_schema check should already have caught upstream; treat
+        # defensively as "nothing to route" rather than duplicating that policing here.
+        return DecisionTrigger.PROACTIVE, None
+
+    route = route_prompt(
+        screen=screen,
+        run_id=ctx.run_id,
+        turn_number=ctx.turn_number,
+        step_index=step_index,
+        occurred_at=occurred_at,
+        registry=ctx.registry,
+    )
+    if route.status is PromptRouteStatus.unknown_screen:
+        assert route.event is not None
+        raise UnknownScreenEncountered(
+            "the current screen is not recognised by any declared catalog entry; the run "
+            "must stall visibly rather than guess (FR-049, research R13)",
+            event=route.event,
+        )
+    if route.status is PromptRouteStatus.prompt_decision:
+        return DecisionTrigger.PROMPT_RESPONSE, route.prompt_type
+    return DecisionTrigger.PROACTIVE, None
+
+
+async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
+    """Run one turn attempt's decision-step loop to one of its two permitted exits (T110, T112).
+
+    Raises :class:`MidTurnObservationFailure` when a fresh observation cannot be assembled (T096)
+    -- this module never recovers in place: the attempt is not continuable on a stale board
+    (research R14), so the caller (``run/turn_cycle.py``) must abandon this whole attempt (T152:
+    retaining whatever steps the exception carries) and replay a fresh one from the turn's start
+    quicksave. Raises :class:`~civsim_harness.errors.ProviderChainExhausted` when no decision can
+    be obtained for a step (FR-042) and :class:`UnknownScreenEncountered` when a screen cannot be
+    identified (FR-049) -- both propagate for the same reason: neither is a condition this loop is
+    permitted to paper over by fabricating a decision or guessing what to do.
+    """
+    tracker = NoProgressTracker(limit=ctx.no_progress_step_limit)
+    steps: list[DecisionStepBundle] = []
+    events: list[RunEvent] = []
+
+    step_index = 1
+    step_id = DecisionStepId(uuid.uuid4().hex)
+    initial = await _observe_or_wrap(
+        ctx,
+        step_id=step_id,
+        step_index=step_index,
+        completed_steps=(),
+        completed_events=(),
+        no_progress_streak=tracker.streak,
+    )
+    observation = initial.observation
+    degraded = initial.visually_degraded
+    events.extend(initial.events)
+
+    while True:
+        started_at = ctx.clock()
+
+        trigger, prompt_type = _resolve_trigger(
+            observation, ctx=ctx, step_index=step_index, occurred_at=started_at
+        )
+
+        request = assemble_context(
+            observation=observation,
+            guidance=ctx.guidance,
+            model=ctx.model,
+            step_index=step_index,
+            response_schema=RESPONSE_SCHEMA,
+        )
+        response = ctx.provider.complete(request)
+
+        model_call = ModelCall(
+            model_call_id=ModelCallId(uuid.uuid4().hex),
+            run_id=ctx.run_id,
+            turn_cycle_id=ctx.turn_cycle_id,
+            decision_step_id=step_id,
+            model_requested=ctx.model,
+            model_served=response.model_served,
+            latency_ms=response.latency_ms,
+            cost=response.cost,
+            retry_count=response.retry_count,
+            fallback_occurred=response.fallback_occurred,
+            image_count=response.image_count,
+            outcome=response.outcome,
+        )
+
+        if response.outcome is not CallOutcome.DECISION_RETURNED or response.decision is None:
+            # FR-042: this call never produced a DecisionStep, so it never rides along in the
+            # persisted TurnCycleRecord -- record it directly, right now, or it is lost entirely.
+            ctx.store.write_model_call(model_call)
+            raise ProviderChainExhausted(
+                "no decision could be obtained for this decision step",
+                detail={"step_index": step_index, "outcome": response.outcome.value},
+            )
+
+        raw_decision = response.decision
+        if trigger is DecisionTrigger.PROMPT_RESPONSE and raw_decision.prompt_type is None:
+            # The harness's own screen-identity routing is authoritative (FR-011's "never assert
+            # from the executor" spirit applied to prompt identity, not just verification): a
+            # provider that omits the optional echo still gets recorded as answering the prompt
+            # the harness determined was open.
+            raw_decision = replace(raw_decision, prompt_type=prompt_type)
+
+        dispatch_outcome = dispatch_action(
+            registry=ctx.registry,
+            context=LuaContext.IN_GAME,
+            action_declaration_id=raw_decision.action_declaration_id,
+            observation=observation,
+            target=raw_decision.parameters.get("target"),
+        )
+
+        next_step_id = DecisionStepId(uuid.uuid4().hex)
+        next_step_index = step_index + 1
+
+        if dispatch_outcome.status is DispatchStatus.rejected:
+            execution = rejection_to_execution(dispatch_outcome, verified_at=ctx.clock())
+            progress = StepProgress.REJECTED
+            next_fresh = await _observe_or_wrap(
+                ctx,
+                step_id=next_step_id,
+                step_index=next_step_index,
+                completed_steps=tuple(steps),
+                completed_events=tuple(events),
+                no_progress_streak=tracker.streak,
+            )
+        else:
+            declaration = dispatch_outcome.declaration
+            assert declaration is not None
+            await ctx.execute_action(
+                declaration.declaration_id,
+                raw_decision.parameters,
+                raw_decision.parameters.get("target"),
+            )
+            next_fresh = await _observe_or_wrap(
+                ctx,
+                step_id=next_step_id,
+                step_index=next_step_index,
+                completed_steps=tuple(steps),
+                completed_events=tuple(events),
+                no_progress_streak=tracker.streak,
+            )
+            verification = verify_execution(
+                declaration=declaration,
+                pre_observation=observation,
+                post_observation=next_fresh.observation,
+                target=raw_decision.parameters.get("target"),
+                verified_at=ctx.clock(),
+            )
+            execution = verification.execution
+            progress = verification.progress
+
+        next_observation = next_fresh.observation
+        events.extend(next_fresh.events)
+
+        ended_at = ctx.clock()
+        no_progress_streak_after = tracker.record(progress)
+
+        decision_record = build_decision(
+            raw_decision,
+            decision_id=DecisionId(uuid.uuid4().hex),
+            decision_step_id=step_id,
+            model_call_id=model_call.model_call_id,
+            trigger=trigger,
+            execution=execution,
+        )
+
+        step_record = DecisionStep(
+            decision_step_id=step_id,
+            turn_cycle_id=ctx.turn_cycle_id,
+            step_index=step_index,
+            observation_id=observation.observation_id,
+            decision_id=decision_record.decision_id,
+            model_call_id=model_call.model_call_id,
+            progress=progress,
+            no_progress_streak_after=no_progress_streak_after,
+            visually_degraded=degraded,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
+        bundle = DecisionStepBundle(
+            step=step_record,
+            observation=observation,
+            decision=decision_record,
+            model_call=model_call,
+        )
+        steps.append(bundle)
+
+        if raw_decision.is_end_turn:
+            return DecisionLoopResult(
+                outcome=TurnOutcome.ENDED_BY_AGENT,
+                steps=tuple(steps),
+                final_no_progress_streak=tracker.streak,
+                events=tuple(events),
+            )
+
+        if tracker.tripped:
+            events.append(
+                build_no_progress_event(
+                    run_id=ctx.run_id,
+                    turn_number=ctx.turn_number,
+                    occurred_at=ctx.clock(),
+                    final_no_progress_streak=tracker.streak,
+                    step_index=step_index,
+                )
+            )
+            return DecisionLoopResult(
+                outcome=TurnOutcome.ENDED_ON_NO_PROGRESS,
+                steps=tuple(steps),
+                final_no_progress_streak=tracker.streak,
+                events=tuple(events),
+            )
+
+        step_index = next_step_index
+        step_id = next_step_id
+        observation = next_observation
+        degraded = next_fresh.visually_degraded

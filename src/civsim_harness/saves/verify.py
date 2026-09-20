@@ -47,6 +47,15 @@ def resolve_saves_dir(host: HostPlatform, *, home: Path | None = None) -> Path:
     port -- never hard-coded (R5, R19). *home* exists purely for
     deterministic testing, mirroring ``HostPlatform.resolve_game_directories``
     itself.
+
+    The returned path is **not** required to already exist (T077 spike
+    finding: on a fresh install, the Linux save directory did not exist
+    until the first save created it) -- this is pure path resolution, with
+    no ``is_dir()``/``exists()`` check here or in any ``HostPlatform``
+    adapter's ``resolve_game_directories``. ``verify_save`` below is the
+    only place a missing directory has any consequence, and there it is
+    indistinguishable from -- and handled identically to -- a missing file:
+    both simply fail to verify.
     """
     return host.resolve_game_directories(home=home).saves_dir
 

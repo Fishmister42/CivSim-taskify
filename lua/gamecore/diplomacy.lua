@@ -8,7 +8,13 @@
 -- reachable as plain game-state reads (diplomatic state/visibility, which the standard diplomacy
 -- overview shows regardless of which screen is open); anything that turns out to require the
 -- InGame UI state at runtime must be re-declared against lua/ingame/diplomacy.lua's read side
--- instead of this file. This tension is flagged, not resolved, here.
+-- instead of this file. This tension is flagged, not resolved, here. Not independently tested by
+-- the live-client sweep (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md).
+--
+-- SANDBOX CONSTRAINT (spike P5): neither tuner context exposes `require`, `io`, or `debug`, and
+-- no JSON library exists in either. This file must stay entirely self-contained — no shared
+-- module can ever be factored out and `require`d elsewhere — and carries its own hand-rolled JSON
+-- encoder.
 --
 -- Parity note: only diplomatic *state* visible to the human player (met/not met, current
 -- diplomatic state, public agreements) is reported — never hidden AI intent, undisclosed grievances
@@ -60,35 +66,40 @@ local function CivSim_Diplomacy_GetState()
     local player = Players[localPlayer]
     local diploAI = player:GetDiplomaticAI() -- UNVERIFIED: Player:GetDiplomaticAI()
 
+    -- VERIFIED (P4 spot-check): PlayerManager.GetAlive() exists, replacing the unconfirmed
+    -- GetAliveMajors() guess. UNVERIFIED: whether it returns majors only or all alive players;
+    -- Player:IsMajor() is applied defensively (kept if unavailable) as in lua/gamecore/cities.lua.
     local relations = {}
-    for _, otherPlayer in ipairs(PlayerManager.GetAliveMajors()) do -- UNVERIFIED
-        local otherID = otherPlayer:GetID()
-        if otherID ~= localPlayer then
-            local hasMet = false
-            local ok1, met = pcall(function() return player:GetDiplomacy():HasMet(otherID) end) -- UNVERIFIED
-            if ok1 then hasMet = met end
-            if hasMet then
-                local stateName = nil
-                local ok2, stateIndex = pcall(function()
-                    return diploAI:GetDiplomaticStateIndex(otherID) -- UNVERIFIED
-                end)
-                if ok2 and stateIndex then
-                    stateName = GameInfo.DiplomaticStates[stateIndex].StateType -- UNVERIFIED
+    for _, otherPlayer in ipairs(PlayerManager.GetAlive()) do
+        if not otherPlayer.IsMajor or otherPlayer:IsMajor() then -- UNVERIFIED: Player:IsMajor()
+            local otherID = otherPlayer:GetID()
+            if otherID ~= localPlayer then
+                local hasMet = false
+                local ok1, met = pcall(function() return player:GetDiplomacy():HasMet(otherID) end) -- UNVERIFIED
+                if ok1 then hasMet = met end
+                if hasMet then
+                    local stateName = nil
+                    local ok2, stateIndex = pcall(function()
+                        return diploAI:GetDiplomaticStateIndex(otherID) -- UNVERIFIED
+                    end)
+                    if ok2 and stateIndex then
+                        stateName = GameInfo.DiplomaticStates[stateIndex].StateType -- UNVERIFIED
+                    end
+                    local hasDelegation = false
+                    local ok3, delegation = pcall(function()
+                        return player:GetDiplomacy():HasDelegationAt(otherID) -- UNVERIFIED
+                    end)
+                    if ok3 then hasDelegation = delegation end
+                    relations[#relations + 1] = {
+                        player_id = otherID,
+                        has_met = true,
+                        diplomatic_state = stateName,
+                        has_delegation = hasDelegation,
+                        civilization = PlayerConfigurations[otherID]:GetCivilizationTypeName(), -- UNVERIFIED accessor name
+                    }
+                else
+                    relations[#relations + 1] = { player_id = otherID, has_met = false }
                 end
-                local hasDelegation = false
-                local ok3, delegation = pcall(function()
-                    return player:GetDiplomacy():HasDelegationAt(otherID) -- UNVERIFIED
-                end)
-                if ok3 then hasDelegation = delegation end
-                relations[#relations + 1] = {
-                    player_id = otherID,
-                    has_met = true,
-                    diplomatic_state = stateName,
-                    has_delegation = hasDelegation,
-                    civilization = PlayerConfigurations[otherID]:GetCivilizationTypeName(), -- UNVERIFIED accessor name
-                }
-            else
-                relations[#relations + 1] = { player_id = otherID, has_met = false }
             end
         end
     end

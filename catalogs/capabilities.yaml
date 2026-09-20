@@ -6,10 +6,11 @@
 # T130-T131) needed a bespoke capability: every declared observation, view, and action this
 # author wrote has a Lua implementation reachable through the Nexus contexts (Principle II,
 # Firetuner-first, is satisfied by default here, not as an exception). The one bespoke capability
-# named in contracts/capability-catalog.md's own worked example — saves.save_game — belongs to
-# T077/T078 (owned by a different task range and gated on the R5 save-path spike, neither of
-# which is in this assignment) and is intentionally NOT declared here; whoever completes T078
-# adds that single entry to this file once R5's outcome is known.
+# named in contracts/capability-catalog.md's own worked example — saves.save_game — belonged to
+# T077/T078, gated on the R5 save-path spike: T077 has since run against a real client and found
+# Outcome A (a verified Firetuner Lua save path), so T078 declared it below as path: firetuner
+# too, not bespoke — see catalogs/actions/saves.yaml and
+# specs/002-civ-playing-harness/spikes/r5-save-path.md.
 
 - capability_id: map.read
   path: firetuner
@@ -163,4 +164,11 @@
   implementation_ref: lua/ingame/camera.lua
   reads: [current camera state]
   writes: [camera move, zoom, and view-mode changes]
+  firetuner_gap: null
+
+- capability_id: saves.save_game
+  path: firetuner
+  implementation_ref: lua/ingame/save_game.lua
+  reads: []
+  writes: [named .Civ6Save file]
   firetuner_gap: null

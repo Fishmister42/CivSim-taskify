@@ -5,6 +5,15 @@
 -- government.change_government, government.assign_governor (catalogs/actions/research.yaml,
 -- catalogs/actions/policies.yaml), capability_id: empire.orders.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- This file's own set-side accessors were not covered by the live-client sweep and remain
+-- unconfirmed guesses; the per-call UNVERIFIED markers below are left as-is because the sweep did
+-- not test them.
+--
 -- Parity note: choices are restricted to what CivSim_Research.state()/CivSim_Government.state()
 -- already reported as researchable/available — exactly what the standard tech tree, civic tree,
 -- and government screens would let a human pick right now.

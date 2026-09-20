@@ -6,15 +6,16 @@
 carries are enforced structurally rather than by convention:
 
 - **No image is attached here.** ``images`` is always ``[]`` unless a caller
-  explicitly passes one -- and no caller should until T134 exists, once US2's
-  screening gate is in place. The signature below accepts an explicit
+  explicitly passes one. The signature below accepts an explicit
   ``images: list[Image] | None`` parameter precisely so that extension is
-  additive: T134 will pass a ``list[Image]`` built from captures it has
-  *itself* verified as ``ScreeningStatus.SCREENED_CLEAN``. This module never
-  reads ``Observation.captures`` (the list of ``CaptureId`` shown at this
-  step) at all, so wiring a capture id through here by itself can never
-  attach an image -- the only path to a non-empty ``images`` list is a caller
-  explicitly supplying one.
+  additive: :func:`select_screened_images` (T134) is the one function in this
+  module permitted to turn a step's captures into that ``list[Image]`` --
+  callers build it there, then pass the result straight through unmodified.
+  ``assemble_context`` itself still never reads ``Observation.captures`` (the
+  list of ``CaptureId`` shown at this step) at all, so wiring a capture id
+  through here by itself can never attach an image -- the only path to a
+  non-empty ``images`` list is a caller explicitly supplying one, built by
+  the one function whose whole job is verifying it is safe to show.
 - **Harness telemetry (FR-020) cannot reach the assembled text**, because the
   only inputs this module accepts are ``Observation`` (already parity-filtered
   upstream by ``observe/assemble.py``) and ``GuidanceSet`` (run-independent
@@ -24,16 +25,48 @@ carries are enforced structurally rather than by convention:
   change that wanted to leak one of those fields into the agent's context
   would have to change the accepted parameter types first, which is exactly
   the friction FR-020's red-team test (T126) is meant to rely on.
+
+**T134 -- the only way an image reaches the agent.** :func:`select_screened_images` is a pure
+filter, not a data source: it never reads a store, never decodes bytes, and never invents an
+``Image`` on its own. A caller (the run loop) hands it *candidates* -- each a
+``(ScreenCapture, Image)`` pair it already has in hand, the ``Image`` already built from whatever
+raw bytes it read back (via ``StepCapture.blob`` fresh off ``observe.capture.capture_for_step``, or
+read back through the store) -- and gets back only the ``Image`` half of the candidates that pass
+*all three* of FR-024/FR-025/FR-015's conditions:
+
+1. ``capture.screening_status == ScreeningStatus.SCREENED_CLEAN`` -- an unscreened or withheld
+   capture is never shown, full stop (research R7, SC-019).
+2. ``capture.view_declaration_id`` resolves in the run's own catalog (via the ``registry`` the
+   caller passes -- the same registry bound to the run's catalog version everywhere else in this
+   codebase; this function trusts that binding rather than re-deriving it, matching
+   ``act.dispatch.dispatch_action``'s and ``observe.assemble.assemble_observation``'s own trust of
+   their own ``registry`` parameter).
+3. ``capture.decision_step_id == observation.decision_step_id`` -- a prior step's capture, however
+   clean, has no path into *this* step's context (FR-015): the board shown must reflect what the
+   agent has already done this turn, never a stale frame.
+
+A capture failing any one of the three is silently skipped, never raised on -- a caller iterating
+every capture a run has ever produced and handing all of them to this function is expected usage,
+not a caller error, so most candidates on a long-lived run are supposed to be filtered out here.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any, Final
 
+from civsim_harness.capability.registry import CapabilityRegistry
+from civsim_harness.errors import CatalogError
+from civsim_harness.models.catalog import DeclarationKind
 from civsim_harness.models.common import ModelRef
 from civsim_harness.models.config import GuidanceSet
-from civsim_harness.models.turn import Observation, ObservationEntry
+from civsim_harness.models.turn import (
+    Observation,
+    ObservationEntry,
+    ScreenCapture,
+    ScreeningStatus,
+)
 from civsim_harness.provider.port import DecisionRequest, Image
 
 ROLE_TEXT: Final[str] = (
@@ -104,12 +137,12 @@ def assemble_context(
 ) -> DecisionRequest:
     """Assemble one decision step's complete ``DecisionRequest`` (T103).
 
-    ``images`` defaults to none attached: US1 ships before screening exists
-    (US2), so today this is always ``[]`` regardless of what
+    ``images`` defaults to none attached, regardless of what
     ``observation.captures`` lists (this function never inspects that field).
-    T134 is the only caller that should ever pass a non-empty ``images``
-    list, and only with captures it has already verified as
-    ``ScreeningStatus.SCREENED_CLEAN``.
+    The caller is expected to build ``images`` via :func:`select_screened_images`
+    (T134) -- the one function that verifies each candidate capture is
+    ``ScreeningStatus.SCREENED_CLEAN``, resolves in the run's own catalog, and
+    belongs to *this* decision step -- and pass its result straight through.
 
     ``model`` is used only to populate ``DecisionRequest.model`` (which
     routes the call) -- it is never rendered into ``system`` or
@@ -124,3 +157,50 @@ def assemble_context(
         step_index=step_index,
         response_schema=response_schema,
     )
+
+
+def select_screened_images(
+    *,
+    observation: Observation,
+    registry: CapabilityRegistry,
+    candidates: Sequence[tuple[ScreenCapture, Image]],
+) -> list[Image]:
+    """T134: the only function permitted to turn a step's captures into agent-visible images.
+
+    *candidates* is whatever the caller already has in hand -- typically every
+    :class:`~civsim_harness.models.turn.ScreenCapture` on record for this run (or just this
+    step), each paired with its already-decoded :class:`~civsim_harness.provider.port.Image`
+    (built from ``StepCapture.blob`` fresh off
+    :func:`~civsim_harness.observe.capture.capture_for_step`, or read back through the store).
+    This function never reads a store and never decodes bytes itself -- it is a pure filter,
+    nothing more.
+
+    A candidate's ``Image`` is included in the result only when **all three** hold (FR-024,
+    FR-025, FR-015); see the module docstring for the full rationale behind each:
+
+    1. ``capture.screening_status is ScreeningStatus.SCREENED_CLEAN``.
+    2. ``capture.view_declaration_id`` resolves in *registry* (the caller's own trust that
+       *registry* is bound to this run's catalog version, matching how every other module in this
+       codebase trusts its own ``registry`` parameter).
+    3. ``capture.decision_step_id == observation.decision_step_id`` -- the capture belongs to the
+       *current* decision step, never a prior one.
+
+    A capture failing any one of the three is silently skipped, not raised on: iterating every
+    capture a run has ever produced and handing all of them to this function is expected usage,
+    and only the handful belonging to the current step could ever pass check 3 regardless. Order
+    is preserved from *candidates*.
+    """
+    images: list[Image] = []
+    for capture, image in candidates:
+        if capture.screening_status is not ScreeningStatus.SCREENED_CLEAN:
+            continue
+        if capture.decision_step_id != observation.decision_step_id:
+            continue
+        try:
+            declaration = registry.resolve(capture.view_declaration_id)
+        except CatalogError:
+            continue
+        if declaration.kind is not DeclarationKind.VIEW:
+            continue
+        images.append(image)
+    return images

@@ -3,10 +3,18 @@
 -- Backs declaration_id: great_people.state (catalogs/observations/great_people.yaml),
 -- capability_id: great_people.read.
 --
--- UNVERIFIED (whole file): `Game.GetGreatPeople()` as a global manager is believed to exist
--- (referenced in community modding discussions of great-person points and recruitment), but the
--- exact methods for "currently recruitable individuals" and "this player's points per class" are
--- not confirmed against a live client.
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- CORRECTED/CONFIRMED against a live client (spike P3): `Game.GetGreatPeople()` as a global
+-- manager accessor is now confirmed to exist (it is one of the 8 `InGame` manager accessors the
+-- sweep checked; only 4 of the 8 are present in GameCore_Tuner — this file's context — so calling
+-- it here should be re-checked against which 4 before relying on it). What remains unconfirmed
+-- (existence is not arity) is every method *on* the object it returns: "currently recruitable
+-- individuals" and "this player's points per class" below are still unconfirmed method-name
+-- guesses, not verified calls, and are marked as such individually.
 --
 -- Parity note: reports only great people currently recruitable/visible to the local player on the
 -- standard Great People screen (available individuals and the local player's own accumulated
@@ -57,8 +65,11 @@ end
 local function CivSim_GreatPeople_GetState()
     local localPlayer = Game.GetLocalPlayer()
 
+    -- VERIFIED (P3): Game.GetGreatPeople() itself confirmed to exist. UNVERIFIED: every method
+    -- called on gpMgr below (GetAvailableIndividuals, GetPlayerPoints) and every field read off
+    -- their results.
     local recruitable = {}
-    local ok1, gpMgr = pcall(function() return Game.GetGreatPeople() end) -- UNVERIFIED
+    local ok1, gpMgr = pcall(function() return Game.GetGreatPeople() end)
     if ok1 and gpMgr ~= nil and gpMgr.GetAvailableIndividuals then
         for _, individual in ipairs(gpMgr:GetAvailableIndividuals(localPlayer)) do -- UNVERIFIED
             recruitable[#recruitable + 1] = {

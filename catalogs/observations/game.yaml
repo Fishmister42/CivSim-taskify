@@ -18,6 +18,22 @@
   parity_basis: >
     Look at whichever screen or panel is currently open on the local player's own display —
     obvious to any human player observing their own screen.
+  # CORRECTED against a live client (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md,
+  # P2): there is no single-call UIManager screen-identity API (GetScreen/GetTopmostScreen/
+  # GetCurrentPopup/IsScreenOpen/GetScreenName are all confirmed nil). The verified mechanism is
+  # per-screen `ContextPtr:IsHidden()` — each UI screen is its own isolated Lua state — proven live
+  # by flipping InGameTopOptionsMenu via Escape and observing exactly it change (screen_identity.md).
+  # FR-010/FR-049 ARE reachable through FireTuner; there is no firetuner_gap here. See
+  # lua/ingame/screens.lua's header for the full correction and CIVSIM_SCREEN_WATCHLIST there.
+  #
+  # REPORTED, NOT FIXED (Python-side implication, outside this agent's lua/+catalogs ownership):
+  # assembling this declaration's shape now requires the dispatcher to resolve each watchlisted
+  # screen name to its own Lua state (via the nexus protocol's `LSQ:` handshake) and issue one
+  # CivSim_Screens.probe() command per candidate screen, folding the per-screen `hidden` results
+  # into `screen`/`recognized`/`has_blocking_prompt` below — rather than one call into `InGame`
+  # answering this whole shape by itself, which was this declaration's previous assumption. Z-order
+  # is not exposed by this mechanism, so "screen" below can report which known screen is open, not
+  # which is topmost if more than one somehow reports open at once.
   context: InGame
   capability_id: screens.probe
   output_schema:
@@ -40,6 +56,14 @@
   parity_basis: >
     Look at the turn counter in the top bar and whether the end-turn button is enabled (it is
     only enabled during the local player's own turn).
+  # VERIFIED (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P1):
+  # is_local_player_turn is backed by `UI.CanEndTurn()` in lua/ingame/turn_control.lua, a real
+  # boolean confirmed readable before acting — not the earlier untested
+  # `Players[x]:IsTurnActive()` guess, which has been removed. turn_number is
+  # `Game.GetCurrentGameTurn()`, also confirmed. This is the readback that turn.end_turn's
+  # verification_predicate (catalogs/actions/turn.yaml) depends on to detect a swallowed end-turn,
+  # since `UI.RequestAction(ActionTypes.ACTION_ENDTURN)` — the confirmed real end-turn call —
+  # always returns `nil`.
   context: InGame
   capability_id: turn.control
   output_schema:

@@ -4,8 +4,19 @@
 -- Backs declaration_id: espionage.assign_mission (catalogs/actions/espionage.yaml),
 -- capability_id: espionage.orders.
 --
--- UNVERIFIED (whole file): the InGame spy-mission-assignment Lua surface is not confidently known.
--- Assumed by analogy with the Unit/City operation-request pattern used elsewhere in this catalog.
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- UNVERIFIED (whole file): the InGame spy-mission-assignment Lua surface is not confidently known,
+-- and this file's domain (espionage) was not covered by the live-client sweep at all. Assumed by
+-- analogy with the Unit/City operation-request pattern used elsewhere in this catalog. The spy
+-- lookup below was corrected from a `UnitManager.GetUnit(playerID, unitID)` guess (never
+-- confirmed to exist, and the sweep separately confirmed `Units.GetUnit` — a related but distinct
+-- guess — is `nil`) to the `Players`-based lookup pattern lua/ingame/unit_orders.lua now uses,
+-- since a spy is itself a unit; this substitution is a defensive correction by analogy, not
+-- itself independently spike-verified for the espionage domain.
 --
 -- Parity note: a mission may only be assigned to one of the local player's own spies, against a
 -- target city currently offered on the standard espionage panel for that spy — never a mission
@@ -52,9 +63,19 @@ local function CivSim_JsonEncode(value)
     end
 end
 
-local function CivSim_Espionage_AssignMission(spyUnitId, missionType, targetCityId)
+local function CivSim_FindLocalSpyUnit(spyUnitId)
     local localPlayer = Game.GetLocalPlayer()
-    local unit = UnitManager.GetUnit(localPlayer, spyUnitId) -- UNVERIFIED
+    local units = Players[localPlayer]:GetUnits()
+    for _, u in units:Members() do
+        if u:GetID() == spyUnitId then
+            return u
+        end
+    end
+    return nil
+end
+
+local function CivSim_Espionage_AssignMission(spyUnitId, missionType, targetCityId)
+    local unit = CivSim_FindLocalSpyUnit(spyUnitId)
     if unit == nil then
         return { ok = false, reason = "spy_not_found" }
     end

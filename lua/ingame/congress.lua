@@ -4,8 +4,15 @@
 -- Backs declaration_id: congress.cast_vote (catalogs/actions/congress.yaml),
 -- capability_id: congress.orders.
 --
--- UNVERIFIED (whole file): see lua/gamecore/congress.lua's header — the whole World Congress Lua
--- surface, read and write, is unconfirmed pending a live-client spike.
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- UNVERIFIED (whole file, except one accessor): see lua/gamecore/congress.lua's header — spike P3
+-- confirms `Game.GetWorldCongress()` exists as a real accessor in InGame (corrected below from
+-- the previous `Game.GetCongress()` guess to match), but every method called on what it returns
+-- (`:CastVote(...)` included) is still unconfirmed and pending a live-client spike.
 --
 -- Parity note: only a resolution and choice already reported active by CivSim_Congress.state()
 -- may be voted on, spending no more of the local player's own diplomatic favor than the standard
@@ -54,8 +61,9 @@ end
 
 local function CivSim_Congress_CastVote(resolutionId, choiceId, favorSpent)
     local localPlayer = Game.GetLocalPlayer()
+    -- VERIFIED (P3): Game.GetWorldCongress() itself confirmed to exist. UNVERIFIED: :CastVote(...).
     local ok, result = pcall(function()
-        return Game.GetCongress():CastVote(localPlayer, resolutionId, choiceId, favorSpent) -- UNVERIFIED
+        return Game.GetWorldCongress():CastVote(localPlayer, resolutionId, choiceId, favorSpent) -- UNVERIFIED
     end)
     return {
         ok = (ok and result ~= false),

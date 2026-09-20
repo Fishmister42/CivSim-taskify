@@ -2,7 +2,7 @@
   "$defs": {
     "BuildAcceptance": {
       "additionalProperties": false,
-      "description": "An operator-accepted deviation from a seed set's pinned game build (FR-002, R20).\n\nRecorded once on the seed set and referenced (via ``AcceptanceId``) by\nevery run that relied on it.",
+      "description": "An operator-accepted deviation from a seed set's pinned game build (FR-002, R20).\n\nRecorded once on the seed set and referenced (via ``AcceptanceId``) by\nevery run that relied on it.\n\n``is_platform_transition`` is derived (data-model.md SS1), not supplied\nby the caller: the ``model_validator`` below recomputes it from\n``from_build``/``to_build`` after every validation, so a caller may\nomit it -- every construction site in this codebase does -- or pass any\nvalue and get the correct answer either way. ``r20_spike_ref`` is the\nrecorded passing result of the R20 cross-platform save spike (T199);\ndata-model.md marks it required when ``is_platform_transition`` is\ntrue, but that gate is enforced by the caller that *creates* an\nacceptance (the `seedset accept-build` command, T174) and by\n``saves.branching.check_branch_build``, which both fail closed on a\nmissing spike ref -- not by this model. A platform-crossing\n``BuildAcceptance`` with no spike result on record is still a\nconstructible value; it is simply refused wherever it would be relied\nupon.",
       "properties": {
         "acceptance_id": {
           "title": "Acceptance Id",
@@ -20,6 +20,23 @@
         "from_build": {
           "title": "From Build",
           "type": "string"
+        },
+        "is_platform_transition": {
+          "default": false,
+          "title": "Is Platform Transition",
+          "type": "boolean"
+        },
+        "r20_spike_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "R20 Spike Ref"
         },
         "reason": {
           "title": "Reason",

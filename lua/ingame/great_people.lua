@@ -4,8 +4,15 @@
 -- Backs declaration_id: great_people.recruit (catalogs/actions/great_people.yaml),
 -- capability_id: great_people.orders.
 --
--- UNVERIFIED (whole file): the recruit/patronize Lua call is not confidently known; assumed by
--- analogy with Game.GetGreatPeople()'s read side in lua/gamecore/great_people.lua.
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- CORRECTED/CONFIRMED against a live client (spike P3): `Game.GetGreatPeople()` itself is
+-- confirmed to exist in InGame (see lua/gamecore/great_people.lua's header). The recruit/patronize
+-- method called on it below (`:Recruit(...)`) remains an unconfirmed guess — existence of the
+-- accessor is not arity of its methods.
 --
 -- Parity note: only an individual already reported by CivSim_GreatPeople.state()'s
 -- recruitable_individuals for the local player may be recruited — exactly the choice the standard
@@ -54,6 +61,7 @@ end
 
 local function CivSim_GreatPeople_Recruit(individualId)
     local localPlayer = Game.GetLocalPlayer()
+    -- VERIFIED (P3): Game.GetGreatPeople() itself confirmed to exist. UNVERIFIED: :Recruit(...).
     local ok, result = pcall(function()
         return Game.GetGreatPeople():Recruit(localPlayer, individualId) -- UNVERIFIED
     end)

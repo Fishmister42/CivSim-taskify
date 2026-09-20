@@ -5,15 +5,51 @@
 -- screens.probe; and every declaration_id in catalogs/actions/prompts.yaml, capability_id:
 -- prompts.orders.
 --
--- HIGHEST UNCERTAINTY FILE IN THIS CATALOG. Research R13 calls for "which screen is currently up"
--- as a declared observation, but does not (and could not, without a live client) specify the
--- concrete Lua mechanism. Civ VI's UI screens are ordinarily owned by their own Lua files via a
--- private `ContextPtr`; whether the InGame tuner context can enumerate "which UI context is
--- currently topmost" at all, and by what call, is not confirmed. Everything below is a best-effort
--- skeleton against the most plausible API shape (a global UI-manager-style query), written so the
--- JSON contract it produces is stable even though its internals must be validated against a live
--- client before first use — exactly the kind of gap the R13 implementer needs flagged, not hidden
--- behind a plausible-looking call.
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- CORRECTED against a live client (spike P2). The original draft here assumed a global
+-- `UIManager`-style "what is topmost" query. That does not exist: `UIManager.GetScreen`,
+-- `UIManager.GetTopmostScreen`, `UIManager.GetCurrentPopup`, `UIManager.ClosePopup`,
+-- `UI.IsScreenOpen`, and `UI.GetScreenName` are all confirmed `nil` in InGame.
+--
+-- VERIFIED (P2): the real mechanism. Every Civ VI UI screen is its own separate Lua state (137
+-- observed at turn 1; spikes/r5-raw/00_states.txt), each with its own private `ContextPtr`, and
+-- that state's own `ContextPtr:IsHidden()` reports whether that one screen is currently showing.
+-- Live-proven: 26 watched screens started `hidden=true`; sending one Escape to the client flipped
+-- exactly `InGameTopOptionsMenu` to `hidden=false` and nothing else
+-- (spikes/sweep-raw/screen_identity.md). So FR-010 and FR-049 ARE reachable through FireTuner —
+-- there is no firetuner_gap to document for screen identity.
+--
+-- ARCHITECTURAL CONSEQUENCE — reported, not fixed here (this agent owns lua/ and these two
+-- catalog files only, not the dispatcher). Because each screen is a genuinely separate Lua VM
+-- state, code running in the InGame state cannot read another screen's ContextPtr by name — there
+-- is no shared global namespace across states, the same isolation that makes `require` absent.
+-- contracts/nexus-protocol.md's wire format (`CMD:<state_index>:<lua_code>`, resolved via the
+-- `LSQ:` handshake) already supports addressing any enumerated Lua state, not just
+-- `GameCore_Tuner`/`InGame` — the transport can do this. What is missing is on the
+-- catalog/dispatcher side (outside this directory): today a declaration's `context` resolves to
+-- exactly one of those two named contexts, and the client "refuses to execute an entry in the
+-- wrong one". Answering game.screen_state for real means the dispatcher must additionally resolve
+-- each name in CIVSIM_SCREEN_WATCHLIST below to its own state index (via `LSQ:`) and issue one
+-- `CivSim_Screens.probe()` command per candidate screen, in watchlist order, folding the
+-- per-screen `hidden` results into game.screen_state's aggregate shape — rather than assuming one
+-- call into "InGame" is enough, which was this file's previous (wrong) assumption.
+--
+-- Three honest limits on what this answers even once the dispatcher does that (see spike P2):
+-- 1. It answers "is screen X open", not "what is topmost" — Z-order is not exposed. Sufficient
+--    for FR-049 (the unknown case is "the game is blocked and nothing known is open"), not for
+--    true stacking order.
+-- 2. One round-trip per screen state — 26 screens is 26 commands, since these are genuinely
+--    separate Lua environments with no single call spanning all of them. CIVSIM_SCREEN_WATCHLIST
+--    is ordered by likelihood so a per-step probe can check the most probable screens first
+--    rather than always scanning all 26.
+-- 3. A screen whose state is not instantiated until first use reads as absent from the `LSQ:`
+--    enumeration (a dispatcher-level fact), not as `hidden=true` — a Lua probe can only run once
+--    the dispatcher has found the state at all. All 26 watched states existed at turn 1; that
+--    should not be assumed for rarely-opened screens across a whole game.
 --
 -- Parity note: a screen identifier and its offered options are things a human player already sees
 -- by looking at their own screen; nothing here reads hidden state to determine "what happens if I
@@ -77,52 +113,64 @@ local function CivSim_ScreenIsKnown(screenId)
     return false
 end
 
--- UNVERIFIED: the actual "what is currently on top" query. `UI.GetTopmostContext` (or similar) is
--- assumed as a placeholder; the real mechanism may require polling `ContextPtr` visibility from
--- each known screen's own Lua file via a LuaEvents broadcast instead of a single global query.
+-- Real Civ VI Lua state names (spikes/r5-raw/00_states.txt), likelihood-ordered (most commonly
+-- opened mid-turn first, menu/pause screens last) for the dispatcher to resolve via `LSQ:` and
+-- probe one at a time — see the header's architectural note. This is data for that future
+-- multi-state dispatch, not something this file loops over itself.
+local CIVSIM_SCREEN_WATCHLIST = {
+    "CityPanel", "ProductionPanel", "TechTree", "CivicsTree", "GovernmentScreen", "ReligionScreen",
+    "DiplomacyActionView", "DiplomacyDealView", "DeclareWarPopup", "UnitPromotionPopup",
+    "PantheonChooser", "GreatPeoplePopup", "WorldCongressPopup", "WorldCongressBetweenTurns",
+    "WorldCongressIntro", "EventPopup", "EraCompletePopup", "NaturalWonderPopup", "LeaderScene",
+    "TechCivicCompletedPopup", "BoostUnlockedPopup", "CivilopediaScreen", "InGamePopup",
+    "InGameTopOptionsMenu", "PausePanel", "Options", "SaveGameMenu", "LoadGameMenu",
+}
+
+-- VERIFIED (P2, screen_identity.md) that each named state exists; UNVERIFIED that
+-- ContextPtr:IsHidden()==false on that exact state precisely coincides with the catalog concept
+-- named on the left, beyond the one live-flipped case (InGameTopOptionsMenu, confirmed). Entries
+-- intentionally left out below (e.g. "strategic", most `prompt.*` ids) have no confirmed 1:1 state
+-- and are not guessed here.
+local CIVSIM_SCREEN_ID_BY_STATE = {
+    city_screen = "CityPanel",
+    congress = "WorldCongressPopup",
+    diplomacy = "DiplomacyActionView",
+    ["prompt.unit_promotion"] = "UnitPromotionPopup",
+    ["prompt.pantheon_selection"] = "PantheonChooser",
+    ["prompt.great_person_selection"] = "GreatPeoplePopup",
+    ["prompt.declare_war_response"] = "DeclareWarPopup",
+    ["prompt.era_transition"] = "EraCompletePopup",
+}
+
+-- VERIFIED (P2): the confirmed screen-identity mechanism. This is written to be dispatched once
+-- *per candidate screen state* (see header) — when the dispatcher targets a given screen's own
+-- Lua state and calls this, it reports that screen's own hidden flag. The caller already knows
+-- which screen it targeted (it chose the state index/name), so this function needs no argument
+-- and does not itself decide which screen it is probing.
 local function CivSim_Screens_Probe()
-    local screenId = "world"
-    local isBlocking = false
-    local promptOptions = {}
-
-    local ok, topmost = pcall(function() return UI.GetTopmostContext() end) -- UNVERIFIED
-    if ok and topmost ~= nil then
-        screenId = topmost
+    local ok, hidden = pcall(function() return ContextPtr:IsHidden() end)
+    if not ok then
+        -- ContextPtr missing/erroring in a state the dispatcher successfully targeted is distinct
+        -- from that screen's state not existing at all (STATE_ABSENT, a fact the `LSQ:` handshake
+        -- surfaces before this Lua ever runs — see header limitation 3).
+        return { screen_probe_ok = false, hidden = nil }
     end
-
-    local recognized = CivSim_ScreenIsKnown(screenId)
-    if not recognized then
-        return {
-            screen = "unknown",
-            raw_screen_id = screenId,
-            recognized = false,
-            has_blocking_prompt = false,
-        }
-    end
-
-    local isPrompt = (screenId:sub(1, 7) == "prompt.")
-    if isPrompt then
-        isBlocking = true
-        -- UNVERIFIED: per-prompt option enumeration. Each known prompt type would need its own
-        -- accessor (e.g. available promotions, available beliefs) rather than one generic call;
-        -- this returns an empty list as a structurally honest placeholder rather than a guess.
-        promptOptions = {}
-    end
-
-    return {
-        screen = screenId,
-        raw_screen_id = screenId,
-        recognized = true,
-        has_blocking_prompt = isBlocking,
-        prompt_options = promptOptions,
-    }
+    return { screen_probe_ok = true, hidden = (hidden == true) }
 end
 
--- Answer a currently open prompt with one of its offered options. UNVERIFIED: the actual
--- dismiss/answer call is prompt-specific in the real client (e.g. selecting a pantheon goes
--- through lua/ingame/religion.lua's select_pantheon, not a generic "answer prompt" call). This
--- generic entry point exists only for prompt types with no dedicated orders file (e.g. era
--- transition acknowledgement, city-state quest acceptance).
+-- Answer a currently open prompt with one of its offered options. UNVERIFIED: the sweep did not
+-- test prompt response, so this remains an unconfirmed placeholder, not a corrected call —
+-- `UI.RespondToPrompt` was not among the symbols probed and is not on either the confirmed or the
+-- confirmed-wrong list. The dismiss/answer call is prompt-specific in the real client (e.g.
+-- selecting a pantheon goes through lua/ingame/religion.lua's select_pantheon, not a generic
+-- "answer prompt" call). Given P2's finding that each screen (very plausibly including each
+-- prompt popup, e.g. PantheonChooser/DeclareWarPopup in CIVSIM_SCREEN_WATCHLIST above) is its own
+-- isolated Lua state, a single generic call issued from InGame is now additionally suspect for
+-- the same reason the old screen-identity query was wrong: the real answer call more plausibly
+-- belongs inside that prompt's own state (e.g. driving one of its Controls' callbacks), not a
+-- global `UI.*` function reachable from InGame. Not fixed here — untested, and reported above as
+-- part of the same architectural gap. This generic entry point exists only for prompt types with
+-- no dedicated orders file (e.g. era transition acknowledgement, city-state quest acceptance).
 local function CivSim_Screens_RespondToPrompt(promptType, optionId)
     if not CivSim_ScreenIsKnown(promptType) then
         return { ok = false, reason = "unknown_prompt" }
@@ -138,6 +186,8 @@ CivSim_Screens = {
     respond = CivSim_Screens_RespondToPrompt,
 }
 
--- Example dispatch (performed by the Nexus dispatcher, not by this file):
+-- Example dispatch (performed by the Nexus dispatcher, not by this file). Once per candidate
+-- screen state in CIVSIM_SCREEN_WATCHLIST order — folding results into game.screen_state's
+-- aggregate shape is the dispatcher's job, not this file's (see header):
 --   print(CivSim_JsonEncode(CivSim_Screens.probe()))
 --   print(CivSim_JsonEncode(CivSim_Screens.respond("prompt.city_state_quest", "accept")))

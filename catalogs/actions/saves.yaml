@@ -1,0 +1,32 @@
+# catalogs/actions/saves.yaml
+# T078 (US1). Backed by lua/ingame/save_game.lua (capability_id: saves.save_game).
+#
+# Path is `firetuner`, not `bespoke`. The T077 / research R5 spike
+# (specs/002-civ-playing-harness/spikes/r5-save-path.md) ran against a real
+# Civilization VI client and found a working Lua save call
+# (`Network.SaveGame`, `InGame` context, verified live: four calls, four
+# valid size-stable files, zero failures). Under Principle II
+# ("Firetuner-First"), that positive result means the bespoke Save Game
+# dialog driver this declaration might otherwise have needed is now
+# forbidden, not merely unnecessary -- there is no Firetuner gap left to
+# document, so `firetuner_gap` must be (and is) absent below.
+#
+# The turn-start quicksave (FR-007) is harness-issued, not agent-chosen, but
+# it still passes through this same declared, parity-audited path like any
+# other action that touches the game (Principle I) -- nothing reaches the
+# game without a catalog entry, whether or not the agent is the one deciding
+# to invoke it.
+
+- declaration_id: saves.save_game
+  kind: action
+  summary: Take a named, addressable save of the current game.
+  parity_basis: >
+    Press Esc to open the in-game menu, choose Save Game, type a name, and
+    save.
+  context: InGame
+  capability_id: saves.save_game
+  availability_predicate: >
+    game.is_local_player_turn
+  verification_predicate: >
+    game.turn_number == observed_turn_number
+  introduced_in_version: "2026.09.1"

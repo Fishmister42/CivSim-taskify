@@ -21,6 +21,7 @@ enforcement, matching how the rest of `models/` already works.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -38,7 +39,7 @@ from civsim_harness.models.common import (
 )
 from civsim_harness.models.config import RunConfiguration
 from civsim_harness.models.decision import Decision
-from civsim_harness.models.records import ModelCall, RunEvent, SavePoint
+from civsim_harness.models.records import ModelCall, RunEvent, RunEventType, SavePoint
 from civsim_harness.models.run import Run
 from civsim_harness.models.turn import DecisionStep, Observation, ScreenCapture, TurnCycle
 
@@ -176,13 +177,19 @@ class MatchStore(Protocol):
     """The store every harness write and recovery/branching/retention read
     goes through (contracts/match-store-port.md).
 
-    Nine writes (including `archive_run`), eight reads (including
-    `step_gaps` and `list_eligible_save_points`), and `ping()`. Every write
-    is synchronous-durable: see the D1-D6 durability contract on each
-    method below and in the contract document. Later waves bind to this
-    `Protocol`, never to `SqliteMatchStore` directly, so that deliverable
-    3's real store is a drop-in configuration change (plan Complexity
-    Tracking C2).
+    Nine writes (including `archive_run`), ten reads (including
+    `step_gaps`, `list_eligible_save_points`, `get_capture`, and
+    `list_run_events`), and `ping()`. Every write is synchronous-durable:
+    see the D1-D6 durability contract on each method below and in the
+    contract document. Later waves bind to this `Protocol`, never to
+    `SqliteMatchStore` directly, so that deliverable 3's real store is a
+    drop-in configuration change (plan Complexity Tracking C2).
+
+    `get_capture` and `list_run_events` are reads only, deliberately: the
+    port has no delete or mutate path for captures or events, matching the
+    same reasoning that already keeps it off turn records (FR-034,
+    invariant I12) -- a capture or event, once written, is never removed or
+    revised by anything reachable through this port.
     """
 
     # --- writes (all synchronous-durable; see contracts/match-store-port.md
@@ -312,6 +319,30 @@ class MatchStore(Protocol):
     def list_eligible_save_points(self) -> list[SavePoint]:
         """Save points whose run has been archived, and only those (FR-036,
         R17) -- the sole input to any operator-invoked save-file removal.
+        """
+        ...
+
+    def get_capture(self, capture_id: CaptureId) -> ScreenCapture | None:
+        """Look up one capture by id.
+
+        The read counterpart to `write_capture`'s record half (not its
+        blob -- this port has no blob-fetch operation, only the record that
+        carries `blob_ref`). What a parity or capabilities audit needs to
+        resolve a `ScreenCapture`'s `view_declaration_id` without reaching
+        past the port into an implementation detail.
+        """
+        ...
+
+    def list_run_events(
+        self, run_id: RunId, *, event_types: Sequence[RunEventType] | None = None
+    ) -> list[RunEvent]:
+        """All `RunEvent`s for one run, chronological by `occurred_at`.
+
+        `event_types`, when given, restricts the result to just those
+        types (e.g. `unknown_screen` for FR-005's "recorded stall" half:
+        every prompt is a recorded `prompt_response` decision or a
+        recorded stall) without the caller re-filtering the full timeline
+        itself. Omitted or `None` returns every event type.
         """
         ...
 

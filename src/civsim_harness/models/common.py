@@ -20,7 +20,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import NewType
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 # --------------------------------------------------------------------------
 # Base model
@@ -151,11 +151,43 @@ class CatalogVersionRef(HarnessModel):
     content_hash: str
 
 
+def _build_platform(build: str) -> str:
+    """The platform component of a composite ``<platform>/<version>`` build
+    string (research R20).
+
+    Deliberately duplicated rather than imported from
+    ``observe.game_build.split_build``: ``models/`` is the foundation layer
+    every other module in this package imports from (module docstring
+    above), never the reverse, and this one-line split needs none of that
+    module's stricter error handling to serve as ``BuildAcceptance``'s own
+    derivation. A build string with no ``/`` is treated as all-platform,
+    all-version (no split), which only ever makes two builds compare as the
+    *same* platform -- the conservative direction for a derived field.
+    """
+    platform, _, _ = build.partition("/")
+    return platform
+
+
 class BuildAcceptance(HarnessModel):
     """An operator-accepted deviation from a seed set's pinned game build (FR-002, R20).
 
     Recorded once on the seed set and referenced (via ``AcceptanceId``) by
     every run that relied on it.
+
+    ``is_platform_transition`` is derived (data-model.md SS1), not supplied
+    by the caller: the ``model_validator`` below recomputes it from
+    ``from_build``/``to_build`` after every validation, so a caller may
+    omit it -- every construction site in this codebase does -- or pass any
+    value and get the correct answer either way. ``r20_spike_ref`` is the
+    recorded passing result of the R20 cross-platform save spike (T199);
+    data-model.md marks it required when ``is_platform_transition`` is
+    true, but that gate is enforced by the caller that *creates* an
+    acceptance (the `seedset accept-build` command, T174) and by
+    ``saves.branching.check_branch_build``, which both fail closed on a
+    missing spike ref -- not by this model. A platform-crossing
+    ``BuildAcceptance`` with no spike result on record is still a
+    constructible value; it is simply refused wherever it would be relied
+    upon.
     """
 
     acceptance_id: AcceptanceId
@@ -164,3 +196,12 @@ class BuildAcceptance(HarnessModel):
     accepted_by: str
     accepted_at: Timestamp
     reason: str
+    is_platform_transition: bool = False
+    r20_spike_ref: str | None = None
+
+    @model_validator(mode="after")
+    def _derive_is_platform_transition(self) -> BuildAcceptance:
+        self.is_platform_transition = _build_platform(self.from_build) != _build_platform(
+            self.to_build
+        )
+        return self

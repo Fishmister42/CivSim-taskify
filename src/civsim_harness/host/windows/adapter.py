@@ -194,6 +194,12 @@ class WindowsHostPlatform:
             user32.ReleaseDC(window.handle, window_dc)
 
     def resolve_game_directories(self, *, home: Path | None = None) -> GameDirectories:
+        # Deliberately no existence check anywhere in this method (T077/T078
+        # audit): the R5 spike confirmed on Linux that `Saves/Single/` does
+        # not exist until the first save creates it, and a preflight probe
+        # that required it to pre-exist would false-negative on a fresh
+        # install. Pure path construction below has the same property on
+        # Windows without needing an explicit guard against it.
         if home is not None:
             base = home.joinpath(*_BASE_DIR_PARTS)
         else:

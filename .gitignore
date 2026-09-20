@@ -20,8 +20,10 @@ secrets.yml
 *.sqlite3
 *.db
 
-# Spike and validation output written during implementation.
-specs/*/validation-results.md
+# NOTE: specs/*/validation-results.md was ignored here in the initial commit as
+# "validation output". It is not: T200-T202 and T205 record their outcomes there,
+# and the constitution Governance section REQUIRES the T205 compliance review be
+# recorded before implementation closes. An audit nobody can read is not a record.
 
 # --- Python ---
 __pycache__/

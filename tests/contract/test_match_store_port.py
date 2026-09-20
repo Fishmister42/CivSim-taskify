@@ -25,7 +25,7 @@ import pytest
 from civsim_harness.errors import StoreWriteError
 from civsim_harness.models.config import RunConfiguration
 from civsim_harness.models.decision import Decision
-from civsim_harness.models.records import ModelCall, RunEvent, SavePoint
+from civsim_harness.models.records import ModelCall, RunEvent, RunEventType, SavePoint
 from civsim_harness.models.run import Run
 from civsim_harness.models.turn import DecisionStep, Observation, ScreenCapture, TurnCycle
 from civsim_harness.store.guard import (
@@ -816,6 +816,121 @@ def test_get_last_known_good_skips_missing_and_removed_saves(store: SqliteMatchS
 def test_get_last_known_good_is_none_with_no_usable_saves(store: SqliteMatchStore) -> None:
     store.create_run(_make_run("run-lkg2"), _make_config("cfg-lkg2"))
     assert store.get_last_known_good("run-lkg2") is None
+
+
+def test_get_capture_returns_none_for_an_unknown_capture(store: SqliteMatchStore) -> None:
+    assert store.get_capture("no-such-capture") is None
+
+
+def test_get_capture_round_trips_a_written_capture(store: SqliteMatchStore) -> None:
+    blob = b"pretend-image-bytes-for-get-capture"
+    digest = hashlib.sha256(blob).hexdigest()
+    capture = ScreenCapture.model_validate(
+        {
+            "capture_id": "cap-getread",
+            "run_id": "run-cap-read",
+            "turn_number": 1,
+            "decision_step_id": "step-1",
+            "captured_at": NOW,
+            "view_declaration_id": "views.world",
+            "screening_status": "screened_clean",
+            "shown_to_agent": True,
+            "retained_as_evidence": True,
+            "blob_ref": digest,
+            "capture_path": "windows_graphics_capture",
+        }
+    )
+    store.write_capture(capture, blob)
+
+    assert store.get_capture("cap-getread") == capture
+
+
+def test_get_capture_round_trips_a_withheld_capture_with_no_blob(store: SqliteMatchStore) -> None:
+    capture = ScreenCapture.model_validate(
+        {
+            "capture_id": "cap-getwithheld",
+            "run_id": "run-cap-read",
+            "turn_number": 1,
+            "decision_step_id": "step-1",
+            "captured_at": NOW,
+            "view_declaration_id": "views.world",
+            "screening_status": "withheld",
+            "withheld_reason": "capture_failed",
+            "shown_to_agent": False,
+            "retained_as_evidence": True,
+            "capture_path": "windows_graphics_capture",
+        }
+    )
+    store.write_capture(capture, None)
+
+    assert store.get_capture("cap-getwithheld") == capture
+
+
+def test_list_run_events_returns_a_runs_timeline_in_chronological_order(
+    store: SqliteMatchStore,
+) -> None:
+    store.create_run(_make_run("run-events"), _make_config("cfg-events"))
+    early = RunEvent.model_validate(
+        {
+            "event_id": "evt-early",
+            "run_id": "run-events",
+            "event_type": "resumed",
+            "occurred_at": datetime(2026, 1, 1, tzinfo=UTC),
+        }
+    )
+    late = RunEvent.model_validate(
+        {
+            "event_id": "evt-late",
+            "run_id": "run-events",
+            "event_type": "unknown_screen",
+            "occurred_at": datetime(2026, 1, 2, tzinfo=UTC),
+        }
+    )
+    # Written out of chronological order -- list_run_events must still
+    # return them ordered by occurred_at, not by write order.
+    store.write_run_event(late)
+    store.write_run_event(early)
+
+    events = store.list_run_events("run-events")
+
+    assert [e.event_id for e in events] == ["evt-early", "evt-late"]
+
+
+def test_list_run_events_filters_by_event_types(store: SqliteMatchStore) -> None:
+    """FR-005: an audit needs just the stall-shaped events
+    (`unknown_screen`) off a run's timeline without re-filtering the whole
+    thing itself.
+    """
+    store.create_run(_make_run("run-events2"), _make_config("cfg-events2"))
+    store.write_run_event(
+        RunEvent.model_validate(
+            {
+                "event_id": "evt-resumed",
+                "run_id": "run-events2",
+                "event_type": "resumed",
+                "occurred_at": NOW,
+            }
+        )
+    )
+    store.write_run_event(
+        RunEvent.model_validate(
+            {
+                "event_id": "evt-unknown-screen",
+                "run_id": "run-events2",
+                "event_type": "unknown_screen",
+                "occurred_at": NOW,
+            }
+        )
+    )
+
+    filtered = store.list_run_events("run-events2", event_types=[RunEventType.UNKNOWN_SCREEN])
+
+    assert [e.event_id for e in filtered] == ["evt-unknown-screen"]
+
+
+def test_list_run_events_is_empty_for_a_run_with_no_events(store: SqliteMatchStore) -> None:
+    store.create_run(_make_run("run-events3"), _make_config("cfg-events3"))
+    assert store.list_run_events("run-events3") == []
 
 
 def test_list_active_runs_excludes_terminal_states(store: SqliteMatchStore) -> None:

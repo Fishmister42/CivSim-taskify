@@ -62,6 +62,31 @@ def locate_process_by_names(candidate_names: Sequence[str]) -> GameProcess | Non
 
 
 def read_disk_space(path: Path) -> DiskSpace:
-    """Read free/total bytes at `path` via the stdlib (identical on every platform)."""
-    usage = shutil.disk_usage(path)
+    """Read free/total bytes at `path` via the stdlib (identical on every platform).
+
+    `path` itself is **not** required to exist (research R5's T077 spike: the
+    Linux save directory did not exist until the first save created it, and
+    the same is true of the equivalent directories this repo cannot yet
+    confirm live on Windows/macOS). `shutil.disk_usage` needs a real,
+    existing path to stat -- on Windows it raises `FileNotFoundError` for a
+    path that is merely missing a leaf directory, not actually inaccessible
+    -- so a caller headroom-checking a not-yet-created save directory on a
+    fresh install would otherwise get a spurious crash rather than an
+    honest "free/total bytes" answer. Walking up to the nearest existing
+    ancestor resolves that: free space is a property of the volume/mount
+    the path *would* land on, which an ancestor already sitting on that same
+    volume reports identically. The returned `DiskSpace.path` is still the
+    originally requested `path`, not the ancestor substituted internally --
+    callers asked about `path` and should see `path` back.
+    """
+    probe = path
+    while not probe.exists():
+        parent = probe.parent
+        if parent == probe:
+            # Reached the filesystem root (or an anchor with no further
+            # parent) without finding an existing directory; let
+            # `disk_usage` raise its own error rather than loop forever.
+            break
+        probe = parent
+    usage = shutil.disk_usage(probe)
     return DiskSpace(path=path, free_bytes=int(usage.free), total_bytes=int(usage.total))

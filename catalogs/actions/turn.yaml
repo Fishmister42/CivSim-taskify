@@ -2,6 +2,17 @@
 # T092 (US1). Backed by lua/ingame/turn_control.lua (capability_id: turn.control).
 # Matches contracts/capability-catalog.md's worked example verbatim (that contract names this
 # exact declaration_id, parity_basis, availability_predicate, and verification_predicate).
+#
+# CORRECTED against a live client (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md,
+# P1): `Game.EndTurn()` does not exist (confirmed `nil` in both tuner contexts) — the action lua/
+# ingame/turn_control.lua issues is `UI.RequestAction(ActionTypes.ACTION_ENDTURN)`, whose return
+# value is always `nil` and therefore carries no information about whether anything happened. The
+# predicate text below is unchanged from the contract's worked example and the grammar is
+# unchanged (no new predicate symbols were introduced); what changed is that `game.is_local_player_
+# turn` is now backed by a real, confirmed-live boolean (`UI.CanEndTurn()`) instead of an untested
+# guess, and that the turn-number readback below is confirmed to be the *only* signal available —
+# not an optional extra — for telling a genuine turn advance from a swallowed click, which is
+# exactly the case FR-011 asks this declaration to detect.
 
 - declaration_id: turn.end_turn
   kind: action

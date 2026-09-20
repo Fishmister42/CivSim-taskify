@@ -51,6 +51,14 @@ introduced_in_version: "2026.09.1"
 | `verification_predicate` | actions | Evaluated after execution; determines `applied` / `partially_applied` / `rejected` (FR-011) |
 | `output_schema` | observations, views | JSON Schema; the produced value is validated against it |
 
+**Predicate grammar** (`availability_predicate`, `verification_predicate`; full namespace/field
+vocabulary in `catalogs/README.md` §4, which this must agree with): literals (numbers, strings,
+`true`/`false`, `null`, list literals), `.`-attribute access, the operators `and`/`or`/`not`/
+`==`/`!=`/`<`/`<=`/`>`/`>=`/`in`, and binary `+`/`-` between two numeric operands (e.g.
+`observed_turn_number + 1`, used by `end_turn` below). No function calls, no multiplication or
+division, no arithmetic beyond binary `+`/`-` on numeric operands, no assignment — this is what
+load-time validation rule 6 below enforces.
+
 ## `view` entries (visual observations)
 
 A `view` declares a camera state and what it shows. Because images can carry whatever is on screen,
@@ -148,7 +156,9 @@ firetuner_gap: >
 3. `declaration_id` values are unique across all files.
 4. Action entries have both `availability_predicate` and `verification_predicate`.
 5. Observation and view entries have a valid `output_schema`.
-6. Predicates reference only symbols the evaluator exposes — no arbitrary evaluation.
+6. Predicates reference only symbols the evaluator exposes — no arbitrary evaluation, no function
+   calls; arithmetic is limited to binary `+`/`-` between numeric operands (see "Predicate grammar"
+   above and `catalogs/README.md` §4 — the two must state the same grammar).
 7. `catalogs/VERSION` is present and the computed content hash is recorded.
 
 ## Run-time enforcement

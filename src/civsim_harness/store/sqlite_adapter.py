@@ -1,4 +1,4 @@
-"""The SQLite + content-addressed blob reference adapter (T039, T040).
+"""The SQLite + content-addressed blob reference adapter (T039, T040, T168).
 
 Implements `civsim_harness.store.port.MatchStore` -- the interim store the
 harness is built and tested against until deliverable 3's real
@@ -28,6 +28,17 @@ age check, no quota, no retention window, and no thinning anywhere in this
 file -- search it; the only place `RetentionStatus.ELIGIBLE` or
 `archived_at=` appears as something being *written* is inside
 `archive_run` itself.
+
+Parent immutability (T168, FR-034, invariant I12): `write_turn_cycle`
+already refuses to add a second authoritative attempt at a turn number that
+already has one, regardless of whose write it is. `mark_turn_superseded`
+additionally refuses to strip authoritative status from a turn that some
+child run has recorded as its lineage point (`parent_run_id`/`parent_turn`)
+-- closing the one write path that could otherwise un-authoritative a
+branch's parent turn and let a differently-shaped attempt quietly replace
+it. `write_save_point` refuses to reassign an existing `save_point_id` to a
+different `run_id`. The port has no delete operation on any turn or save
+record at all, and none is added here.
 """
 
 from __future__ import annotations
@@ -37,7 +48,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -459,6 +470,29 @@ class SqliteMatchStore:
             )
 
         def body(conn: sqlite3.Connection) -> SavePointId:
+            # Parent immutability (FR-034, invariant I12): a save_point_id
+            # is an identity, not a slot to repoint. Rejecting a write that
+            # would reassign an existing save point to a different run_id
+            # closes the one path by which a write could otherwise reach
+            # into another run's -- including a parent's -- records under
+            # cover of this method's ordinary (and otherwise legitimate)
+            # upsert semantics.
+            existing_owner = conn.execute(
+                "SELECT run_id FROM save_points WHERE save_point_id = ?",
+                (save.save_point_id,),
+            ).fetchone()
+            if existing_owner is not None and existing_owner[0] != save.run_id:
+                raise StoreWriteError(
+                    "write_save_point rejected: save_point_id already belongs to a "
+                    "different run_id -- a write may never reassign an existing save "
+                    "point's ownership (FR-034, invariant I12)",
+                    detail={
+                        "save_point_id": save.save_point_id,
+                        "existing_run_id": existing_owner[0],
+                        "attempted_run_id": save.run_id,
+                    },
+                )
+
             # A mutable resource (missing/retention_status evolve over a
             # save's lifecycle): an upsert, not an idempotent-insert-only
             # write like the immutable historical facts below.
@@ -535,6 +569,33 @@ class SqliteMatchStore:
 
     def mark_turn_superseded(self, run_id: RunId, turn: int, attempt: int) -> None:
         def body(conn: sqlite3.Connection) -> None:
+            # Parent immutability (FR-034, invariant I12): a turn recorded
+            # as some child run's lineage point (child.parent_run_id ==
+            # run_id and child.parent_turn == turn) may never be stripped
+            # of its authoritative status. Without this guard,
+            # mark_turn_superseded could un-authoritative the exact turn a
+            # branch claims to have started from, and a *new* authoritative
+            # write_turn_cycle at that same turn number would then slip
+            # past write_turn_cycle's "already authoritative" clash check
+            # (nothing would be authoritative any more) -- silently
+            # changing what the branch's parent position was. The port has
+            # no delete operation on turn records at all
+            # (contracts/match-store-port.md "Immutability"); this closes
+            # the one remaining write path that could still invalidate one
+            # without deleting it.
+            child_rows = conn.execute(
+                "SELECT run_id, run_json FROM runs WHERE parent_run_id = ?", (run_id,)
+            ).fetchall()
+            for child_run_id, child_json in child_rows:
+                child = Run.model_validate_json(child_json)
+                if child.parent_turn == turn:
+                    raise StoreWriteError(
+                        "mark_turn_superseded rejected: this turn is the lineage point of "
+                        "an existing branch and its parent's record may never be modified "
+                        "or invalidated (FR-034, invariant I12)",
+                        detail={"run_id": run_id, "turn": turn, "child_run_id": child_run_id},
+                    )
+
             row = conn.execute(
                 "SELECT turn_cycle_id, turn_json FROM turn_cycles "
                 "WHERE run_id = ? AND turn_number = ? AND attempt_index = ?",
@@ -730,6 +791,31 @@ class SqliteMatchStore:
                 (RetentionStatus.ELIGIBLE.value,),
             ).fetchall()
             return [SavePoint.model_validate_json(row[0]) for row in rows]
+
+        return self._with_lock(body)
+
+    def get_capture(self, capture_id: CaptureId) -> ScreenCapture | None:
+        def body(conn: sqlite3.Connection) -> ScreenCapture | None:
+            row = conn.execute(
+                "SELECT capture_json FROM captures WHERE capture_id = ?", (capture_id,)
+            ).fetchone()
+            return ScreenCapture.model_validate_json(row[0]) if row is not None else None
+
+        return self._with_lock(body)
+
+    def list_run_events(
+        self, run_id: RunId, *, event_types: Sequence[RunEventType] | None = None
+    ) -> list[RunEvent]:
+        def body(conn: sqlite3.Connection) -> list[RunEvent]:
+            rows = conn.execute(
+                "SELECT event_json FROM run_events WHERE run_id = ? ORDER BY occurred_at ASC",
+                (run_id,),
+            ).fetchall()
+            events = [RunEvent.model_validate_json(row[0]) for row in rows]
+            if event_types is not None:
+                allowed = set(event_types)
+                events = [event for event in events if event.event_type in allowed]
+            return events
 
         return self._with_lock(body)
 

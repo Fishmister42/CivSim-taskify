@@ -32,16 +32,66 @@ reading one back are both genuinely declared-observation/action concerns
 accept the actual apply/read mechanism as an injected callable, matching the
 seam pattern already used throughout this codebase (``HostPlatform``,
 ``ModelProvider``, ``observe.game_build``'s tuner/host readers).
+
+3. :func:`catalog_preflight` (**T135 / T136 / FR-022 / FR-023 / V5 / SC-006 / SC-007**): the
+   catalog-side counterpart to the two responsibilities above, following the same "self-contained
+   function another wave's module calls" shape :func:`~civsim_harness.observe.host_gate.
+   evaluate_host_gate` (T101) already established for this same file. Two things, one function,
+   because they are two views of the same loaded :class:`~civsim_harness.capability.loader.Catalog`
+   and always run together at preflight:
+
+   - **T136, the gate**: every *capability* the run could use must be governed by at least one
+     parity declaration, or the run does not start, naming the offending ``capability_id``. This is
+     deliberately the *reverse* of what :func:`~civsim_harness.capability.loader.load_catalog`
+     already checks at load time (its validation 2 confirms every *declaration*'s ``capability_id``
+     resolves to a loaded capability -- declaration -> capability). FR-023's "any observation or
+     action available to it lacks a declared parity basis" is the other direction: a loaded,
+     invokable capability with **zero** declarations pointing to it would be reachable machinery
+     with no parity basis governing it at all, and nothing at load time catches that, because the
+     loader only ever walks declarations outward to their capability, never capabilities inward to
+     their declarations.
+   - **T135, the record**: the version and content hash of the one loaded catalog, packaged as the
+     ``CatalogVersionRef`` pair ``Run.observation_catalog_version`` / ``Run.action_catalog_version``
+     both need (FR-022). One catalog root, one ``catalogs/VERSION``, one computed content hash
+     (:func:`~civsim_harness.capability.version.compute_content_hash`) -- so both fields get the
+     identical reference; a future split into independently-versioned observation/action catalogs
+     would need this function's own return shape to change, not merely its call site.
+
+4. :func:`debug_menu_preflight` (**T204 hardening item 1**): reads ``EnableDebugMenu`` from
+   ``AppOptions.txt`` -- the same file already located via
+   ``HostPlatform.resolve_game_directories()`` for ``EnableTuner`` -- and returns it for the
+   caller to record on the run. A live-client spike
+   (``specs/002-civ-playing-harness/spikes/principle-i-debugmenu-linux.md``) found the tuner's own
+   callable surface byte-identical across three separate comparisons with the debug menu on and
+   off, so there is no constitutional tension (Principle I) to enforce here -- this function
+   **records the setting, it never refuses a run over it**.
+5. :func:`turn_timer_preflight` (**T204 hardening item 2**): verifies, via an injected reader,
+   that this run is not using a turn timer before it starts. A live spike originally attributed a
+   validation host's turns advancing on their own (``spikes/load-path-linux.md``) to auto-end-turn
+   being enabled; that finding was retracted once ``UserOptions.txt``'s own ``AutoEndTurn 0`` was
+   found already correctly set, and the real, measured cause is
+   ``GameConfiguration.GetTurnTimerType()`` returning ``TURNTIMER_STANDARD`` even in a
+   single-player game -- turn 1 advanced to turn 6 at roughly one turn per 25 s with zero input
+   once one end-turn was issued. Three outcomes: verified no-timer (proceeds), verified a timer is
+   active (raises -- the run must not start), and undeterminable (proceeds, but the result records
+   an explicit *unverified* precondition rather than silently treating "cannot tell" as
+   "confirmed off"). See the function's own docstring for why FR-011, FR-014, and FR-015/SC-022 all
+   depend on this holding.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
 from typing import Any
 
-from civsim_harness.errors import BuildMismatchError
-from civsim_harness.models.common import BuildAcceptance
+from civsim_harness.capability.loader import Catalog
+from civsim_harness.errors import BuildMismatchError, PreflightError
+from civsim_harness.host.port import HostPlatform
+from civsim_harness.models.common import BuildAcceptance, CapabilityId, CatalogVersionRef
 from civsim_harness.models.config import RunConfiguration, SeedSet
 from civsim_harness.observe.game_build import is_platform_transition
 
@@ -242,3 +292,343 @@ def verify_configuration(
         if actual != expected:
             mismatches.append(SettingMismatch(field=name, expected=expected, actual=actual))
     return PreparationResult(applied_fields=tuple(fields.keys()), mismatches=tuple(mismatches))
+
+
+# --------------------------------------------------------------------------
+# T135 / T136 -- catalog preflight: capability-resolution gate + version record
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CatalogPreflightResult:
+    """T135's deliverable: the ``CatalogVersionRef`` pair to set on the ``Run`` under
+    construction, returned only once :func:`catalog_preflight`'s T136 gate has already passed --
+    there is no way to obtain one of these for a catalog carrying an ungoverned capability.
+    """
+
+    observation_catalog_version: CatalogVersionRef
+    action_catalog_version: CatalogVersionRef
+
+
+def _capabilities_without_declarations(catalog: Catalog) -> list[CapabilityId]:
+    """Every ``capability_id`` in *catalog* that no loaded ``ParityDeclaration`` points to.
+
+    The reverse of ``capability.loader.load_catalog``'s own validation 2 (see module docstring) --
+    sorted so a raised :class:`~civsim_harness.errors.PreflightError`'s ``detail`` is deterministic
+    across runs, not dependent on dict iteration order.
+    """
+    governed = {declaration.capability_id for declaration in catalog.declarations.values()}
+    return sorted(
+        capability_id for capability_id in catalog.capabilities if capability_id not in governed
+    )
+
+
+def catalog_preflight(catalog: Catalog) -> CatalogPreflightResult:
+    """**T135 + T136** (FR-022, FR-023, V5, SC-006, SC-007): the run does not start unless every
+    capability *catalog* implements is governed by at least one parity declaration; once that
+    holds, returns the ``CatalogVersionRef`` pair to record on the ``Run`` under construction.
+
+    Raises :class:`~civsim_harness.errors.PreflightError` naming every offending
+    ``capability_id`` at once (never just the first) when
+    :func:`_capabilities_without_declarations` finds any -- mirroring
+    :func:`~civsim_harness.provider.preflight.preflight_chain`'s "describe every model, name every
+    failure" discipline rather than stopping at the first bad capability. A run whose catalog fails
+    this gate has no ``Run`` record at all yet (same failure shape as :func:`build_pin_preflight`):
+    this is a hard preflight failure, not something recorded on an already-created run.
+    """
+    offending = _capabilities_without_declarations(catalog)
+    if offending:
+        raise PreflightError(
+            "a capability this run could use has no governing parity declaration; "
+            "the run does not start (FR-023, V5, SC-006)",
+            detail={"capability_ids": [str(capability_id) for capability_id in offending]},
+        )
+
+    ref = CatalogVersionRef(
+        version=catalog.version.version, content_hash=catalog.version.content_hash
+    )
+    return CatalogPreflightResult(observation_catalog_version=ref, action_catalog_version=ref)
+
+
+# --------------------------------------------------------------------------
+# T204 hardening item 1 -- EnableDebugMenu, read and recorded (never enforced)
+# --------------------------------------------------------------------------
+
+
+class DebugMenuState(Enum):
+    """Whether ``EnableDebugMenu`` could be read from ``AppOptions.txt``, and if so what it said.
+
+    ``spikes/principle-i-debugmenu-linux.md``'s own live-client spike ran the tuner three separate
+    ways with ``EnableDebugMenu`` on and off -- a curated symbol probe, a full namespace
+    enumeration, and the Lua state table -- and found all three byte-identical in both modes.
+    There is therefore no constitutional tension to enforce here (Principle I): the tuner's own
+    callable surface does not widen with the debug menu on. What the spike's own recommendation
+    asks for is *recording*, not refusing -- "so a run's parity configuration is reconstructible
+    from its record alone rather than from a claim about how the host was set up" -- which is
+    exactly what this enum and :func:`debug_menu_preflight` exist to do, and nothing more.
+    """
+
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class DebugMenuPreflightResult:
+    """What :func:`debug_menu_preflight` hands back: the state, the file it was read from, and,
+    when the state is not a plain on/off reading, why."""
+
+    state: DebugMenuState
+    app_options_path: Path
+    detail: str | None = None
+
+
+_APP_OPTIONS_ENTRY = re.compile(r"^\s*([A-Za-z0-9_]+)\s+(\S+)")
+
+
+def _read_app_options_entry(text: str, key: str) -> str | None:
+    """Read one bare ``KEY VALUE`` entry from ``AppOptions.txt``-shaped text (research spike
+    ``launch-tuning-linux.md``'s own example: ``EnableDebugMenu 0    # [Debug] - ...``) -- no
+    ``=``, no section headers, one setting per line, trailing ``#``/``;`` comments ignored.
+    Returns ``None`` when *key* is not present at all, so a caller can distinguish "absent" from
+    "present but unrecognised".
+    """
+    lowered_key = key.lower()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith(";"):
+            continue
+        match = _APP_OPTIONS_ENTRY.match(stripped)
+        if match is None:
+            continue
+        name, value = match.group(1), match.group(2)
+        if name.lower() == lowered_key:
+            return value
+    return None
+
+
+def debug_menu_preflight(
+    host: HostPlatform, *, home: Path | None = None
+) -> DebugMenuPreflightResult:
+    """Read ``EnableDebugMenu`` from ``AppOptions.txt`` at preflight and return it for the caller
+    to record on the run (T204 hardening item 1; ``spikes/principle-i-debugmenu-linux.md``).
+
+    Uses the same ``AppOptions.txt`` path ``HostPlatform.resolve_game_directories()`` already
+    resolves for ``EnableTuner`` (research R1). **Never raises, and never refuses a run on this
+    setting's value** -- the live spike's evidence is that the tuner's callable surface is
+    identical with the debug menu on or off, so there is no parity basis for treating this as a
+    gate; a caller wanting to *require* ``DISABLED`` (the spike's own "costs nothing, so require
+    it" recommendation for runs feeding trending/metrics/optimization) is free to check ``.state``
+    itself and act on it, but that policy decision does not belong inside this reader.
+
+    A missing ``AppOptions.txt`` -- the client rewrites this file on exit, and its directory need
+    not pre-exist on a fresh install, exactly the accommodation ``host._shared.read_disk_space``
+    already had to make for the same reason -- is reported as ``DebugMenuState.UNKNOWN``, not
+    raised: this function must never crash preflight over a file the game itself is free to not
+    have written yet. Any other read failure (permission denied, a mid-write partial file) is
+    reported the same way, with the underlying error preserved in ``detail``.
+    """
+    directories = host.resolve_game_directories(home=home)
+    path = directories.app_options_path
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return DebugMenuPreflightResult(
+            state=DebugMenuState.UNKNOWN,
+            app_options_path=path,
+            detail=(
+                "AppOptions.txt does not exist at the resolved path -- a fresh install, or the "
+                "client has not written it yet; EnableDebugMenu cannot be read"
+            ),
+        )
+    except OSError as exc:
+        return DebugMenuPreflightResult(
+            state=DebugMenuState.UNKNOWN,
+            app_options_path=path,
+            detail=f"AppOptions.txt could not be read: {exc}",
+        )
+
+    raw_value = _read_app_options_entry(text, "EnableDebugMenu")
+    if raw_value is None:
+        return DebugMenuPreflightResult(
+            state=DebugMenuState.UNKNOWN,
+            app_options_path=path,
+            detail="AppOptions.txt exists but has no EnableDebugMenu entry",
+        )
+    if raw_value == "1":
+        return DebugMenuPreflightResult(state=DebugMenuState.ENABLED, app_options_path=path)
+    if raw_value == "0":
+        return DebugMenuPreflightResult(state=DebugMenuState.DISABLED, app_options_path=path)
+    return DebugMenuPreflightResult(
+        state=DebugMenuState.UNKNOWN,
+        app_options_path=path,
+        detail=f"AppOptions.txt EnableDebugMenu value {raw_value!r} was not recognised",
+    )
+
+
+# --------------------------------------------------------------------------
+# T204 hardening item 2 -- the turn-timer-type precondition seam
+# --------------------------------------------------------------------------
+
+
+class TurnTimerReadStatus(Enum):
+    """The two-state outcome of one attempt to read this host's turn-timer type."""
+
+    DETERMINED = "determined"
+    UNDETERMINABLE = "undeterminable"
+
+
+#: Resolved turn-timer-type names a live, measured finding confirms mean "no timer is running".
+#: Both names are distinct, build-dependent ``DB.MakeHash`` values on the probed build
+#: (``TURNTIMER_NONE`` -> ``-1525060181``, ``NO_TURNTIMER`` -> ``-1206781825``) -- a reader is
+#: expected to check which name its own build's ``GameInfo`` table actually uses rather than this
+#: module assuming one, and both are accepted here precisely because the live finding named both
+#: explicitly ("accept either if you cannot tell"). Deliberately *not* a set of raw hash integers:
+#: hashes are build-dependent, so any comparison against one belongs inside the injected reader
+#: (which has the build's own reverse lookup available), never hard-coded in this module.
+_NO_TIMER_NAMES = frozenset({"TURNTIMER_NONE", "NO_TURNTIMER"})
+
+
+@dataclass(frozen=True)
+class TurnTimerReading:
+    """One reader's answer to "what turn-timer type is this run using", resolved to a name.
+
+    ``turn_timer_type`` and ``turn_timer_hash`` are independent facts a caller should record
+    together -- hash-authoritative (``turn_timer_hash``, the raw ``DB.MakeHash`` result actually
+    read) plus a resolved display name (``turn_timer_type``, looked up via the same build's own
+    reverse scan of ``GameInfo`` for ``row.Hash == value``) -- because ``DB.MakeHash`` output is
+    build-dependent: a stored name resolved through that build's own table is what stays meaningful
+    across builds, where a bare stored hash would not (T204 note: "config values should be stored
+    hash-authoritative with a resolved display name for the record").
+
+    ``turn_timer_type`` is required exactly when ``status`` is ``DETERMINED``; ``reason`` is
+    required exactly when it is not (mirrors ``host.port.CaptureResult``/``InputResult``'s own
+    "report the gap, never guess" discipline).
+    """
+
+    status: TurnTimerReadStatus
+    turn_timer_type: str | None = None
+    turn_timer_hash: int | None = None
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status is TurnTimerReadStatus.DETERMINED:
+            if self.turn_timer_type is None:
+                raise ValueError(
+                    "TurnTimerReading.status is DETERMINED but turn_timer_type is None"
+                )
+        elif not self.reason:
+            raise ValueError(f"TurnTimerReading.status is {self.status!r} but no reason was given")
+
+
+class TurnTimerPreconditionState(Enum):
+    """What :func:`turn_timer_preflight` records when the run is allowed to proceed.
+
+    There is no "verified active" member here on purpose: that reading never produces a result at
+    all -- it raises (see :func:`turn_timer_preflight`) -- so this type cannot represent "the run
+    started anyway with a timer running".
+    """
+
+    VERIFIED_NONE = "verified_none"
+    UNVERIFIED = "unverified"
+
+
+@dataclass(frozen=True)
+class TurnTimerPreflightResult:
+    """What :func:`turn_timer_preflight` hands back when the run is allowed to proceed --
+    ``turn_timer_type``/``turn_timer_hash`` are populated exactly when ``state`` is
+    ``VERIFIED_NONE`` (the actual name/hash that was confirmed safe); both are ``None`` for
+    ``UNVERIFIED``, since nothing was actually read.
+    """
+
+    state: TurnTimerPreconditionState
+    turn_timer_type: str | None = None
+    turn_timer_hash: int | None = None
+    reason: str | None = None
+
+
+def turn_timer_preflight(
+    *, read_turn_timer: Callable[[], TurnTimerReading]
+) -> TurnTimerPreflightResult:
+    """T204 hardening item 2: verify -- never assume -- that this run is not using a turn timer,
+    before it starts.
+
+    **Why this matters, concretely.** A live validation-host finding, measured rather than
+    inferred: ``GameConfiguration.GetTurnTimerType()`` returned ``TURNTIMER_STANDARD`` in an
+    ordinary *single-player* game (``IsAnyMultiplayer``/``IsHotseat``/``IsNetworkMultiplayer`` all
+    false) -- one end-turn was issued, the host was then left untouched for 130 s, and the turn
+    advanced 1 -> 6 at roughly one turn per 25 s with zero input, indefinitely. **Do not assume
+    single-player implies no timer; that host is the counterexample.** A running timer invalidates
+    three things at once, silently:
+
+    - FR-014: a turn has no time bound, but a timer imposes exactly one -- a single ~30 s model
+      call is already over a 25 s-per-turn budget, so the agent's own thinking time competes with
+      a clock nothing in this harness is supposed to have.
+    - FR-011: turn-advance verification has only the before/after turn-number readback as
+      evidence (``UI.RequestAction`` returns ``nil``); a timer-advanced turn reads back exactly
+      like an agent-ended one, so the verification predicate reports success for turns the agent
+      never ended -- the identical corruption ``run/turn_cycle.py``'s own auto-end-turn concern
+      would have caused, from an entirely different mechanism.
+    - FR-015/SC-022: the no-progress backstop's accounting assumes nothing but the harness (via
+      the agent's decision or the backstop itself) ever advances a turn; a timer violates that on
+      every turn, not just ones where something else already went wrong.
+
+    **The failure mode is that nothing errors.** The run completes, every turn has a decision and
+    an advance, ``record_completeness_status`` reads ``complete`` -- the decisions and the advances
+    are simply not causally related to each other. A clean-looking, complete dataset that means
+    nothing is worse than a failed run, which is why this is a hard preflight gate rather than
+    something merely recorded and left for later analysis to notice (contrast
+    :func:`debug_menu_preflight` immediately above, which genuinely has no parity basis for being a
+    gate -- this does).
+
+    **The seam.** *read_turn_timer* is an injected callable, exactly like every other real
+    game-state read this module depends on (``apply_setting``/``read_setting`` above) -- there is
+    no live client in this repo to dispatch ``GameConfiguration.GetTurnTimerType()`` /
+    ``DB.MakeHash`` against directly, and fabricating that call here would be indistinguishable
+    from guessing. A caller wires in the real Lua dispatch once ``observe``/``act`` exposes it.
+
+    **Three outcomes, deliberately asymmetric** -- the same "verified / actively unsafe /
+    undeterminable" shape as :func:`build_pin_preflight`'s and :func:`catalog_preflight`'s own hard
+    gates above, but with an explicit third state neither of those needs, since this is the one
+    precondition in this module a caller genuinely may not be able to read at all yet:
+
+    - Determined, and the resolved name is one of :data:`_NO_TIMER_NAMES` (``TURNTIMER_NONE`` or
+      ``NO_TURNTIMER`` -- both accepted, since which name a given build actually uses is not
+      assumed here): the precondition holds. Returns a result with ``state=VERIFIED_NONE``.
+    - Determined, and the resolved name is anything else (e.g. ``TURNTIMER_STANDARD``,
+      ``TURNTIMER_DYNAMIC``, ``TURNTIMER_FIXED``): raises ``PreflightError`` naming the offending
+      type and its hash -- the run must not start, because every turn-advance and no-progress
+      reading it could ever produce would be untrustworthy, not merely degraded.
+    - Undeterminable (the reader could not resolve an answer at all): **does not raise, and does
+      not default to treating this as safe** -- assuming no timer is exactly the shape of
+      unverified assumption this hardening item exists to replace. Returns a result with
+      ``state=UNVERIFIED`` instead, so the run's own record carries an explicit "this precondition
+      was never confirmed" fact rather than silently proceeding as though it had passed.
+    """
+    reading = read_turn_timer()
+    if reading.status is TurnTimerReadStatus.UNDETERMINABLE:
+        return TurnTimerPreflightResult(
+            state=TurnTimerPreconditionState.UNVERIFIED,
+            reason=reading.reason,
+        )
+
+    assert reading.turn_timer_type is not None  # guaranteed by TurnTimerReading.__post_init__
+    if reading.turn_timer_type in _NO_TIMER_NAMES:
+        return TurnTimerPreflightResult(
+            state=TurnTimerPreconditionState.VERIFIED_NONE,
+            turn_timer_type=reading.turn_timer_type,
+            turn_timer_hash=reading.turn_timer_hash,
+            reason=reading.reason,
+        )
+
+    raise PreflightError(
+        "a turn timer is active on this host; FR-014 (a turn has no time bound, but a timer "
+        "imposes one), FR-011 (a timer-advanced turn is indistinguishable from one the agent "
+        "ended), and FR-015/SC-022 (no-progress accounting) all depend on nothing but the "
+        "harness or the agent ever advancing a turn -- a clean-looking, 'complete' dataset "
+        "produced under a timer would not mean what it claims to",
+        detail={
+            "turn_timer_type": reading.turn_timer_type,
+            "turn_timer_hash": reading.turn_timer_hash,
+        },
+    )

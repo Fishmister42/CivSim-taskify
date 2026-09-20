@@ -5,6 +5,18 @@
 -- and verification: the harness re-invokes CivSim_Units.state() before evaluating a unit action's
 -- predicates and again afterward to verify the effect.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- CORRECTED against a live client (spike P4): `Units.GetUnit` is confirmed `nil` — there is no
+-- `Units` global with that shape. This file never used it directly (it already enumerated units
+-- via `Players`), so nothing here needed changing for that specific finding; it is documented
+-- because lua/ingame/unit_orders.lua's per-ID lookup did need correcting for the same reason (see
+-- that file). `UnitOperationTypes.FOUND_CITY` below, and `UnitManager.RequestOperation`/
+-- `CanStartOperation` used in this file, are all confirmed to exist (P4 spot-check).
+--
 -- Parity note: only the local human player's own units, plus enemy/other-civ units that are
 -- currently visible on a revealed plot (exactly what the standard UI renders as a unit flag),
 -- are reported. No hidden unit intent, no fog-of-war peeking, no other civilization's orders.
@@ -82,8 +94,17 @@ local function CivSim_DescribeUnit(unit, localPlayer)
     }
     if entry.owner_is_local_player then
         entry.reachable_plots = CivSim_GetReachablePlots(unit)
-        entry.can_found_city = unit.CanStartOperation and
-            unit:CanStartOperation(UnitOperationTypes.FOUND_CITY) or false -- UNVERIFIED
+        -- VERIFIED (P4 spot-check): UnitManager.CanStartOperation and UnitOperationTypes.FOUND_CITY
+        -- both confirmed to exist. CanStartOperation is confirmed as a function on the
+        -- `UnitManager` table (like RequestOperation), not as a method on the unit object itself
+        -- — the previous `unit:CanStartOperation(...)` call shape here was an untested guess and
+        -- has been corrected to the UnitManager-table call convention `RequestOperation` also
+        -- uses. UNVERIFIED: the exact argument order/count (assumed `(unit, opType)` by analogy
+        -- with RequestOperation) is existence-only confirmed, not exercised.
+        local okFound, canFound = pcall(function()
+            return UnitManager.CanStartOperation(unit, UnitOperationTypes.FOUND_CITY)
+        end)
+        entry.can_found_city = (okFound and canFound == true)
         local promotions = {}
         if unit.GetAvailablePromotions then -- UNVERIFIED: no confirmed accessor for eligible promotions
             for _, promo in ipairs(unit:GetAvailablePromotions()) do
@@ -101,16 +122,24 @@ local function CivSim_DescribeUnit(unit, localPlayer)
     return entry
 end
 
+-- VERIFIED (P4 spot-check): PlayerManager.GetAlive() exists. The previous `GetAliveMajors` name
+-- here was an untested guess and is not confirmed to exist under that name; it has been replaced.
+-- UNVERIFIED: whether GetAlive() returns every alive player (including city-states) or majors
+-- only was not checked. Player:IsMajor() is applied defensively (only if present) so this file
+-- keeps reporting majors only, matching its parity note, even if GetAlive() turns out to include
+-- minors; if IsMajor is unavailable every returned player is kept, preserving prior behavior.
 local function CivSim_Units_GetState()
     local localPlayer = Game.GetLocalPlayer()
     local units = {}
-    for i, player in ipairs(PlayerManager.GetAliveMajors()) do -- UNVERIFIED: PlayerManager.GetAliveMajors exact name
-        local playerUnits = player:GetUnits()
-        for _, unit in playerUnits:Members() do -- Player:GetUnits():Members() iterator pattern
-            local isOwn = (player:GetID() == localPlayer)
-            local plot = Map.GetPlot(unit:GetX(), unit:GetY())
-            if isOwn or (plot ~= nil and plot:IsVisible(localPlayer)) then
-                units[#units + 1] = CivSim_DescribeUnit(unit, localPlayer)
+    for i, player in ipairs(PlayerManager.GetAlive()) do
+        if not player.IsMajor or player:IsMajor() then -- UNVERIFIED: Player:IsMajor()
+            local playerUnits = player:GetUnits()
+            for _, unit in playerUnits:Members() do -- Player:GetUnits():Members() iterator pattern
+                local isOwn = (player:GetID() == localPlayer)
+                local plot = Map.GetPlot(unit:GetX(), unit:GetY())
+                if isOwn or (plot ~= nil and plot:IsVisible(localPlayer)) then
+                    units[#units + 1] = CivSim_DescribeUnit(unit, localPlayer)
+                end
             end
         end
     end
