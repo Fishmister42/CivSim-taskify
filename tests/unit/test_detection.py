@@ -41,13 +41,18 @@ from civsim_harness.models.run import (
 )
 from civsim_harness.nexus.client import REASON_CONNECTION_CLOSED, REASON_TIMEOUT, StateIndices
 from civsim_harness.resilience.detector import (
+    DEFAULT_RECONNECT_REPROBE_DELAY_S,
     DetectionAggregator,
     check_heartbeat,
     check_operation_bound,
     check_process_liveness,
     check_screen_identity,
 )
-from civsim_harness.resilience.heartbeat_monitor import HeartbeatMonitor, HeartbeatOutcome
+from civsim_harness.resilience.heartbeat_monitor import (
+    DEFAULT_HEARTBEAT_TIMEOUT_S,
+    HeartbeatMonitor,
+    HeartbeatOutcome,
+)
 from civsim_harness.resilience.liveness import ProcessLivenessMonitor, is_process_alive
 from civsim_harness.resilience.operation_bounds import (
     DEFAULT_OPERATION_BOUNDS_S,
@@ -163,6 +168,37 @@ class _ScreenProbe:
     async def __call__(self) -> bool:
         self.calls += 1
         return self.known
+
+
+@dataclass
+class _FlakyHeartbeatClient:
+    """Duck-typed `NexusClient` stand-in that raises *outcome* on its first `fail_times` calls,
+    then reports a healthy round-trip -- for the heartbeat's connection-refusal re-probe path
+    (mirrors `_FakeLoader`'s own fail-then-succeed shape, used below for recovery)."""
+
+    outcome: Exception
+    fail_times: int = 1
+    calls: int = 0
+    state_indices: StateIndices = field(
+        default_factory=lambda: StateIndices(
+            by_name={"GameCore_Tuner": 0, "InGame": 1}, game_core_tuner=0, in_game=1
+        )
+    )
+
+    async def execute_command(
+        self, *, state_index: int, lua_body: str, timeout_s: float | None = None
+    ) -> Any:
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise self.outcome
+        return True
+
+
+async def _instant_sleep(_delay_s: float) -> None:
+    """Stand-in for `asyncio.sleep` so the re-probe corroboration tests below run instantly
+    instead of actually pausing `reprobe_delay_s` -- the delay value itself is exercised
+    separately (`test_default_reconnect_reprobe_delay_fits_well_inside_the_60s_budget`)."""
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -334,6 +370,114 @@ async def test_check_heartbeat_healthy_trips_nothing() -> None:
         occurred_at=_T0,
     )
     assert event is None
+
+
+# --------------------------------------------------------------------------
+# Defect fix: a connection refusal is corroborated before it is ever
+# reported as crash_detected -- Civ VI accepts one tuner client at a time
+# and can transiently refuse a rapid reconnect while a healthy client is
+# still releasing the previous socket (contracts/nexus-protocol.md). This
+# is the exact shape found against a live client: a naive detector would
+# have manufactured crash_detected on a perfectly healthy game.
+# --------------------------------------------------------------------------
+
+
+async def test_connection_refusal_with_pid_alive_does_not_produce_crash_detected() -> None:
+    """A dropped/refused connection that is still down after one re-probe, but whose PID is
+    still alive, is an honest 'unresponsive', never a fabricated crash (process liveness is the
+    strongest signal -- FR-set behind this fix)."""
+    import os
+
+    client = _FakeHeartbeatClient(
+        outcome=NexusError("closed", detail={"reason": REASON_CONNECTION_CLOSED})
+    )
+    event = await check_heartbeat(
+        HeartbeatMonitor(client=client),  # type: ignore[arg-type]
+        run_id=RunId("run-1"),
+        occurred_at=_T0,
+        liveness=ProcessLivenessMonitor(pid=os.getpid()),
+        sleep=_instant_sleep,
+    )
+    assert event is not None
+    assert event.event_type is not RunEventType.CRASH_DETECTED
+    assert event.event_type is RunEventType.UNRESPONSIVE_DETECTED
+    assert event.detail["reprobed"] is True
+    # exactly one initial reading plus exactly one bounded re-probe -- not an open-ended retry loop
+    assert client.calls == 2
+
+
+async def test_connection_refusal_persisting_with_pid_gone_produces_crash_detected() -> None:
+    """A connection refusal that is *still* unreachable after the re-probe, corroborated by a
+    PID that is genuinely gone, is exactly what crash_detected exists for -- this fix must not
+    swallow a real crash while it stops fabricating one."""
+    import psutil
+
+    dead_pid = 1
+    while psutil.pid_exists(dead_pid):
+        dead_pid += 1
+    client = _FakeHeartbeatClient(
+        outcome=NexusError("closed", detail={"reason": REASON_CONNECTION_CLOSED})
+    )
+    event = await check_heartbeat(
+        HeartbeatMonitor(client=client),  # type: ignore[arg-type]
+        run_id=RunId("run-1"),
+        occurred_at=_T0,
+        liveness=ProcessLivenessMonitor(pid=dead_pid),
+        sleep=_instant_sleep,
+    )
+    assert event is not None
+    assert event.event_type is RunEventType.CRASH_DETECTED
+    assert event.detail["pid"] == dead_pid
+    assert client.calls == 2
+
+    # SC-010's 60s budget still comfortably holds: two heartbeat-timeout-bounded reads plus one
+    # fixed re-probe pause is a small, fixed fraction of the full budget, never a wall-clock
+    # deadline of the detector's own.
+    worst_case_s = 2 * DEFAULT_HEARTBEAT_TIMEOUT_S + DEFAULT_RECONNECT_REPROBE_DELAY_S
+    assert worst_case_s < 60.0
+
+
+async def test_single_transient_connection_refusal_that_recovers_trips_no_event_at_all() -> None:
+    """The first reading is refused, the re-probe succeeds -- this was never a fault, and there
+    is no event of any kind, not even a downgraded one."""
+    client = _FlakyHeartbeatClient(
+        outcome=NexusError("closed", detail={"reason": REASON_CONNECTION_CLOSED}), fail_times=1
+    )
+    event = await check_heartbeat(
+        HeartbeatMonitor(client=client),  # type: ignore[arg-type]
+        run_id=RunId("run-1"),
+        occurred_at=_T0,
+        sleep=_instant_sleep,
+    )
+    assert event is None
+    assert client.calls == 2
+
+
+async def test_default_reconnect_reprobe_delay_fits_well_inside_the_60s_budget() -> None:
+    """The re-probe pause itself, plus the two heartbeat reads it straddles, must leave generous
+    room inside SC-010's 60s crash/hang/unresponsiveness budget."""
+    assert 0 < DEFAULT_RECONNECT_REPROBE_DELAY_S <= 5.0
+    assert 2 * DEFAULT_HEARTBEAT_TIMEOUT_S + DEFAULT_RECONNECT_REPROBE_DELAY_S < 60.0
+
+
+async def test_detection_aggregator_corroborates_a_dropped_connection_with_its_own_liveness() -> (
+    None
+):
+    """`DetectionAggregator.check_once` wires its own liveness monitor into the heartbeat check
+    automatically -- a caller that has both signals gets the corroborated classification without
+    doing anything extra."""
+    import os
+
+    client = _FakeHeartbeatClient(
+        outcome=NexusError("closed", detail={"reason": REASON_CONNECTION_CLOSED})
+    )
+    aggregator = DetectionAggregator(
+        liveness=ProcessLivenessMonitor(pid=os.getpid()),
+        heartbeat=HeartbeatMonitor(client=client),  # type: ignore[arg-type]
+        sleep=_instant_sleep,
+    )
+    events = await aggregator.check_once(run_id=RunId("run-1"), occurred_at=_T0)
+    assert [e.event_type for e in events] == [RunEventType.UNRESPONSIVE_DETECTED]
 
 
 async def test_check_operation_bound_trips_unresponsive_detected() -> None:

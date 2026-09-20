@@ -7,12 +7,24 @@ real turn actually uses them: preflight once, then several decision steps throug
 each response fed into `provider.accounting.record_model_call` and `agent.decisions.
 build_decision`, proving the whole pipeline produces a self-consistent, step-attributable record
 rather than merely that each piece works alone.
+
+**T146 coverage note.** This file already discharged P5's backoff/fallback shape and P6's
+exhaustion-produces-nothing-fabricated guarantee (the two test groups above). Two additions close
+the remaining T146 gaps without duplicating `test_model_provider_port.py`'s own P5/P6/P11 suite:
+`test_every_attempt_against_a_multi_hop_chain_is_its_own_recorded_event` makes P5's "every
+attempt" precise with an exact count across a three-model chain (the existing pipeline test above
+only asserts the fallback *count*, not the full failure/retry/fallback accounting), and
+`test_a_long_running_multi_step_turn_never_has_a_call_cancelled_by_elapsed_clock_time` asserts P11
+*behaviorally*, across many steps with a clock that advances by hours between calls, rather than
+`test_model_provider_port.py`'s structural signature/field-name check -- this file's own charter
+(exercising the chain "the way a real turn actually uses them") is exactly where a behavioural,
+multi-step version of that property belongs.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -331,3 +343,114 @@ def test_exhaustion_produces_no_fabricated_decision_and_no_model_call_is_recorde
     # No accounting record exists for an exhausted step -- nothing was ever recorded for it.
     assert call_sink.calls == []
     assert len(sink.of_type(RunEventType.MODEL_CHAIN_EXHAUSTED)) == 1
+
+
+# --------------------------------------------------------------------------
+# T146 gap-fill 1: P5's "every attempt a recorded event", made exact (FR-041)
+# --------------------------------------------------------------------------
+
+
+def test_every_attempt_against_a_multi_hop_chain_is_its_own_recorded_event() -> None:
+    """A three-model chain where the first two both exhaust their own retry budget before the
+    third succeeds -- every one of the four failed attempts is its own `PROVIDER_FAILURE` event,
+    each model's own retry is its own `PROVIDER_RETRY` event, and each hop to the next model is
+    its own `PROVIDER_FALLBACK` event. `test_full_turn_pipeline_...` above only asserts the
+    fallback *count*; this makes the full per-attempt accounting exact."""
+    fake = FakeModelProvider()
+    primary = _model("primary-a")
+    fallback1 = _model("fallback-a")
+    fallback2 = _model("fallback-b")
+    model_config = _model_config(primary, fallback1, fallback2)
+
+    fake.queue_failed()  # primary attempt 1
+    fake.queue_failed()  # primary attempt 2 -- retries exhausted, fall back
+    fake.queue_rate_limited()  # fallback1 attempt 1
+    fake.queue_rate_limited()  # fallback1 attempt 2 -- retries exhausted, fall back
+    fake.queue_decision(_raw_decision(), model_served=fallback2)  # fallback2 attempt 1 -- serves
+
+    sink = _EventSink()
+    chain = ProviderChain(
+        fake,
+        model_config,
+        event_sink=sink,
+        retry_policy=RetryPolicy(max_attempts_per_model=2),
+        sleep=lambda _delay: None,
+        rand=lambda: 0.0,
+    )
+
+    response = chain.complete_step(_request(primary), run_id=_RUN_ID, turn_number=7)
+    assert response.decision is not None
+    assert response.fallback_occurred is True
+    assert response.model_served == fallback2
+    # Every one of the 4 failed attempts before the serving one counted (FR-041's own
+    # "the most informative number for per-call accounting" -- provider/chain.py's docstring).
+    assert response.retry_count == 4
+
+    assert len(sink.of_type(RunEventType.PROVIDER_FAILURE)) == 4
+    assert len(sink.of_type(RunEventType.PROVIDER_RETRY)) == 2
+    assert len(sink.of_type(RunEventType.PROVIDER_FALLBACK)) == 2
+
+    fallback_events = sink.of_type(RunEventType.PROVIDER_FALLBACK)
+    assert fallback_events[0].detail["from_model"] == "openrouter/primary-a"
+    assert fallback_events[0].detail["to_model"] == "openrouter/fallback-a"
+    assert fallback_events[1].detail["from_model"] == "openrouter/fallback-a"
+    assert fallback_events[1].detail["to_model"] == "openrouter/fallback-b"
+
+    # Every event attributed to the same step/turn -- nothing about a multi-hop chain loses the
+    # step this whole sequence of attempts was actually serving.
+    for event in sink.events:
+        assert event.turn_number == 7
+
+
+# --------------------------------------------------------------------------
+# T146 gap-fill 2: P11, behaviourally -- no turn-level clock cancels a call (FR-014)
+# --------------------------------------------------------------------------
+
+
+def test_a_long_running_multi_step_turn_never_has_a_call_cancelled_by_elapsed_clock_time() -> None:
+    """`test_p11_*` in `tests/contract/test_model_provider_port.py` proves this structurally (no
+    deadline-shaped parameter exists anywhere in the signature or `RetryPolicy`'s fields). This
+    proves it behaviourally: 50 decision steps, each separated by a 6-hour jump of the *injected*
+    clock (over 12 simulated days for the whole "turn"), some of them needing a retry before
+    succeeding -- every single one still completes normally. Nothing here measures, checks, or
+    reacts to how much time has elapsed since the turn -- or the chain -- started; the clock is
+    read only to timestamp each event, never to gate whether a call is allowed to proceed."""
+    fake = FakeModelProvider()
+    model = _model("primary-a")
+
+    for step in range(1, 51):
+        if step % 5 == 0:
+            fake.queue_rate_limited()  # occasionally retried, never cancelled by elapsed time
+        fake.queue_decision(_raw_decision(f"step {step}"))
+
+    sink = _EventSink()
+    current_time = datetime(2026, 9, 20, tzinfo=UTC)
+
+    def clock() -> datetime:
+        nonlocal current_time
+        current_time += timedelta(hours=6)
+        return current_time
+
+    chain = ProviderChain(
+        fake,
+        _model_config(model),
+        event_sink=sink,
+        retry_policy=RetryPolicy(max_attempts_per_model=2),
+        sleep=lambda _delay: None,
+        rand=lambda: 0.0,
+        clock=clock,
+    )
+
+    for step in range(1, 51):
+        response = chain.complete_step(_request(model, step_index=step), run_id=_RUN_ID)
+        assert response.decision is not None
+        assert response.decision.reasoning == f"step {step}"
+
+    # The clock genuinely advanced by a lot across the whole simulated turn (it is read once per
+    # recorded event -- a PROVIDER_FAILURE and a PROVIDER_RETRY for each of the 10 retried steps,
+    # 6 hours apart each), and every one of the 50 steps -- including the retried ones -- still
+    # completed; nothing about that elapsed span raised, cancelled, or altered a single call's
+    # outcome.
+    assert (current_time - datetime(2026, 9, 20, tzinfo=UTC)) >= timedelta(days=5)
+    assert len(sink.of_type(RunEventType.PROVIDER_RETRY)) == 10  # every 5th step, once each
+    assert len(fake.calls) == 50 + len(sink.of_type(RunEventType.PROVIDER_RETRY))
