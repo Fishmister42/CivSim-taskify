@@ -1,0 +1,44 @@
+# --- Secrets: never commit. FR-043 / SC-018 make a leaked key a release blocker. ---
+.env
+.env.*
+secrets.yaml
+secrets.yml
+*.key
+
+# --- Run artifacts: large, machine-local, and reproducible from the store. ---
+# Game saves copied or created by the harness (Principle IV keeps these on disk,
+# but they are per-machine state, not source).
+*.Civ6Save
+saves/
+
+# Screen captures written by the capture pipeline (one per decision step adds up fast).
+captures/
+blobs/
+
+# The local reference match-store adapter's database (plan Complexity Tracking C2).
+*.sqlite
+*.sqlite3
+*.db
+
+# Spike and validation output written during implementation.
+specs/*/validation-results.md
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+uv.lock.bak
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
