@@ -1,0 +1,9 @@
+=== PROBE ===
+  Game.GetWorldCongress  ->  nil
+  Game.GetReligion  ->  function
+  Game.GetGreatPeople  ->  function
+  Game.GetEmergencyManager  ->  nil
+  Game.GetHistoryManager  ->  nil
+  Game.GetEras  ->  function
+  Game.GetQuestsManager  ->  function
+  Game.GetGossipManager  ->  nil

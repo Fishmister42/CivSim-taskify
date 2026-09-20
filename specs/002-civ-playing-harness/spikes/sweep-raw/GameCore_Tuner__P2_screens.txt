@@ -1,0 +1,19 @@
+=== PROBE ===
+  UIManager.GetScreen  ->  ERROR(root missing)
+  UIManager.IsInPopupQueue  ->  ERROR(root missing)
+  UIManager.GetCurrentPopup  ->  ERROR(root missing)
+  UIManager.QueuePopup  ->  ERROR(root missing)
+  UIManager.DequeuePopup  ->  ERROR(root missing)
+  UIManager.ClosePopup  ->  ERROR(root missing)
+  UIManager.GetTopmostScreen  ->  ERROR(root missing)
+  UIManager.IsPopupQueueEmpty  ->  ERROR(root missing)
+  UI.GetInterfaceMode  ->  ERROR(root missing)
+  UI.SetInterfaceMode  ->  ERROR(root missing)
+  InterfaceModeTypes.SELECTION  ->  ERROR(root missing)
+  InterfaceModeTypes.CITY_MANAGEMENT  ->  ERROR(root missing)
+  ContextPtr  ->  nil
+  Controls  ->  nil
+  LuaEvents  ->  table
+  Events  ->  table
+  UI.IsScreenOpen  ->  ERROR(root missing)
+  UI.GetScreenName  ->  ERROR(root missing)
