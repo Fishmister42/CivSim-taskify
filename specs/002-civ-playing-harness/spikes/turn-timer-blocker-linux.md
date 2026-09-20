@@ -1,4 +1,27 @@
-# 🔴 Run-blocker — a turn timer is active, and it will expire the agent's turn
+# 🟢 RESOLVED — a turn timer is active *in `Play Now` games only*
+
+> **Resolution (same session).** The timer comes from **`Play Now`**, not from the mod set and not
+> from the host. Read back through `GameConfiguration`:
+>
+> | Path | `TurnTimerType` |
+> |---|---|
+> | `Play Now` game | **`TURNTIMER_STANDARD`** (`2133509568`) |
+> | Create Game screen, defaults | **`TURNTIMER_NONE`** (`-1525060181`) |
+> | **`CivSim DEFAULT` preset** | **`TURNTIMER_NONE`** ✅ |
+>
+> The control is **Advanced Setup → `Smart-Timer`**, a BBG/MPH option. It reads
+> `CivLan / CWC 2025` under `Play Now` defaults and **`Off`** in the `CivSim DEFAULT` preset.
+>
+> **Consequence: preparation must never use `Play Now`** — which was already the direction for a
+> different reason (it randomises the leader). Using the preset avoids the timer entirely. The
+> preflight assertion below is still worth keeping, because the failure is silent.
+>
+> The original analysis below is retained: the *reason* this would have been catastrophic is
+> unchanged, and the preflight check is still required.
+
+---
+
+# 🔴 Original finding — a turn timer is active, and it will expire the agent's turn
 
 **Feature**: `002-civ-playing-harness` · **Executed**: 2026-09-20 · **Host**: Linux (native Aspyr)
 **Client**: `1.0.12.9 (564030)`, Gathering Storm, BBG + Multiplayer Helper 1.7.9 active
