@@ -437,6 +437,29 @@ and both records name the model that actually served each call.
 
 ---
 
+## Phase 9: Composition & Wiring (added after the integration-readiness audit)
+
+**Why this phase exists.** Phases 1-8 built every component and 933 tests pass, but an
+end-to-end audit (`integration-readiness.md`) found almost all of them are **seams with no
+production caller**. `civsim run start` fails at its first line with "no runner is configured".
+Most seriously, `implementation_ref` -- the field binding each catalog declaration to its Lua
+file -- is **never read outside its own model definition**, so the 21 declared Lua files and 51
+declarations are never loaded or executed by anything.
+
+This is a genuine gap in the original task breakdown: the 205 tasks specify every part and never
+specify assembling them. These tasks close it.
+
+- [ ] T206 Implement the capability executor in `src/civsim_harness/capability/executor.py`: resolve a `ParityDeclaration` to its `IntegrationCapability`, read that capability's `implementation_ref`, load the `lua/` file from disk, dispatch it through `NexusClient.execute_command` **in the declaration's declared context** (resolved by name at call time, never a cached index), and return a `CapabilityResult`. This is the missing link between the catalog and the game; nothing currently reads `implementation_ref` at all
+- [ ] T207 Implement the production `ObservationReader` in `src/civsim_harness/observe/reader.py`: for a decision step, execute every observation declaration the run uses via T206, validate each against its `output_schema`, and feed `observe/assemble.py`. The assembler already consumes capability results only (FR-018) -- this is what produces them
+- [ ] T208 Implement the production `ActionExecutor` in `src/civsim_harness/act/executor.py`: dispatch one action declaration via T206 and hand the result to `act/verify.py`, so the outcome is still **derived** from the verification predicate rather than asserted by the executor (FR-011, invariant I4)
+- [ ] T209 Implement the composition root in `src/civsim_harness/run/composition.py`: build `RunnerDependencies` from a `RunConfiguration` -- store, `NexusClient`, host adapter, catalog + registry, `ProviderChain` over `OpenRouterProvider`, `LuaSaveCapability` -- and call `configure_runner_factory` from the CLI so `civsim run start` reaches a `Runner` at all
+- [ ] T210 Chain the preparation sequence in `run/runner.py`'s `prepare_run`: `build_pin_preflight`, `catalog_preflight`, `turn_timer_preflight`, `debug_menu_preflight`, `evaluate_host_gate`, `preflight_chain`, the leader/civilization selection with its read-back, and `verify_configuration` -- then call `NexusClient.refresh_state_indices()` at the **menu to in-game phase boundary**, which currently has zero production callers despite indices being known to change by phase
+- [ ] T211 Integration test in `tests/integration/test_end_to_end_wiring.py`: drive `civsim run start` against the fake Nexus, fake provider and fake host through the **real** composition root, and assert a turn is played and persisted -- so "the pieces are connected" becomes a test result rather than a claim
+
+**Checkpoint**: the harness can actually be run, not merely assembled
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
