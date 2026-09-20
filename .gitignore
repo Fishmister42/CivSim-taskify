@@ -42,3 +42,9 @@ uv.lock.bak
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Credential files (defense in depth; the real key lives outside the repo)
+openRouterKey.txt
+*.token
+*_key.txt
+*apikey*

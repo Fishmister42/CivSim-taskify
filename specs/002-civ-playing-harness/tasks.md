@@ -232,9 +232,9 @@ across era transitions to victory or defeat.
 
 **Agent and provider**
 
-- [ ] T103 [US1] Implement agent context assembly in `src/civsim_harness/agent/context.py`: system role plus out-of-game guidance plus this step's parity-filtered structured state. Images are attached only once screening exists (US2); harness telemetry is never included (FR-020, FR-021, FR-024)
-- [ ] T104 [US1] Implement the decision response schema and parsing in `src/civsim_harness/agent/decisions.py`: **exactly one** decision carrying its stated reasoning, with malformed, multi-decision, or decision-free output treated as a failed call rather than a decision to do nothing (FR-008, FR-012, P4, P10)
-- [ ] T105 [US1] Implement the OpenRouter adapter's `complete()` in `src/civsim_harness/provider/openrouter.py` over `httpx` using the OpenAI-compatible chat completions shape with images as `image_url` content parts — **no vendor SDK on the decision path** — mapping a successful-but-empty response to `CallOutcome.empty_response`, and coupling no timeout to the turn (only the request timeout and its retry ladder) (FR-037, P4, P11)
+- [X] T103 [US1] Implement agent context assembly in `src/civsim_harness/agent/context.py`: system role plus out-of-game guidance plus this step's parity-filtered structured state. Images are attached only once screening exists (US2); harness telemetry is never included (FR-020, FR-021, FR-024)
+- [X] T104 [US1] Implement the decision response schema and parsing in `src/civsim_harness/agent/decisions.py`: **exactly one** decision carrying its stated reasoning, with malformed, multi-decision, or decision-free output treated as a failed call rather than a decision to do nothing (FR-008, FR-012, P4, P10)
+- [X] T105 [US1] Implement the OpenRouter adapter's `complete()` in `src/civsim_harness/provider/openrouter.py` over `httpx` using the OpenAI-compatible chat completions shape with images as `image_url` content parts — **no vendor SDK on the decision path** — mapping a successful-but-empty response to `CallOutcome.empty_response`, and coupling no timeout to the turn (only the request timeout and its retry ladder) (FR-037, P4, P11)
 
 **Act**
 
