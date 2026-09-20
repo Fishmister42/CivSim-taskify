@@ -54,7 +54,14 @@ everything -- so it is recorded as a `preparation_mismatch` and fails the run, n
 as agreement. That is the FR-002/V2-required direction: a run whose setup cannot be *confirmed*
 must not produce data. An earlier draft of this module echoed each configured value back as its
 own "actual", which made V2 pass vacuously for every field; that is the specific defect this
-binding exists to remove.
+binding exists to remove. Two named, recorded exceptions carve out fields where "fail the run"
+would itself be the fabrication (T242, T250): a configured field with no authored getter at all,
+and a field live-confirmed unobservable in any phase (`map_settings.resources`), are accepted on
+V3 seed-set agreement alone and recorded on the run as `v2_unverified_fields` /
+`v2_unobservable_fields` respectively. The snapshot itself is read in the `InGame` state at the
+post-load, pre-turn-1 moment -- the only phase T218's phase-dependent getters (`mod_set`,
+`opponents.major_count`) are honest in -- so the in-game-only comparison T250 requires runs right
+here, and a front-end value can never be what V2 compares.
 """
 
 from __future__ import annotations
@@ -956,18 +963,42 @@ async def _prepare_connected_run(
     turn_timer_preflight(read_turn_timer=snapshot.read_turn_timer)
 
     v2_fallback_fields: list[str] = []
+    v2_unobservable_fields: list[str] = []
 
     def _read_setting(name: str) -> Any:
+        if name in snapshot.unobservable:
+            # T250: a field live-confirmed to have no read path in ANY phase (today:
+            # `map_settings.resources` -- T218 measured all three candidate getters nil). The
+            # previous shape registered an UNVERIFIED getter that always came back unread, so
+            # every run configuring the field died before turn 1 over a value nothing can read
+            # -- the exact false-failure T218 ranked #1. An unreadable field fails closed as
+            # accepted-unverified and RECORDED (the preparing -> playing transition below
+            # carries `v2_unobservable_fields`), it does not kill the run. Distinct from the
+            # `v2_unverified_fields` no-getter tail on purpose: "we looked, and it is not
+            # observable" is a measured fact; "no getter has been authored" is missing work.
+            v2_unobservable_fields.append(name)
+            return configured_fields(config)[name]
+        # T250: a `phase_deferred` field is deliberately NOT special-cased here. This snapshot
+        # is read in the `InGame` state -- the post-load, pre-turn-1 moment, which is exactly
+        # the phase T218's in-game-only getters (`mod_set`, `opponents.major_count`) are honest
+        # in -- so nothing is ever deferred at this pass and those fields are genuinely read and
+        # compared, fail-closed, right here. If a deferred field ever *did* reach this
+        # comparison (a future front-end V2 pass wired without its in-game re-check),
+        # `snapshot.read_setting` returns an `UnreadSetting` naming the deferral and the run
+        # fails closed -- a deferred comparison that never runs must fail the run, never pass
+        # it vacuously.
         value = snapshot.read_setting(name)
         if isinstance(value, UnreadSetting) and value.reason == _NO_READ_PATH_REASON:
             # A narrow, named exception -- not a reversion of `GameSetupSnapshot`'s own "unread
             # is never treated as matching" rule (see `run/preparation.py`'s own module docstring
             # on why an earlier draft of *this* module doing that for every field was a defect).
             # Every field named by the reference configuration (configs/turn50-validation.yaml)
-            # now has a registered getter in `_SETTING_GETTERS` -- `mod_set` reads back through
-            # `Modding.GetActiveMods()` and `game_settings.victory_types` through
-            # `GameInfo.Victories` (both UNVERIFIED shapes that fail closed to "unread", T242) --
-            # so what reaches this branch is only the open-ended tail: a custom
+            # now has a registered read path in `_SETTING_GETTERS` -- `mod_set` reads back
+            # through `Modding.GetActiveMods()` (in-game only, T250) and
+            # `game_settings.victory_types` through `GameInfo.Victories` (an UNVERIFIED shape
+            # that fails closed to "unread", T242) -- or is declared live-confirmed unobservable
+            # (`map_settings.resources`, caught by the branch above before this one) -- so what
+            # reaches this branch is only the open-ended tail: a custom
             # `map_settings.*`/`game_settings.*`/`opponents.*` key some configuration names that
             # no getter has been authored for. Every field `_SETTING_GETTERS` *does* cover still
             # fails closed on a genuine live mismatch or a getter that errored (a different
@@ -994,19 +1025,30 @@ async def _prepare_connected_run(
             run_lock=run_lock,
         )
 
-    # T242: a field that passed V2 only because no read path exists is recorded on the run --
-    # on the very transition event that concludes preparation -- so the record says which fields
-    # were accepted on V3 seed-set agreement alone rather than silently wearing "verified".
-    transition_detail: dict[str, Any] | None = None
+    # T242/T250: a field that passed V2 without a live read is recorded on the run -- on the
+    # very transition event that concludes preparation -- so the record says which fields were
+    # accepted on V3 seed-set agreement alone rather than silently wearing "verified". Two
+    # distinct markers, never conflated: `v2_unverified_fields` is the open-ended no-getter tail
+    # (T242), `v2_unobservable_fields` is the live-confirmed not-observable-in-any-phase set
+    # (T250). A phase-deferred field never appears in either -- at this in-game pass it is read
+    # for real, and anywhere else it fails the run (see `_read_setting` above).
+    detail_parts: dict[str, Any] = {}
     if v2_fallback_fields:
-        transition_detail = {
-            "v2_unverified_fields": sorted(v2_fallback_fields),
-            "v2_unverified_reason": (
-                "no live read path is registered for these configured fields; their values "
-                "were accepted on the seed-set agreement (V3) alone and are NOT verified "
-                "against the live client (FR-002/V2, T242)"
-            ),
-        }
+        detail_parts["v2_unverified_fields"] = sorted(v2_fallback_fields)
+        detail_parts["v2_unverified_reason"] = (
+            "no live read path is registered for these configured fields; their values "
+            "were accepted on the seed-set agreement (V3) alone and are NOT verified "
+            "against the live client (FR-002/V2, T242)"
+        )
+    if v2_unobservable_fields:
+        detail_parts["v2_unobservable_fields"] = sorted(v2_unobservable_fields)
+        detail_parts["v2_unobservable_reason"] = (
+            "these configured fields are live-confirmed unobservable in any game phase "
+            "(T218/T250: no Lua getter exists for them); their values were accepted on the "
+            "seed-set agreement (V3) alone and are NOT verified against the live client -- "
+            "recorded rather than run-killing (FR-002/V2)"
+        )
+    transition_detail: dict[str, Any] | None = detail_parts or None
     playing_run, event = transition(
         run,
         LifecycleState.PLAYING,

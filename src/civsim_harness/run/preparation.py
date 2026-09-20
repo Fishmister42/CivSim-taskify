@@ -108,7 +108,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -1147,55 +1147,156 @@ class LuaLeaderSelectionApplier:
 # them as mismatches. That is the intended, fail-closed outcome: FR-002/V2 require the run to fail
 # when the game's actual setup cannot be confirmed to match what was configured, and "we could not
 # read it" is not "it matched".
+#
+# **Some getters mean different things in different game phases, and one field has no getter in
+# any phase** (T250, closing T218 on the peer's live evidence --
+# `specs/002-civ-playing-harness/spikes/t218-RESULTS-setting-getters.md`):
+#
+# - `mod_set`: `Modding.GetActiveMods()` returned **0 entries at the front end and the real 22
+#   in-game** on the same host. A front-end read is not "no mods", it is "not loaded yet" -- and
+#   two differently-modded hosts could both record 0 at preparation time and be falsely judged
+#   COMPARABLE (Principle IV). In-game-only.
+# - `opponents.major_count`: `GameConfiguration.GetAIPlayerCount()` returned 6 at the Create Game
+#   screen (where it meant major AI opponents) and 16 in-game (where it counts every non-human
+#   player: 5 AI majors + 9 city-states + Free Cities + Barbarians, per-player decomposition in
+#   the spike). Same name, two facts. In-game-only, and read through the spike's measured
+#   `Players` derivation rather than `GetAIPlayerCount()` at all.
+# - `map_settings.resources`: a real negative result -- all three candidate keys
+#   (`MapConfiguration.GetValue("RESOURCES")`, `("RESOURCE_DENSITY")`,
+#   `GameConfiguration.GetValue("RESOURCES")`) returned nil in-game and no getter was found in
+#   either phase. Listed in :data:`UNOBSERVABLE_SETTING_FIELDS` rather than here: a documented
+#   "not observable" is recorded on the run as accepted-unverified, where the previous
+#   UnreadSetting sentinel landed every run configuring it `failed` before turn 1 over a value
+#   nothing can read.
+#
+# A getter whose :attr:`SettingGetter.phase` is `IN_GAME` is therefore **never dispatched by a
+# snapshot read outside the in-game phase**: the field is reported in
+# :attr:`GameSetupSnapshot.phase_deferred` (its own bucket, so a deferred field is never conflated
+# with a no-getter field), and :meth:`GameSetupSnapshot.read_setting` still fails it closed for
+# any caller that compares anyway. The comparison itself belongs at the run's first in-game
+# moment -- which is where the composition root's one V2 pass already runs
+# (`run/composition.py` step 8: post-load, pre-turn-1, `InGame` state).
 
-#: Dotted configured-field name -> (Lua expression that reads it back, whether that expression has
-#: been observed working on a live client). Keys are the names :func:`configured_fields` produces;
-#: a configured field absent from this table has no read path at all and is reported unread.
+
+class SettingReadPhase(Enum):
+    """When a :data:`_SETTING_GETTERS` expression actually means what its field name claims.
+
+    ``ANY``: the getter reads the same fact at the Create Game screen and in-game. ``IN_GAME``:
+    the getter is only meaningful once a game is loaded -- at the front end it returns a
+    *different* fact under the same name (T218's measured 0-vs-22 `mod_set` and 6-vs-16
+    `major_count`), so reading it there and comparing would be fabricating agreement or
+    fabricating a mismatch, both silently.
+    """
+
+    ANY = "any"
+    IN_GAME = "in_game"
+
+
+@dataclass(frozen=True)
+class SettingGetter:
+    """One read path in :data:`_SETTING_GETTERS`: the Lua expression, whether it has been
+    observed working on a live client, and the phase it is honest in."""
+
+    expression: str
+    verified: bool
+    phase: SettingReadPhase = SettingReadPhase.ANY
+
+
+#: Configured fields confirmed on a live client to have **no read path in any phase** (field ->
+#: the recorded reason). Distinct from "no getter has been authored" (the open-ended custom-key
+#: tail, reported unread with :data:`_NO_READ_PATH_REASON` and recorded by the composition root
+#: as `v2_unverified_fields`): these were actively looked for and are not observable, so an
+#: entry here is a measured fact with a spike behind it, never a placeholder for missing work.
+#: A snapshot reports them in :attr:`GameSetupSnapshot.unobservable`; the caller records them on
+#: the run and proceeds -- an unreadable field fails closed as accepted-unverified, it does not
+#: kill the run (T250, retiring the UnreadSetting sentinel T218 ranked as the #1 false failure).
+UNOBSERVABLE_SETTING_FIELDS: Mapping[str, str] = {
+    "map_settings.resources": (
+        "confirmed unobservable on a live client in either phase (T218/T250: "
+        'MapConfiguration.GetValue("RESOURCES"), MapConfiguration.GetValue("RESOURCE_DENSITY"), '
+        'and GameConfiguration.GetValue("RESOURCES") all return nil, and no other getter was '
+        "found); recorded as accepted-unverified rather than failing the run"
+    ),
+}
+
+#: The reason recorded for an in-game-only field a snapshot at any other phase did not read.
+_PHASE_DEFERRED_REASON = (
+    "this field is phase-dependent and is read in-game only (T218/T250: the front end returns "
+    "a different fact under the same getter); it was not read at this phase, and its V2 "
+    "comparison is deferred to the in-game read-back"
+)
+
+#: The reason for a requested field no getter has ever been authored for -- must stay
+#: byte-identical to `run/composition.py`'s `_NO_READ_PATH_REASON`, which matches on it.
+_NO_READ_PATH_REASON = "no read path is registered for this configured field"
+
+#: Dotted configured-field name -> :class:`SettingGetter`. Keys are the names
+#: :func:`configured_fields` produces; a configured field absent from this table (and from
+#: :data:`UNOBSERVABLE_SETTING_FIELDS`) has no read path at all and is reported unread.
 #:
 #: ``civsim_resolve`` (spliced in ahead of these expressions) is the spike's own hash -> name
 #: reverse lookup: several ``GameConfiguration`` getters return a ``DB.MakeHash`` integer whose
 #: meaning is build-dependent, and the name resolved through that same build's own ``GameInfo``
 #: table is what stays comparable -- the identical reasoning :class:`TurnTimerReading` already
 #: records for the turn-timer type.
-_SETTING_GETTERS: Mapping[str, tuple[str, bool]] = {
+_SETTING_GETTERS: Mapping[str, SettingGetter] = {
     # VERIFIED -- read back live from the `CivSim DEFAULT` preset (spikes/preset_readback.txt).
-    "civilization": ("PlayerConfigurations[0]:GetCivilizationTypeName()", True),
-    "leader": ("PlayerConfigurations[0]:GetLeaderTypeName()", True),
-    "ruleset": ("GameConfiguration.GetRuleSet()", True),
-    "difficulty": (
+    "civilization": SettingGetter("PlayerConfigurations[0]:GetCivilizationTypeName()", True),
+    "leader": SettingGetter("PlayerConfigurations[0]:GetLeaderTypeName()", True),
+    "ruleset": SettingGetter("GameConfiguration.GetRuleSet()", True),
+    "difficulty": SettingGetter(
         'civsim_resolve(GameConfiguration.GetHandicapType(), "Difficulties", "DifficultyType")',
         True,
     ),
-    "game_settings.game_speed": (
+    "game_settings.game_speed": SettingGetter(
         'civsim_resolve(GameConfiguration.GetGameSpeedType(), "GameSpeeds", "GameSpeedType")',
         True,
     ),
-    "game_settings.starting_era": (
+    "game_settings.starting_era": SettingGetter(
         'civsim_resolve(GameConfiguration.GetStartEra(), "Eras", "EraType")',
         True,
     ),
-    "opponents.city_state_count": ('MapConfiguration.GetValue("CITY_STATE_COUNT")', True),
+    "opponents.city_state_count": SettingGetter(
+        'MapConfiguration.GetValue("CITY_STATE_COUNT")', True
+    ),
     # UNVERIFIED -- the API shape for this kind of setting, never observed returning this
     # particular value on a live client. Fails closed to "unread" if the call does not exist.
-    "map_seed": ('tostring(MapConfiguration.GetValue("RANDOM_SEED"))', False),
-    "map_settings.map_type": ("MapConfiguration.GetScript()", False),
-    "map_settings.map_size": (
+    "map_seed": SettingGetter('tostring(MapConfiguration.GetValue("RANDOM_SEED"))', False),
+    "map_settings.map_type": SettingGetter("MapConfiguration.GetScript()", False),
+    "map_settings.map_size": SettingGetter(
         'civsim_resolve(MapConfiguration.GetValue("MAP_SIZE"), "Maps", "MapSizeType")',
         False,
     ),
-    "map_settings.resources": ('tostring(MapConfiguration.GetValue("RESOURCES"))', False),
-    "opponents.major_count": ("GameConfiguration.GetAIPlayerCount()", False),
-    # `mod_set` is the one table-valued field: `configured_fields` renders it as a list of
-    # `{id, version}` mappings (`ModRef.model_dump()`), so the read-back has to build the same
-    # shape. The live sweep did enumerate this host's 22 active mods, but not through a call whose
-    # exact name was recorded, so the accessor below is UNVERIFIED like its neighbours and fails
-    # closed to "unread" if it does not exist on a given build.
-    "mod_set": (
+    # IN-GAME ONLY (T250/T218): `GetAIPlayerCount()` means "major AI opponents" at the Create
+    # Game screen but "every non-human player" in-game (measured 6 vs 16 on the same host), so
+    # it is not used at all. This is the spike's own measured in-game derivation instead: count
+    # alive majors in the live `Players` table and exclude the local player -- yields 5 where
+    # the preset configured 5 (t218-RESULTS-setting-getters.md, "Correct in-game derivation").
+    # Zero alive majors is impossible in a real loaded game (the human is one), so 0 reports
+    # the field unread rather than returning a nonsensical -1.
+    "opponents.major_count": SettingGetter(
+        "(function() local majors = 0; "
+        "for _, p in ipairs(Players) do "
+        "if p:IsAlive() and p:IsMajor() then majors = majors + 1 end end; "
+        "if majors == 0 then return nil end; "
+        "return majors - 1 end)()",
+        True,
+        SettingReadPhase.IN_GAME,
+    ),
+    # IN-GAME ONLY (T250/T218): `Modding.GetActiveMods()` resolves in both phases but answers
+    # with 0 entries at the front end vs the real 22 in-game -- the worst shape, because a
+    # front-end read on two differently-modded hosts records 0 on both and V2 falsely judges
+    # them COMPARABLE (Principle IV). The call itself is now live-verified in-game (22 entries,
+    # `Id` + `Name`; key on `Id` -- names are partly unlocalised). The `{id, version}` shape
+    # below still reads `m.Version`, which the spike did not capture, so the accessor stays
+    # UNVERIFIED as a whole and fails closed to "unread" if that field does not exist.
+    "mod_set": SettingGetter(
         "(function() local out = {}; "
         "for _, m in ipairs(Modding.GetActiveMods() or {}) do "
         'out[#out + 1] = { ["id"] = tostring(m.Id), ["version"] = tostring(m.Version) } end; '
         "return out end)()",
         False,
+        SettingReadPhase.IN_GAME,
     ),
     # `game_settings.victory_types` (T242): load-bearing for FR-005 `game_outcome` stops -- a run
     # whose enabled victory set silently differs from what was configured resolves (or fails to
@@ -1206,8 +1307,8 @@ _SETTING_GETTERS: Mapping[str, tuple[str, bool]] = {
     # call shape is wrong on a given build the pcall-guarded getter reports the field unread and
     # V2 fails closed (never vacuously) -- live confirmation, including whatever name
     # normalisation the configured `[SCIENCE, CULTURE, ...]` spelling turns out to need, rides
-    # T218 exactly like this table's other UNVERIFIED entries.
-    "game_settings.victory_types": (
+    # T250's next live session exactly like this table's other UNVERIFIED entries.
+    "game_settings.victory_types": SettingGetter(
         "(function() local out = {}; "
         "pcall(function() for row in GameInfo.Victories() do "
         "local enabled = false; "
@@ -1275,9 +1376,13 @@ class GameSetupSnapshot:
     """One instant's read-back of the live client's game setup.
 
     ``values`` holds only the fields that actually came back with a value; ``unread`` maps every
-    other requested field to why it could not be read. The two are disjoint and together cover
-    exactly what was asked for, so a caller can report the gap precisely rather than infer it from
-    a missing key.
+    other requested field to why it could not be read; ``phase_deferred`` maps each requested
+    in-game-only field a non-in-game snapshot deliberately did not read (T250 -- its own bucket,
+    never folded into ``unread``, so a deferred read is never conflated with a missing getter);
+    ``unobservable`` maps each requested field live-confirmed to have no read path in any phase
+    (:data:`UNOBSERVABLE_SETTING_FIELDS`). The four are disjoint and together cover exactly what
+    was asked for, so a caller can report each gap precisely rather than infer it from a missing
+    key.
     """
 
     values: Mapping[str, Any]
@@ -1285,18 +1390,25 @@ class GameSetupSnapshot:
     turn_timer_type: str | None = None
     turn_timer_hash: int | None = None
     turn_timer_reason: str | None = None
+    phase_deferred: Mapping[str, str] = field(default_factory=dict)
+    unobservable: Mapping[str, str] = field(default_factory=dict)
 
     def read_setting(self, name: str) -> Any:
         """The synchronous ``read_setting`` seam :func:`verify_configuration` takes.
 
         Returns an :class:`UnreadSetting` -- never a guess, never the configured value -- for a
-        field this snapshot could not read.
+        field this snapshot could not read. That includes ``phase_deferred`` and ``unobservable``
+        fields: deferring or recording them is a *caller's* explicit decision (made by consulting
+        those mappings, the way ``run/composition.py``'s ``_read_setting`` does); any caller that
+        compares one of them anyway fails closed, exactly like every other unread field.
         """
         if name in self.values:
             return self.values[name]
-        return UnreadSetting(
-            self.unread.get(name, "no read path is registered for this configured field")
-        )
+        if name in self.phase_deferred:
+            return UnreadSetting(self.phase_deferred[name])
+        if name in self.unobservable:
+            return UnreadSetting(self.unobservable[name])
+        return UnreadSetting(self.unread.get(name, _NO_READ_PATH_REASON))
 
     def read_turn_timer(self) -> TurnTimerReading:
         """The synchronous ``read_turn_timer`` seam :func:`turn_timer_preflight` takes.
@@ -1319,6 +1431,14 @@ class GameSetupSnapshot:
         )
 
 
+#: The Lua state name whose presence defines the in-game phase for this module's phase-declared
+#: getters -- the only *state_name* under which :class:`LuaGameSetupReader` dispatches a
+#: :attr:`SettingReadPhase.IN_GAME` getter. Matches `run/composition.py`'s own
+#: `_IN_GAME_STATE_NAME` (verified live: `InGame` exists exactly when a game is loaded, and is
+#: mutually exclusive with the front end's `HostGame`).
+_IN_GAME_LUA_STATE_NAME = "InGame"
+
+
 class LuaGameSetupReader:
     """Reads the live client's game setup back in one dispatch (see this section's own notes).
 
@@ -1333,7 +1453,9 @@ class LuaGameSetupReader:
     ``HostGame``, a UI-side state, and ``InGame`` is that state's in-game counterpart --
     ``GameCore_Tuner`` is the gamecore side, where a live spike confirmed the UI-side globals are
     absent entirely. A caller reading *before* the game loads passes ``"HostGame"``, which is
-    where these reads are actually verified.
+    where the phase-stable reads are actually verified -- and where every
+    :attr:`SettingReadPhase.IN_GAME` getter is **deferred rather than dispatched** (T250; see
+    :meth:`read`).
     """
 
     def __init__(
@@ -1357,8 +1479,8 @@ class LuaGameSetupReader:
         self._state_name = state_name
 
     async def read(self, field_names: Sequence[str]) -> GameSetupSnapshot:
-        """Read every name in *field_names* that has a registered getter, plus the turn-timer
-        type, in one dispatch.
+        """Read every name in *field_names* that has a registered getter honest at this
+        snapshot's phase, plus the turn-timer type, in one dispatch.
 
         Never raises for a field-level failure: a getter that errors, returns ``nil``, or is not
         registered at all is reported in :attr:`GameSetupSnapshot.unread`. A *transport* failure
@@ -1366,14 +1488,31 @@ class LuaGameSetupReader:
         connection) does propagate, since nothing was read at all and reporting that as "every
         field is unread" would erase the distinction between a broken connection and a build whose
         configuration API differs.
+
+        **Phase honesty (T250/T218).** A getter declared ``SettingReadPhase.IN_GAME`` is only
+        dispatched when this reader targets the ``InGame`` state; a snapshot at any other phase
+        (the front end's ``HostGame``) **does not read it at all** -- not even to record what came
+        back -- because the front-end answer is a different fact wearing the same getter (0-vs-22
+        `mod_set`, 6-vs-16 `major_count`, both measured live). Such fields are reported in
+        :attr:`GameSetupSnapshot.phase_deferred`. Fields in
+        :data:`UNOBSERVABLE_SETTING_FIELDS` are likewise never dispatched in any phase and are
+        reported in :attr:`GameSetupSnapshot.unobservable`.
         """
         requested = tuple(field_names)
-        known = [name for name in requested if name in _SETTING_GETTERS]
-        unread: dict[str, str] = {
-            name: "no read path is registered for this configured field"
-            for name in requested
-            if name not in _SETTING_GETTERS
-        }
+        in_game = self._state_name == _IN_GAME_LUA_STATE_NAME
+        known: list[str] = []
+        unread: dict[str, str] = {}
+        phase_deferred: dict[str, str] = {}
+        unobservable: dict[str, str] = {}
+        for name in requested:
+            if name in UNOBSERVABLE_SETTING_FIELDS:
+                unobservable[name] = UNOBSERVABLE_SETTING_FIELDS[name]
+            elif name not in _SETTING_GETTERS:
+                unread[name] = _NO_READ_PATH_REASON
+            elif _SETTING_GETTERS[name].phase is SettingReadPhase.IN_GAME and not in_game:
+                phase_deferred[name] = _PHASE_DEFERRED_REASON
+            else:
+                known.append(name)
 
         state_index = _resolve_named_state_index(self._state_index_source, self._state_name)
         result = await self._execute(state_index, self._build_lua(known))
@@ -1386,12 +1525,12 @@ class LuaGameSetupReader:
 
         values: dict[str, Any] = {}
         for name in known:
-            _expression, verified = _SETTING_GETTERS[name]
+            getter = _SETTING_GETTERS[name]
             raw = result.get(_result_key(name))
             if raw is None:
                 unread[name] = (
                     "the client's configuration API returned no value for this field "
-                    f"({'verified' if verified else 'UNVERIFIED'} getter)"
+                    f"({'verified' if getter.verified else 'UNVERIFIED'} getter)"
                 )
                 continue
             values[name] = raw
@@ -1409,6 +1548,8 @@ class LuaGameSetupReader:
                 else "GameConfiguration.GetTurnTimerType() did not resolve to a named type on "
                 "this build"
             ),
+            phase_deferred=phase_deferred,
+            unobservable=unobservable,
         )
 
     def _build_lua(self, field_names: Sequence[str]) -> str:
@@ -1416,7 +1557,7 @@ class LuaGameSetupReader:
         fields: dict[str, str] = {}
         statements: list[str] = []
         for name in field_names:
-            expression, _verified = _SETTING_GETTERS[name]
+            expression = _SETTING_GETTERS[name].expression
             local = f"civsim_v_{_result_key(name)}"
             statements.append(
                 f"local ok_{local}, {local} = pcall(function() return {expression} end); "

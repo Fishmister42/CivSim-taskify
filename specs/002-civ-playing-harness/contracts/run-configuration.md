@@ -86,6 +86,24 @@ comparable and is not. Preparation reads back the actual game setup through decl
 and compares field by field; any difference aborts with the mismatch recorded, rather than
 proceeding with a warning.
 
+**Phase-dependent settings are verified in-game only, never from the front end** (T218 live
+evidence, T250 ruling). The same getter can name two different facts by game phase:
+`Modding.GetActiveMods()` returned 0 entries at the front end and the real 22 in-game on the same
+host, and the major-opponent count decomposed 6-vs-16 across the same boundary
+(`GetAIPlayerCount()` in-game counts city-states, Free Cities, and Barbarians too). A front-end
+read is therefore not a weaker version of the fact — it is a different fact — and two
+differently-modded hosts both recording 0 mods at preparation time would be falsely judged
+comparable (Principle IV). `mod_set` and `opponents.major_count` accordingly carry an
+in-game-only phase declaration: a front-end read-back never dispatches them (they are reported
+*phase-deferred*, a distinct bucket never conflated with a missing getter, and fail closed if
+compared anyway), and their V2 comparison runs at the post-load, pre-turn-1 read-back — the run's
+first in-game moment, which is where the composition root's single V2 pass already executes. A
+genuine in-game mismatch on these fields still fails the run before turn 1, exactly like any
+other field. `map_settings.resources` is the inverse case: live-confirmed unobservable in
+*either* phase (every candidate getter returns nil), it is recorded on the run as accepted on
+seed-set agreement alone (`v2_unobservable_fields`, distinct from the no-getter
+`v2_unverified_fields`) rather than failing the run over a value nothing can read.
+
 ## Branch configuration
 
 A branch is a run configuration plus a lineage reference (FR-033):

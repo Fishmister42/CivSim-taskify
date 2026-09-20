@@ -102,6 +102,7 @@ class _FakeGame:
         self.config_values = config_values
         self.end_turns_issued = 0
         self.saves_written: list[str] = []
+        self.setup_lua_bodies: list[str] = []
 
     def read_turn_number(self, _command: ReceivedCommand) -> dict[str, Any]:
         return {
@@ -138,9 +139,12 @@ class _FakeGame:
     def read_version(self, _command: ReceivedCommand) -> dict[str, Any]:
         return {"ok": True, "version": GAME_BUILD_VERSION}
 
-    def read_setup(self, _command: ReceivedCommand) -> dict[str, Any]:
+    def read_setup(self, command: ReceivedCommand) -> dict[str, Any]:
         """Answer the single `LuaGameSetupReader` snapshot with the configured setup, keyed the
-        way that reader flattens dotted field names."""
+        way that reader flattens dotted field names. The dispatched body is kept so a test can
+        assert on the Lua the tuner actually received (T250: which getters ran, and which must
+        not have)."""
+        self.setup_lua_bodies.append(command.lua_body)
         return {
             **{key.replace(".", "__"): value for key, value in self.config_values.items()},
             "turn_timer_type": "TURNTIMER_NONE",
@@ -236,15 +240,21 @@ def _write_seed_set(root: Path) -> None:
 
 
 def _write_run_config(
-    path: Path, *, extra_game_settings: dict[str, Any] | None = None
+    path: Path,
+    *,
+    extra_game_settings: dict[str, Any] | None = None,
+    extra_map_settings: dict[str, Any] | None = None,
+    extra_opponents: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write the run configuration and return the flattened setup the fake game must report back.
 
     Deliberately carries only the configured fields `run.preparation`'s own setup reader has a
     registered getter for: a field with no read path is recorded on the run as unverified (T242)
     rather than silently treated as agreeing, which is a separate behaviour with its own test
-    below rather than something to work around here. *extra_game_settings* lets that test add
-    exactly such a field.
+    below rather than something to work around here. *extra_game_settings* /
+    *extra_map_settings* / *extra_opponents* let such tests add exactly the fields they are
+    about; a test whose client must *not* report one back (an unobservable field, T250) pops it
+    from the returned mapping.
     """
     document = {
         "schema_version": 1,
@@ -255,13 +265,13 @@ def _write_run_config(
         "leader": _LEADER,
         "ruleset": _RULESET,
         "mod_set": [],
-        "map_settings": {},
+        "map_settings": dict(extra_map_settings or {}),
         "game_settings": dict(
             {"game_speed": "GAMESPEED_ONLINE", "starting_era": "ERA_ANCIENT"},
             **(extra_game_settings or {}),
         ),
         "difficulty": _DIFFICULTY,
-        "opponents": {"city_state_count": 10},
+        "opponents": dict({"city_state_count": 10}, **(extra_opponents or {})),
         "stop_condition": {"type": "turn_reached", "turn": STOP_AT_TURN},
         "model_config": {
             "primary": {"provider": "fake", "model": "primary"},
@@ -284,7 +294,9 @@ def _write_run_config(
         "game_settings.game_speed": "GAMESPEED_ONLINE",
         "game_settings.starting_era": "ERA_ANCIENT",
         **{f"game_settings.{key}": value for key, value in (extra_game_settings or {}).items()},
+        **{f"map_settings.{key}": value for key, value in (extra_map_settings or {}).items()},
         "opponents.city_state_count": 10,
+        **{f"opponents.{key}": value for key, value in (extra_opponents or {}).items()},
     }
 
 
@@ -1430,6 +1442,127 @@ def test_a_field_passing_v2_only_by_fallback_is_recorded_on_the_run(tmp_path: Pa
         f"nothing less (silence is the T242 defect). Got: {detail!r}"
     )
     assert "seed-set agreement" in detail.get("v2_unverified_reason", "")
+
+
+# --------------------------------------------------------------------------
+# T250 -- phase-dependent settings are read in-game only, and an unobservable
+# field is recorded rather than run-killing
+# --------------------------------------------------------------------------
+
+
+def test_unobservable_resources_is_recorded_on_the_run_not_run_killing(tmp_path: Path) -> None:
+    """T250 halves one and two, far side: a run configuring `map_settings.resources` -- the
+    field the peer's live session confirmed unreadable in either phase -- COMPLETES, with the
+    field recorded on the preparing -> playing transition under its own `v2_unobservable_fields`
+    marker (never conflated with T242's no-getter `v2_unverified_fields`); and the in-game-only
+    reads (`mod_set`, `opponents.major_count`) genuinely ran in the one setup dispatch, at the
+    run's post-load/pre-turn-1 in-game moment, through the phase-correct derivation.
+
+    Reverting either half fails this: with the old `RESOURCES` sentinel getter restored, the
+    field reads back unread, V2 records a mismatch, and the run dies before turn 1 (exit code 1
+    here); with the `GetAIPlayerCount()` getter restored, the dispatched Lua assertion fails.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(
+        config_path,
+        extra_map_settings={"resources": "RESOURCES_STANDARD"},
+        extra_opponents={"major_count": 5},
+    )
+    # The client cannot report resources back -- that is the whole finding. The fake reporting
+    # it anyway would be a fake with a getter the real game does not have.
+    config_values.pop("map_settings.resources")
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+    provider = _build_provider()
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        runner, store = _compose(tmp_path, port=server.port, provider=provider)
+        cli.configure_runner_factory(lambda: runner)
+
+        result = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert result.exit_code == 0, _failure_report(result.output, store)
+        run_id = _wait_for_terminal_run(runner, store, result.output)
+
+    run = store.get_run(run_id)
+    assert run is not None
+    assert run.lifecycle_state is LifecycleState.FINISHED
+
+    # -- the unobservable field is recorded, distinctly, on the run itself --------------------
+    playing_transitions = [
+        event
+        for event in store.list_run_events(RunId(run_id))
+        if event.event_type.value == "lifecycle_transition"
+        and event.detail.get("to") == "playing"
+    ]
+    assert len(playing_transitions) == 1
+    detail = playing_transitions[0].detail
+    assert detail.get("v2_unobservable_fields") == ["map_settings.resources"], (
+        "the unobservable field must be recorded under its own marker on the transition that "
+        f"concludes preparation. Got: {detail!r}"
+    )
+    assert "unobservable" in detail.get("v2_unobservable_reason", "")
+    assert "map_settings.resources" not in detail.get("v2_unverified_fields", []), (
+        "a live-confirmed unobservable field must never be conflated with the no-getter tail"
+    )
+
+    # -- the in-game-only fields were read for real, in-game, phase-correctly -----------------
+    assert game.setup_lua_bodies, "the setup read-back never reached the fake tuner"
+    setup_lua = game.setup_lua_bodies[0]
+    assert "Modding.GetActiveMods" in setup_lua, (
+        "mod_set was not read at the run's in-game moment -- the deferred comparison that "
+        "never runs is the vacuous-pass pattern T250 exists to prevent"
+    )
+    assert "IsMajor" in setup_lua, "major_count was not read through the Players derivation"
+    assert "GetAIPlayerCount" not in setup_lua, (
+        "GetAIPlayerCount() counts city-states, Free Cities, and Barbarians in-game (T218's "
+        "6-vs-16 decomposition) and must not be dispatched in any phase"
+    )
+    assert "RESOURCES" not in setup_lua, "the retired resources sentinel getter was dispatched"
+
+
+def test_an_in_game_only_field_mismatch_still_fails_the_run_closed(tmp_path: Path) -> None:
+    """T250's fail-closed half, far side: the in-game comparison of an in-game-only field is a
+    real V2 gate, not a recorded shrug. The client reports `opponents.major_count` as 16 -- the
+    exact value `GetAIPlayerCount()` would have fabricated from the phase confusion -- where 5
+    was configured: the run fails before turn 1 with the mismatch recorded, and no turn is
+    played. (Recording without comparing would pass here; this is the guard against it.)"""
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path, extra_opponents={"major_count": 5})
+    config_values["opponents.major_count"] = 16
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+    provider = _build_provider()
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        runner, store = _compose(tmp_path, port=server.port, provider=provider)
+        cli.configure_runner_factory(lambda: runner)
+
+        result = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert result.exit_code == 1, result.output
+        run_id = _parse_run_id(result.output)
+
+    run = store.get_run(run_id)
+    assert run is not None
+    assert run.lifecycle_state is LifecycleState.FAILED
+    assert game.end_turns_issued == 0
+    assert store.get_turn_cycle(run_id, 1) is None
+
+    mismatches = [
+        mismatch
+        for event in store.list_run_events(run_id)
+        if event.event_type.value == "preparation_mismatch"
+        for mismatch in event.detail.get("mismatches", [])
+    ]
+    major_count_mismatches = [m for m in mismatches if m["field"] == "opponents.major_count"]
+    assert major_count_mismatches, f"the mismatch was not recorded; got {mismatches!r}"
+    assert major_count_mismatches[0]["expected"] == 5
+    assert major_count_mismatches[0]["actual"] == 16
 
 
 # --------------------------------------------------------------------------
