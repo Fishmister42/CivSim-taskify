@@ -38,8 +38,10 @@ from civsim_harness.host.port import (
     WindowRect,
 )
 
-# UNVERIFIED: exact Linux (Aspyr) binary name as installed via Steam.
-_PROCESS_NAMES = ("CivilizationVI",)
+# VERIFIED on a live Aspyr client (Steam app 289070, build 1.0.12.9): the
+# process is `Civ6`. `CivilizationVI` is the Windows name and matches nothing
+# here, so process detection found no client at all before this was corrected.
+_PROCESS_NAMES = ("Civ6",)
 
 # UNVERIFIED: X keysyms below cover only the keys the bespoke save dialog
 # needs (R5: Escape, Enter, Tab); `xtest.fake_input` itself is a stable,
@@ -91,11 +93,10 @@ class LinuxHostPlatform:
                 detail={"missing_dependency": "python-xlib"},
             ) from exc
 
-        # UNVERIFIED: this repo could not exercise the X11 protocol on
-        # real hardware. Reading `_NET_CLIENT_LIST` off the root window and
-        # matching `_NET_WM_PID` is the standard EWMH-compliant way to
-        # enumerate top-level windows, but the exact python-xlib
-        # property-reading incantations below have not been verified.
+        # VERIFIED on real hardware (X11/Cinnamon, Mutter/Muffin): reading
+        # `_NET_CLIENT_LIST` off the root and matching `_NET_WM_PID` resolves
+        # the live client correctly, and the python-xlib calls below are right
+        # as written.
         display = Display()
         try:
             root = display.screen().root
@@ -113,9 +114,25 @@ class LinuxHostPlatform:
                 geometry = candidate.get_geometry()
                 name_prop = candidate.get_full_property(net_wm_name, X.AnyPropertyType)
                 title = bytes(name_prop.value).decode("utf-8", "replace") if name_prop else ""
+                # A reparenting WM makes get_geometry() report coordinates
+                # relative to the WM frame, which is (0, 0) for a managed
+                # window -- not the screen position. Translating the window
+                # origin into root space is what yields absolute coordinates,
+                # and on a multi-monitor desktop the difference is the whole
+                # offset of the monitor the client is on.
+                left, top = int(geometry.x), int(geometry.y)
+                # python-xlib's translate_coords is invoked on the DESTINATION
+                # window: root.translate_coords(src, x, y) maps src's (x, y)
+                # into root space. Calling it the other way round returns the
+                # offset negated, which looks plausible and is wrong.
+                try:
+                    origin = root.translate_coords(candidate, 0, 0)
+                    left, top = int(origin.x), int(origin.y)
+                except Exception:  # pragma: no cover - server-dependent
+                    pass
                 rect = WindowRect(
-                    left=int(geometry.x),
-                    top=int(geometry.y),
+                    left=left,
+                    top=top,
                     width=int(geometry.width),
                     height=int(geometry.height),
                 )
