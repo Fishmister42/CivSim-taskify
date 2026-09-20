@@ -1197,6 +1197,28 @@ _SETTING_GETTERS: Mapping[str, tuple[str, bool]] = {
         "return out end)()",
         False,
     ),
+    # `game_settings.victory_types` (T242): load-bearing for FR-005 `game_outcome` stops -- a run
+    # whose enabled victory set silently differs from what was configured resolves (or fails to
+    # resolve) the wrong outcomes. UNVERIFIED shape: Civ VI's setup screen stores each victory
+    # toggle as a GameConfiguration value keyed by the victory's own `VictoryType` row name
+    # (`VICTORY_*` in `GameInfo.Victories`), so this enumerates that table and reports the
+    # enabled names, sorted for a stable comparison. Never observed on a live client; if the
+    # call shape is wrong on a given build the pcall-guarded getter reports the field unread and
+    # V2 fails closed (never vacuously) -- live confirmation, including whatever name
+    # normalisation the configured `[SCIENCE, CULTURE, ...]` spelling turns out to need, rides
+    # T218 exactly like this table's other UNVERIFIED entries.
+    "game_settings.victory_types": (
+        "(function() local out = {}; "
+        "pcall(function() for row in GameInfo.Victories() do "
+        "local enabled = false; "
+        "pcall(function() enabled = GameConfiguration.GetValue(row.VictoryType) end); "
+        "if enabled == true then out[#out + 1] = tostring(row.VictoryType) end "
+        "end end); "
+        "table.sort(out); "
+        "if #out == 0 then return nil end; "
+        "return out end)()",
+        False,
+    ),
 }
 
 #: The turn-timer read :func:`turn_timer_preflight` consumes. Kept out of :data:`_SETTING_GETTERS`

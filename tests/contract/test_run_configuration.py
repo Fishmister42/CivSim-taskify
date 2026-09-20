@@ -1,6 +1,6 @@
-"""Contract tests for `contracts/run-configuration.md` (T063).
+"""Contract tests for `contracts/run-configuration.md` (T063; V11 added by T243).
 
-Asserts V1, V3, V7, V8, V9, V12, and V13 against the already-implemented preflight checks:
+Asserts V1, V3, V7, V8, V9, V11, V12, and V13 against the already-implemented preflight checks:
 
 - **V1** -- a partially specified run does not start (`config/run_config.py`).
 - **V3** -- a `seed_set` mismatch is an error, never an override (`config/seed_set.py`).
@@ -9,6 +9,10 @@ Asserts V1, V3, V7, V8, V9, V12, and V13 against the already-implemented preflig
 - **V8** -- no run is already active on this client or this run identity (`run/identity_lock.py`).
 - **V9** -- a credential-shaped value anywhere in the configuration is a validation error, never a
   warning (`config/run_config.py`).
+- **V11** -- free disk space at or above `min_free_disk_gb` AND the run's estimated save/capture
+  footprint fits within it (`saves/headroom.py`'s `estimate_footprint` + `check_headroom`, called
+  at preflight by `run/composition.py`'s `_prepare_run` -- T243; before that, `estimate_footprint`
+  had no caller in `src/` and V11 was asserted nowhere).
 - **V12** -- `no_progress_step_limit` >= 1, with no silent upper bound (`config/run_config.py`,
   `models/config.py`).
 - **V13** -- an `UNSUPPORTED` host is rejected before turn 1 with the missing capability recorded,
@@ -316,6 +320,93 @@ def test_v9_credential_rejection_is_an_error_not_a_stripped_warning() -> None:
 
 def test_v9_an_ordinary_configuration_with_no_secret_loads_cleanly() -> None:
     load_run_configuration_yaml(CONFIG_PATH.read_text(encoding="utf-8"))  # must not raise
+
+
+# --------------------------------------------------------------------------
+# V11 -- free disk >= min_free_disk_gb AND the estimated footprint fits (T243)
+# --------------------------------------------------------------------------
+
+
+def _host_with_free_bytes(path: Path, free_bytes: int) -> FakeHostPlatform:
+    from civsim_harness.host.port import DiskSpace
+
+    host = FakeHostPlatform()
+    host.set_disk_space(
+        DiskSpace(path=path, free_bytes=free_bytes, total_bytes=free_bytes * 2)
+    )
+    return host
+
+
+def test_v11_a_footprint_that_cannot_fit_in_free_disk_is_rejected_even_above_the_floor(
+    tmp_path: Path,
+) -> None:
+    """V11's second clause -- the half T081 never wired: free space clears `min_free_disk_gb`,
+    but the run's estimated save/capture footprint does not fit, so preflight must refuse.
+    `configs/turn50-validation.yaml` stops at turn 50, which under `saves/headroom.py`'s
+    documented conservative defaults estimates ~4.5 GB; 2 GB free clears a 1-GB floor and cannot
+    hold that."""
+    from civsim_harness.errors import DiskHeadroomError
+    from civsim_harness.saves.headroom import check_headroom, estimate_footprint
+
+    config = load_run_configuration_yaml(CONFIG_PATH.read_text(encoding="utf-8"))
+    footprint = estimate_footprint(config)
+    two_gb = 2 * 1024**3
+    assert footprint.total_bytes > two_gb  # the fixture is meaningful, not vacuous
+
+    with pytest.raises(DiskHeadroomError) as excinfo:
+        check_headroom(
+            host=_host_with_free_bytes(tmp_path, two_gb),
+            path=tmp_path,
+            min_free_disk_gb=1,
+            footprint=footprint,
+        )
+    assert excinfo.value.detail["estimated_footprint_bytes"] == footprint.total_bytes
+
+
+def test_v11_below_the_floor_is_rejected_regardless_of_footprint(tmp_path: Path) -> None:
+    from civsim_harness.errors import DiskHeadroomError
+    from civsim_harness.saves.headroom import check_headroom, estimate_footprint
+
+    config = load_run_configuration_yaml(CONFIG_PATH.read_text(encoding="utf-8"))
+    with pytest.raises(DiskHeadroomError):
+        check_headroom(
+            host=_host_with_free_bytes(tmp_path, 1 * 1024**3),
+            path=tmp_path,
+            min_free_disk_gb=float(config.min_free_disk_gb),
+            footprint=estimate_footprint(config),
+        )
+
+
+def test_v11_enough_room_for_both_the_floor_and_the_footprint_passes(tmp_path: Path) -> None:
+    from civsim_harness.saves.headroom import check_headroom, estimate_footprint
+
+    config = load_run_configuration_yaml(CONFIG_PATH.read_text(encoding="utf-8"))
+    footprint = estimate_footprint(config)
+    generous = footprint.total_bytes + (config.min_free_disk_gb + 10) * 1024**3
+
+    check_headroom(  # must not raise
+        host=_host_with_free_bytes(tmp_path, int(generous)),
+        path=tmp_path,
+        min_free_disk_gb=float(config.min_free_disk_gb),
+        footprint=footprint,
+    )
+
+
+def test_v11_has_a_production_caller_at_preflight() -> None:
+    """The wiring half, stated structurally: `run/composition.py`'s `_prepare_run` must call
+    `estimate_footprint` and pass its result to `check_headroom` -- T243's finding was exactly
+    that both existed and neither had a production caller, so a run below headroom started and
+    died at its first quicksave instead of being refused for free. (The behavioural proof runs
+    through the real composition root in tests/integration/test_end_to_end_wiring.py's
+    `test_a_run_whose_estimated_footprint_cannot_fit_is_refused_at_preflight`; this assertion is
+    the cheap guard that the call sites stay in the preflight path named here.)"""
+    import inspect
+
+    from civsim_harness.run import composition
+
+    source = inspect.getsource(composition._prepare_run)
+    assert "estimate_footprint(" in source
+    assert "footprint=footprint" in source
 
 
 # --------------------------------------------------------------------------

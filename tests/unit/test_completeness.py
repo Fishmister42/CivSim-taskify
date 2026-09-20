@@ -19,7 +19,10 @@ from civsim_harness.models.decision import Decision
 from civsim_harness.models.records import ModelCall, SavePoint
 from civsim_harness.models.run import RecordCompletenessStatus, Run
 from civsim_harness.models.turn import DecisionStep, Observation, TurnCycle
-from civsim_harness.store.completeness import record_completeness_status
+from civsim_harness.store.completeness import (
+    record_completeness_status,
+    refresh_run_completeness,
+)
 from civsim_harness.store.port import DecisionStepBundle, TurnCycleRecord
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
 
@@ -61,7 +64,14 @@ def _make_config(config_id: str) -> RunConfiguration:
     )
 
 
-def _make_run(run_id: str, config_id: str = "cfg1", *, lifecycle_state: str = "playing") -> Run:
+def _make_run(
+    run_id: str,
+    config_id: str = "cfg1",
+    *,
+    lifecycle_state: str = "playing",
+    parent_run_id: str | None = None,
+    parent_turn: int | None = None,
+) -> Run:
     return Run.model_validate(
         {
             "run_id": run_id,
@@ -74,6 +84,8 @@ def _make_run(run_id: str, config_id: str = "cfg1", *, lifecycle_state: str = "p
             "game_build": "win/1.0.12.9",
             "host_support_tier": "validated",
             "capture_path": "windows_graphics_capture",
+            "parent_run_id": parent_run_id,
+            "parent_turn": parent_turn,
         }
     )
 
@@ -371,3 +383,96 @@ def test_trailing_unrecorded_turn_on_a_still_playing_run_is_not_a_spurious_gap(
         record_completeness_status(store, "run-trailing-playing")  # type: ignore[arg-type]
         is RecordCompletenessStatus.COMPLETE
     )
+
+
+# --------------------------------------------------------------------------
+# T239: a branch owes its record from its branch point, not from turn 1 --
+# and refresh_run_completeness persists the derivation onto the stored Run.
+# --------------------------------------------------------------------------
+
+
+def test_a_branch_with_a_contiguous_record_from_its_branch_point_is_complete(
+    store: SqliteMatchStore,
+) -> None:
+    """A branch from parent turn 5 replays turn 5 and plays on; turns 1-4 live in the *parent's*
+    record, reachable through the recorded lineage (FR-033, Principle IV). An unfloored
+    derivation would call every such branch has_gaps forever on a perfect record -- the false
+    disqualification T239 exists to prevent in the field Deliverable 1's trend gate consumes."""
+    store.create_run(
+        _make_run("branch-clean", parent_run_id="some-parent", parent_turn=5),
+        _make_config("cfg-branch-clean"),
+    )
+    _write_turn(store, "branch-clean", 5, step_indices=[1, 2])
+    _write_turn(store, "branch-clean", 6, step_indices=[1])
+
+    assert (
+        record_completeness_status(store, "branch-clean")  # type: ignore[arg-type]
+        is RecordCompletenessStatus.COMPLETE
+    )
+
+
+def test_a_branch_with_a_gap_at_or_above_its_branch_point_is_still_has_gaps(
+    store: SqliteMatchStore,
+) -> None:
+    """The floor is a floor, not a pass: a genuine gap in the branch's *own* record (turn 6,
+    between its replayed turn 5 and its turn 7) still forces has_gaps."""
+    store.create_run(
+        _make_run("branch-gap", parent_run_id="some-parent", parent_turn=5),
+        _make_config("cfg-branch-gap"),
+    )
+    _write_turn(store, "branch-gap", 5)
+    # Turn 6 skipped entirely; turn 7 recorded.
+    _write_turn(store, "branch-gap", 7)
+
+    assert (
+        record_completeness_status(store, "branch-gap")  # type: ignore[arg-type]
+        is RecordCompletenessStatus.HAS_GAPS
+    )
+
+
+def test_a_branch_missing_its_own_branch_point_turn_is_has_gaps(
+    store: SqliteMatchStore,
+) -> None:
+    """The branch replays its parent_turn itself (run/runner.py's _begin) -- a branch whose own
+    record starts *after* its branch point is missing the very turn it exists to replay."""
+    store.create_run(
+        _make_run("branch-floor-gap", parent_run_id="some-parent", parent_turn=5),
+        _make_config("cfg-branch-floor-gap"),
+    )
+    # Only turn 6 on record -- turn 5, the branch point itself, was never recorded.
+    _write_turn(store, "branch-floor-gap", 6)
+
+    assert (
+        record_completeness_status(store, "branch-floor-gap")  # type: ignore[arg-type]
+        is RecordCompletenessStatus.HAS_GAPS
+    )
+
+
+def test_refresh_run_completeness_persists_the_derivation_onto_the_stored_run(
+    store: SqliteMatchStore,
+) -> None:
+    """T239's derive-and-persist half, asserted on the far side: what a fresh get_run returns
+    after the refresh, not what the helper handed back."""
+    store.create_run(_make_run("run-refresh"), _make_config("cfg-refresh"))
+    persisted = store.get_run("run-refresh")  # type: ignore[arg-type]
+    assert persisted is not None
+    assert persisted.record_completeness_status is RecordCompletenessStatus.UNKNOWN
+
+    _write_turn(store, "run-refresh", 1, step_indices=[1, 2])
+    refresh_run_completeness(store, "run-refresh")  # type: ignore[arg-type]
+
+    persisted = store.get_run("run-refresh")  # type: ignore[arg-type]
+    assert persisted is not None
+    assert persisted.record_completeness_status is RecordCompletenessStatus.COMPLETE
+
+
+def test_refresh_run_completeness_is_a_no_op_for_a_run_the_store_does_not_know(
+    store: SqliteMatchStore,
+) -> None:
+    """A hand-built PreparedRun that was never persisted has no row to update -- the helper
+    reports the derivation (UNKNOWN) and writes nothing rather than raising."""
+    assert (
+        refresh_run_completeness(store, "never-persisted")  # type: ignore[arg-type]
+        is RecordCompletenessStatus.UNKNOWN
+    )
+    assert store.get_run("never-persisted") is None  # type: ignore[arg-type]

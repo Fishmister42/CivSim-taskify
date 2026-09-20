@@ -118,6 +118,7 @@ from civsim_harness.saves.headroom import build_disk_headroom_event, check_headr
 from civsim_harness.saves.save_game import SaveCapability
 from civsim_harness.saves.save_point import build_save_point, save_name_for, write_save_point
 from civsim_harness.saves.verify import SaveVerificationError, verify_save
+from civsim_harness.store.completeness import refresh_run_completeness
 from civsim_harness.store.guard import TurnPersistedToken, write_then_advance
 from civsim_harness.store.port import DecisionStepBundle, MatchStore, TurnCycleRecord
 
@@ -644,6 +645,13 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
     # strictly after the record is durable (I3), even though store.guard's own signatures never
     # changed to know about asyncio.
     final_turn_cycle_id = await write_then_advance(deps.store, record, _end_turn)
+
+    # T239 (FR-052, Principle III): a turn just became durably persisted -- one of the moments
+    # `Run.record_completeness_status` can change -- so the persisted field is re-derived from
+    # the record (store/completeness.py's single derivation) rather than left at whatever the
+    # run was created with. Strictly after write_then_advance: the derivation must see the turn
+    # it is being asked about.
+    refresh_run_completeness(deps.store, deps.run_id)
 
     return TurnCycleOutcome(
         turn_cycle_id=final_turn_cycle_id, outcome=result.outcome, run=current_run
