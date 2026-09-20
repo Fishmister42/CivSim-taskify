@@ -14,13 +14,28 @@ exercised by this task's own tests. They are still written to the full
 contract; :mod:`civsim_harness.nexus.sentinels` isolates the one piece that
 *is* unit-tested here (sentinel correlation) from everything socket-shaped.
 
-Ambiguity resolved: contracts/nexus-protocol.md says ``LSQ:`` "enumerate[s]
-available Lua states" but does not pin the response payload's wire format.
-:func:`_parse_state_list` resolves this as newline-separated state names in
-positional (index) order -- the simplest reading consistent with "indices
-are positional" (Connection sequence, step 4-5). If a later wave's recorded
-transcript shows a different separator, that function is the only place to
-change.
+Verified against a real client (first real-world Nexus transport
+verification, a live Civ VI client on Linux): contracts/nexus-protocol.md
+says ``LSQ:`` "enumerate[s] available Lua states" but does not pin the
+response payload's wire format. An earlier implementation guessed
+"newline-separated state names in positional order" -- that guess was
+wrong. A captured transcript (see the real-client fixture in
+tests/unit/test_nexus_client.py) confirms the actual format: NUL-separated
+alternating ``<index>\0<name>\0`` pairs, e.g.
+``"0\x00Main State\x001\x00DebugHotloadCache"``. There is no newline
+anywhere in that payload. :func:`_parse_state_list` parses each index from
+the payload itself -- never from a pair's position in the list, since nothing
+guarantees the wire enumerates states in index order.
+
+Also verified against that same real client: the main-menu state table
+contains only ``Main State`` and ``DebugHotloadCache`` -- ``GameCore_Tuner``
+and ``InGame`` do not exist until a game is loaded. That makes "connect and
+resolve the game states" two separate concerns with two separate points in
+the run sequence: :meth:`NexusClient.connect` performs the handshake and
+resolves whatever states exist (so it succeeds against a client sitting at
+the main menu), and :meth:`NexusClient.resolve_game_states` is the explicit
+later step, called once a game is loaded, that requires ``GameCore_Tuner``
+and ``InGame`` to be present.
 """
 
 from __future__ import annotations
@@ -29,6 +44,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -65,6 +81,12 @@ REASON_TIMEOUT = "timeout"
 REASON_INVALID_RESULT_JSON = "invalid_result_json"
 REASON_HANDSHAKE_FAILED = "handshake_failed"
 REASON_CONNECTION_CLOSED = "connection_closed"
+#: Raised by resolve_game_states() when GameCore_Tuner and/or InGame are not
+#: (yet) in the state table -- distinct from REASON_HANDSHAKE_FAILED, which
+#: is reserved for an actual protocol violation (e.g. the wrong response
+#: tag). A missing game state is an expected, reportable condition (no game
+#: loaded yet), not a broken handshake.
+REASON_GAME_STATES_UNAVAILABLE = "game_states_unavailable"
 
 _logger = logging.getLogger(__name__)
 
@@ -80,19 +102,66 @@ def _default_telemetry_sink(text: str) -> None:
     _logger.warning("nexus: discarding unmatched output: %s", text)
 
 
-def _parse_state_list(payload: str) -> list[str]:
-    """Parse an ``LSQ:`` response payload into ordered Lua state names.
+def _parse_state_list(payload: str) -> dict[str, int]:
+    """Parse an ``LSQ:`` response payload into a ``{name: index}`` mapping.
 
-    See the module docstring's "Ambiguity resolved" note: this is the one
-    function to change if a recorded transcript shows a different wire
-    format for the state listing.
+    **Verified against a real client** (first real-world Nexus transport
+    verification -- see the captured-bytes regression fixture in
+    tests/unit/test_nexus_client.py). The wire format is NUL-separated,
+    alternating ``<index>\\0<name>\\0`` pairs, e.g.::
+
+        "0\\x00Main State\\x001\\x00DebugHotloadCache"
+
+    There is no newline anywhere in that payload. An earlier implementation
+    guessed "newline-separated names in positional order"; against a real
+    client that guess produced a single unsplit element and every index
+    resolution failed. Each index is parsed from its own field in the
+    payload -- never inferred from a pair's position in the list, so a
+    state table with non-contiguous or reordered indices still resolves
+    correctly.
     """
-    return [line.strip() for line in payload.splitlines() if line.strip()]
+    tokens = payload.split("\x00")
+    # A well-formed payload splits into an even number of non-empty tokens
+    # (index, name, index, name, ...). Tolerate one trailing empty token, in
+    # case a payload ever keeps a trailing separator.
+    if tokens and tokens[-1] == "":
+        tokens = tokens[:-1]
+    if not tokens:
+        return {}
+    if len(tokens) % 2 != 0:
+        raise NexusError(
+            "Nexus LSQ response payload has an odd number of NUL-separated "
+            "fields; expected alternating <index>\\0<name> pairs",
+            detail={"reason": REASON_HANDSHAKE_FAILED, "payload": payload},
+        )
+
+    states: dict[str, int] = {}
+    for position in range(0, len(tokens), 2):
+        index_text, name = tokens[position], tokens[position + 1]
+        try:
+            index = int(index_text)
+        except ValueError as exc:
+            raise NexusError(
+                "Nexus LSQ response payload has a non-integer state index",
+                detail={"reason": REASON_HANDSHAKE_FAILED, "field": index_text},
+            ) from exc
+        states[name] = index
+    return states
 
 
 @dataclass(frozen=True)
 class StateIndices:
     """Resolved Lua state indices for one connected session.
+
+    ``by_name`` reflects whatever the most recent ``LSQ:`` query reported.
+    Verified against a real client: at the main menu that is only
+    ``Main State`` and ``DebugHotloadCache`` -- ``GameCore_Tuner`` and
+    ``InGame`` do not exist in the state table until a game is loaded.
+    ``game_core_tuner`` / ``in_game`` are ``None`` until then; check
+    :attr:`has_game_states`, or call :meth:`NexusClient.resolve_game_states`
+    to turn "not available yet" into an explicit, reportable
+    :class:`~civsim_harness.errors.PreflightError` naming what is missing,
+    instead of an opaque failure.
 
     Positional and not guaranteed stable across game versions or mod sets
     (contracts/nexus-protocol.md "Connection sequence", step 5) -- callers
@@ -100,8 +169,14 @@ class StateIndices:
     before a disconnect (T159).
     """
 
-    game_core_tuner: int
-    in_game: int
+    by_name: Mapping[str, int]
+    game_core_tuner: int | None = None
+    in_game: int | None = None
+
+    @property
+    def has_game_states(self) -> bool:
+        """Whether both game-play states (``GameCore_Tuner``, ``InGame``) are resolved."""
+        return self.game_core_tuner is not None and self.in_game is not None
 
 
 class NexusClient:
@@ -111,6 +186,13 @@ class NexusClient:
     run. All command execution goes through :meth:`execute_command`, which
     serializes access with an internal lock and enforces a per-command
     timeout -- there is no turn-level timer anywhere in this class.
+
+    :meth:`connect` performs the handshake and resolves whatever Lua states
+    exist, succeeding even against a client sitting at the main menu.
+    :meth:`resolve_game_states` is the separate, later step -- call it once
+    a game is loaded -- that requires ``GameCore_Tuner`` and ``InGame`` and
+    raises :class:`~civsim_harness.errors.PreflightError` naming whichever
+    is still missing.
     """
 
     def __init__(
@@ -150,7 +232,7 @@ class NexusClient:
     # -- connection lifecycle -------------------------------------------
 
     async def connect(self) -> StateIndices:
-        """Connect, run the full handshake, and resolve state indices.
+        """Connect, run the handshake, and resolve whatever Lua states exist.
 
         A refused (or otherwise failed) connection is a *preparation*
         failure (contracts/nexus-protocol.md "Connection sequence", step 1:
@@ -158,6 +240,12 @@ class NexusClient:
         as :class:`PreflightError`, distinct from :class:`NexusError`, so
         callers can route "nothing to connect to" differently from an
         in-run transport fault.
+
+        This succeeds against a client sitting at the main menu, where the
+        state table has no game-play states yet (verified against a real
+        client -- see the module docstring). It does **not** require
+        ``GameCore_Tuner`` or ``InGame`` to be present; call
+        :meth:`resolve_game_states` separately once a game is loaded.
         """
         try:
             reader, writer = await asyncio.wait_for(
@@ -198,7 +286,10 @@ class NexusClient:
         Indices captured before a disconnect are never reused, even if the
         new connection happens to enumerate Lua states in the same order --
         that would be an assumption about game/mod state, not a fact this
-        client is entitled to rely on.
+        client is entitled to rely on. As with the first connect, the
+        result may not yet have game states resolved (``has_game_states``
+        may be ``False``) -- call :meth:`resolve_game_states` again if the
+        caller needs them.
         """
         await self._close()
         self._state_indices = None
@@ -223,7 +314,21 @@ class NexusClient:
     # -- handshake --------------------------------------------------------
 
     async def _handshake(self) -> StateIndices:
+        """``APP:`` to identify, then resolve whatever Lua states currently exist.
+
+        Does not require ``GameCore_Tuner`` / ``InGame`` -- see
+        :meth:`resolve_game_states` for the step that does.
+        """
         await self._send_raw(TAG_HANDSHAKE, f"APP:{self._app_name}")
+        return await self._query_states()
+
+    async def _query_states(self) -> StateIndices:
+        """Send ``LSQ:`` and parse whatever Lua states the client currently reports.
+
+        Shared by :meth:`_handshake` (the initial connect) and
+        :meth:`resolve_game_states` (the later, explicit step): both need
+        "the current state table," just at different points in the run.
+        """
         await self._send_raw(TAG_HANDSHAKE, "LSQ:")
 
         frame = await self._read_frame()
@@ -233,23 +338,54 @@ class NexusClient:
                 detail={"reason": REASON_HANDSHAKE_FAILED, "tag": frame.tag},
             )
 
-        state_names = _parse_state_list(frame.payload)
-        positions = {name: index for index, name in enumerate(state_names)}
-        missing = [name for name in _REQUIRED_STATES if name not in positions]
-        if missing:
+        by_name = _parse_state_list(frame.payload)
+        return StateIndices(
+            by_name=by_name,
+            game_core_tuner=by_name.get("GameCore_Tuner"),
+            in_game=by_name.get("InGame"),
+        )
+
+    async def resolve_game_states(self) -> StateIndices:
+        """Require ``GameCore_Tuner`` and ``InGame`` to be present, right now.
+
+        Call this once a game is loaded -- :meth:`connect` deliberately does
+        not require these two states, since (verified against a real
+        client) they do not exist in the state table at the main menu.
+        Sequencing "connect" and "the game is actually loaded" as two
+        distinct steps lets a caller like ``doctor`` report "tuner
+        reachable, no game loaded" as a normal, useful diagnostic instead of
+        connect() failing with a confusing preflight error.
+
+        Re-sends ``LSQ:`` (not the full handshake -- ``APP:`` identifies the
+        session once, at :meth:`connect`) so this reflects the state table
+        as it is *now*, and updates :attr:`state_indices` on success.
+
+        Raises :class:`PreflightError` naming exactly which required
+        state(s) are still missing if either is absent -- this is an
+        expected, reportable condition (no game loaded yet), not a broken
+        handshake.
+        """
+        if self._writer is None or self._reader is None:
             raise NexusError(
-                "Nexus LSQ response is missing required Lua state(s)",
+                "Nexus client is not connected", detail={"reason": REASON_NOT_CONNECTED}
+            )
+
+        async with self._lock:
+            indices = await self._query_states()
+
+        missing = [name for name in _REQUIRED_STATES if name not in indices.by_name]
+        if missing:
+            raise PreflightError(
+                "Required Nexus Lua state(s) are not available yet -- is a game loaded?",
                 detail={
-                    "reason": REASON_HANDSHAKE_FAILED,
+                    "reason": REASON_GAME_STATES_UNAVAILABLE,
                     "missing": missing,
-                    "states": state_names,
+                    "states": sorted(indices.by_name),
                 },
             )
 
-        return StateIndices(
-            game_core_tuner=positions["GameCore_Tuner"],
-            in_game=positions["InGame"],
-        )
+        self._state_indices = indices
+        return indices
 
     # -- request/response discipline --------------------------------------
 

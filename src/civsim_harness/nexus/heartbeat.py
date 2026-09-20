@@ -42,10 +42,19 @@ async def probe_heartbeat(
         raise NexusError(
             "Cannot probe the heartbeat before the Nexus handshake has resolved state indices"
         )
+    game_core_tuner = indices.game_core_tuner
+    if game_core_tuner is None:
+        # GameCore_Tuner does not exist in the state table until a game is
+        # loaded (verified against a real client -- see nexus/client.py);
+        # a heartbeat probe before that point has nothing to round-trip
+        # through, distinct from "never connected" above.
+        raise NexusError(
+            "Cannot probe the heartbeat before GameCore_Tuner is resolved -- is a game loaded?"
+        )
 
     try:
         result = await client.execute_command(
-            state_index=indices.game_core_tuner,
+            state_index=game_core_tuner,
             lua_body=_HEARTBEAT_LUA_BODY,
             timeout_s=timeout_s,
         )

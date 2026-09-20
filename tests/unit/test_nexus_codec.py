@@ -198,3 +198,32 @@ def test_missing_nul_terminator_raises_nexus_error() -> None:
     header = struct.pack("<Ii", len(body), TAG_COMMAND)
     with pytest.raises(NexusError):
         decoder.feed(header + body)
+
+
+def test_real_client_capture_app_response_payload_round_trips() -> None:
+    """Codec-level regression fixture from the first real-world Nexus verification.
+
+    This is the ``APP:`` response payload verified against a live Civ VI
+    client (Linux/Aspyr build): three NUL-separated fields (short name,
+    display name, install path), same header framing as every other frame.
+    It corroborates the NUL-separated wire format independently confirmed
+    for ``LSQ:`` responses (see the real-client fixture in
+    tests/unit/test_nexus_client.py) -- this is a captured real value, not a
+    synthetic guess, so it should not be replaced with one.
+
+    The baked-in Windows-looking path is an Aspyr port artifact of that
+    particular build, not a live path -- it is asserted here only to prove
+    byte-for-byte round-tripping, not as anything semantically meaningful.
+    """
+    payload = "Civ6\x00Sid Meier's Civilization 6\x00C:\\Emu\\AppAssets\\base\\binaries\\Debug"
+    encoded = encode_frame(TAG_HANDSHAKE, payload)
+    decoder = NexusFrameDecoder()
+    frames = decoder.feed(encoded)
+    assert len(frames) == 1
+    assert frames[0].tag == TAG_HANDSHAKE
+    assert frames[0].payload == payload
+    assert frames[0].payload.split("\x00") == [
+        "Civ6",
+        "Sid Meier's Civilization 6",
+        "C:\\Emu\\AppAssets\\base\\binaries\\Debug",
+    ]
