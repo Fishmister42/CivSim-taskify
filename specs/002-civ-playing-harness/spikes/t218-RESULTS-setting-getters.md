@@ -121,6 +121,49 @@ same phase-dependence `major_count` just demonstrated.
 (`LOC_EXPANSION2_MOD_TITLE`), so **key `mod_set` on `Id`, not `Name`** — the GUIDs are stable where
 the display names depend on localisation state.
 
+## Front-end measurement (2026-09-20, second session) — a SECOND phase-dependent getter
+
+Same probe, run in `HostGame` (14) and `MainMenu` (24) at the **main menu** of a freshly launched
+client. Read these as front-end values, **not** as the `CivSim DEFAULT` preset's — the preset was not
+loaded, so this is the front end's default configuration, not a configured game.
+
+| getter | front end | in-game | verdict |
+|---|---|---|---|
+| `GAME_SYNC_RANDOM_SEED` | `847446016` | `-986870912` | ✅ resolves at both |
+| `MapConfiguration.GetValue('RANDOM_SEED')` | `847446017` | `-986870911` | ✅ still seed+1 |
+| `MapConfiguration.GetScript()` | `Continents.lua` | `Continents.lua` | ✅ stable |
+| `MAP_SIZE` | `-1837222328` → `MAPSIZE_SMALL` | same | ✅ stable, via `GameInfo.Maps` |
+| `resources` (3 keys) | **all nil** | all nil | ❌ **unavailable at both phases** |
+| `GetAIPlayerCount()` | **6** | **16** | 🔴 phase-dependent |
+| `Modding.GetActiveMods()` | **0** | **22** | 🔴 **phase-dependent — NEW** |
+
+### 🔴 `mod_set` is phase-dependent too, and this is new
+
+```
+[6] mod_set
+  OK    Modding.GetActiveMods() count = 0      <- front end
+  OK    Modding.GetActiveMods() count = 22     <- in-game
+```
+
+**Preparation reading `mod_set` at the front end records zero mods on a host running 22.** Then
+verification in-game reads 22 and they disagree — or worse, a comparability check concludes two runs
+share a mod set because both recorded the empty one. That is the `major_count` defect's twin, and it
+was not on anyone's list.
+
+`mod_set` must be read **in-game**, after `AutomationPostGameInitialization`/game start, never at
+preparation time. Same rule now applies to `major_count`.
+
+### `resources` is closed — genuinely not observable
+
+All three candidates are nil at the **front end as well as in-game**, so this is not a
+phase-retention artifact. There is no getter. Record it as *not observable* and drop the
+`UnreadSetting` sentinel, which otherwise lands every run `failed` before turn 1.
+
+### `GetHumanPlayerCount()` = 0 at the front end
+
+Worth noting for any preflight that asserts a human player exists before `HostGame` completes: the
+count is 0 at the main menu and 1 in-game.
+
 ## Still to measure
 
 - The same six getters at the **Create Game screen** (`HostGame`), which is the phase preparation

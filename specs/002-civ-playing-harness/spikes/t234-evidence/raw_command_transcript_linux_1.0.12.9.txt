@@ -1,0 +1,12 @@
+states: 29  has InGame=False has GameCore_Tuner=False
+state table: [('Main State', 0), ('DebugHotloadCache', 1), ('Options', 2), ('CreditsScreen', 3), ('My2K', 4), ('PBCNotifyRemind', 6), ('Lobby', 7), ('Mods', 8), ('MultiSelectWindow', 11), ('CityStatePicker', 12), ('LeaderPicker', 13), ('HostGame', 14), ('ConfirmKick', 15), ('EditHotseatPlayer', 16), ('StagingRoom', 17), ('LoadGameMenu', 18), ('SaveGameMenu', 19), ('FrontEndPopup', 20), ('CivRoyaleIntro', 21), ('PiratesIntro', 22), ('CrossPlayLogin', 23), ('MainMenu', 24), ('StateTransition', 25), ('JoiningRoom', 26), ('UserSetupWarning', 27), ('SwitchLayoutPopup', 28), ('Test', 29), ('FrontEnd', 30), ('InvitePopup', 31)]
+
+sending CMD to state 'MainMenu' (index 24), nonce=bbb96d7ae11b4c78afef6382f5031458
+
+--- every frame received in the next 8s ---
+  tag=-1 payload='O\x00MainMenu: ---BEGIN:bbb96d7ae11b4c78afef6382f5031458---'   <<<< CARRIES OUR NONCE
+  tag=-1 payload='O\x00MainMenu: {"probe":"tag-hunt","lua_version":"2013.2.0 r13768"}'
+  tag=-1 payload='O\x00MainMenu: ---END:bbb96d7ae11b4c78afef6382f5031458---'   <<<< CARRIES OUR NONCE
+  tag=3 payload=''
+
+RESULT: sentinels came back on tag(s) [-1]; TAG_COMMAND is 3
