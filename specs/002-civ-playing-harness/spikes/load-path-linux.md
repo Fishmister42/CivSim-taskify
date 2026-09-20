@@ -213,6 +213,69 @@ one the agent ended. It also breaks the FR-015 no-progress backstop's accounting
 3. **Do not compare save bytes** anywhere in branch or replay verification.
 4. **Settle auto-end-turn** before any unattended run.
 
+## T217 decision brief (2026-09-20)
+
+T217 is the keystone: it blocks T177, T226's load, and every `resume-from`. The owning side has
+asked for an owner decision between completing the Firetuner path and accepting a documented
+Principle II gap. **The honest answer is that the decision is not yet ripe, and is one cheap probe
+away from being so.**
+
+### Why it is not ripe
+
+Principle II requires **documented evidence of a Firetuner gap, not an assertion**. The evidence
+here is strong — six `gameFile` shapes refused, a handler that registers but never fires, `getfenv`
+closed — but **two cheap leads named in this spike were never actually tried**:
+
+- vary the query's parameter names and values (`Directory` vs `Location`, and the
+  `SaveLocations`/`SaveFileTypes` members, none of which were confirmed to exist), since `ret=0` may
+  be a result *count* rather than a query handle — meaning the query matched nothing and the
+  **parameters** are wrong rather than the event being mis-wired;
+- `LuaEvents.FileListQueryComplete` as the completion signal.
+
+A third lead was not in the original list and is stronger than either: **is `LuaEvents` iterable?**
+`_G` and `getfenv` are nil and `UI`/`Network` are opaque userdata yielding zero entries under
+`pairs()` — but `Game` *is* iterable, so iterability is per-object in this sandbox, not a blanket
+property. If `LuaEvents` enumerates, the event name stops being guesswork entirely.
+
+**Staged as `t217_savegame_query.lua`**, ready to run in one client session. Declaring the gap
+before running it would be exactly the assertion Principle II forbids.
+
+### What changed today, and it changes the cost side
+
+The fallback — a bespoke UI driver for load — needed two primitives that were **both stubs** as
+recently as this morning. Both now exist and are verified on this platform:
+
+| Primitive the UI driver needs | This morning | Now |
+|---|---|---|
+| See the dialog (window-scoped capture) | stub | ✅ `capture_window` returns real `BGRA8` pixels (`r6-xcomposite-readback-linux.md`) |
+| Drive the dialog (synthetic input) | unverified, and silently broken | ✅ XTest driven and verified, three silent-failure defects fixed (`r5-xtest-input-linux.md`) |
+
+So option B is **materially cheaper than when the question was first raised**, and its parity basis
+is unusually clean: the UI sequence is *literally* the steps a human takes, which is the strongest
+possible Principle I footing for a bespoke path.
+
+### The costs that do not go away
+
+- **The UI sequence's coordinates are platform-specific.** Windows and macOS would each need their
+  own, and neither has a host that can produce them. A Firetuner solution would have been portable
+  for free; a UI driver will not be.
+- **It is fragile against the client's own UI changes** — a patch that moves a button breaks load,
+  and the failure mode is a mis-click, not a clean error.
+- **`CONFIRM LOAD FILE` modal** already ate a click once during this spike; any driver must handle
+  modals it did not expect rather than assume a fixed sequence.
+- Input is verified against `Xephyr`, **not against Civ VI** — whether the client accepts XTest
+  input at all is still inference.
+
+### Recommendation
+
+**Run `t217_savegame_query.lua` first** — one client session, and it either completes the Firetuner
+path (best outcome, portable, no governance question at all) or converts the gap from a strong
+inference into documented evidence, which is what Principle II actually asks for.
+
+**Only then put the choice to the owner**, at which point it is a real decision with real evidence
+rather than a premature one. If the probe fails, the recommendation is to accept the gap: the parity
+basis is clean, and both enabling primitives are now built and verified.
+
 ## Scope limits
 
 - One save, one load, one client session, turn 1 → 19 → 1.
