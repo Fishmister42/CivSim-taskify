@@ -15,8 +15,10 @@ Two scripting layers:
    this fake exactly as it would a probed real adapter.
 2. **Per-capability overrides** (`set_process`, `set_window`,
    `set_find_window_error`, `set_capture_result` / `set_capture_unavailable`
-   / `set_capture_failed`, `set_input_result` / `set_input_unavailable` /
-   `set_input_failed`, `set_directories`, `set_disk_space`): make any single
+   / `set_capture_failed`, `set_capture_preconditions` /
+   `set_capture_preconditions_failed` (T249), `set_input_result` /
+   `set_input_unavailable` / `set_input_failed`, `set_directories`,
+   `set_disk_space`): make any single
    capability behave independently of the overall tier, e.g. a `validated`
    host whose capture path has gone `unavailable` mid-run.
 
@@ -35,6 +37,7 @@ from civsim_harness.errors import PreflightError
 from civsim_harness.host.detect import SupportProbeResult, SupportTier
 from civsim_harness.host.port import (
     CaptureFrame,
+    CapturePreconditionResult,
     CaptureResult,
     CaptureStatus,
     DiskSpace,
@@ -88,6 +91,7 @@ class FakeHostPlatform:
         self._window: GameWindow | None = DEFAULT_WINDOW
         self._find_window_error: PreflightError | None = None
         self._capture_override: CaptureResult | None = None
+        self._capture_preconditions_override: CapturePreconditionResult | None = None
         self._input_override: InputResult | None = None
         self._directories_override: GameDirectories | None = None
         self._disk_space_override: DiskSpace | None = None
@@ -95,6 +99,7 @@ class FakeHostPlatform:
         # Call logs, so a scripted scenario can also assert on *what* the
         # harness asked for, not just what it got back.
         self.capture_calls: list[GameWindow] = []
+        self.capture_precondition_calls = 0
         self.input_calls: list[list[InputEvent]] = []
         self.locate_process_calls = 0
         self.find_window_calls: list[GameProcess] = []
@@ -182,6 +187,19 @@ class FakeHostPlatform:
         """Make capture report `failed` (an attempt that broke partway through)."""
         self.set_capture_result(CaptureResult(status=CaptureStatus.failed, reason=reason))
 
+    def set_capture_preconditions(self, result: CapturePreconditionResult | None) -> None:
+        """Script `check_capture_preconditions()`'s return value directly (T249). `None`
+        restores the default: a pass whose reason says it was scripted, independent of the
+        tier -- the preflight can only take capture away, never grant it, so a passing
+        default never widens what any tier permits."""
+        self._capture_preconditions_override = result
+
+    def set_capture_preconditions_failed(self, reason: str) -> None:
+        """Make the T249 capture-precondition preflight fail with `reason` -- the capture
+        path must then withhold the step without ever calling `capture_window` (assert via
+        `capture_calls`)."""
+        self.set_capture_preconditions(CapturePreconditionResult(passed=False, reason=reason))
+
     def set_input_result(self, result: InputResult | None) -> None:
         """Script `send_input()`'s return value directly. `None` restores the default (`ok`)."""
         self._input_override = result
@@ -213,6 +231,15 @@ class FakeHostPlatform:
         if self._find_window_error is not None:
             raise self._find_window_error
         return self._window
+
+    def check_capture_preconditions(self) -> CapturePreconditionResult:
+        self.capture_precondition_calls += 1
+        if self._capture_preconditions_override is not None:
+            return self._capture_preconditions_override
+        return CapturePreconditionResult(
+            passed=True,
+            reason="fake host: capture preconditions scripted to pass (T055 default)",
+        )
 
     def capture_window(self, window: GameWindow) -> CaptureResult:
         self.capture_calls.append(window)

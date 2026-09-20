@@ -413,11 +413,17 @@ ALLOWLIST: dict[str, str] = {
         "same ruling, same condition -- THE NEXT CONSUMER MUST DELETE THIS ENTRY"
     ),
     "capture_preconditions": (
-        "Ruled (hypervisor log, Run 6, 2026-09-20): suspected REAL wiring gap on the "
-        "Linux side -- hygiene preconditions that run only in tests are exactly the "
-        "T235 pattern -- and referred to the Linux peer (their adapter, their live "
-        "evidence; queued for the next issue #1 post). The entry stays until the peer "
-        "wires or retires it in host/linux/adapter.py"
+        "T249 (seam half landed): wired -- the Linux implementation of the port's "
+        "check_capture_preconditions preflight delegates to it in host/linux/adapter.py, "
+        "so the peer's live-verified probe is the code the production capture path now "
+        "consults on Linux. It still reads as unreached HERE only because its one caller "
+        "is that adapter's own port-method delegation, which the adapter-self-call "
+        "exclusion deliberately discounts; the seam itself is guarded by the auto-derived "
+        "check_capture_preconditions port target (reached from observe/capture.py), and "
+        "the delegation is pinned by "
+        "test_the_linux_port_preflight_is_the_live_verified_preconditions_verdict "
+        "(tests/unit/test_host_probe_and_composition.py). Live re-verification of the "
+        "Linux half stays with the peer (T249's per-platform halves remain open)"
     ),
 }
 

@@ -25,6 +25,13 @@ The one caller (``run/decision_loop.py``) flips the flag on a validated copy at 
 image is genuinely attached, through ``agent/context.py``'s ``select_screened_images`` chokepoint
 (T134), and never anywhere else.
 
+**T249 -- preconditions are checked before any frame exists.** Every attempt begins by asking the
+host port's :meth:`~civsim_harness.host.port.HostPlatform.check_capture_preconditions` -- the
+cheap per-capture hygiene preflight -- and a non-passing result means the frame is **never
+taken**: ``capture_window`` is not called, and the step takes the same withheld-with-reason path
+as any other host capture failure (no parallel bookkeeping). Passing preconditions grant nothing:
+attachment stays gated on the run's VALIDATED tier (T099/T238, in ``run/decision_loop.py``).
+
 **T157/T240 -- bounded retries, then degrade.** Research R7: "any gate failing means withhold and
 re-capture" -- so a single bad frame (a transient overlay glitch, a capture race) is not immediately
 fatal to the step. :func:`capture_for_step` retries the whole capture-then-screen attempt up to
@@ -151,10 +158,25 @@ def _attempt_once(
     expected_process: GameProcess | None,
     detected_text_tokens: frozenset[str],
 ) -> tuple[CapturePath, CaptureAttempt | None, ScreeningOutcome]:
-    """One host-capture-then-screen attempt. Never raises: a host failure and a screening failure
-    both come back as a withheld :class:`~civsim_harness.parity.screening.ScreeningOutcome`, the
-    same shape :func:`capture_for_step`'s retry loop already knows how to interpret.
+    """One host-capture-then-screen attempt. Never raises: a precondition failure, a host failure
+    and a screening failure all come back as a withheld
+    :class:`~civsim_harness.parity.screening.ScreeningOutcome`, the same shape
+    :func:`capture_for_step`'s retry loop already knows how to interpret.
     """
+    # T249: the port's capture-precondition preflight runs BEFORE any frame is taken. A failing
+    # precondition means no frame may be taken at all -- not taken-and-discarded -- so the host is
+    # never asked to capture, and the step takes the exact host-failure degradation path below
+    # (withheld record, ``capture_failed``/``image_withheld`` events carrying the reason). This
+    # check can only take a capture away, never grant one: T099's tier rule still gates actual
+    # attachment in ``run/decision_loop.py``, untouched.
+    preflight = host.check_capture_preconditions()
+    if not preflight.passed:
+        return (
+            CapturePath.NONE,
+            None,
+            _host_failure_outcome(f"capture preconditions failed: {preflight.reason}"),
+        )
+
     selection = select_capture_path(host=host, host_info=host_info, window=window)
     if selection.capture_result.status is not CaptureStatus.ok:
         reason = selection.capture_result.reason or "capture unavailable"

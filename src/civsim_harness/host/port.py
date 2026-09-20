@@ -3,9 +3,13 @@
 Covers **exactly six** capabilities the harness needs from an operating
 system (research R19): locate the game process, identify its window,
 capture that window, resolve game directories (saves + `AppOptions.txt`),
-optional synthetic input, and free disk space. Nothing else belongs here --
-process liveness beyond "is it running right now", camera control, and
-everything else the harness does is portable and lives outside `host/`.
+optional synthetic input, and free disk space. One cross-cutting hook rides
+on the capture capability rather than being a seventh:
+`check_capture_preconditions` (T249), the cheap per-capture hygiene
+preflight the capture path consults before ever taking a frame. Nothing
+else belongs here -- process liveness beyond "is it running right now",
+camera control, and everything else the harness does is portable and lives
+outside `host/`.
 
 This module itself imports nothing platform-specific: it is pure `typing`,
 `dataclasses`, `enum`, and stdlib `pathlib`. Only `host/windows`,
@@ -121,6 +125,31 @@ class CaptureResult:
 
 
 @dataclass(frozen=True)
+class CapturePreconditionResult:
+    """The tagged outcome of `check_capture_preconditions` (T249).
+
+    `reason` is required in BOTH directions, unlike `CaptureResult`'s: a
+    failure must name the unmet condition (it becomes the withheld capture
+    record's recorded reason), and a pass must say what was actually
+    checked -- or state explicitly that nothing is cheaply checkable on
+    this platform today -- so a hard-coded, evidence-free pass is
+    unrepresentable. Enforced by `__post_init__`, matching this port's
+    existing tagged-outcome types.
+    """
+
+    passed: bool
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.reason.strip():
+            raise ValueError(
+                "CapturePreconditionResult requires a reason whether it passed or failed: "
+                "a pass must name what was checked (or say nothing could be), and a "
+                "failure must name the unmet condition"
+            )
+
+
+@dataclass(frozen=True)
 class GameDirectories:
     """The platform's Civ VI directories the harness needs (R1, R5): saves and `AppOptions.txt`."""
 
@@ -195,7 +224,9 @@ class DiskSpace:
 class HostPlatform(Protocol):
     """The one seam through which the harness ever touches an operating system.
 
-    Exactly six methods, one per capability research R19 names. Later waves
+    One method per capability research R19 names, plus the capture
+    capability's own precondition preflight (`check_capture_preconditions`,
+    T249). Later waves
     (observe/, saves/, resilience/, run/ preflight) bind to this Protocol
     and must never import `host.windows`, `host.macos`, or `host.linux`
     directly -- construct an adapter once, through
@@ -221,6 +252,36 @@ class HostPlatform(Protocol):
     def capture_window(self, window: GameWindow) -> CaptureResult:
         """Capture that window's own content (R6). Never raises for an unavailable
         or failed capture path -- see `CaptureResult`."""
+        ...
+
+    def check_capture_preconditions(self) -> CapturePreconditionResult:
+        """Cheap per-capture preflight of this platform's capture-hygiene preconditions (T249).
+
+        Called by the capture path (`observe/capture.py`) BEFORE every
+        `capture_window` attempt. A non-passing result means this
+        platform/session cannot currently produce a window-scoped,
+        hygiene-eligible frame: the caller must not take a frame at all --
+        not take-and-discard one -- and must record the step's capture as
+        withheld with `reason`, through exactly the same degradation path
+        any other host capture failure takes. Never raises: like
+        `CaptureResult` and `InputResult`, the outcome is a tagged value.
+
+        **Passing NEVER substitutes for the R6 capture-hygiene spike.**
+        T099's rule stands untouched: an image may reach the agent only on
+        a run whose `host_support_tier` is VALIDATED -- earned by this
+        platform-and-session's own recorded R6 spike at preparation and
+        enforced at the moment of attachment (`run/decision_loop.py`). This
+        method is the cheaper, per-capture check layered under that gate:
+        it can only take a capture away, never grant one, so a platform
+        whose preconditions pass but whose spike has not passed still
+        attaches nothing.
+
+        An adapter with nothing cheaply checkable today must say so rather
+        than fabricate a check: return a passing result whose `reason`
+        records exactly that (see `CapturePreconditionResult` -- the reason
+        is structurally required in both directions). An honest no-op is
+        acceptable; a silent hard-coded pass is not.
+        """
         ...
 
     def resolve_game_directories(self, *, home: Path | None = None) -> GameDirectories:

@@ -10,7 +10,11 @@ file pins the contract that makes that story possible at the source:
 - ``blob_media_type`` is populated exactly when the frame's format has a wire form (a raw
   framebuffer stores fine but can never be attached as-is);
 - a step with no frame at all is a withheld, degraded record with its ``capture_failed`` and
-  ``image_withheld`` events naming the step (T157/T133).
+  ``image_withheld`` events naming the step (T157/T133);
+- a failing T249 capture-precondition preflight withholds the step WITHOUT ever asking the host
+  for a frame, through the same degradation path, with the precondition's reason recorded -- and
+  a passing preflight is consulted but changes nothing on the clean path (the far side, through
+  the real turn cycle and store, lives in ``tests/integration/test_capture_preflight.py``).
 """
 
 from __future__ import annotations
@@ -161,6 +165,52 @@ def test_a_raw_framebuffer_frame_stores_its_blob_but_has_no_wire_media_type() ->
     assert result.capture.shown_to_agent is False
     assert result.blob == raw
     assert result.blob_media_type is None
+
+
+def test_a_failing_capture_precondition_withholds_the_step_without_taking_a_frame() -> None:
+    """T249: a non-passing preflight means the frame must never be taken -- not taken and
+    discarded. The host's ``capture_window`` is never called, and the step takes the exact
+    T157/T133 degradation path with the precondition's reason recorded on the timeline event."""
+    reason = "scripted: no compositing manager owns _NET_WM_CM_S0"
+    host = FakeHostPlatform()
+    host.set_capture_result(
+        CaptureResult(status=CaptureStatus.ok, frame=_frame(_png_bytes(), "PNG"))
+    )  # a clean frame WOULD come back, proving the preflight is what withheld it
+    host.set_capture_preconditions_failed(reason)
+
+    result = _capture(host)
+
+    assert host.capture_calls == []  # the frame was never taken at all
+    assert host.capture_precondition_calls >= 1
+    assert result.capture.screening_status is ScreeningStatus.WITHHELD
+    assert result.capture.withheld_reason is WithheldReason.CAPTURE_FAILED
+    assert result.capture.shown_to_agent is False
+    assert result.capture.blob_ref is None
+    assert result.blob is None
+    assert result.blob_media_type is None
+    assert result.visually_degraded is True
+    assert [event.event_type for event in result.events] == [
+        RunEventType.CAPTURE_FAILED,
+        RunEventType.IMAGE_WITHHELD,
+    ]
+    assert reason in str(result.events[0].detail["reason"])
+
+
+def test_a_passing_precondition_is_consulted_and_changes_nothing_on_the_clean_path() -> None:
+    """T249's other side: the preflight really runs before a clean capture, and passing it
+    grants nothing beyond what T238 already pinned -- clean, stored, and still never born
+    shown (attachment stays the run loop's VALIDATED-tier decision)."""
+    png = _png_bytes()
+    host = FakeHostPlatform()
+    host.set_capture_result(CaptureResult(status=CaptureStatus.ok, frame=_frame(png, "PNG")))
+
+    result = _capture(host)
+
+    assert host.capture_precondition_calls == 1
+    assert host.capture_calls != []
+    assert result.capture.screening_status is ScreeningStatus.SCREENED_CLEAN
+    assert result.capture.shown_to_agent is False
+    assert result.blob == png
 
 
 def test_a_step_with_no_frame_is_withheld_degraded_and_named_by_its_events() -> None:

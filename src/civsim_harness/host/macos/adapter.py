@@ -33,6 +33,7 @@ from civsim_harness.errors import PreflightError
 from civsim_harness.host._shared import locate_process_by_names, read_disk_space
 from civsim_harness.host.port import (
     CaptureFrame,
+    CapturePreconditionResult,
     CaptureResult,
     CaptureStatus,
     DiskSpace,
@@ -114,6 +115,35 @@ class MacOSHostPlatform:
             window_number = int(info.get("kCGWindowNumber", 0))
             return GameWindow(handle=window_number, title=title, rect=rect, pid=process.pid)
         return None
+
+    def check_capture_preconditions(self) -> CapturePreconditionResult:
+        """The Screen Recording permission preflight, as a port-level verdict (T249).
+
+        Delegates to the same `_preflight_screen_recording` gate
+        `capture_window` runs first -- one definition, so this preflight and
+        the capture path cannot disagree about the permission: Quartz must
+        be importable, and `CGPreflightScreenCaptureAccess` (where the
+        binding exists) must not report a denied grant. A pass when the
+        binding is absent means only "nothing reported a denial" -- stated
+        in the reason rather than upgraded to a claim -- and, per the port
+        contract, a pass never substitutes for the (still unrun) macOS R6
+        capture-hygiene spike.
+        """
+        denial = self._preflight_screen_recording()
+        if denial is not None:
+            return CapturePreconditionResult(
+                passed=False,
+                reason=denial.reason or "Screen Recording preflight failed",
+            )
+        return CapturePreconditionResult(
+            passed=True,
+            reason=(
+                "Quartz imported and CGPreflightScreenCaptureAccess reported no Screen "
+                "Recording denial (or the binding is absent on this pyobjc build and could "
+                "not be asked -- the capture attempt itself re-checks). Frame hygiene "
+                "remains the unrun macOS R6 spike's question, not this check's."
+            ),
+        )
 
     def capture_window(self, window: GameWindow) -> CaptureResult:
         preflight_failure = self._preflight_screen_recording()
