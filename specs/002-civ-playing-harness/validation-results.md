@@ -495,6 +495,43 @@ Consequences for the design, all measured:
   (`LuaEvents.AutomationMainMenuStarted`, `AutomationGameStarted`, `AutoPlayEnd`) and an
   `AutoplayManager` API, none of which are needed now but none of which were known.
 
+### ✅ Both host primitives verified against the real client — and four traps
+
+`spikes/r7-live-client-session-linux.md`, `tests/live/test_civ6_real_frame.py`,
+`tests/live/test_civ6_real_input.py`.
+
+**Capture:** the full production chain (`find_game_window` → `capture_preconditions` →
+`capture_window`) returns real 1920x1200 `BGRA8` frames from Civ VI in **34–47 ms**, faster than on
+synthetic windows, with no flicker across back-to-back captures. The frame **cross-validates the Lua
+reads** — pixels say turn 1/500, Eleanor, 10 gold, settler awaiting orders; the tuner says the same.
+
+**Input:** Civ VI **accepts XTest events** — previously inference. Asserted on the client's pixels
+changing, not on the returned `InputStatus`, and guarded so nothing is sent unless Civ holds focus.
+
+**The loader is complete and coordinate-free.** The leader-intro screen appears on *every* load (not
+just turn-1 saves) and blocks indefinitely; **`Escape` dismisses it**, `Return`/`space` do not. So
+`SaveLoader` = one Lua call + one keystroke, with **no UI coordinates anywhere** — which retires the
+platform-specific-coordinates objection to a UI-assisted load.
+
+Four traps, three of the "succeeds while doing nothing useful" family:
+
+1. 🔴 **`find_game_window()` returns `None` if the process is located by cmdline.** Under Steam's
+   pressure-vessel runtime the wrapper/`reaper`/`pv-adverb` all carry the game path, and `pgrep -f`
+   returns the wrapper first; only the real `Civ6` owns a window. Use `pgrep -x Civ6`. This is
+   directly the unfixed `window_provider` defect's failure mode.
+2. 🔴 **The client exited cleanly mid-session after an end-turn**, ~6 s later, with no dump and a
+   normal Steam teardown. **Cause not established** — possibly earlier synthetic keys leaving a menu
+   focused, possibly `ACTION_ENDTURN` from an unexpected UI state. Lesson: `send_input` returning
+   `ok` says a key was dispatched, not that the client is where we think it is. Verify the expected
+   screen before *and* after every key.
+3. 🔴 **`steam://rungameid/289070` can resolve to Remote Play streaming from another machine** — a
+   window titled `Sid Meier's Civilization VI (DX11) [Streaming]`, showing real gameplay, with **no
+   local process and no tuner**. Readiness must require `pgrep -x Civ6` **and** a bound tuner port,
+   never a window title.
+4. 🟡 **`doctor` prints `capture path : none`** on this host right after capture returned three real
+   frames (reported, not fixed — outside owned paths). Also **`provider key : MISSING` is real
+   here too**, so both hosts are blocked on that for a decision-making run.
+
 ### 🔴 T218 — `major_count` reads the wrong number in-game
 
 `spikes/t218-RESULTS-setting-getters.md`. Five of six getters resolve; one is unavailable; and one

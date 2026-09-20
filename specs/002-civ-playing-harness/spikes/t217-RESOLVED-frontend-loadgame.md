@@ -106,7 +106,15 @@ Preconditions and consequences, all measured:
   (unbuilt) crash detector T233 would otherwise misread.
 - **`Name` is the bare save name** — no `.Civ6Save`, no directory.
 
-### One open item, honestly flagged
+### ✅ RESOLVED — see `r7-live-client-session-linux.md`
+
+A second load (`civsim__rep__t0004`) stopped on the same screen, so it is **not** a turn-1 artifact:
+the intro appears on **every** load and waits indefinitely (measured 150 s). **`Escape` dismisses
+it** — `Return` and `space` do not — through the production `send_input` path. The loader is
+therefore Lua + one keystroke, **with no UI coordinates at all**, which retires the platform-specific
+-coordinates objection entirely. The original flag is kept below for the record.
+
+### One open item, honestly flagged (now resolved, above)
 
 The load stopped on the **leader-intro screen** (`ENGLISH EMPIRE JOINS THE WORLD STAGE`) with a
 `CONTINUE GAME` button, and stayed there indefinitely — >120 s with the tuner closed. One click at
