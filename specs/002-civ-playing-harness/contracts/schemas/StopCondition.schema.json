@@ -1,0 +1,72 @@
+{
+  "$defs": {
+    "GameOutcomeStopCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "game_outcome",
+          "default": "game_outcome",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "GameOutcomeStopCondition",
+      "type": "object"
+    },
+    "OperatorStopStopCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "operator_stop",
+          "default": "operator_stop",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "OperatorStopStopCondition",
+      "type": "object"
+    },
+    "TurnReachedStopCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "turn": {
+          "minimum": 1,
+          "title": "Turn",
+          "type": "integer"
+        },
+        "type": {
+          "const": "turn_reached",
+          "default": "turn_reached",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn"
+      ],
+      "title": "TurnReachedStopCondition",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "game_outcome": "#/$defs/GameOutcomeStopCondition",
+      "operator_stop": "#/$defs/OperatorStopStopCondition",
+      "turn_reached": "#/$defs/TurnReachedStopCondition"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/TurnReachedStopCondition"
+    },
+    {
+      "$ref": "#/$defs/GameOutcomeStopCondition"
+    },
+    {
+      "$ref": "#/$defs/OperatorStopStopCondition"
+    }
+  ],
+  "schemaVersion": 1,
+  "title": "StopCondition"
+}

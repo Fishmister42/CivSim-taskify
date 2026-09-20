@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "TurnOutcome": {
+      "description": "How a turn attempt ended. ``abandoned`` is not an ending; see class docs.",
+      "enum": [
+        "ended_by_agent",
+        "ended_on_no_progress",
+        "abandoned"
+      ],
+      "title": "TurnOutcome",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One attempt at one turn of one run (data-model.md SS5).\n\nNo ``observation_id`` field exists here by design: observations are\nper decision step (see ``DecisionStep``/``Observation`` below), not\nper turn. ``save_point_id`` is non-nullable -- a failed quicksave means\nthe turn attempt never comes into existence at all (FR-007, SC-004).\n``step_count`` is bounded only below (``ge=1``); there is deliberately\nno upper bound, since a turn may run for as many steps and as long as\nthe agent needs (FR-008, FR-014, invariant I16).",
+  "properties": {
+    "attempt_index": {
+      "minimum": 0,
+      "title": "Attempt Index",
+      "type": "integer"
+    },
+    "ended_at": {
+      "format": "date-time",
+      "title": "Ended At",
+      "type": "string"
+    },
+    "final_no_progress_streak": {
+      "minimum": 0,
+      "title": "Final No Progress Streak",
+      "type": "integer"
+    },
+    "is_authoritative": {
+      "title": "Is Authoritative",
+      "type": "boolean"
+    },
+    "outcome": {
+      "$ref": "#/$defs/TurnOutcome"
+    },
+    "persisted_at": {
+      "format": "date-time",
+      "title": "Persisted At",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "save_point_id": {
+      "title": "Save Point Id",
+      "type": "string"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "step_count": {
+      "minimum": 1,
+      "title": "Step Count",
+      "type": "integer"
+    },
+    "turn_cycle_id": {
+      "title": "Turn Cycle Id",
+      "type": "string"
+    },
+    "turn_number": {
+      "minimum": 1,
+      "title": "Turn Number",
+      "type": "integer"
+    },
+    "visually_degraded": {
+      "title": "Visually Degraded",
+      "type": "boolean"
+    },
+    "yields": {
+      "additionalProperties": true,
+      "title": "Yields",
+      "type": "object"
+    }
+  },
+  "required": [
+    "turn_cycle_id",
+    "run_id",
+    "turn_number",
+    "attempt_index",
+    "is_authoritative",
+    "save_point_id",
+    "step_count",
+    "outcome",
+    "final_no_progress_streak",
+    "visually_degraded",
+    "started_at",
+    "ended_at",
+    "persisted_at"
+  ],
+  "schemaVersion": 1,
+  "title": "TurnCycle",
+  "type": "object"
+}

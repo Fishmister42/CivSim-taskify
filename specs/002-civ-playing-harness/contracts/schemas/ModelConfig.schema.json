@@ -1,0 +1,49 @@
+{
+  "$defs": {
+    "ModelRef": {
+      "additionalProperties": false,
+      "description": "A model reference: provider + model name (contracts/model-provider-port.md).",
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Primary model plus an ordered fallback chain. Carries no credentials (FR-043).\n\nKeys resolve from environment or a secrets file at runtime, never from\nthis record. ``request_params`` is validated at construction time to\nreject any credential-shaped key outright -- the strongest guarantee\navailable for a structured field, and independent of (in addition to)\nthe general-purpose redaction filter that protects everything else\nreachable from a serialized record or log line (T014).",
+  "properties": {
+    "fallbacks": {
+      "items": {
+        "$ref": "#/$defs/ModelRef"
+      },
+      "title": "Fallbacks",
+      "type": "array"
+    },
+    "primary": {
+      "$ref": "#/$defs/ModelRef"
+    },
+    "request_params": {
+      "additionalProperties": true,
+      "title": "Request Params",
+      "type": "object"
+    }
+  },
+  "required": [
+    "primary"
+  ],
+  "schemaVersion": 1,
+  "title": "ModelConfig",
+  "type": "object"
+}

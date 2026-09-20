@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "CapturePath": {
+      "description": "Which screen-capture mechanism served a run or a capture (research R6).\n\nOne member per platform's decided primary/fallback path, plus ``NONE``\nfor a run with no capture mechanism available at all (visually degraded\nunder FR-050 -- valid and recorded, never an error on its own).\n``Run.capture_path`` may be ``NONE``; ``ScreenCapture.capture_path``\nnever is, since a capture record only exists once some mechanism was\nactually attempted.",
+      "enum": [
+        "windows_graphics_capture",
+        "screencapturekit",
+        "cg_window_list_image",
+        "xcomposite",
+        "pipewire_portal",
+        "none"
+      ],
+      "title": "CapturePath",
+      "type": "string"
+    },
+    "ScreeningStatus": {
+      "enum": [
+        "screened_clean",
+        "withheld"
+      ],
+      "title": "ScreeningStatus",
+      "type": "string"
+    },
+    "WithheldReason": {
+      "enum": [
+        "non_player_ui",
+        "geometry_mismatch",
+        "provenance_failure",
+        "capture_failed"
+      ],
+      "title": "WithheldReason",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "An image of the game's own view, bound to one run, turn, and decision step\n(FR-015, FR-025, FR-030).\n\nA withheld capture is never stored and never shown (SC-019): the\n``model_validator`` below enforces that structurally --\n``screening_status == withheld`` forces ``blob_ref is None`` and\n``shown_to_agent is False``, and requires a ``withheld_reason``; the\nreverse (``screened_clean``) forbids one.",
+  "properties": {
+    "blob_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Blob Ref"
+    },
+    "camera_state": {
+      "additionalProperties": true,
+      "title": "Camera State",
+      "type": "object"
+    },
+    "capture_id": {
+      "title": "Capture Id",
+      "type": "string"
+    },
+    "capture_path": {
+      "$ref": "#/$defs/CapturePath"
+    },
+    "captured_at": {
+      "format": "date-time",
+      "title": "Captured At",
+      "type": "string"
+    },
+    "decision_step_id": {
+      "title": "Decision Step Id",
+      "type": "string"
+    },
+    "retained_as_evidence": {
+      "title": "Retained As Evidence",
+      "type": "boolean"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "screening_status": {
+      "$ref": "#/$defs/ScreeningStatus"
+    },
+    "shown_to_agent": {
+      "title": "Shown To Agent",
+      "type": "boolean"
+    },
+    "turn_number": {
+      "minimum": 1,
+      "title": "Turn Number",
+      "type": "integer"
+    },
+    "view_declaration_id": {
+      "title": "View Declaration Id",
+      "type": "string"
+    },
+    "withheld_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WithheldReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "capture_id",
+    "run_id",
+    "turn_number",
+    "decision_step_id",
+    "captured_at",
+    "view_declaration_id",
+    "screening_status",
+    "shown_to_agent",
+    "retained_as_evidence",
+    "capture_path"
+  ],
+  "schemaVersion": 1,
+  "title": "ScreenCapture",
+  "type": "object"
+}

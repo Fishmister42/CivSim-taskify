@@ -1,0 +1,253 @@
+{
+  "$defs": {
+    "GameOutcomeStopCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "game_outcome",
+          "default": "game_outcome",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "GameOutcomeStopCondition",
+      "type": "object"
+    },
+    "ModRef": {
+      "additionalProperties": false,
+      "description": "A mod reference: id + version. Immutable by convention (mods are pinned, not mutated).",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "title": "ModRef",
+      "type": "object"
+    },
+    "ModelConfig": {
+      "additionalProperties": false,
+      "description": "Primary model plus an ordered fallback chain. Carries no credentials (FR-043).\n\nKeys resolve from environment or a secrets file at runtime, never from\nthis record. ``request_params`` is validated at construction time to\nreject any credential-shaped key outright -- the strongest guarantee\navailable for a structured field, and independent of (in addition to)\nthe general-purpose redaction filter that protects everything else\nreachable from a serialized record or log line (T014).",
+      "properties": {
+        "fallbacks": {
+          "items": {
+            "$ref": "#/$defs/ModelRef"
+          },
+          "title": "Fallbacks",
+          "type": "array"
+        },
+        "primary": {
+          "$ref": "#/$defs/ModelRef"
+        },
+        "request_params": {
+          "additionalProperties": true,
+          "title": "Request Params",
+          "type": "object"
+        }
+      },
+      "required": [
+        "primary"
+      ],
+      "title": "ModelConfig",
+      "type": "object"
+    },
+    "ModelRef": {
+      "additionalProperties": false,
+      "description": "A model reference: provider + model name (contracts/model-provider-port.md).",
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    },
+    "OperatorStopStopCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "operator_stop",
+          "default": "operator_stop",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "OperatorStopStopCondition",
+      "type": "object"
+    },
+    "TurnReachedStopCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "turn": {
+          "minimum": 1,
+          "title": "Turn",
+          "type": "integer"
+        },
+        "type": {
+          "const": "turn_reached",
+          "default": "turn_reached",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn"
+      ],
+      "title": "TurnReachedStopCondition",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The complete recorded definition of a run before it starts (FR-001).\n\nDeliberately has no ``turn_time_budget_s`` field (see module docstring).\n``no_progress_step_limit`` has no upper bound -- any validator that\nimposed one would silently cap a turn, which FR-014 forbids.\n\nNaming note for callers: the wire/record field is ``model_config``\n(contracts/run-configuration.md), which collides with\n``pydantic.BaseModel``'s own reserved ``model_config`` class attribute.\nThe Python attribute here is therefore ``agent_model_config``, with\n``model_config`` kept as its serialization alias via\n``populate_by_name=True`` -- so YAML/JSON round-trips still use the key\n``model_config``, but ``instance.model_config`` in Python is (and must\nstay) pydantic's own config dict, never this field. Use\n``.model_dump(by_alias=True)`` to get the ``model_config`` key back out.",
+  "properties": {
+    "civilization": {
+      "title": "Civilization",
+      "type": "string"
+    },
+    "config_id": {
+      "title": "Config Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "difficulty": {
+      "title": "Difficulty",
+      "type": "string"
+    },
+    "game_settings": {
+      "additionalProperties": true,
+      "title": "Game Settings",
+      "type": "object"
+    },
+    "guidance_set_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Guidance Set Id"
+    },
+    "leader": {
+      "title": "Leader",
+      "type": "string"
+    },
+    "map_seed": {
+      "title": "Map Seed",
+      "type": "string"
+    },
+    "map_settings": {
+      "additionalProperties": true,
+      "title": "Map Settings",
+      "type": "object"
+    },
+    "min_free_disk_gb": {
+      "minimum": 0,
+      "title": "Min Free Disk Gb",
+      "type": "number"
+    },
+    "mod_set": {
+      "items": {
+        "$ref": "#/$defs/ModRef"
+      },
+      "title": "Mod Set",
+      "type": "array"
+    },
+    "model_config": {
+      "$ref": "#/$defs/ModelConfig"
+    },
+    "no_progress_step_limit": {
+      "minimum": 1,
+      "title": "No Progress Step Limit",
+      "type": "integer"
+    },
+    "opponents": {
+      "additionalProperties": true,
+      "title": "Opponents",
+      "type": "object"
+    },
+    "recovery_attempt_limit": {
+      "minimum": 1,
+      "title": "Recovery Attempt Limit",
+      "type": "integer"
+    },
+    "ruleset": {
+      "title": "Ruleset",
+      "type": "string"
+    },
+    "seed_set_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Seed Set Id"
+    },
+    "stop_condition": {
+      "discriminator": {
+        "mapping": {
+          "game_outcome": "#/$defs/GameOutcomeStopCondition",
+          "operator_stop": "#/$defs/OperatorStopStopCondition",
+          "turn_reached": "#/$defs/TurnReachedStopCondition"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/TurnReachedStopCondition"
+        },
+        {
+          "$ref": "#/$defs/GameOutcomeStopCondition"
+        },
+        {
+          "$ref": "#/$defs/OperatorStopStopCondition"
+        }
+      ],
+      "title": "Stop Condition"
+    }
+  },
+  "required": [
+    "config_id",
+    "map_seed",
+    "civilization",
+    "leader",
+    "ruleset",
+    "difficulty",
+    "stop_condition",
+    "model_config",
+    "no_progress_step_limit",
+    "recovery_attempt_limit",
+    "min_free_disk_gb",
+    "created_at"
+  ],
+  "schemaVersion": 1,
+  "title": "RunConfiguration",
+  "type": "object"
+}

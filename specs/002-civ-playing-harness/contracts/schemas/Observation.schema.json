@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "CatalogVersionRef": {
+      "additionalProperties": false,
+      "description": "A lightweight reference to the catalog version in force for a run/observation/decision.",
+      "properties": {
+        "content_hash": {
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "content_hash"
+      ],
+      "title": "CatalogVersionRef",
+      "type": "object"
+    },
+    "LuaContext": {
+      "description": "Which Lua execution context a catalog entry or observation entry came from.\n\nShared by ``ObservationEntry.context`` (models/turn.py) and\n``ParityDeclaration.context`` (models/catalog.py) -- both name the same\ntwo contexts (contracts/capability-catalog.md), so it is defined once\nhere rather than twice.",
+      "enum": [
+        "GameCore_Tuner",
+        "InGame"
+      ],
+      "title": "LuaContext",
+      "type": "string"
+    },
+    "ObservationEntry": {
+      "additionalProperties": false,
+      "description": "One piece of structured state, attributed to the catalog entry that produced it.\n\n``declaration_id`` is required -- there is no unattributed-value path\n(FR-016, SC-007).",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/LuaContext"
+        },
+        "declaration_id": {
+          "title": "Declaration Id",
+          "type": "string"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "declaration_id",
+        "key",
+        "context"
+      ],
+      "title": "ObservationEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The view assembled for one decision step (FR-012, FR-024).\n\n``decision_step_id`` is step-scoped, not turn-scoped: this is what makes\nthe observation the effect of the *previous* step's decision, assembled\nfresh every time (FR-008).",
+  "properties": {
+    "assembled_at": {
+      "format": "date-time",
+      "title": "Assembled At",
+      "type": "string"
+    },
+    "captures": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Captures",
+      "type": "array"
+    },
+    "catalog_version": {
+      "$ref": "#/$defs/CatalogVersionRef"
+    },
+    "decision_step_id": {
+      "title": "Decision Step Id",
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/ObservationEntry"
+      },
+      "title": "Entries",
+      "type": "array"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "screen_identity": {
+      "title": "Screen Identity",
+      "type": "string"
+    }
+  },
+  "required": [
+    "observation_id",
+    "decision_step_id",
+    "assembled_at",
+    "catalog_version",
+    "screen_identity"
+  ],
+  "schemaVersion": 1,
+  "title": "Observation",
+  "type": "object"
+}

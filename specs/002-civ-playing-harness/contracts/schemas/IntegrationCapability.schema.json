@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "CapabilityPath": {
+      "enum": [
+        "firetuner",
+        "bespoke"
+      ],
+      "title": "CapabilityPath",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The implementation behind one or more declarations (FR-027-FR-029).\n\n``path == bespoke`` without a non-empty ``firetuner_gap`` fails catalog\nload (FR-028, SC-020) -- enforced below. Conversely a ``firetuner`` path\ncarries no gap statement at all (``null`` in the YAML shape), so one\nbeing present there is equally rejected.",
+  "properties": {
+    "capability_id": {
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "firetuner_gap": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Firetuner Gap"
+    },
+    "implementation_ref": {
+      "title": "Implementation Ref",
+      "type": "string"
+    },
+    "parity_basis": {
+      "minLength": 1,
+      "title": "Parity Basis",
+      "type": "string"
+    },
+    "path": {
+      "$ref": "#/$defs/CapabilityPath"
+    },
+    "reads": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reads",
+      "type": "array"
+    },
+    "writes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Writes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "capability_id",
+    "path",
+    "implementation_ref",
+    "parity_basis"
+  ],
+  "schemaVersion": 1,
+  "title": "IntegrationCapability",
+  "type": "object"
+}

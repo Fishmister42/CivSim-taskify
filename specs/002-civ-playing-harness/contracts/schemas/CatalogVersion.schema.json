@@ -1,0 +1,28 @@
+{
+  "additionalProperties": false,
+  "description": "The catalog version in force for a run (FR-022).",
+  "properties": {
+    "content_hash": {
+      "title": "Content Hash",
+      "type": "string"
+    },
+    "declaration_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Declaration Ids",
+      "type": "array"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "content_hash"
+  ],
+  "schemaVersion": 1,
+  "title": "CatalogVersion",
+  "type": "object"
+}

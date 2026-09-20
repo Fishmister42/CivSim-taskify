@@ -1,0 +1,81 @@
+{
+  "$defs": {
+    "StepProgress": {
+      "description": "Derived from verification, never asserted -- feeds the no-progress counter.",
+      "enum": [
+        "changed_state",
+        "no_change",
+        "rejected"
+      ],
+      "title": "StepProgress",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One iteration of the within-turn loop (data-model.md SS6, FR-008, FR-012).\n\nExactly one decision and one model call per step (invariant I13) is\nenforced structurally: ``decision_id`` and ``model_call_id`` are both\nrequired singular ids, not lists, so a step carrying a batch cannot be\nconstructed at all.",
+  "properties": {
+    "decision_id": {
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "decision_step_id": {
+      "title": "Decision Step Id",
+      "type": "string"
+    },
+    "ended_at": {
+      "format": "date-time",
+      "title": "Ended At",
+      "type": "string"
+    },
+    "model_call_id": {
+      "title": "Model Call Id",
+      "type": "string"
+    },
+    "no_progress_streak_after": {
+      "minimum": 0,
+      "title": "No Progress Streak After",
+      "type": "integer"
+    },
+    "observation_id": {
+      "title": "Observation Id",
+      "type": "string"
+    },
+    "progress": {
+      "$ref": "#/$defs/StepProgress"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "step_index": {
+      "minimum": 1,
+      "title": "Step Index",
+      "type": "integer"
+    },
+    "turn_cycle_id": {
+      "title": "Turn Cycle Id",
+      "type": "string"
+    },
+    "visually_degraded": {
+      "title": "Visually Degraded",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "decision_step_id",
+    "turn_cycle_id",
+    "step_index",
+    "observation_id",
+    "decision_id",
+    "model_call_id",
+    "progress",
+    "no_progress_streak_after",
+    "visually_degraded",
+    "started_at",
+    "ended_at"
+  ],
+  "schemaVersion": 1,
+  "title": "DecisionStep",
+  "type": "object"
+}

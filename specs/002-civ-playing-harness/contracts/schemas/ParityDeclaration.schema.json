@@ -1,0 +1,171 @@
+{
+  "$defs": {
+    "CameraMode": {
+      "description": "contracts/capability-catalog.md ``view`` entries.",
+      "enum": [
+        "world",
+        "strategic",
+        "city_screen",
+        "diplomacy",
+        "congress"
+      ],
+      "title": "CameraMode",
+      "type": "string"
+    },
+    "CameraRequirements": {
+      "additionalProperties": false,
+      "description": "Required on every ``view`` declaration (FR-024, FR-026).",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/CameraMode"
+        },
+        "target_must_be_revealed": {
+          "title": "Target Must Be Revealed",
+          "type": "boolean"
+        },
+        "zoom_range": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Zoom Range",
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode",
+        "zoom_range",
+        "target_must_be_revealed"
+      ],
+      "title": "CameraRequirements",
+      "type": "object"
+    },
+    "DeclarationKind": {
+      "enum": [
+        "observation",
+        "view",
+        "action"
+      ],
+      "title": "DeclarationKind",
+      "type": "string"
+    },
+    "LuaContext": {
+      "description": "Which Lua execution context a catalog entry or observation entry came from.\n\nShared by ``ObservationEntry.context`` (models/turn.py) and\n``ParityDeclaration.context`` (models/catalog.py) -- both name the same\ntwo contexts (contracts/capability-catalog.md), so it is defined once\nhere rather than twice.",
+      "enum": [
+        "GameCore_Tuner",
+        "InGame"
+      ],
+      "title": "LuaContext",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One observable, visual view, or action, with its human equivalent\n(data-model.md SS10; contracts/capability-catalog.md).\n\n``parity_basis`` is required and non-empty for every kind (the\nenforcement point for FR-016/FR-017). ``camera_requirements`` and\n``screening_profile`` are required exactly when ``kind == view`` and\nforbidden otherwise -- enforced below rather than left to the catalog\nloader alone, since a malformed declaration should never validate\nsuccessfully as this type in the first place.",
+  "properties": {
+    "availability_predicate": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Availability Predicate"
+    },
+    "camera_requirements": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CameraRequirements"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "capability_id": {
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "context": {
+      "$ref": "#/$defs/LuaContext"
+    },
+    "declaration_id": {
+      "title": "Declaration Id",
+      "type": "string"
+    },
+    "introduced_in_version": {
+      "title": "Introduced In Version",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/DeclarationKind"
+    },
+    "output_schema": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Output Schema"
+    },
+    "parity_basis": {
+      "minLength": 1,
+      "title": "Parity Basis",
+      "type": "string"
+    },
+    "screening_profile": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Screening Profile"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "verification_predicate": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Verification Predicate"
+    }
+  },
+  "required": [
+    "declaration_id",
+    "kind",
+    "summary",
+    "parity_basis",
+    "context",
+    "capability_id",
+    "introduced_in_version"
+  ],
+  "schemaVersion": 1,
+  "title": "ParityDeclaration",
+  "type": "object"
+}

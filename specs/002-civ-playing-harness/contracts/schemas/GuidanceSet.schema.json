@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "description": "Run-independent strategic guidance supplied to the agent (FR-021).\n\nMust contain no state from the current run and no hidden state -- a\nreview-time rule this model cannot enforce on its own, plus the runtime\ninvariant it *can* enforce: identical content hashes to identical\ncontent (checked by whatever loads/caches these against other instances\nsharing a hash, not here, since a single instance has nothing to compare\nagainst).",
+  "properties": {
+    "content": {
+      "title": "Content",
+      "type": "string"
+    },
+    "content_hash": {
+      "title": "Content Hash",
+      "type": "string"
+    },
+    "guidance_set_id": {
+      "title": "Guidance Set Id",
+      "type": "string"
+    },
+    "source_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Ref"
+    }
+  },
+  "required": [
+    "guidance_set_id",
+    "content_hash",
+    "content"
+  ],
+  "schemaVersion": 1,
+  "title": "GuidanceSet",
+  "type": "object"
+}

@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "RetentionStatus": {
+      "description": "``ELIGIBLE`` has exactly one cause: ``Run.archived_at`` is set (FR-036, R17).\n\nNot age, not a quota, not a retention window, not the run reaching a\nterminal state, not thinning -- see contracts/match-store-port.md A2.\nThis model cannot enforce that cross-record invariant on its own (it\nwould need the owning ``Run``); it is enforced by ``archive_run`` in the\nstore adapter, which is the *only* code path permitted to produce this\nvalue.",
+      "enum": [
+        "retained",
+        "eligible",
+        "removed"
+      ],
+      "title": "RetentionStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A named, addressable save bound to a run and turn (FR-032).\n\nAddressable by run, turn, and lineage without inspecting the filesystem\nor the game client -- ``save_name`` is a naming convention\n(``civsim__<run_id>__t<turn:04d>``), not the address.",
+  "properties": {
+    "lineage": {
+      "additionalProperties": true,
+      "title": "Lineage",
+      "type": "object"
+    },
+    "missing": {
+      "default": false,
+      "title": "Missing",
+      "type": "boolean"
+    },
+    "retention_status": {
+      "$ref": "#/$defs/RetentionStatus"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "save_name": {
+      "pattern": "^civsim__.+__t\\d{4,}$",
+      "title": "Save Name",
+      "type": "string"
+    },
+    "save_point_id": {
+      "title": "Save Point Id",
+      "type": "string"
+    },
+    "taken_at": {
+      "format": "date-time",
+      "title": "Taken At",
+      "type": "string"
+    },
+    "turn_number": {
+      "minimum": 1,
+      "title": "Turn Number",
+      "type": "integer"
+    },
+    "verified": {
+      "title": "Verified",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "save_point_id",
+    "run_id",
+    "turn_number",
+    "save_name",
+    "taken_at",
+    "verified",
+    "retention_status"
+  ],
+  "schemaVersion": 1,
+  "title": "SavePoint",
+  "type": "object"
+}

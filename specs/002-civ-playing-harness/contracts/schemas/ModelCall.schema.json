@@ -1,0 +1,160 @@
+{
+  "$defs": {
+    "CallOutcome": {
+      "description": "A successful call returns exactly one decision -- ``DECISION_RETURNED`` is\nsingular by design, since a call serves exactly one decision step\n(contracts/model-provider-port.md). ``EMPTY_RESPONSE`` is a failed call,\nnever a decision to do nothing.",
+      "enum": [
+        "decision_returned",
+        "empty_response",
+        "failed",
+        "rate_limited",
+        "context_rejected"
+      ],
+      "title": "CallOutcome",
+      "type": "string"
+    },
+    "Cost": {
+      "additionalProperties": false,
+      "description": "Cost as reported by the provider layer's usage data; never independently priced.\n\nAll fields are optional because they come verbatim from whatever a given\nprovider reports -- some providers report token counts, some report a\ndollar amount, some report both (contracts/model-provider-port.md P7).",
+      "properties": {
+        "amount_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Amount Usd"
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Tokens"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
+        },
+        "total_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Tokens"
+        }
+      },
+      "title": "Cost",
+      "type": "object"
+    },
+    "ModelRef": {
+      "additionalProperties": false,
+      "description": "A model reference: provider + model name (contracts/model-provider-port.md).",
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "title": "ModelRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One request to the provider layer for one decision step's decision (FR-040).\n\nAttributed to the step it served: a turn contains as many ``ModelCall``\nrecords as it contained decision steps, and no fewer, since a step\nwithout a ``model_call_id`` cannot be constructed (FR-042, SC-012, see\n``DecisionStep`` in models/turn.py).",
+  "properties": {
+    "cost": {
+      "$ref": "#/$defs/Cost"
+    },
+    "decision_step_id": {
+      "title": "Decision Step Id",
+      "type": "string"
+    },
+    "fallback_occurred": {
+      "title": "Fallback Occurred",
+      "type": "boolean"
+    },
+    "image_count": {
+      "minimum": 0,
+      "title": "Image Count",
+      "type": "integer"
+    },
+    "latency_ms": {
+      "minimum": 0,
+      "title": "Latency Ms",
+      "type": "integer"
+    },
+    "model_call_id": {
+      "title": "Model Call Id",
+      "type": "string"
+    },
+    "model_requested": {
+      "$ref": "#/$defs/ModelRef"
+    },
+    "model_served": {
+      "$ref": "#/$defs/ModelRef"
+    },
+    "outcome": {
+      "$ref": "#/$defs/CallOutcome"
+    },
+    "retry_count": {
+      "minimum": 0,
+      "title": "Retry Count",
+      "type": "integer"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "turn_cycle_id": {
+      "title": "Turn Cycle Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "model_call_id",
+    "run_id",
+    "turn_cycle_id",
+    "decision_step_id",
+    "model_requested",
+    "model_served",
+    "latency_ms",
+    "cost",
+    "retry_count",
+    "fallback_occurred",
+    "image_count",
+    "outcome"
+  ],
+  "schemaVersion": 1,
+  "title": "ModelCall",
+  "type": "object"
+}

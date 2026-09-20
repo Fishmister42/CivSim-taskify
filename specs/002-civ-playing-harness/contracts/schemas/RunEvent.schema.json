@@ -1,0 +1,97 @@
+{
+  "$defs": {
+    "RunEventType": {
+      "description": "The full set of non-turn occurrences on a run's timeline (data-model.md SS14).\n\n``stall`` is deliberately absent: it denoted a turn exceeding its time\nbudget, and there is no time budget any more. A backstop-ended turn is\n``turn_ended_on_no_progress`` -- a normal, recorded turn ending, not a\nfault -- while a genuinely stuck *game* surfaces as ``hang_detected`` or\n``unknown_screen``.",
+      "enum": [
+        "lifecycle_transition",
+        "lifecycle_command_received",
+        "preparation_mismatch",
+        "crash_detected",
+        "hang_detected",
+        "unresponsive_detected",
+        "unknown_screen",
+        "save_taken",
+        "save_failed",
+        "save_missing",
+        "resumed",
+        "turn_abandoned",
+        "turn_ended_on_no_progress",
+        "observation_assembly_failed",
+        "provider_failure",
+        "provider_retry",
+        "provider_fallback",
+        "context_rejected",
+        "model_chain_exhausted",
+        "image_withheld",
+        "capture_failed",
+        "branch_created",
+        "branch_abandoned",
+        "run_archived",
+        "game_build_change_accepted",
+        "disk_headroom_low",
+        "persistence_failure",
+        "recovery_limit_reached"
+      ],
+      "title": "RunEventType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Any non-turn occurrence on a run's timeline.\n\n``detail`` is redacted on the way in -- data-model.md's own annotation\nfor this field is \"type-specific, credential-redacted\", so the\nredaction is applied here structurally rather than left to whoever\nconstructs the event to remember (T014, FR-043, SC-018).",
+  "properties": {
+    "detail": {
+      "additionalProperties": true,
+      "title": "Detail",
+      "type": "object"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "$ref": "#/$defs/RunEventType"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "step_index": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Step Index"
+    },
+    "turn_number": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Turn Number"
+    }
+  },
+  "required": [
+    "event_id",
+    "run_id",
+    "event_type",
+    "occurred_at"
+  ],
+  "schemaVersion": 1,
+  "title": "RunEvent",
+  "type": "object"
+}

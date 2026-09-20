@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "ExecutionOutcome": {
+      "enum": [
+        "applied",
+        "rejected",
+        "partially_applied"
+      ],
+      "title": "ExecutionOutcome",
+      "type": "string"
+    },
+    "RejectionReason": {
+      "enum": [
+        "not_in_catalog",
+        "unavailable_to_human_now",
+        "illegal_in_context",
+        "out_of_parity_camera",
+        "verification_failed"
+      ],
+      "title": "RejectionReason",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The outcome of dispatching one decision's action, and how it was verified.\n\n``outcome`` is derived from the action's declared verification predicate\nand must never be asserted directly by an executor (FR-011) -- this\nmodel cannot enforce *that* on its own (it has no access to the\npredicate evaluator), but it does enforce the one thing it can:\n``rejection_reason`` is present exactly when ``outcome == rejected`` or\n``partially_applied`` is not itself a rejection, so a reason is\nmeaningless there too. ``applied`` never carries a rejection reason.",
+  "properties": {
+    "outcome": {
+      "$ref": "#/$defs/ExecutionOutcome"
+    },
+    "rejection_reason": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RejectionReason"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "verification": {
+      "additionalProperties": true,
+      "title": "Verification",
+      "type": "object"
+    },
+    "verified_at": {
+      "format": "date-time",
+      "title": "Verified At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "outcome",
+    "verified_at"
+  ],
+  "schemaVersion": 1,
+  "title": "ActionExecution",
+  "type": "object"
+}

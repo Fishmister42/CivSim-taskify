@@ -1,0 +1,243 @@
+{
+  "$defs": {
+    "CapturePath": {
+      "description": "Which screen-capture mechanism served a run or a capture (research R6).\n\nOne member per platform's decided primary/fallback path, plus ``NONE``\nfor a run with no capture mechanism available at all (visually degraded\nunder FR-050 -- valid and recorded, never an error on its own).\n``Run.capture_path`` may be ``NONE``; ``ScreenCapture.capture_path``\nnever is, since a capture record only exists once some mechanism was\nactually attempted.",
+      "enum": [
+        "windows_graphics_capture",
+        "screencapturekit",
+        "cg_window_list_image",
+        "xcomposite",
+        "pipewire_portal",
+        "none"
+      ],
+      "title": "CapturePath",
+      "type": "string"
+    },
+    "CatalogVersionRef": {
+      "additionalProperties": false,
+      "description": "A lightweight reference to the catalog version in force for a run/observation/decision.",
+      "properties": {
+        "content_hash": {
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "content_hash"
+      ],
+      "title": "CatalogVersionRef",
+      "type": "object"
+    },
+    "ComparabilityStatus": {
+      "description": "FR-050.",
+      "enum": [
+        "comparable",
+        "visually_degraded",
+        "not_comparable"
+      ],
+      "title": "ComparabilityStatus",
+      "type": "string"
+    },
+    "HostSupportTier": {
+      "description": "Resolved at preflight. ``unsupported`` has no member here: an\nunsupported host cannot produce a run at all, so there is nothing to\nrecord (R19) -- only the two tiers a run can actually carry are\nrepresentable.",
+      "enum": [
+        "validated",
+        "supported"
+      ],
+      "title": "HostSupportTier",
+      "type": "string"
+    },
+    "LifecycleState": {
+      "description": "See the state machine in data-model.md SS4 (FR-003).",
+      "enum": [
+        "preparing",
+        "playing",
+        "waiting_on_model",
+        "waiting_on_game",
+        "paused",
+        "interrupted",
+        "resuming",
+        "finished",
+        "failed"
+      ],
+      "title": "LifecycleState",
+      "type": "string"
+    },
+    "RecordCompletenessStatus": {
+      "description": "Derived, never asserted (FR-052, SC-003, SC-011).",
+      "enum": [
+        "complete",
+        "has_gaps",
+        "unknown"
+      ],
+      "title": "RecordCompletenessStatus",
+      "type": "string"
+    },
+    "StopResolution": {
+      "description": "The recorded outcome of a terminated run (FR-005) -- broader than\n``StopCondition.type`` by design; see module docstring.",
+      "enum": [
+        "turn_reached",
+        "victory",
+        "defeat",
+        "operator_stop",
+        "unrecoverable_failure"
+      ],
+      "title": "StopResolution",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One execution of a configuration (data-model.md SS4).\n\nArchival is a terminal-state action, not a lifecycle state:\n``archived_at`` is orthogonal to ``lifecycle_state`` and is set only by\nan explicit operator command (enforced by the store's ``archive_run``,\nnot here) -- this model only enforces the narrower, purely structural\nhalf of that: ``archived_at`` may not be set unless ``lifecycle_state``\nis already terminal.",
+  "properties": {
+    "action_catalog_version": {
+      "$ref": "#/$defs/CatalogVersionRef"
+    },
+    "archived_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Archived At"
+    },
+    "capture_path": {
+      "$ref": "#/$defs/CapturePath"
+    },
+    "client_identity": {
+      "additionalProperties": true,
+      "title": "Client Identity",
+      "type": "object"
+    },
+    "comparability_status": {
+      "$ref": "#/$defs/ComparabilityStatus"
+    },
+    "config_id": {
+      "title": "Config Id",
+      "type": "string"
+    },
+    "ended_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ended At"
+    },
+    "game_build": {
+      "title": "Game Build",
+      "type": "string"
+    },
+    "game_build_acceptance_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Game Build Acceptance Ref"
+    },
+    "host_platform": {
+      "additionalProperties": true,
+      "title": "Host Platform",
+      "type": "object"
+    },
+    "host_support_tier": {
+      "$ref": "#/$defs/HostSupportTier"
+    },
+    "lifecycle_state": {
+      "$ref": "#/$defs/LifecycleState"
+    },
+    "observation_catalog_version": {
+      "$ref": "#/$defs/CatalogVersionRef"
+    },
+    "parent_run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Run Id"
+    },
+    "parent_turn": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Turn"
+    },
+    "record_completeness_status": {
+      "$ref": "#/$defs/RecordCompletenessStatus"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Started At"
+    },
+    "stop_resolution": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StopResolution"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "run_id",
+    "config_id",
+    "lifecycle_state",
+    "record_completeness_status",
+    "comparability_status",
+    "observation_catalog_version",
+    "action_catalog_version",
+    "game_build",
+    "host_support_tier",
+    "capture_path"
+  ],
+  "schemaVersion": 1,
+  "title": "Run",
+  "type": "object"
+}
