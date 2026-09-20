@@ -9,6 +9,18 @@ boundaries. This module is the boundary that turns that stream back into
 - :func:`wrap_lua` wraps a declared Lua body so its *printed* output (not the
   Lua source) is bracketed by a per-request nonce's ``---BEGIN:<nonce>---``
   / ``---END:<nonce>---`` sentinels.
+- :data:`LUA_JSON_PRELUDE` / :func:`lua_print_json` are the *write* side of
+  that same discipline: the tuner has no native return channel, so a Lua body
+  that ends in ``return { ... }`` produces **no result at all** -- the table
+  goes nowhere and nothing is printed between the sentinels, so
+  :meth:`~civsim_harness.nexus.client.NexusClient.execute_command` sees an
+  empty body and fails its ``json.loads``. Every Lua body that wants to return
+  something must ``print`` it as JSON. The ``lua/**/*.lua`` files do this with
+  their own hand-rolled ``CivSim_JsonEncode`` (and the T206 capability
+  executor appends the ``print`` call for them); the small Lua bodies embedded
+  directly in Python modules -- the save call, the leader-selection write and
+  read-back, the version probe -- use these two helpers instead of carrying a
+  fourth copy of an encoder.
 - :class:`SentinelCorrelator` consumes arriving text and extracts the JSON
   body between a matched BEGIN/END pair for one nonce at a time. Everything
   outside a matched pair for the nonce currently being awaited -- stray
@@ -63,6 +75,86 @@ def wrap_lua(nonce: str, lua_body: str) -> str:
             f'print("{end_marker(nonce)}")',
         ]
     )
+
+
+# --------------------------------------------------------------------------
+# Emitting a result: the write side of the sentinel discipline
+# --------------------------------------------------------------------------
+
+#: A self-contained JSON encoder for a Lua body embedded in a Python module.
+#:
+#: Semantically identical to the ``CivSim_JsonEncode`` every ``lua/**/*.lua``
+#: file carries -- same control-character escaping, same array-vs-object
+#: decision, and the same "an empty table encodes as ``[]``" convention -- so
+#: a value round-trips the same way whichever path dispatched it. It exists
+#: separately only because those files are self-contained by design (the
+#: sandbox has no ``require``), while the bodies embedded in Python have no
+#: file of their own to carry a copy in; this is the one shared copy for them
+#: rather than a fourth hand-rolled one per call site.
+#:
+#: ``string.format('%q', ...)`` is deliberately not used anywhere here: Lua's
+#: ``%q`` escapes a newline as a backslash followed by a *literal* newline,
+#: which is valid Lua source but not valid JSON.
+LUA_JSON_PRELUDE = (
+    "local function civsim_json_value(v) "
+    'local t = type(v); '
+    'if v == nil then return "null" end '
+    'if t == "boolean" then return tostring(v) end '
+    'if t == "number" then if v ~= v then return "null" end return tostring(v) end '
+    'if t == "table" then '
+    "local n = 0; for _ in pairs(v) do n = n + 1 end; "
+    'if n == 0 then return "[]" end '
+    "local isArray = true; "
+    "for i = 1, n do if v[i] == nil then isArray = false break end end "
+    "local parts = {}; "
+    "if isArray then "
+    "for i = 1, n do parts[i] = civsim_json_value(v[i]) end "
+    'return "[" .. table.concat(parts, ",") .. "]" '
+    "else "
+    "for k, item in pairs(v) do "
+    'parts[#parts + 1] = civsim_json_value(tostring(k)) .. ":" .. civsim_json_value(item) end '
+    'return "{" .. table.concat(parts, ",") .. "}" end end '
+    "local s = tostring(v); "
+    "s = s:gsub('[%c\"\\\\]', function(c) "
+    "if c == '\"' then return '\\\\\"' "
+    "elseif c == '\\\\' then return '\\\\\\\\' "
+    "elseif c == '\\n' then return '\\\\n' "
+    "elseif c == '\\r' then return '\\\\r' "
+    "elseif c == '\\t' then return '\\\\t' "
+    "else return string.format('\\\\u%04x', string.byte(c)) end end); "
+    "return '\"' .. s .. '\"' end; "
+)
+
+
+def lua_print_json(fields: dict[str, str]) -> str:
+    """One Lua statement printing *fields* as a JSON object.
+
+    Each value is a Lua **expression** (evaluated in the body's own scope),
+    not a literal -- e.g. ``{"issued": "ok", "error": "err"}`` emits
+    ``print("{" .. '"issued":' .. civsim_json_value(ok) .. ...)``. Requires
+    :data:`LUA_JSON_PRELUDE` to have been emitted earlier in the same body.
+
+    Key order is the caller's insertion order, so a body's printed shape is
+    deterministic and readable in a transcript rather than dict-order
+    dependent.
+    """
+    parts = [
+        f"'{_json_key(name)}:' .. civsim_json_value({expression})"
+        for name, expression in fields.items()
+    ]
+    joined = " .. ',' .. ".join(parts) if parts else "''"
+    return f"print('{{' .. {joined} .. '}}')"
+
+
+def _json_key(name: str) -> str:
+    """A JSON object key, quoted for splicing into a single-quoted Lua string
+    literal. Names here are always plain identifiers chosen by this codebase,
+    never game-supplied, so a quote or backslash in one would be a bug in the
+    caller rather than untrusted input -- rejected outright instead of
+    escaped, so it can never silently produce a malformed document."""
+    if '"' in name or "\\" in name or "'" in name:
+        raise ValueError(f"JSON key {name!r} must not contain quotes or backslashes")
+    return f'"{name}"'
 
 
 def _default_sink(text: str) -> None:

@@ -57,6 +57,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, runtime_checkable
 
 from civsim_harness.errors import NexusError
+from civsim_harness.nexus.sentinels import LUA_JSON_PRELUDE, lua_print_json
 
 
 class SaveCapability(Protocol):
@@ -167,6 +168,18 @@ def _resolve_in_game_index(source: InGameStateIndexSource) -> int:
 # true only means the call did not error -- per the spike, the file itself
 # is written asynchronously, so this can never claim more than "issued".
 #
+# The result is **printed** as JSON, never ``return``-ed. The tuner has no
+# native return channel (contracts/nexus-protocol.md "Request/response
+# discipline"): ``NexusClient.execute_command`` reads whatever the body
+# prints between its nonce sentinels and ``json.loads`` that. A body ending
+# in ``return { ... }`` therefore yields no result at all -- the table goes
+# nowhere, nothing is printed, and the command fails on an empty body. This
+# is the same ``print(<json>)`` convention every ``lua/**/*.lua`` file already
+# follows via its own ``CivSim_JsonEncode``; the shared
+# ``nexus.sentinels.LUA_JSON_PRELUDE``/``lua_print_json`` pair supplies it
+# here rather than a fourth hand-rolled encoder. The *call* below is
+# unchanged and still exactly what the T077 spike verified.
+#
 # ``(ok and "") or tostring(err)`` rather than ``ok and nil or tostring(err)``:
 # the latter is the classic Lua ``and/or`` ternary trap -- when *ok* is true
 # the middle operand would be ``nil``, which is itself falsy, so the ``or``
@@ -174,16 +187,27 @@ def _resolve_in_game_index(source: InGameStateIndexSource) -> int:
 # *ok*. Using the always-truthy ``""`` as the "no error" value sidesteps that
 # trap; pcall's own ``err`` is ``nil`` on success in any case, since the
 # wrapped function returns nothing.
-_SAVE_LUA_TEMPLATE = (
-    "local gameFile = {{}}; "
-    'gameFile.Name = "{save_name}"; '
-    "gameFile.Location = SaveLocations.LOCAL_STORAGE; "
-    "gameFile.Type = SaveTypes.SINGLE_PLAYER; "
-    "gameFile.IsAutosave = false; "
-    "gameFile.IsQuicksave = false; "
-    "local ok, err = pcall(function() Network.SaveGame(gameFile) end); "
-    'return {{ ["issued"] = ok, ["error"] = (ok and "") or tostring(err) }}'
-)
+def _build_save_lua(save_name: str) -> str:
+    """The save body for *save_name*, assembled rather than ``.format``-ed.
+
+    Built by concatenation because both the JSON prelude and the printed
+    result contain Lua table braces, which a ``str.format`` template would
+    require escaping throughout -- a silent-corruption hazard for a body that
+    cannot be tested without a live client. *save_name* is harness-generated
+    (``saves.save_point.save_name_for``'s ``civsim__<run_id>__t<turn:04d>``),
+    never game- or operator-supplied, so plain interpolation is safe here.
+    """
+    return (
+        LUA_JSON_PRELUDE
+        + "local gameFile = {}; "
+        + f'gameFile.Name = "{save_name}"; '
+        + "gameFile.Location = SaveLocations.LOCAL_STORAGE; "
+        + "gameFile.Type = SaveTypes.SINGLE_PLAYER; "
+        + "gameFile.IsAutosave = false; "
+        + "gameFile.IsQuicksave = false; "
+        + "local ok, err = pcall(function() Network.SaveGame(gameFile) end); "
+        + lua_print_json({"issued": "ok", "error": '(ok and "") or tostring(err)'})
+    )
 
 
 class LuaSaveCapability:
@@ -253,7 +277,7 @@ class LuaSaveCapability:
         silently target the wrong Lua state.
         """
         state_index = _resolve_in_game_index(self._in_game_state_index)
-        lua_body = _SAVE_LUA_TEMPLATE.format(save_name=save_name)
+        lua_body = _build_save_lua(save_name)
         result = await self._execute(state_index, lua_body)
         if not isinstance(result, dict) or not result.get("issued"):
             raise NexusError(

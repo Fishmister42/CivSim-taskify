@@ -138,11 +138,32 @@ class TranscriptEntry:
     lists them, from among those not yet consumed -- so two entries with
     the same `match` (e.g. the same read repeated before and after an
     action) serve consecutive calls in order rather than one being reused.
+
+    `repeatable` opts one entry out of that consumption: it stays in the
+    transcript and answers every matching command for the rest of the
+    session. A fixed-length transcript is the right shape for a scripted
+    scenario of known length, but not for a run whose *length is the thing
+    under test* (an end-to-end run plays as many turns as its stop condition
+    takes, issuing the same handful of reads each turn) -- enumerating one
+    entry per expected command there would encode the very sequence the test
+    is supposed to discover.
+
+    `response` may also be a **callable** taking this command's
+    `ReceivedCommand` and returning the value to answer with. That is what
+    lets a fake stand in for a *stateful* game rather than a fixed recording:
+    the turn counter a run reads has to actually advance when the run ends a
+    turn, or `turn.end_turn`'s own verification predicate (`game.turn_number
+    == observed_turn_number + 1`) could never be satisfied by any static
+    transcript. Side effects belong here too -- a real client writes a save
+    file when `Network.SaveGame` is dispatched, and a fake that answers
+    "issued" without writing one would fail the filesystem verification
+    `run/turn_cycle.py` does immediately afterward.
     """
 
     match: str
     response: Any
     state_index: int | None = None
+    repeatable: bool = False
 
 
 @dataclass(frozen=True)
@@ -320,6 +341,19 @@ class FakeNexusServer:
             await self._server.wait_closed()
             self._server = None
 
+    def close_now(self) -> None:
+        """Stop listening without awaiting in-flight connection handlers.
+
+        `stop()` awaits `wait_closed()`, which does not return while a client is still connected
+        -- fine for a test that owns both ends, but a caller driving a *run* does not: nothing in
+        the harness closes its `NexusClient` when a run finishes, so the handler stays live and a
+        graceful stop would block forever. Synchronous so it can be handed straight to
+        `loop.call_soon_threadsafe` during teardown.
+        """
+        if self._server is not None:
+            self._server.close()
+            self._server = None
+
     async def __aenter__(self) -> FakeNexusServer:
         await self.start()
         return self
@@ -369,13 +403,25 @@ class FakeNexusServer:
         self._stray_before.setdefault(before_command_index, []).append(text)
 
     def queue_response(
-        self, response: Any, *, match: str = "", state_index: int | None = None
+        self,
+        response: Any,
+        *,
+        match: str = "",
+        state_index: int | None = None,
+        repeatable: bool = False,
     ) -> None:
         """Append one more transcript entry on top of whatever the
         constructor was given -- for scripting the next call or two inline
-        in a test rather than building a whole transcript up front."""
+        in a test rather than building a whole transcript up front. See
+        `TranscriptEntry` for `repeatable` and for answering with a callable
+        rather than a fixed value."""
         self._transcript.append(
-            TranscriptEntry(match=match, response=response, state_index=state_index)
+            TranscriptEntry(
+                match=match,
+                response=response,
+                state_index=state_index,
+                repeatable=repeatable,
+            )
         )
 
     def set_state_table(self, state_table: Mapping[str, int]) -> None:
@@ -472,7 +518,13 @@ class FakeNexusServer:
                 continue
             if entry.match not in lua_body:
                 continue
-            self._transcript.remove(entry)
+            if not entry.repeatable:
+                self._transcript.remove(entry)
+            # A callable entry stands in for a *stateful* game: it may both compute this
+            # command's answer and perform the side effect a real client would have (see
+            # `TranscriptEntry`). Called with the command itself so it can read the Lua body.
+            if callable(entry.response):
+                return entry.response(received)
             return entry.response
         self.unmatched_requests.append(received)
         return self._default_response

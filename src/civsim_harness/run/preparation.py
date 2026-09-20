@@ -107,7 +107,7 @@ seam pattern already used throughout this codebase (``HostPlatform``,
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -118,6 +118,7 @@ from civsim_harness.errors import BuildMismatchError, NexusError, PreflightError
 from civsim_harness.host.port import HostPlatform
 from civsim_harness.models.common import BuildAcceptance, CapabilityId, CatalogVersionRef
 from civsim_harness.models.config import RunConfiguration, SeedSet
+from civsim_harness.nexus.sentinels import LUA_JSON_PRELUDE, lua_print_json
 from civsim_harness.observe.game_build import is_platform_transition
 
 # --------------------------------------------------------------------------
@@ -969,24 +970,46 @@ def _resolve_host_game_index(source: HostGameStateIndexSource) -> int:
     return source()
 
 
+# Both bodies **print** their result as JSON rather than `return`-ing it: the tuner has no native
+# return channel, so a body ending in `return { ... }` produces no output between its nonce
+# sentinels and `NexusClient.execute_command` fails on an empty result. See
+# `nexus.sentinels.LUA_JSON_PRELUDE`'s own docstring; the `lua/**/*.lua` files follow the same
+# `print(<json>)` convention through their own `CivSim_JsonEncode`. The *calls* below are
+# unchanged and still exactly what the 2026-09-20 capture verified.
+#
 # `(ok and "") or tostring(err)` rather than `ok and nil or tostring(err)`: the latter is the
-# classic Lua and/or ternary trap -- see `saves.save_game`'s own `_SAVE_LUA_TEMPLATE` comment
+# classic Lua and/or ternary trap -- see `saves.save_game`'s own `_build_save_lua` comment
 # for why the always-truthy `""` sidesteps it. Both pcalls are attempted regardless of whether
 # the first fails, so a caller sees whichever failed (or both) rather than only the first.
-_LEADER_SELECTION_WRITE_LUA_TEMPLATE = (
-    "local pc = PlayerConfigurations[0]; "
-    'local okL, errL = pcall(function() pc:SetLeaderTypeName("{leader}") end); '
-    'local okC, errC = pcall(function() pc:SetCivilizationTypeName("{civilization}") end); '
-    "local ok = okL and okC; "
-    'return {{ ["issued"] = ok, ["error"] = (ok and "") or tostring(errL or errC) }}'
-)
+
+
+def _build_leader_selection_write_lua(*, civilization: str, leader: str) -> str:
+    """The civilization/leader write body. Assembled rather than ``.format``-ed, for the same
+    reason ``saves.save_game._build_save_lua`` is: both the JSON prelude and the printed result
+    contain Lua braces a format template would have to escape throughout. The two names are
+    always supplied by the caller's seed set/run configuration, never hard-coded here."""
+    return (
+        LUA_JSON_PRELUDE
+        + "local pc = PlayerConfigurations[0]; "
+        + f'local okL, errL = pcall(function() pc:SetLeaderTypeName("{leader}") end); '
+        + "local okC, errC = pcall(function() "
+        + f'pc:SetCivilizationTypeName("{civilization}") end); '
+        + "local ok = okL and okC; "
+        + lua_print_json({"issued": "ok", "error": '(ok and "") or tostring(errL or errC)'})
+    )
+
 
 # The actual verification (this section's own docstring point 3): read straight back through
 # `PlayerConfigurations`, never the Create Game UI.
 _LEADER_SELECTION_READBACK_LUA = (
-    "local pc = PlayerConfigurations[0]; "
-    'return { ["civilization"] = pc:GetCivilizationTypeName(), '
-    '["leader"] = pc:GetLeaderTypeName() }'
+    LUA_JSON_PRELUDE
+    + "local pc = PlayerConfigurations[0]; "
+    + lua_print_json(
+        {
+            "civilization": "pc:GetCivilizationTypeName()",
+            "leader": "pc:GetLeaderTypeName()",
+        }
+    )
 )
 
 
@@ -1054,7 +1077,7 @@ class LuaLeaderSelectionApplier:
         """
         try:
             write_state_index = _resolve_host_game_index(self._host_game_state_index)
-            write_body = _LEADER_SELECTION_WRITE_LUA_TEMPLATE.format(
+            write_body = _build_leader_selection_write_lua(
                 civilization=civilization, leader=leader
             )
             write_result = await self._execute(write_state_index, write_body)
@@ -1092,3 +1115,327 @@ class LuaLeaderSelectionApplier:
             actual_civilization=readback.get("civilization"),
             actual_leader=readback.get("leader"),
         )
+
+
+# --------------------------------------------------------------------------
+# The game-setup read-back -- one snapshot binding this module's two
+# synchronous read seams (`verify_configuration`'s `read_setting` and
+# `turn_timer_preflight`'s `read_turn_timer`) to a live client
+# --------------------------------------------------------------------------
+#
+# Both seams above are deliberately synchronous callables, while live Nexus dispatch is async --
+# the same split :class:`LuaLeaderSelectionApplier` documents for the write side. The bridge is a
+# *snapshot*: :meth:`LuaGameSetupReader.read` makes exactly one async round trip, reading every
+# field the caller asks about at one instant, and returns a :class:`GameSetupSnapshot` whose
+# :meth:`~GameSetupSnapshot.read_setting` / :meth:`~GameSetupSnapshot.read_turn_timer` are plain
+# synchronous lookups over what was read. One round trip, one consistent view, and neither seam's
+# signature has to change.
+#
+# **Verification status is per field, and recorded per field.** Only the getters marked VERIFIED
+# below were actually observed returning a value on a live client (Linux, native Aspyr,
+# 2026-09-20 -- `spikes/preset_readback.lua` and its captured output `spikes/preset_readback.txt`).
+# The rest name the *shape* the Civ VI configuration API uses for that kind of setting; they are
+# UNVERIFIED in exactly the sense `observe/game_build.py`'s own version probe and several
+# `lua/**/*.lua` call shapes already use that word. Every getter is individually `pcall`-wrapped
+# and every field independently nil-able, so an UNVERIFIED getter that does not exist on a given
+# build reports that one field as unread -- it never takes the whole snapshot down, and it never
+# substitutes a plausible-looking value.
+#
+# **A field with no getter, and a field whose getter failed, are both reported as unread -- never
+# as matching.** :meth:`GameSetupSnapshot.read_setting` returns an :class:`UnreadSetting` marker
+# for those, which compares unequal to every configured value, so `verify_configuration` records
+# them as mismatches. That is the intended, fail-closed outcome: FR-002/V2 require the run to fail
+# when the game's actual setup cannot be confirmed to match what was configured, and "we could not
+# read it" is not "it matched".
+
+#: Dotted configured-field name -> (Lua expression that reads it back, whether that expression has
+#: been observed working on a live client). Keys are the names :func:`configured_fields` produces;
+#: a configured field absent from this table has no read path at all and is reported unread.
+#:
+#: ``civsim_resolve`` (spliced in ahead of these expressions) is the spike's own hash -> name
+#: reverse lookup: several ``GameConfiguration`` getters return a ``DB.MakeHash`` integer whose
+#: meaning is build-dependent, and the name resolved through that same build's own ``GameInfo``
+#: table is what stays comparable -- the identical reasoning :class:`TurnTimerReading` already
+#: records for the turn-timer type.
+_SETTING_GETTERS: Mapping[str, tuple[str, bool]] = {
+    # VERIFIED -- read back live from the `CivSim DEFAULT` preset (spikes/preset_readback.txt).
+    "civilization": ("PlayerConfigurations[0]:GetCivilizationTypeName()", True),
+    "leader": ("PlayerConfigurations[0]:GetLeaderTypeName()", True),
+    "ruleset": ("GameConfiguration.GetRuleSet()", True),
+    "difficulty": (
+        'civsim_resolve(GameConfiguration.GetHandicapType(), "Difficulties", "DifficultyType")',
+        True,
+    ),
+    "game_settings.game_speed": (
+        'civsim_resolve(GameConfiguration.GetGameSpeedType(), "GameSpeeds", "GameSpeedType")',
+        True,
+    ),
+    "game_settings.starting_era": (
+        'civsim_resolve(GameConfiguration.GetStartEra(), "Eras", "EraType")',
+        True,
+    ),
+    "opponents.city_state_count": ('MapConfiguration.GetValue("CITY_STATE_COUNT")', True),
+    # UNVERIFIED -- the API shape for this kind of setting, never observed returning this
+    # particular value on a live client. Fails closed to "unread" if the call does not exist.
+    "map_seed": ('tostring(MapConfiguration.GetValue("RANDOM_SEED"))', False),
+    "map_settings.map_type": ("MapConfiguration.GetScript()", False),
+    "map_settings.map_size": (
+        'civsim_resolve(MapConfiguration.GetValue("MAP_SIZE"), "Maps", "MapSizeType")',
+        False,
+    ),
+    "map_settings.resources": ('tostring(MapConfiguration.GetValue("RESOURCES"))', False),
+    "opponents.major_count": ("GameConfiguration.GetAIPlayerCount()", False),
+    # `mod_set` is the one table-valued field: `configured_fields` renders it as a list of
+    # `{id, version}` mappings (`ModRef.model_dump()`), so the read-back has to build the same
+    # shape. The live sweep did enumerate this host's 22 active mods, but not through a call whose
+    # exact name was recorded, so the accessor below is UNVERIFIED like its neighbours and fails
+    # closed to "unread" if it does not exist on a given build.
+    "mod_set": (
+        "(function() local out = {}; "
+        "for _, m in ipairs(Modding.GetActiveMods() or {}) do "
+        'out[#out + 1] = { ["id"] = tostring(m.Id), ["version"] = tostring(m.Version) } end; '
+        "return out end)()",
+        False,
+    ),
+}
+
+#: The turn-timer read :func:`turn_timer_preflight` consumes. Kept out of :data:`_SETTING_GETTERS`
+#: because it is not a configured field: it is a *precondition* on the host, reported through its
+#: own :class:`TurnTimerReading` rather than compared against anything in the run configuration.
+#: VERIFIED: ``TURNTIMER_NONE`` was read back from the ``CivSim DEFAULT`` preset through exactly
+#: this call (spikes/turn-timer-blocker-linux.md's resolution).
+_TURN_TIMER_HASH_LUA = "GameConfiguration.GetTurnTimerType()"
+_TURN_TIMER_NAME_LUA = (
+    f'civsim_resolve({_TURN_TIMER_HASH_LUA}, "TurnTimerTypes", "TurnTimerType")'
+)
+
+#: The spike's own hash -> name reverse lookup, spliced ahead of every field getter.
+_RESOLVE_HELPER_LUA = (
+    "local function civsim_resolve(value, tableName, field) "
+    "local found = nil; "
+    "pcall(function() "
+    "for row in GameInfo[tableName]() do "
+    "if row.Hash == value then found = row[field] end "
+    "end end); "
+    "return found end; "
+)
+
+
+class UnreadSetting:
+    """The value :meth:`GameSetupSnapshot.read_setting` reports for a field that could not be
+    read -- no getter is registered for it, or its getter errored or returned ``nil``.
+
+    Compares unequal to everything, including another instance, so a field that could not be read
+    can never be mistaken for one that matched: :func:`verify_configuration` records it as a
+    :class:`SettingMismatch` whose ``actual`` names why. This is the fail-closed half of FR-002/V2
+    -- a run whose setup cannot be *confirmed* must not proceed on the assumption it is fine.
+    """
+
+    __slots__ = ("reason",)
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def __eq__(self, other: object) -> bool:
+        return False
+
+    def __ne__(self, other: object) -> bool:
+        return True
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __repr__(self) -> str:
+        return f"<unread: {self.reason}>"
+
+
+@dataclass(frozen=True)
+class GameSetupSnapshot:
+    """One instant's read-back of the live client's game setup.
+
+    ``values`` holds only the fields that actually came back with a value; ``unread`` maps every
+    other requested field to why it could not be read. The two are disjoint and together cover
+    exactly what was asked for, so a caller can report the gap precisely rather than infer it from
+    a missing key.
+    """
+
+    values: Mapping[str, Any]
+    unread: Mapping[str, str]
+    turn_timer_type: str | None = None
+    turn_timer_hash: int | None = None
+    turn_timer_reason: str | None = None
+
+    def read_setting(self, name: str) -> Any:
+        """The synchronous ``read_setting`` seam :func:`verify_configuration` takes.
+
+        Returns an :class:`UnreadSetting` -- never a guess, never the configured value -- for a
+        field this snapshot could not read.
+        """
+        if name in self.values:
+            return self.values[name]
+        return UnreadSetting(
+            self.unread.get(name, "no read path is registered for this configured field")
+        )
+
+    def read_turn_timer(self) -> TurnTimerReading:
+        """The synchronous ``read_turn_timer`` seam :func:`turn_timer_preflight` takes.
+
+        Reports ``UNDETERMINABLE`` -- never "no timer" -- when the type could not be resolved:
+        :func:`turn_timer_preflight`'s own contract is that an undeterminable reading records the
+        gap rather than defaulting to safe, and this reader must not pre-empt that decision by
+        inventing a name.
+        """
+        if self.turn_timer_type is None:
+            return TurnTimerReading(
+                status=TurnTimerReadStatus.UNDETERMINABLE,
+                reason=self.turn_timer_reason
+                or "the client did not report a resolvable turn-timer type",
+            )
+        return TurnTimerReading(
+            status=TurnTimerReadStatus.DETERMINED,
+            turn_timer_type=self.turn_timer_type,
+            turn_timer_hash=self.turn_timer_hash,
+        )
+
+
+class LuaGameSetupReader:
+    """Reads the live client's game setup back in one dispatch (see this section's own notes).
+
+    Structured like :class:`LuaLeaderSelectionApplier` above: *execute* is a plain
+    ``execute(state_index, lua_body)`` callable (typically
+    :meth:`~civsim_harness.nexus.client.NexusClient.execute_command`, adapted by the composition
+    root), and *state_index_source* is the connected session itself rather than a bare ``int``,
+    re-resolved by name on every call for the same phase-transition reason.
+
+    *state_name* defaults to ``"InGame"``: the configuration globals this reads
+    (``GameConfiguration``/``MapConfiguration``/``PlayerConfigurations``) were observed live in
+    ``HostGame``, a UI-side state, and ``InGame`` is that state's in-game counterpart --
+    ``GameCore_Tuner`` is the gamecore side, where a live spike confirmed the UI-side globals are
+    absent entirely. A caller reading *before* the game loads passes ``"HostGame"``, which is
+    where these reads are actually verified.
+    """
+
+    def __init__(
+        self,
+        execute: Callable[[int, str], Awaitable[Any]],
+        *,
+        state_index_source: HostGameStateIndexSource,
+        state_name: str = "InGame",
+    ) -> None:
+        if not isinstance(state_index_source, _HasHostGameStateIndices) and not callable(
+            state_index_source
+        ):
+            raise TypeError(
+                "state_index_source must be a zero-argument callable returning the current Lua "
+                "state index, or a connected Nexus client exposing `.state_indices` -- never a "
+                "bare int captured once at construction (see this module's docstring); got "
+                f"{type(state_index_source).__name__!r}"
+            )
+        self._execute = execute
+        self._state_index_source = state_index_source
+        self._state_name = state_name
+
+    async def read(self, field_names: Sequence[str]) -> GameSetupSnapshot:
+        """Read every name in *field_names* that has a registered getter, plus the turn-timer
+        type, in one dispatch.
+
+        Never raises for a field-level failure: a getter that errors, returns ``nil``, or is not
+        registered at all is reported in :attr:`GameSetupSnapshot.unread`. A *transport* failure
+        (:class:`~civsim_harness.errors.NexusError` -- an unresolvable state index, a dropped
+        connection) does propagate, since nothing was read at all and reporting that as "every
+        field is unread" would erase the distinction between a broken connection and a build whose
+        configuration API differs.
+        """
+        requested = tuple(field_names)
+        known = [name for name in requested if name in _SETTING_GETTERS]
+        unread: dict[str, str] = {
+            name: "no read path is registered for this configured field"
+            for name in requested
+            if name not in _SETTING_GETTERS
+        }
+
+        state_index = _resolve_named_state_index(self._state_index_source, self._state_name)
+        result = await self._execute(state_index, self._build_lua(known))
+
+        if not isinstance(result, dict):
+            raise NexusError(
+                "the game-setup read-back did not return a table",
+                detail={"state_name": self._state_name, "result": repr(result)},
+            )
+
+        values: dict[str, Any] = {}
+        for name in known:
+            _expression, verified = _SETTING_GETTERS[name]
+            raw = result.get(_result_key(name))
+            if raw is None:
+                unread[name] = (
+                    "the client's configuration API returned no value for this field "
+                    f"({'verified' if verified else 'UNVERIFIED'} getter)"
+                )
+                continue
+            values[name] = raw
+
+        timer_name = result.get("turn_timer_type")
+        timer_hash = result.get("turn_timer_hash")
+        return GameSetupSnapshot(
+            values=values,
+            unread=unread,
+            turn_timer_type=timer_name if isinstance(timer_name, str) else None,
+            turn_timer_hash=timer_hash if isinstance(timer_hash, int) else None,
+            turn_timer_reason=(
+                None
+                if isinstance(timer_name, str)
+                else "GameConfiguration.GetTurnTimerType() did not resolve to a named type on "
+                "this build"
+            ),
+        )
+
+    def _build_lua(self, field_names: Sequence[str]) -> str:
+        """One body reading every requested field, each independently ``pcall``-guarded."""
+        fields: dict[str, str] = {}
+        statements: list[str] = []
+        for name in field_names:
+            expression, _verified = _SETTING_GETTERS[name]
+            local = f"civsim_v_{_result_key(name)}"
+            statements.append(
+                f"local ok_{local}, {local} = pcall(function() return {expression} end); "
+                f"if not ok_{local} then {local} = nil end; "
+            )
+            fields[_result_key(name)] = local
+
+        statements.append(
+            "local ok_tt, civsim_tt = pcall(function() return "
+            f"{_TURN_TIMER_NAME_LUA} end); if not ok_tt then civsim_tt = nil end; "
+        )
+        statements.append(
+            "local ok_tth, civsim_tth = pcall(function() return "
+            f"{_TURN_TIMER_HASH_LUA} end); if not ok_tth then civsim_tth = nil end; "
+        )
+        fields["turn_timer_type"] = "civsim_tt"
+        fields["turn_timer_hash"] = "civsim_tth"
+
+        return (
+            LUA_JSON_PRELUDE + _RESOLVE_HELPER_LUA + "".join(statements) + lua_print_json(fields)
+        )
+
+
+def _result_key(field_name: str) -> str:
+    """A dotted configured-field name as a flat JSON key / Lua local suffix
+    (``game_settings.game_speed`` -> ``game_settings__game_speed``)."""
+    return field_name.replace(".", "__")
+
+
+def _resolve_named_state_index(source: HostGameStateIndexSource, state_name: str) -> int:
+    """:func:`_resolve_host_game_index`, generalised to any state name -- the same "resolve by
+    name, fresh, every call" discipline, for a reader that may legitimately run in ``HostGame``
+    (before the game loads) or ``InGame`` (after)."""
+    if isinstance(source, _HasHostGameStateIndices):
+        indices = source.state_indices
+        if indices is None or state_name not in indices.by_name:
+            raise NexusError(
+                f"Cannot resolve the {state_name!r} Lua state index -- this Nexus session has "
+                "not connected, or the client is not currently in the phase whose state table "
+                "contains it",
+                detail={"reason": "state_index_unresolved", "state_name": state_name},
+            )
+        return indices.by_name[state_name]
+    return source()

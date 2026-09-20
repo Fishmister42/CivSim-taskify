@@ -43,10 +43,11 @@ planned.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -77,6 +78,15 @@ from civsim_harness.telemetry.logging import get_harness_logger, log_event
 
 def _utcnow() -> Timestamp:
     return datetime.now(UTC)
+
+
+async def _await_on_this_loop(awaitable: Awaitable[PreparedRun]) -> PreparedRun:
+    """Wrap any ``Awaitable[PreparedRun]`` as a plain ``Coroutine`` -- what
+    ``asyncio.run_coroutine_threadsafe`` requires -- regardless of what kind of awaitable a
+    ``RunnerDependencies.prepare_run`` implementation happened to hand back. See
+    :meth:`Runner._resolve_prepared_run`.
+    """
+    return await awaitable
 
 
 @dataclass(frozen=True)
@@ -112,6 +122,17 @@ class RunnerDependencies:
     "invalid configuration, nothing prepared"; any other :class:`~civsim_harness.errors.
     HarnessError` it raises is treated as a preparation failure the same way.
 
+    ``prepare_run`` may be a plain synchronous callable (every test in this codebase before T209
+    passes one) **or** a coroutine function. The composition root's own real implementation
+    (:mod:`civsim_harness.run.composition`) needs the latter: connecting its ``NexusClient`` is
+    inherently ``async``, and -- critically -- it must run on *this runner's own* background event
+    loop (:attr:`Runner._loop`), the same loop every later per-turn Nexus call runs on, never a
+    throwaway loop of its own (an ``asyncio`` socket/lock binds to whichever loop first awaits it;
+    connecting on a different one than the loop that later plays turns would break the first real
+    call). :meth:`Runner._resolve_prepared_run` is where that bridging happens -- see its own
+    docstring -- so this field's declared type accepts either shape without any caller needing to
+    know which one a given composition supplies.
+
     ``build_turn_dependencies`` builds one turn's :class:`~civsim_harness.run.turn_cycle.
     TurnCycleDependencies` given the prepared run and the turn number about to be played.
     ``evaluate_stop_facts`` reports what :func:`~civsim_harness.run.stop.evaluate_stop` needs to
@@ -120,7 +141,7 @@ class RunnerDependencies:
     """
 
     store: MatchStore
-    prepare_run: Callable[[RunConfiguration], PreparedRun]
+    prepare_run: Callable[[RunConfiguration], PreparedRun | Awaitable[PreparedRun]]
     build_turn_dependencies: Callable[[PreparedRun, int], TurnCycleDependencies]
     evaluate_stop_facts: Callable[[PreparedRun, int], StopEvaluation]
     connection_health: Callable[[], ConnectionHealth] = field(
@@ -184,7 +205,7 @@ class Runner(RunnerProtocol):
     def start(self, config_path: Path) -> RunId:
         config = load_run_configuration_file(config_path)
         try:
-            prepared = self._deps.prepare_run(config)
+            prepared = self._resolve_prepared_run(config)
         except RunPreparationFailed:
             raise
         except HarnessError as exc:
@@ -202,6 +223,43 @@ class Runner(RunnerProtocol):
         # host-tier gate, T072's build pin, etc.) is returned as-is: nothing to play, and the caller
         # discovers the failure through get_status, exactly as RunnerProtocol's docstring specifies.
         return run_id
+
+    def _resolve_prepared_run(self, config: RunConfiguration) -> PreparedRun:
+        """Call ``self._deps.prepare_run(config)`` and, if it returns something awaitable rather
+        than a plain :class:`PreparedRun`, run it to completion on *this runner's own* background
+        event loop (:attr:`self._loop`) -- never a throwaway loop of this method's own (T210).
+
+        **Why this matters.** :class:`~civsim_harness.run.composition`'s real ``prepare_run``
+        connects a ``NexusClient`` whose ``asyncio.Lock`` and socket-backed stream reader/writer
+        bind to whichever event loop first awaits them (``nexus/client.py``'s own module
+        docstring). That same connected client is what every later per-turn Nexus call
+        (``build_turn_dependencies`` -> ``TurnCycleDependencies`` -> ``run_turn_cycle`` ->
+        ``run_decision_loop``) dispatches through -- and those calls are always awaited from
+        *this* runner's own coroutine (:meth:`_play_run`, scheduled onto ``self._loop`` via
+        :meth:`_schedule`). If ``prepare_run`` connected on a *different* loop (e.g. one created
+        and immediately closed by a bare ``asyncio.run(...)``), the very first per-turn call would
+        fail cross-loop -- or, once the throwaway loop is closed, simply be unable to perform I/O
+        at all. Scheduling the *same* coroutine object onto ``self._loop`` instead -- rather than
+        creating it there in the first place -- is safe: constructing a coroutine object (calling
+        an ``async def`` function) needs no running loop of its own, only *awaiting* it does.
+
+        Calling ``self._deps.prepare_run(config)`` happens on *this* thread (whichever thread
+        called :meth:`start`), exactly as it always did -- only the awaiting, when there is
+        anything to await, moves onto ``self._loop``. A plain synchronous ``prepare_run`` (every
+        pre-T209 test in this codebase passes one) never produces anything awaitable, so it takes
+        the fast path below unchanged: this method is a strict superset of the old
+        ``self._deps.prepare_run(config)`` call it replaces, not a behaviour change for any
+        existing caller.
+        """
+        result = self._deps.prepare_run(config)
+        if inspect.isawaitable(result):
+            # `run_coroutine_threadsafe` wants a `Coroutine` specifically, not any `Awaitable` --
+            # `_await_on_this_loop` below is a trivial wrapper that makes that true regardless of
+            # what kind of awaitable `result` actually is, at the cost of one extra `await` layer.
+            return asyncio.run_coroutine_threadsafe(
+                _await_on_this_loop(result), self._loop
+            ).result()
+        return result
 
     def request_pause(self, run_id: RunId) -> None:
         state = self._require_state(run_id)

@@ -42,6 +42,7 @@ from typing import Any, Protocol, runtime_checkable
 from civsim_harness.errors import NexusError, PreflightError
 from civsim_harness.host.detect import OperatingSystem
 from civsim_harness.host.port import HostPlatform
+from civsim_harness.nexus.sentinels import LUA_JSON_PRELUDE, lua_print_json
 
 # --------------------------------------------------------------------------
 # Composite platform/version identity (R20)
@@ -146,9 +147,15 @@ async def read_game_build(
 # written to fail closed (any Lua-side error, or a missing global, is
 # treated as "not reachable") rather than assert something unconfirmed. This
 # is the one place to update once R18 records its finding.
+# The result is **printed** as JSON, not ``return``-ed: the tuner has no native return channel,
+# so a body ending in ``return { ... }`` prints nothing between its nonce sentinels and the
+# command fails on an empty result (see ``nexus.sentinels.LUA_JSON_PRELUDE``). Every
+# ``lua/**/*.lua`` file already follows the same ``print(<json>)`` convention.
 _VERSION_LUA = (
-    'local ok, value = pcall(function() return tostring(Modding.GetActiveGameVersion()) end); '
-    'return { ["ok"] = ok, ["version"] = ok and value or nil }'
+    LUA_JSON_PRELUDE
+    + "local ok, value = pcall(function() "
+    + "return tostring(Modding.GetActiveGameVersion()) end); "
+    + lua_print_json({"ok": "ok", "version": "ok and value or nil"})
 )
 
 

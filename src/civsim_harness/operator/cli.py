@@ -12,14 +12,16 @@ The CLI never presents turn records, decisions, metrics, or captures (FR-053,
 Principle VI) -- ``run status`` returns exactly ``operator.schemas.RunStatusView``,
 the same closed shape ``GET /runs/{id}/status`` (``operator/api.py``) returns.
 
-**Runner wiring.** ``src/civsim_harness/run/runner.py`` (T116) does not exist
-yet -- see ``operator/runner_protocol.py`` for the exact seam it must satisfy.
-Until it does, this module resolves a runner through an overridable factory:
-call :func:`configure_runner_factory` once at process start-up (e.g. from a
-small bootstrap ``__main__`` the eventual integration owns) to wire a real
-one; tests call it to inject a fake. Invoking a ``run`` subcommand with no
-factory configured fails with a clear, actionable message rather than an
-import error or a stack trace naming a module that does not exist.
+**Runner wiring.** This module resolves a runner through an overridable
+factory, wired at import to :func:`default_runner_factory` -- which composes
+the real thing (``run/composition.py``'s ``build_runner_dependencies`` around
+``run/runner.py``'s ``Runner``, T209). Assigning the factory constructs
+nothing; the catalog is loaded and the tuner socket opened only when a ``run``
+subcommand actually asks for a runner, so ``--help``, ``doctor`` and every
+``audit`` command stay as cheap as they were. Tests (and embedders wanting a
+different composition) override it via :func:`configure_runner_factory`, and
+passing ``None`` clears it entirely -- which is the only way a ``run``
+subcommand now reports "no runner is configured".
 
 **``run branch`` needs no new seam.** A branch document is an ordinary run
 configuration plus a ``branch_from`` block (``config/run_config.py``); this
@@ -118,6 +120,11 @@ def version() -> None:
 # Runner wiring -- see the module docstring
 # --------------------------------------------------------------------------
 
+#: Wired to :func:`default_runner_factory` at the bottom of this module, so an ordinary `civsim`
+#: process reaches a real runner with no bootstrap step of its own. Tests (and any embedder
+#: wanting a different composition) override it through :func:`configure_runner_factory`; passing
+#: ``None`` clears it entirely, which is what makes `_get_runner`'s "no runner is configured"
+#: branch reachable and testable rather than dead code.
 _runner_factory: Callable[[], RunnerProtocol] | None = None
 
 
@@ -132,13 +139,47 @@ def configure_runner_factory(factory: Callable[[], RunnerProtocol] | None) -> No
 def _get_runner() -> RunnerProtocol:
     if _runner_factory is None:
         typer.echo(
-            "no runner is configured -- civsim_harness.run.runner (T116) is a later wave's "
-            "addition; call civsim_harness.operator.cli.configure_runner_factory(...) to wire "
-            "one before invoking a `run` subcommand (see operator/runner_protocol.py).",
+            "no runner is configured -- the default factory was explicitly cleared by calling "
+            "civsim_harness.operator.cli.configure_runner_factory(None); call it again with a "
+            "factory (or default_runner_factory) before invoking a `run` subcommand.",
             err=True,
         )
         raise typer.Exit(code=1)
     return _runner_factory()
+
+
+def default_runner_factory() -> RunnerProtocol:
+    """Build the real, fully composed :class:`~civsim_harness.run.runner.Runner` (T209).
+
+    This is what makes ``civsim run start`` reach a runner at all. Until the composition root
+    landed, ``_runner_factory`` was ``None`` in every production process and the command failed on
+    its first line, before the configuration file was even parsed -- the single blocking finding of
+    ``specs/002-civ-playing-harness/integration-readiness.md``.
+
+    Resolves its collaborators from exactly the conventions the rest of this CLI already uses: the
+    store from ``$CIVSIM_STORE_PATH`` (via :func:`_open_store`, the same construction ``doctor``
+    and every ``audit`` subcommand use), the host adapter from
+    :func:`~civsim_harness.host.factory.get_host_platform`, and the catalog from
+    :data:`DEFAULT_CATALOG_ROOT`. Imported lazily so ``civsim --help`` and the ``audit``/``doctor``
+    commands never pay for loading the run stack they do not use.
+
+    **The host support probe is left at ``UNPROBED``**, matching ``doctor``'s own default: no
+    per-platform R19 probe exists in this codebase yet, so the honest answer is "not yet probed",
+    which :func:`~civsim_harness.observe.host_gate.evaluate_host_gate` resolves to
+    ``UNSUPPORTED`` and refuses before turn 1 (FR-054). That refusal is a real, recorded
+    environment finding rather than a wiring failure -- a host claiming a capability nothing ever
+    demonstrated is exactly what that gate exists to prevent.
+    """
+    from civsim_harness.run.composition import build_runner_dependencies
+    from civsim_harness.run.runner import Runner
+
+    return Runner(
+        build_runner_dependencies(
+            store=_open_store(None),
+            host=get_host_platform(),
+            catalog_root=DEFAULT_CATALOG_ROOT,
+        )
+    )
 
 
 # --------------------------------------------------------------------------
@@ -234,7 +275,13 @@ def run_start(config_path: Path = _ConfigPathArgument) -> None:
     try:
         run_id = commands.start(runner, config_path)
     except HarnessError as exc:
+        # The message alone is often just "run preparation failed; no run was created" -- the
+        # actionable part (which gate refused, and why) lives in `detail`. Printing only the
+        # message leaves an operator with nothing to act on, which is exactly the shape of
+        # failure this command is most likely to produce against a real client.
         typer.echo(f"run start failed: {exc.message}", err=True)
+        for key, value in (exc.detail or {}).items():
+            typer.echo(f"  {key}: {value}", err=True)
         raise typer.Exit(code=1) from exc
 
     status = runner.get_status(run_id)
@@ -765,6 +812,16 @@ def audit_secrets(run_id: str, store_path: Path | None = _StorePathOption) -> No
     """Zero credential-shaped values appear in RUN_ID's records or captures
     (SC-016, SC-018)."""
     _run_store_only_audit(audit_module.audit_secrets, "secrets", run_id, store_path)
+
+
+# --------------------------------------------------------------------------
+# Default wiring (T209) -- "call configure_runner_factory once at process
+# start-up" is satisfied here, at import, rather than left to a bootstrap
+# module no production entry point ever had. Assigning the factory (never
+# calling it) keeps this free: nothing is constructed, no catalog is loaded
+# and no socket is opened until a `run` subcommand actually asks for a runner.
+# --------------------------------------------------------------------------
+configure_runner_factory(default_runner_factory)
 
 
 if __name__ == "__main__":
