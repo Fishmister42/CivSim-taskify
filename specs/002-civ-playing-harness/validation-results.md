@@ -30,7 +30,7 @@ open items below that block calling this deliverable fully compliant.
 
 | Principle | Status | Headline |
 |---|---|---|
-| I — Human-Parity Information & Action Boundary | **Partially evidenced** | Structural boundary is real and tested; the `EnableDebugMenu` question is resolved with no constitutional tension; capture pixel extraction is stubbed everywhere and the live tier hasn't run |
+| I — Human-Parity Information & Action Boundary | **Partially evidenced** | Structural boundary is real and tested; the `EnableDebugMenu` question is resolved with no constitutional tension; capture pixel extraction now works on Linux/X11 through the harness itself, but is still stubbed on Windows/macOS/Wayland and has never run against a real Civ VI frame |
 | II — Firetuner-First, Skill-Extensible Harness | **Compliant** | All 23 capabilities are `path: firetuner`; `Network.SaveGame` is now live-verified 4/4, so the one candidate bespoke path is not merely unneeded but **forbidden** |
 | III — Complete Match Telemetry | **Compliant (structurally enforced)** | `TurnPersistedToken` still makes end-turn unreachable without a durably-acknowledged write; two real defects that would have violated this principle's spirit were found by the integration tier and fixed |
 | IV — Reproducible, Seeded Experimentation | **Partially evidenced** | FR-034's identical-position guarantee is now verified field-for-field across a save/load round trip; but `Network.LoadGame` itself refuses from Lua, so the *automated* load path does not exist — only the UI path does |
@@ -103,6 +103,13 @@ open items below that block calling this deliverable fully compliant.
   about the harness's own capture path.** It used a raw, harness-independent `import -window` call,
   not `host/linux/adapter.py`'s own (still stubbed) `capture_window`. Strong, concrete evidence the
   design will work once implemented — not proof the shipped adapter clears the same gates.
+
+  > **Superseded for Linux, 2026-09-20.** `capture_window` is implemented and returns real pixels;
+  > occlusion immunity has been re-demonstrated **through the harness's own adapter**
+  > (`spikes/r6-xcomposite-readback-linux.md`). Two caveats keep this from closing Principle I's
+  > visual half: the frames were captured from ordinary X11 windows rather than **Civilization VI
+  > itself** (the client could not be launched — `spikes/steam-dependency-linux.md`), and Windows
+  > and macOS pixel extraction remain stubbed.
 - **The live tier has not run.** `tests/live/test_capture_hygiene.py` (T194) and
   `tests/live/test_host_platform.py` (T198) are the tests that would exercise a real captured frame
   against a real client; neither has been executed as part of this audit.
@@ -359,6 +366,46 @@ cross-referenced here to avoid duplication.
   Wayland, the `xdg-desktop-portal` ScreenCast path, and reporting synthetic input as unavailable
   rather than attempting it are all unexecuted code. A Linux pass is not Linux coverage in general.
 
+### XComposite pixmap readback: implemented, and the two traps in it
+
+`spikes/r6-xcomposite-readback-linux.md` (T052, Linux/X11, `Composite` 0.4, python-xlib 0.33).
+`capture_window` is no longer a stub — it returns real `BGRA8` pixels, ~79 ms for 1920×1200.
+
+- **A running compositor is not sufficient; the harness must redirect the window itself.**
+  `NameWindowPixmap` fails with **`BadMatch`** unless the calling client has issued
+  `CompositeRedirectWindow` for that window. Muffin redirects root's *subwindows*, which does not
+  satisfy it. Measured both ways: naming without redirecting is `BadMatch`, the identical call after
+  `redirect_window` succeeds. `RedirectAutomatic` leaves the client's own display untouched.
+- **python-xlib reports X errors asynchronously, and this produced a confident false pass.** Both
+  requests return an object even when the server rejects them; the `BadMatch` above surfaced only as
+  an out-of-band print, then resurfaced later as a misleading `BadDrawable`. **Every request now
+  carries an explicit `CatchError` + `sync()`.** Without it, `capture_window` reports success while
+  holding a pixmap the server never created — the worst failure available to this function.
+- **Channel order was verified with known colours, not inferred.** `#ff0000` reads back
+  `00 00 ff ff` and `#3366cc` reads back `cc 66 33 ff` — B,G,R,pad, emitted as `BGRA8`, which the
+  screening gates already decode. A silent R/B swap would pass every size assertion while corrupting
+  every image the agent sees; MSBFirst servers are **refused rather than guessed at**.
+- **Occlusion immunity re-proven through the harness's own adapter**, not `import`: with an occluder
+  raised over 420×260 px of the target, the harness-captured target frame is complete and contains
+  no trace of it (`r6-evidence/harness-xcomposite-target.png`). No root grab appears anywhere in the
+  evidence script, including to illustrate the overlap.
+- **Preflight implemented** as `capture_preconditions()`: compositing via `_NET_WM_CM_Sn` selection
+  ownership (never `XDG_SESSION_TYPE`), plus `unredirect-fullscreen-windows`, which warns on `true`
+  *and* on unknown. It is additive to the port — **a port-level preflight hook is the right
+  long-term home, flagged for the owning side rather than changed here.**
+- **Still outstanding: a real Civilization VI frame through this path.** Verified against ordinary
+  X11 windows only, because the client could not be launched (see below). Fullscreen capture, GPU
+  overlays, and redirect churn on a live game window are all unmeasured.
+
+### Steam is a hard dependency of the live node
+
+`spikes/steam-dependency-linux.md`. Civ VI **cannot** run without a running, signed-in Steam client:
+launched directly it fails `SteamAPI_Init` and puts up a DRM dialog that exits. Since an account can
+be in a game on only one machine at a time, **the live node is unavailable whenever the owner is
+gaming on that account** — live tasks must be scheduled around it, and an unattended run can be
+pre-empted. Steam offline mode does not help from a signed-out state (logout clears the credential
+cache), nor does Family Sharing (borrowing is blocked while the lender plays).
+
 ### The Lua sandbox: what exists, what doesn't, and what changes by phase
 
 `spikes/lua-api-verification-linux.md`, `spikes/load-path-linux.md`, `spikes/r5-save-path.md`:
@@ -593,15 +640,25 @@ they are not lost between this audit and whichever future session runs `/speckit
 Stated plainly, gathered in one place rather than left scattered across the principle sections
 above:
 
-- **The live tier has not run.** No `tests/live/*` test has been executed as part of this audit.
-  Everything above from spike work is real live-client evidence gathered by hand-written probe
-  scripts deliberately independent of `civsim_harness` (per `spikes/r5-save-path.md`: "these results
-  are evidence about the game rather than about our implementation"), not the harness's own live
-  test suite against a client.
-- **Capture pixel extraction is stubbed on all three host adapters.** Linux is furthest along (the
-  `XComposite`/`NameWindowPixmap` path is confirmed viable, not yet wired up); Windows and macOS
-  remain unimplemented stubs. No platform has proven a real captured frame clears the parity
-  screening gates through the harness's own code.
+- **No live test has run against a real Civilization VI client.** Everything above from spike work is
+  real live-client evidence gathered by hand-written probe scripts deliberately independent of
+  `civsim_harness` (per `spikes/r5-save-path.md`: "these results are evidence about the game rather
+  than about our implementation"), not the harness's own live test suite against a client.
+
+  Partial exception, 2026-09-20: `tests/live/test_linux_xcomposite_capture.py` (5 tests) **has** run
+  green and does exercise the harness's own `capture_window`. It targets ordinary X11 windows rather
+  than Civ VI, so it proves the pixel pipeline, not the client integration.
+- **Capture pixel extraction is implemented on Linux/X11 only; Windows and macOS remain stubs.**
+  The Linux `XComposite`/`NameWindowPixmap` path now returns real, correctly-ordered `BGRA8` pixels
+  and is occlusion-immune through the harness's own code
+  (`spikes/r6-xcomposite-readback-linux.md`). **No platform has yet proven a real frame *of
+  Civilization VI* clears the parity screening gates through the harness's own code** — on Linux
+  because the client could not be launched (`spikes/steam-dependency-linux.md`), elsewhere because
+  the extraction is unwritten. Linux/Wayland also remains stubbed.
+- **The Linux live node depends on Steam and is not available on demand.** Civ VI refuses to launch
+  without a running, signed-in Steam client, and an account can be in a game on only one machine at
+  a time — so live work is pre-empted whenever the owner is playing. Scheduling constraint, not a
+  defect; see `spikes/steam-dependency-linux.md`.
 - **macOS has no machine anywhere that can execute it.** Every macOS-specific claim in this document
   and the codebase (`host/macos/adapter.py`) is reasoning by analogy to Linux, not independent
   verification. The **R1/R5 save-directory contradiction for macOS is unresolvable without a live
