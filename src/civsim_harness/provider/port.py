@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from civsim_harness.errors import HarnessError
 from civsim_harness.models.common import Cost, DeclarationId, ModelRef
 from civsim_harness.models.records import CallOutcome
 
@@ -138,3 +139,86 @@ class ModelProvider(Protocol):
     def complete(self, request: DecisionRequest) -> DecisionResponse:
         """Serve exactly one decision for *request*'s single decision step."""
         ...
+
+
+# --------------------------------------------------------------------------
+# Adapter obligation enforcement (T188)
+# --------------------------------------------------------------------------
+
+
+class AdapterObligationViolation(HarnessError):
+    """An adapter broke one of contracts/model-provider-port.md's "Adapter obligations".
+
+    Raised by :class:`ObligationEnforcingProvider`, never by a well-behaved adapter itself --
+    this is a defensive boundary check, not something an adapter is expected to raise about its
+    own behaviour.
+    """
+
+
+class ObligationEnforcingProvider:
+    """Wraps any :class:`ModelProvider` and enforces the contract's "Adapter obligations" at
+    the port boundary, defensively, at runtime.
+
+    Two of the six obligations are already structurally impossible to violate through this
+    seam and so need no runtime check here: an adapter cannot "carry state between calls, or
+    infer the turn's earlier steps" when ``complete()``'s only input is one self-contained
+    ``DecisionRequest``, and it cannot "read run configuration or game state directly" when
+    neither is reachable from that same signature. "Return more than one decision" is likewise
+    ruled out by ``DecisionResponse.decision`` being a single ``RawDecision | None`` field with
+    nowhere to put a second one -- an adapter that tries must raise instead (P10), which is a
+    property of the *adapter's* implementation (see ``provider/openrouter.py`` and
+    ``tests/fakes/fake_provider.py``), not something this generic wrapper can detect from the
+    outside.
+
+    What *is* checked here, because nothing about the ``DecisionRequest``/``DecisionResponse``
+    shapes prevents an adapter from getting them wrong: that ``request.observation`` and
+    ``request.images`` come back unmodified (``images`` is a plain mutable ``list`` even though
+    the dataclass itself is frozen, so an adapter mutating it in place would otherwise go
+    unnoticed), that ``model_served`` is always populated, and that a ``decision`` is present if
+    and only if ``outcome == CallOutcome.DECISION_RETURNED`` (P4's "swallow an error and return
+    ``decision=None`` with a successful outcome" and its mirror image, both forbidden).
+    """
+
+    def __init__(self, provider: ModelProvider) -> None:
+        self._provider = provider
+
+    def describe(self, model: ModelRef) -> ModelCapabilities:
+        return self._provider.describe(model)
+
+    def complete(self, request: DecisionRequest) -> DecisionResponse:
+        observation_before = request.observation
+        images_before = list(request.images)
+
+        response = self._provider.complete(request)
+
+        if request.observation != observation_before:
+            raise AdapterObligationViolation(
+                "adapter modified request.observation -- adapters must not alter the "
+                "images or observation they were handed",
+                detail={"step_index": request.step_index},
+            )
+        if list(request.images) != images_before:
+            raise AdapterObligationViolation(
+                "adapter modified request.images -- adapters must not alter the images "
+                "or observation they were handed (P2, FR-039)",
+                detail={"step_index": request.step_index},
+            )
+        if response.model_served is None:  # pragma: no cover - guards a broken adapter
+            raise AdapterObligationViolation(
+                "adapter did not report model_served -- a substituted model must always "
+                "be reported (P3, FR-040)",
+                detail={"step_index": request.step_index},
+            )
+        if response.decision is None and response.outcome == CallOutcome.DECISION_RETURNED:
+            raise AdapterObligationViolation(
+                "adapter reported outcome=DECISION_RETURNED with decision=None -- an "
+                "empty successful response must be CallOutcome.EMPTY_RESPONSE, never a "
+                "decision to do nothing (P4)",
+                detail={"step_index": request.step_index},
+            )
+        if response.decision is not None and response.outcome != CallOutcome.DECISION_RETURNED:
+            raise AdapterObligationViolation(
+                "adapter returned a decision without outcome=DECISION_RETURNED",
+                detail={"step_index": request.step_index, "outcome": response.outcome.value},
+            )
+        return response

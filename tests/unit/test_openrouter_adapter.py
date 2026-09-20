@@ -359,14 +359,20 @@ def test_credential_never_appears_in_a_raised_exception(monkeypatch: pytest.Monk
 
 
 # --------------------------------------------------------------------------
-# describe() -- conservative placeholder pending T183
+# describe() -- fails closed when the models endpoint can't confirm a model (T183)
 # --------------------------------------------------------------------------
 
 
-def test_describe_is_a_fail_closed_placeholder() -> None:
-    provider = OpenRouterProvider(client=httpx.Client(transport=httpx.MockTransport(
-        lambda request: httpx.Response(200, json={})
-    )))
+def test_describe_fails_closed_when_the_model_is_absent_from_the_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", _FAKE_KEY)
+    provider = OpenRouterProvider(
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})),
+            base_url="https://openrouter.ai/api/v1",
+        )
+    )
     capabilities = provider.describe(_MODEL)
     assert capabilities.confirmed is False
 

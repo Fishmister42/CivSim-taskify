@@ -3,8 +3,9 @@
 contracts/model-provider-port.md is normative; this module is its
 "OpenRouter adapter specifics" section made real. **No vendor SDK appears on
 the decision path** (FR-037): the only third-party import here is ``httpx``
-(plain HTTP) plus ``PyYAML`` for the optional secrets-file fallback -- never
-``openai``, ``anthropic``, or any other vendor client.
+(plain HTTP) -- never ``openai``, ``anthropic``, or any other vendor client.
+Secrets-file parsing (``PyYAML``) now lives entirely in ``config/secrets.py``,
+which this module delegates to (see ``_resolve_api_key`` below).
 
 ``complete()`` serves exactly **one** call for exactly **one** decision step.
 It does not retry and does not fall back to another model in a chain --
@@ -20,34 +21,30 @@ long the enclosing turn has been running, and nothing here could cancel a
 call on that basis even if it wanted to -- ``complete()``'s signature carries
 no turn-level state at all, only a ``DecisionRequest`` scoped to one step.
 
-**Credentials resolve at call time only** (FR-043, P8). ``_resolve_api_key``
-is invoked fresh inside every ``complete()`` call -- never cached on the
-instance, never read at construction, and never accepted as a constructor
-argument -- so a key rotated between calls (or added to the environment
-after the process started) takes effect on the very next call. The resolved
-key is used solely to build the ``Authorization`` header of the outgoing
-request; it is never interpolated into a log line, a raised exception, or
-any field of the returned ``DecisionResponse``. (``config/secrets.py``,
-T074, is the harness's general-purpose secrets module for the rest of the
-harness; this adapter deliberately does not import it, to stay within this
-task's owned files, but resolves credentials in the same order FR-043
-describes -- environment, then a secrets file -- so a later wave, T189, can
-delegate to it without changing this function's observable behaviour.)
+**Credentials resolve at call time only** (FR-043, P8, T189). ``_resolve_api_key`` is invoked
+fresh inside every ``complete()`` call -- never cached on the instance, never read at
+construction, and never accepted as a constructor argument -- so a key rotated between calls (or
+added to the environment after the process started) takes effect on the very next call. The
+resolved key is used solely to build the ``Authorization`` header of the outgoing request; it is
+never interpolated into a log line, a raised exception, or any field of the returned
+``DecisionResponse``. ``_resolve_api_key`` now delegates entirely to
+:func:`civsim_harness.config.secrets.require_secret` -- see that function's docstring for the
+exact environment/secrets-file precedence -- rather than re-implementing the same lookup a
+second time; this module retains only its own exception type (``CredentialResolutionError``) so
+existing callers/tests keep the same observable failure mode.
 """
 
 from __future__ import annotations
 
 import base64
-import os
 import time
-from pathlib import Path
 from typing import Any, Final
 
 import httpx
-import yaml
 
 from civsim_harness.agent.decisions import parse_decision
-from civsim_harness.errors import HarnessError
+from civsim_harness.config.secrets import provider_key_name, require_secret
+from civsim_harness.errors import HarnessError, PreflightError
 from civsim_harness.models.common import Cost, ModelRef
 from civsim_harness.models.records import CallOutcome
 from civsim_harness.provider.port import (
@@ -58,10 +55,16 @@ from civsim_harness.provider.port import (
 
 DEFAULT_BASE_URL: Final[str] = "https://openrouter.ai/api/v1"
 DEFAULT_REQUEST_TIMEOUT_S: Final[float] = 120.0
+DEFAULT_MODELS_PATH: Final[str] = "/models"
 
-_API_KEY_ENV_VAR: Final[str] = "OPENROUTER_API_KEY"
-_SECRETS_FILE_ENV_VAR: Final[str] = "CIVSIM_SECRETS_FILE"
-_SECRETS_FILE_KEY: Final[str] = "openrouter_api_key"
+_OPENROUTER_SECRET_NAME: Final[str] = provider_key_name("openrouter")  # "openrouter_api_key"
+
+_UNCONFIRMED_CAPABILITIES: Final[ModelCapabilities] = ModelCapabilities(
+    accepts_images=False,
+    max_context_tokens=0,
+    max_images_per_request=None,
+    confirmed=False,
+)
 
 _CONTEXT_REJECTION_KEYWORDS: Final[tuple[str, ...]] = (
     "context length",
@@ -81,35 +84,23 @@ class CredentialResolutionError(HarnessError):
 
 
 def _resolve_api_key() -> str:
-    """Resolve the OpenRouter API key at call time only (FR-043, P8).
+    """Resolve the OpenRouter API key at call time only (FR-043, P8, T189).
 
-    Resolution order: the ``OPENROUTER_API_KEY`` environment variable, then a
-    YAML secrets file named by ``CIVSIM_SECRETS_FILE`` (key
-    ``openrouter_api_key``) if that variable points at an existing file. The
-    raw value is returned to the caller for immediate use in one request's
-    headers and is never stored, logged, or embedded in any exception this
-    module raises.
+    Delegates entirely to :func:`civsim_harness.config.secrets.require_secret` under the
+    secret name ``"openrouter_api_key"`` (the same environment-variable name,
+    ``OPENROUTER_API_KEY``, and secrets-file key this function has always used -- delegating
+    changes nothing about where the key comes from, only who implements the lookup). The raw
+    value is returned to the caller for immediate use in one request's headers and is never
+    stored, logged, or embedded in any exception this module raises: a missing secret is
+    translated from ``config.secrets``'s ``PreflightError`` into this module's own
+    ``CredentialResolutionError`` so existing callers keep seeing the same exception type.
     """
-    key = os.environ.get(_API_KEY_ENV_VAR)
-    if key:
-        return key
-
-    secrets_path = os.environ.get(_SECRETS_FILE_ENV_VAR)
-    if secrets_path:
-        path = Path(secrets_path)
-        if path.is_file():
-            try:
-                loaded: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
-            except (OSError, yaml.YAMLError):
-                loaded = None
-            if isinstance(loaded, dict):
-                value = loaded.get(_SECRETS_FILE_KEY)
-                if isinstance(value, str) and value:
-                    return value
-
-    raise CredentialResolutionError(
-        "no OpenRouter API key found in the environment or a secrets file (FR-043)"
-    )
+    try:
+        return require_secret(_OPENROUTER_SECRET_NAME)
+    except PreflightError as exc:
+        raise CredentialResolutionError(
+            "no OpenRouter API key found in the environment or a secrets file (FR-043)"
+        ) from exc
 
 
 def _as_int(value: Any) -> int | None:
@@ -165,17 +156,33 @@ class OpenRouterProvider:
     # ----------------------------------------------------------------
 
     def describe(self, model: ModelRef) -> ModelCapabilities:
-        """Report *model*'s capabilities. Placeholder pending T183 -- always fails closed.
+        """Report *model*'s capabilities by reading OpenRouter's models endpoint (R10, T183).
 
-        *model* is unused for now: T183 will read OpenRouter's live models endpoint keyed on
-        it. Until then every model reports the same fail-closed answer.
+        Every field maps from that endpoint's own reported data for *model* -- modality and
+        context length are never hard-coded per model here, since "the roster moves faster than
+        this repo" (research R10). Any failure to reach the endpoint, find *model* in its
+        listing, or parse the fields needed maps to ``confirmed=False`` with the most
+        conservative possible values for the rest: P1's chain preflight fails a run closed on an
+        unconfirmable model, never open.
         """
-        return ModelCapabilities(
-            accepts_images=False,
-            max_context_tokens=0,
-            max_images_per_request=None,
-            confirmed=False,
-        )
+        try:
+            response = self._client.get(DEFAULT_MODELS_PATH, timeout=self._timeout_s)
+        except httpx.HTTPError:
+            return _UNCONFIRMED_CAPABILITIES
+
+        if response.status_code != 200:
+            return _UNCONFIRMED_CAPABILITIES
+
+        try:
+            body = response.json()
+        except ValueError:
+            return _UNCONFIRMED_CAPABILITIES
+
+        entry = self._find_model_entry(body, model.model)
+        if entry is None:
+            return _UNCONFIRMED_CAPABILITIES
+
+        return self._capabilities_from_entry(entry)
 
     def complete(self, request: DecisionRequest) -> DecisionResponse:
         """Serve exactly one decision for *request*'s single decision step.
@@ -350,9 +357,77 @@ class OpenRouterProvider:
             outcome=outcome,
         )
 
+    # ----------------------------------------------------------------
+    # describe() support (R10, T183)
+    # ----------------------------------------------------------------
+
+    @staticmethod
+    def _find_model_entry(body: Any, model_id: str) -> dict[str, Any] | None:
+        """Find *model_id*'s own entry in the models endpoint's ``{"data": [...]}`` body."""
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list):
+            return None
+        for entry in data:
+            if isinstance(entry, dict) and entry.get("id") == model_id:
+                return entry
+        return None
+
+    @classmethod
+    def _capabilities_from_entry(cls, entry: dict[str, Any]) -> ModelCapabilities:
+        """Map one models-endpoint entry to ``ModelCapabilities``; unconfirmable ⇒ closed."""
+        context_length = cls._extract_context_length(entry)
+        if context_length is None:
+            return _UNCONFIRMED_CAPABILITIES
+
+        accepts_images = cls._extract_accepts_images(entry)
+        if accepts_images is None:
+            return _UNCONFIRMED_CAPABILITIES
+
+        max_images = entry.get("max_images_per_request")
+        max_images_per_request = (
+            max_images if isinstance(max_images, int) and max_images > 0 else None
+        )
+
+        return ModelCapabilities(
+            accepts_images=accepts_images,
+            max_context_tokens=context_length,
+            max_images_per_request=max_images_per_request,
+            confirmed=True,
+        )
+
+    @staticmethod
+    def _extract_context_length(entry: dict[str, Any]) -> int | None:
+        context_length = entry.get("context_length")
+        if isinstance(context_length, int) and context_length > 0:
+            return context_length
+        top_provider = entry.get("top_provider")
+        if isinstance(top_provider, dict):
+            candidate = top_provider.get("context_length")
+            if isinstance(candidate, int) and candidate > 0:
+                return candidate
+        return None
+
+    @staticmethod
+    def _extract_accepts_images(entry: dict[str, Any]) -> bool | None:
+        architecture = entry.get("architecture")
+        if not isinstance(architecture, dict):
+            return None
+        input_modalities = architecture.get("input_modalities")
+        if isinstance(input_modalities, list):
+            return any(
+                isinstance(modality, str) and modality.lower() == "image"
+                for modality in input_modalities
+            )
+        modality = architecture.get("modality")
+        if isinstance(modality, str):
+            input_side = modality.split("->", 1)[0]
+            return "image" in input_side.lower()
+        return None
+
 
 __all__ = [
     "DEFAULT_BASE_URL",
+    "DEFAULT_MODELS_PATH",
     "DEFAULT_REQUEST_TIMEOUT_S",
     "CredentialResolutionError",
     "OpenRouterProvider",

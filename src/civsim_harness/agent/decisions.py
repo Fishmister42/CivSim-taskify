@@ -33,7 +33,8 @@ import json
 from typing import Any, Final
 
 from civsim_harness.errors import HarnessError
-from civsim_harness.models.common import DeclarationId
+from civsim_harness.models.common import DecisionId, DecisionStepId, DeclarationId, ModelCallId
+from civsim_harness.models.decision import ActionExecution, Decision, DecisionTrigger
 from civsim_harness.provider.port import RawDecision
 
 # --------------------------------------------------------------------------
@@ -173,3 +174,48 @@ def parse_decision(content: str | None) -> RawDecision | None:
         parsed = parsed[0]
 
     return _as_decision(parsed)
+
+
+# --------------------------------------------------------------------------
+# Decision <-> ModelCall linkage (T187)
+# --------------------------------------------------------------------------
+
+
+def build_decision(
+    raw: RawDecision,
+    *,
+    decision_id: DecisionId,
+    decision_step_id: DecisionStepId,
+    model_call_id: ModelCallId,
+    trigger: DecisionTrigger,
+    execution: ActionExecution,
+) -> Decision:
+    """Assemble the persisted :class:`~civsim_harness.models.decision.Decision` from one
+    provider call's :class:`RawDecision`, binding it to the
+    :class:`~civsim_harness.models.records.ModelCall` that produced it via *model_call_id*
+    (FR-040, SC-016, invariant I5).
+
+    This is the load-bearing link between a decision and the model that served it:
+    ``Decision.model_call_id`` names the exact ``ModelCall`` (``provider/accounting.py``, T186)
+    whose ``model_served`` records which model actually produced this decision. Because that
+    linkage lives on the ``Decision`` itself -- one per ``DecisionStep`` -- a step served by a
+    fallback model is distinguishable from a primary-served one at *step* granularity, and a
+    turn's mix of models is recoverable by rolling those steps up rather than being asserted only
+    at the turn level (contract P3: "distinguishability resolves per step and rolls up").
+
+    *raw* is passed through unmodified other than being re-shaped into ``Decision``'s fields;
+    this function invents nothing about the decision's content, only supplies the identifiers
+    and out-of-game metadata (*trigger*, *execution*) the harness -- not the provider -- knows.
+    """
+    return Decision(
+        decision_id=decision_id,
+        decision_step_id=decision_step_id,
+        action_declaration_id=raw.action_declaration_id,
+        parameters=dict(raw.parameters),
+        reasoning=raw.reasoning,
+        trigger=trigger,
+        prompt_type=raw.prompt_type,
+        is_end_turn=raw.is_end_turn,
+        model_call_id=model_call_id,
+        execution=execution,
+    )
