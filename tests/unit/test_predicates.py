@@ -2,19 +2,20 @@
 
 Covers :func:`~civsim_harness.act.predicates.evaluate_predicate` directly against hand-built
 bindings (the documented grammar: literals, ``.`` access, boolean/comparison operators, list
-literals, membership -- and what it must reject: function calls, arithmetic, unknown names), and
+literals, membership, binary ``+``/``-`` between numeric operands -- and what it must reject:
+function calls, multiplication/division, arithmetic on non-numeric operands, unknown names), and
 :func:`~civsim_harness.act.predicates.build_predicate_bindings` against small
 :class:`~civsim_harness.models.turn.Observation` fixtures (namespace merges, field renames, and
 subject-namespace resolution against ``target``).
 
-The final test class documents a real, load-bearing finding against the *actual* catalog under
-``catalogs/``: ``turn.end_turn``'s own ``verification_predicate``
-(``game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players``) uses
-arithmetic (``+ 1``), which the grammar this evaluator was specified against explicitly forbids
-("No function calls, no arithmetic" -- ``catalogs/README.md`` §4). This is flagged in the
-implementation report rather than silently patched around; the test here pins down exactly what
-happens (a clean, typed ``PredicateEvaluationError``, never a false ``True``) so the behaviour is
-covered rather than merely asserted in prose.
+The final test class binds the evaluator to the *actual* catalog under ``catalogs/``:
+``turn.end_turn``'s own ``verification_predicate``
+(``game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players``) uses binary
+``+``, which ``catalogs/README.md`` §4 and contracts/capability-catalog.md now both document as
+permitted (numeric-only arithmetic, no function calls, no multiplication/division). These tests
+assert the real predicate, loaded from the real catalog, evaluates correctly both when the turn
+advanced and when it did not -- so a future regression in either the catalog or the evaluator's
+grammar is caught here rather than only in prose.
 """
 
 from __future__ import annotations
@@ -65,6 +66,20 @@ CATALOG_ROOT = REPO_ROOT / "catalogs"
         ("game.gold == 10 and game.turn == 1", {"game": {"gold": 10, "turn": 1}}, True),
         ("game.gold == 10 and game.turn == 2", {"game": {"gold": 10, "turn": 1}}, False),
         ("game.gold == 10 or game.turn == 2", {"game": {"gold": 5, "turn": 2}}, True),
+        ("1 + 1 == 2", {}, True),
+        ("5 - 3 == 2", {}, True),
+        (
+            "game.turn_number == observed_turn_number + 1",
+            {"game": {"turn_number": 6}, "observed_turn_number": 5},
+            True,
+        ),
+        (
+            "game.turn_number == observed_turn_number + 1",
+            {"game": {"turn_number": 5}, "observed_turn_number": 5},
+            False,
+        ),
+        ("unit.movement_remaining - 1 > 0", {"unit": {"movement_remaining": 2}}, True),
+        ("unit.movement_remaining - 1 > 0", {"unit": {"movement_remaining": 1}}, False),
     ],
 )
 def test_evaluate_predicate_basic_grammar(
@@ -107,8 +122,9 @@ def test_evaluate_predicate_absent_attribute_resolves_to_none_not_a_crash() -> N
     [
         "opponent.secret_hand_visible",
         "game.frobnicate()",
-        "1 + 1 == 2",
-        "unit.movement_remaining - 1 > 0",
+        "2 * 3 == 6",
+        "6 / 2 == 3",
+        "2 ** 3 == 8",
         "[x for x in [1, 2, 3]]",
         "lambda: True",
         "unit.plot['x'] == 1",
@@ -116,6 +132,23 @@ def test_evaluate_predicate_absent_attribute_resolves_to_none_not_a_crash() -> N
     ],
 )
 def test_evaluate_predicate_rejects_disallowed_constructs(predicate: str) -> None:
+    with pytest.raises(PredicateEvaluationError):
+        evaluate_predicate(predicate, {"game": {}, "unit": {"plot": {"x": 1}}})
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "'a' + 'b' == 'ab'",
+        "unit.plot + 1 == 1",
+        "true + 1 == 2",
+        "unit.movement_remaining - 1 > 0",
+    ],
+)
+def test_evaluate_predicate_rejects_arithmetic_on_non_numeric_operands(predicate: str) -> None:
+    # +/- is permitted (catalogs/README.md §4), but only between numeric operands. A string, a
+    # mapping (unit.plot), a boolean literal, or an absent field (unit.movement_remaining, not
+    # supplied in bindings here) must all still raise, never silently coerce.
     with pytest.raises(PredicateEvaluationError):
         evaluate_predicate(predicate, {"game": {}, "unit": {"plot": {"x": 1}}})
 
@@ -295,13 +328,16 @@ def test_build_bindings_observed_snapshot_is_merged_verbatim() -> None:
 
 
 # --------------------------------------------------------------------------
-# Real-catalog finding: turn.end_turn's verification_predicate uses arithmetic the documented
-# grammar forbids. See module docstring.
+# Real-catalog binding: turn.end_turn's verification_predicate, loaded from the actual catalog,
+# must evaluate correctly under the (now arithmetic-permitting) documented grammar. See module
+# docstring. This is the regression guard for the harness's single most important action: if this
+# predicate cannot evaluate, `turn.end_turn` can never be recorded as `applied` and the run loop
+# can never verify a turn ended.
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
-def test_real_turn_end_turn_verification_predicate_uses_forbidden_arithmetic() -> None:
+def test_real_turn_end_turn_verification_predicate_evaluates_true_when_turn_advanced() -> None:
     catalog = load_catalog(CATALOG_ROOT)
     registry = CapabilityRegistry(catalog=catalog)
     declaration = registry.resolve("turn.end_turn")
@@ -312,8 +348,41 @@ def test_real_turn_end_turn_verification_predicate_uses_forbidden_arithmetic() -
         "game": {"turn_number": 6, "is_waiting_for_other_players": False},
         "observed_turn_number": 5,
     }
-    with pytest.raises(PredicateEvaluationError):
-        evaluate_predicate(declaration.verification_predicate, bindings)
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is True
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_real_turn_end_turn_verification_predicate_evaluates_false_when_turn_did_not_advance() -> (
+    None
+):
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("turn.end_turn")
+    assert declaration.verification_predicate is not None
+
+    # Turn number unchanged and the harness is not waiting on other players either -- the click
+    # was swallowed; the predicate must resolve false, never raise and never default to true.
+    bindings = {
+        "game": {"turn_number": 5, "is_waiting_for_other_players": False},
+        "observed_turn_number": 5,
+    }
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_real_turn_end_turn_verification_predicate_true_via_waiting_for_other_players() -> None:
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("turn.end_turn")
+    assert declaration.verification_predicate is not None
+
+    # The `or game.is_waiting_for_other_players` branch: turn_number has not yet ticked over (the
+    # other civilizations are still taking their turns), but the end-turn click was still accepted.
+    bindings = {
+        "game": {"turn_number": 5, "is_waiting_for_other_players": True},
+        "observed_turn_number": 5,
+    }
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is True
 
 
 @pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")

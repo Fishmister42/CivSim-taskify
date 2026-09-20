@@ -6,17 +6,34 @@ Binds to the fixed symbol table already declared in
 ("does this predicate touch a namespace nobody declared"); this one performs the *runtime*
 evaluation contracts/capability-catalog.md's validation 6 and ``catalogs/README.md`` §4 describe:
 literals (numbers, strings, ``true``/``false``, ``null``, list literals), ``.``-attribute access,
-and the operators ``and``, ``or``, ``not``, ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``, ``in``. No
-function calls, no arithmetic beyond a signed numeric literal, no assignment.
+the operators ``and``, ``or``, ``not``, ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``, ``in``, and
+binary ``+``/``-`` between two numeric operands (e.g. ``observed_turn_number + 1``, the form
+``catalogs/actions/turn.yaml``'s own ``turn.end_turn`` verification predicate and contracts/
+capability-catalog.md's worked example both use). No function calls, no multiplication or division,
+no arithmetic on non-numeric operands, no assignment.
+
+**Why `+`/`-` and nothing more.** The grammar's restriction exists to rule out arbitrary evaluation
+and function calls (capability-catalog.md load-time rule 6: predicates reference only exposed
+symbols) -- not arithmetic itself. Integer/float addition and subtraction inside this
+AST-restricted evaluator introduce no such risk: both operands are already fully evaluated,
+plain-data values before the operator is ever applied, and the operator set stays a fixed,
+enumerable pair. Forbidding this specific arithmetic would instead force the harness to precompute
+derived values like "next turn number" in Python and hand them in as bespoke bindings, pushing game
+semantics out of the declarative catalog and into code -- the opposite of what the catalog-as-data
+design wants. ``*`` and ``/`` remain forbidden because nothing in this catalog needs them; adding
+them would only widen the surface without a documented use.
 
 **How "no arbitrary evaluation" is enforced structurally, not by convention.** A predicate string is
 parsed once with Python's own ``ast.parse(expr, mode="eval")`` -- used purely as a grammar
 recognizer, never handed to ``eval()``/``exec()``. Every node the parse produces is checked against
 an explicit allow-list (``_ALLOWED_NODE_TYPES``) before :func:`evaluate_predicate` interprets it;
-an unlisted node (a call, a binary arithmetic operator, a lambda, a comprehension, an f-string, a
-subscript, ...) raises immediately. Name and attribute resolution are both handled by this
-module's own code walking *bindings*, a plain mapping supplied by the caller -- there is no path
-from a parsed predicate to Python's normal name resolution, globals, or builtins.
+an unlisted node (a call, ``*``/``/``/``**``/... arithmetic, a lambda, a comprehension, an f-string,
+a subscript, ...) raises immediately -- ``ast.BinOp`` is allowed structurally, but only ``ast.Add``
+and ``ast.Sub`` are in the allow-list, so a multiplication or division expression still fails this
+same walk because its ``ast.Mult``/``ast.Div`` operator node is not listed. Name and attribute
+resolution are both handled by this module's own code walking *bindings*, a plain mapping supplied
+by the caller -- there is no path from a parsed predicate to Python's normal name resolution,
+globals, or builtins.
 
 **Bindings.** ``evaluate_predicate(predicate, bindings)`` is deliberately generic: it takes whatever
 namespace-name -> value mapping the caller supplies and does not know where that mapping came from.
@@ -61,13 +78,18 @@ class PredicateEvaluationError(CatalogError):
 
 
 #: Every AST node type this evaluator is willing to walk. Anything else -- ``ast.Call``,
-#: ``ast.BinOp`` (beyond signed-literal ``USub``), ``ast.Lambda``, ``ast.Subscript``,
-#: ``ast.JoinedStr``, comprehensions, ``ast.Dict`` -- is rejected outright. This is the concrete,
-#: structural form of "no function calls, no arithmetic, no assignment".
+#: ``ast.Mult``/``ast.Div``/``ast.Pow``/... (any ``BinOp`` operator besides ``Add``/``Sub``),
+#: ``ast.Lambda``, ``ast.Subscript``, ``ast.JoinedStr``, comprehensions, ``ast.Dict`` -- is rejected
+#: outright. This is the concrete, structural form of "no function calls, no arithmetic beyond
+#: binary +/- on numeric operands, no assignment". ``ast.BinOp`` itself is allowed (a binary
+#: operator expression can be ``+``/``-``), but only ``ast.Add``/``ast.Sub`` are listed as operator
+#: node types, so ``ast.walk`` still surfaces and rejects any other operator (``ast.Mult``, ...) it
+#: finds inside that same ``BinOp``.
 _ALLOWED_NODE_TYPES: tuple[type[ast.AST], ...] = (
     ast.Expression,
     ast.BoolOp,
     ast.UnaryOp,
+    ast.BinOp,
     ast.Compare,
     ast.Name,
     ast.Attribute,
@@ -78,6 +100,8 @@ _ALLOWED_NODE_TYPES: tuple[type[ast.AST], ...] = (
     ast.Or,
     ast.Not,
     ast.USub,
+    ast.Add,
+    ast.Sub,
     ast.Eq,
     ast.NotEq,
     ast.Lt,
@@ -133,7 +157,8 @@ def _parse(predicate: str) -> ast.Expression:
         if not isinstance(node, _ALLOWED_NODE_TYPES):
             raise PredicateEvaluationError(
                 "predicate uses a construct outside the documented grammar "
-                "(catalogs/README.md §4): no function calls, no arithmetic, no assignment",
+                "(catalogs/README.md §4): no function calls, no arithmetic beyond binary "
+                "+/- on numeric operands, no assignment",
                 detail={"predicate": predicate, "node_type": type(node).__name__},
             )
     return tree
@@ -163,12 +188,39 @@ def _eval_node(node: ast.AST, bindings: Mapping[str, Any], predicate: str) -> An
             ) from exc
     if isinstance(node, ast.BoolOp):
         return _eval_bool_op(node, bindings, predicate)
+    if isinstance(node, ast.BinOp):
+        return _eval_binop(node, bindings, predicate)
     if isinstance(node, ast.Compare):
         return _eval_compare(node, bindings, predicate)
     raise PredicateEvaluationError(  # pragma: no cover - _ALLOWED_NODE_TYPES already filters this
         "predicate uses a construct outside the documented grammar",
         detail={"predicate": predicate, "node_type": type(node).__name__},
     )
+
+
+def _is_numeric(value: Any) -> bool:
+    """``int``/``float`` only -- ``bool`` is a ``int`` subclass in Python but is not a number in
+    this catalog's grammar (``true``/``false`` are boolean literals, never arithmetic operands)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _eval_binop(node: ast.BinOp, bindings: Mapping[str, Any], predicate: str) -> Any:
+    # ast.Add / ast.Sub -- the only two operator node types _ALLOWED_NODE_TYPES permits; anything
+    # else (ast.Mult, ast.Div, ...) was already rejected by _parse's structural walk.
+    left = _eval_node(node.left, bindings, predicate)
+    right = _eval_node(node.right, bindings, predicate)
+    if not _is_numeric(left) or not _is_numeric(right):
+        raise PredicateEvaluationError(
+            "predicate applied arithmetic ('+'/'-') to a non-numeric operand",
+            detail={
+                "predicate": predicate,
+                "left": repr(left),
+                "right": repr(right),
+            },
+        )
+    if isinstance(node.op, ast.Add):
+        return left + right
+    return left - right
 
 
 def _eval_bool_op(node: ast.BoolOp, bindings: Mapping[str, Any], predicate: str) -> Any:

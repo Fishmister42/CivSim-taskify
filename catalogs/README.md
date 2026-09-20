@@ -58,7 +58,19 @@ not arbitrary code. The grammar T106 must evaluate:
 - Attribute access with `.` (e.g. `unit.movement_remaining`).
 - Operators: `and`, `or`, `not`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `in` (membership on a list or
   equality against a scalar).
-- No function calls, no assignment, no arithmetic beyond what a literal already expresses.
+- Arithmetic: binary `+` and `-` between two numeric operands only (e.g. `observed_turn_number +
+  1`, as `turn.end_turn`'s own `verification_predicate` below uses). Permitted deliberately, and
+  narrowly: the grammar's restriction exists to rule out arbitrary evaluation and function calls,
+  not arithmetic as such, and integer/float addition or subtraction inside the AST-restricted
+  evaluator (`src/civsim_harness/act/predicates.py`) introduces no such risk — both operands are
+  already-evaluated plain data before the operator applies. Forbidding it would instead force the
+  harness to precompute derived values like "next turn number" in Python and hand them in as
+  bespoke bindings, pushing game semantics out of the declarative catalog. Do not "simplify" this
+  back to disallowing arithmetic entirely; that regression previously made `turn.end_turn` — the
+  single most important action in the harness — unable to ever verify as `applied`.
+- No function calls, no assignment, no multiplication, no division, no arithmetic beyond binary
+  `+`/`-` on numeric operands (a non-numeric operand, e.g. a string or an absent/`null` field, is a
+  clean evaluation-time error, never silently coerced).
 
 ### Namespaces exposed to every predicate
 
