@@ -1,6 +1,6 @@
 """Unit tests for the Nexus client (T031, T032, T159) -- state parsing and sequencing.
 
-Two real-world defects, found via the first live-Civ-VI-client verification of the
+Three real-world defects, found via live-Civ-VI-client verification of the
 Nexus transport, are covered here:
 
 1. ``_parse_state_list`` guessed "newline-separated state names in positional
@@ -17,11 +17,22 @@ Nexus transport, are covered here:
    resolves whatever states exist and succeeds at the menu;
    ``resolve_game_states()`` is the separate, explicit step the run sequence
    calls once a game is loaded.
+3. Indices differ by *game phase*, not only by client version or connection
+   (a follow-up 2026-09-20 capture: 31 states at the Create Game screen with
+   ``LoadGameMenu``/``SaveGameMenu`` at 18/19, versus 136 states once in game
+   with the *same-named* states at 112/113). A cached index from one phase
+   can silently be a *valid* index for an unrelated state in another --
+   caching indices once per run and never re-resolving would target the
+   wrong Lua state with no error at all. See the "phase transition" tests
+   below, which use ``tests/fakes/fake_nexus.py``'s ``FakeNexusServer`` and
+   its ``set_state_table`` (that fixture now speaks the real NUL-separated
+   ``LSQ:`` format, same as this module).
 
-The integration-style tests below use a small scripted TCP double local to
-this module -- not ``tests/fakes/fake_nexus.py``, which is a separate fixture
-another agent is writing concurrently against the pre-fix (newline) LSQ
-format and is out of scope here.
+The ``_ScriptedTuner``-based tests below use a small scripted TCP double local
+to this module, just enough to drive ``connect()``/``resolve_game_states()``
+sequencing against a scriptable state table without pulling in the fuller
+``FakeNexusServer`` machinery (command transcripts, stalls, drops) that
+defect 3's tests below need instead.
 """
 
 from __future__ import annotations
@@ -35,6 +46,7 @@ from civsim_harness.errors import NexusError, PreflightError
 from civsim_harness.nexus.client import (
     REASON_GAME_STATES_UNAVAILABLE,
     REASON_HANDSHAKE_FAILED,
+    REASON_STALE_STATE_INDEX,
     NexusClient,
     StateIndices,
     _parse_state_list,
@@ -45,6 +57,7 @@ from civsim_harness.nexus.codec import (
     NexusFrameDecoder,
     encode_frame,
 )
+from fakes.fake_nexus import FakeNexusServer
 
 # --------------------------------------------------------------------------
 # Defect 1 -- _parse_state_list: real-client capture + robustness
@@ -329,6 +342,139 @@ async def test_resolve_game_states_before_connect_raises_not_connected() -> None
     client = NexusClient(host="127.0.0.1", port=1)
     with pytest.raises(NexusError):
         await client.resolve_game_states()
+
+
+# --------------------------------------------------------------------------
+# Defect 3 -- indices are invalidated by a phase transition, not only a
+# reconnect (2026-09-20 live capture)
+# --------------------------------------------------------------------------
+#
+# Representative subsets of the two real tables, not the full 31/136 states
+# -- enough to prove the defining fact: `LoadGameMenu`/`SaveGameMenu` exist
+# in *both* phases, under the *same* name, at *different* indices, and
+# neither phase's table has `GameCore_Tuner`/`InGame` until a game is loaded.
+
+_CREATE_GAME_SCREEN_STATE_TABLE = {
+    "HostGame": 0,
+    "MainMenu": 1,
+    "StagingRoom": 2,
+    "Lobby": 3,
+    "Mods": 4,
+    "LoadGameMenu": 18,
+    "SaveGameMenu": 19,
+}
+
+_IN_GAME_STATE_TABLE = {
+    "GameCore_Tuner": 0,
+    "InGame": 1,
+    "LoadGameMenu": 112,
+    "SaveGameMenu": 113,
+}
+
+
+async def test_indices_resolved_at_create_game_phase_are_not_reused_after_the_game_loads() -> None:
+    async with FakeNexusServer(state_table=_CREATE_GAME_SCREEN_STATE_TABLE) as server:
+        client = NexusClient(host="127.0.0.1", port=server.port)
+        try:
+            setup_indices = await client.connect()
+            assert setup_indices.by_name["LoadGameMenu"] == 18
+            assert setup_indices.by_name["SaveGameMenu"] == 19
+            assert setup_indices.has_game_states is False
+
+            # The game phase transitions -- no reconnect, same client process.
+            server.set_state_table(_IN_GAME_STATE_TABLE)
+            game_indices = await client.resolve_game_states()
+        finally:
+            await client.close()
+
+    # The new phase's LoadGameMenu/SaveGameMenu indices win outright -- the
+    # setup screen's 18/19 are not carried forward just because they
+    # resolved once before, under the same names.
+    assert game_indices.by_name["LoadGameMenu"] == 112
+    assert game_indices.by_name["SaveGameMenu"] == 113
+    assert game_indices.has_game_states is True
+    assert client.state_indices == game_indices
+
+
+async def test_a_stale_index_from_a_prior_phase_is_not_used_silently() -> None:
+    async with FakeNexusServer(state_table=_CREATE_GAME_SCREEN_STATE_TABLE) as server:
+        client = NexusClient(host="127.0.0.1", port=server.port)
+        try:
+            setup_indices = await client.connect()
+            stale_load_game_menu_index = setup_indices.by_name["LoadGameMenu"]  # 18
+
+            server.set_state_table(_IN_GAME_STATE_TABLE)
+            await client.resolve_game_states()  # phase transition observed
+
+            with pytest.raises(NexusError) as excinfo:
+                await client.execute_command(
+                    state_index=stale_load_game_menu_index, lua_body="print(true)"
+                )
+        finally:
+            await client.close()
+
+    assert excinfo.value.detail["reason"] == REASON_STALE_STATE_INDEX
+    assert excinfo.value.detail["state_index"] == 18
+    # Not "used silently" in the strongest sense: the command never even
+    # reached the wire -- the fake's own receipt log proves it, not just
+    # that *some* error came back.
+    assert server.received == []
+
+
+async def test_execute_command_succeeds_once_a_stale_index_is_refreshed() -> None:
+    async with FakeNexusServer(
+        state_table=_CREATE_GAME_SCREEN_STATE_TABLE, default_response={"ok": True}
+    ) as server:
+        client = NexusClient(host="127.0.0.1", port=server.port)
+        try:
+            await client.connect()
+
+            server.set_state_table(_IN_GAME_STATE_TABLE)
+            game_indices = await client.resolve_game_states()
+
+            result = await client.execute_command(
+                state_index=game_indices.by_name["LoadGameMenu"], lua_body="print(true)"
+            )
+        finally:
+            await client.close()
+
+    assert result == {"ok": True}
+    assert len(server.received) == 1
+    assert server.received[0].state_index == 112
+
+
+async def test_refresh_state_indices_adopts_the_new_table_unconditionally() -> None:
+    async with FakeNexusServer(state_table=_CREATE_GAME_SCREEN_STATE_TABLE) as server:
+        client = NexusClient(host="127.0.0.1", port=server.port)
+        try:
+            await client.connect()
+
+            # Entering a game -- refresh_state_indices() (not just
+            # resolve_game_states()) picks up the new table too.
+            server.set_state_table(_IN_GAME_STATE_TABLE)
+            entered = await client.refresh_state_indices()
+            assert entered.has_game_states is True
+            assert entered.by_name["LoadGameMenu"] == 112
+            assert client.state_indices == entered
+
+            # Leaving the game again -- refresh_state_indices() does not
+            # require GameCore_Tuner/InGame to be present, unlike
+            # resolve_game_states(), since a phase boundary can just as
+            # easily be leaving the game as entering it.
+            server.set_state_table(_CREATE_GAME_SCREEN_STATE_TABLE)
+            left = await client.refresh_state_indices()
+        finally:
+            await client.close()
+
+    assert left.has_game_states is False
+    assert left.by_name["LoadGameMenu"] == 18
+    assert client.state_indices == left
+
+
+async def test_refresh_state_indices_before_connect_raises_not_connected() -> None:
+    client = NexusClient(host="127.0.0.1", port=1)
+    with pytest.raises(NexusError):
+        await client.refresh_state_indices()
 
 
 # --------------------------------------------------------------------------

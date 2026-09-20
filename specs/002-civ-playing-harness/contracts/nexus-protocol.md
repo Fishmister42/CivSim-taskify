@@ -58,6 +58,43 @@ Every message is a header followed by a null-terminated UTF-8 payload.
 5. **Record the resolved indices on the run.** Indices are positional and not guaranteed stable
    across game versions or mod sets, so they are run data rather than constants.
 
+## Lua state indices are re-resolved on reconnect **and** on every phase transition
+
+Indices must be re-resolved on every reconnect (already covered above) — but a live capture against
+a real client (2026-09-20) established that they must **also** be re-resolved on a **game phase
+transition within a single connection and a single client process**. The state table is not a fixed
+property of "this client version" or "this connection"; it is scoped to whatever screen/phase the
+client is currently in.
+
+Evidence, captured from the same running client without a reconnect between the two columns:
+
+| | total states | `LoadGameMenu` | `SaveGameMenu` |
+|---|---|---|---|
+| Create Game screen | 31 | 18 | 19 |
+| In game | 136 | 112 | 113 |
+
+The Create Game (setup) screen exposes an entirely different state table — built from `HostGame`,
+`MainMenu`, `StagingRoom`, `Lobby`, and `Mods` — none of which exist once a game is loaded. Neither
+table contains `GameCore_Tuner`/`InGame` (consistent with the main-menu finding above), so a
+connection sequence performed at the Create Game screen still resolves successfully; it simply has
+no game-play states yet, same as at the bare main menu.
+
+The dangerous case is not the missing states — it's the states that exist in **both** tables under
+the **same name** at **different indices**: `LoadGameMenu` and `SaveGameMenu` above. An index
+resolved for `LoadGameMenu` while at the Create Game screen (18) is not merely stale once the game
+is running — 18 is frequently still a *valid* index in the 136-state in-game table, just for some
+unrelated state. Executing against a stale index in that case raises nothing: the wrong Lua runs,
+silently. This is the same silent-corruption class the `LSQ:` payload's wire-format defect was
+(guessing structure instead of reading ground truth) — the general lesson is the same: never assume
+continuity of something positional across a boundary that hasn't been proven stable.
+
+**Consequence:** a caller must re-resolve indices at every point the run sequence knows a phase
+transition may have occurred (a game finishes loading, the run returns to a menu, a save/load
+submenu is entered or left, etc.) — not only immediately after connecting, and not only once per
+run. `NexusClient.refresh_state_indices()` is the explicit re-resolution step for this; a cached
+index from a prior phase must never be reused without going through it (or
+`resolve_game_states()`) again.
+
 ## Execution contexts
 
 | Context | Use | Limits |
@@ -120,4 +157,12 @@ job, so the Python side never parses prose, and a capability's output validates 
   commands on one socket would interleave output across nonces.
 - Reconnection re-runs the full handshake and re-resolves state indices; indices from before a
   disconnect are not reused.
+- Indices are also re-resolved on every phase transition within a single connection (see "Lua state
+  indices are re-resolved on reconnect and on every phase transition" above) — `connect()` resolves
+  whatever exists at that moment, `resolve_game_states()` re-resolves and additionally requires
+  `GameCore_Tuner`/`InGame`, and `refresh_state_indices()` re-resolves unconditionally for any other
+  known phase boundary. `execute_command()` refuses to send a command against a `state_index` no
+  longer present in the current table, as a cheap backstop against the case where a stale index has
+  simply gone missing — it cannot catch a stale index that happens to still be valid for a different
+  state in the new table, which is why re-resolving at known phase boundaries is the actual fix.
 - The client is the only module permitted to hold a socket to the game.

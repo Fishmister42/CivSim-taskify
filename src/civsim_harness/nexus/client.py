@@ -36,6 +36,55 @@ resolves whatever states exist (so it succeeds against a client sitting at
 the main menu), and :meth:`NexusClient.resolve_game_states` is the explicit
 later step, called once a game is loaded, that requires ``GameCore_Tuner``
 and ``InGame`` to be present.
+
+A follow-up capture against that same real client (2026-09-20) established
+something stronger: Lua state indices differ by *game phase*, not only by
+client version or connection. The Create Game (setup) screen exposes an
+entirely different, smaller state table -- 31 states total, built from
+``HostGame``, ``MainMenu``, ``StagingRoom``, ``Lobby``, and ``Mods`` -- than
+the 136-state table once a game is actually loaded. Critically, a
+same-*named* state can sit at a *different* index in each table:
+``LoadGameMenu`` is index 18 at the Create Game screen but index 112 once
+in game; ``SaveGameMenu`` is 19 versus 113. Neither table has
+``GameCore_Tuner``/``InGame`` before a game is loaded, so :meth:`connect`
+still succeeds at either point -- but an index resolved in one phase is not
+merely "possibly stale" in another: it is frequently still a *valid* index
+into the new table, just for a completely different state, so reusing it
+raises nothing at all -- the wrong Lua just runs. contracts/nexus-protocol.md
+already required re-resolving indices on reconnect; this is the same rule
+extended to every phase transition *within* one connection.
+
+Two things follow from that, both implemented here rather than as a
+periodic background poll or an extra per-command network round trip (a
+per-operation cost on the hot path is not acceptable, and the state table
+is stable *within* a phase -- see FR-014 and the "No turn-level time
+bound" note on :meth:`NexusClient.execute_command`):
+
+- :meth:`NexusClient.refresh_state_indices` is the explicit re-resolution
+  step a caller (the run sequence) calls at a *known* phase boundary --
+  a game finishes loading, the run returns to a menu, and so on -- the
+  same "re-send LSQ:, adopt the new table" mechanism
+  :meth:`resolve_game_states` already used, generalized to not require
+  ``GameCore_Tuner``/``InGame`` (a phase boundary can just as easily be
+  *leaving* the game as entering it).
+- :meth:`NexusClient.execute_command` itself refuses to send a command
+  whose ``state_index`` is not present in the *current* state table
+  (``REASON_STALE_STATE_INDEX``), rather than forwarding it to the wire.
+  This is a cheap, in-memory membership check -- no extra round trip --
+  and it catches the common case where a phase transition made the index
+  disappear outright. It cannot catch the harder case where a stale index
+  happens to still be valid in the new table for a *different* state
+  (nothing observable distinguishes that from a legitimate call), which is
+  why re-resolving at known phase boundaries via
+  :meth:`refresh_state_indices` remains the primary defence and this
+  check is deliberately a backstop, not the fix.
+
+An automatic "retry once on a failure that looks like staleness" was
+considered and rejected: the wire protocol defines no signal that
+distinguishes "this failed because the index is stale" from an ordinary
+Lua error, so any such heuristic would either miss real staleness or mask
+genuine bugs behind a silent retry -- worse than today's opaque failure,
+not better.
 """
 
 from __future__ import annotations
@@ -87,6 +136,15 @@ REASON_CONNECTION_CLOSED = "connection_closed"
 #: tag). A missing game state is an expected, reportable condition (no game
 #: loaded yet), not a broken handshake.
 REASON_GAME_STATES_UNAVAILABLE = "game_states_unavailable"
+#: Raised by execute_command() when the requested state_index is not present
+#: in the current state table -- i.e. it was resolved before a phase
+#: transition (or a reconnect) invalidated it and never re-resolved. This is
+#: the backstop half of the phase-transition fix (see the module docstring):
+#: it only catches an index that has become entirely absent from the current
+#: table, not one that happens to still be valid there for a different
+#: state -- callers must still re-resolve at known phase boundaries via
+#: refresh_state_indices() rather than rely on this check alone.
+REASON_STALE_STATE_INDEX = "stale_state_index"
 
 _logger = logging.getLogger(__name__)
 
@@ -163,10 +221,17 @@ class StateIndices:
     :class:`~civsim_harness.errors.PreflightError` naming what is missing,
     instead of an opaque failure.
 
-    Positional and not guaranteed stable across game versions or mod sets
-    (contracts/nexus-protocol.md "Connection sequence", step 5) -- callers
-    must re-resolve on every (re)connect rather than reusing indices from
-    before a disconnect (T159).
+    Positional and not guaranteed stable across game versions, mod sets, or
+    -- verified against a real client (module docstring) -- *game phase*
+    within a single connection (contracts/nexus-protocol.md "Connection
+    sequence", step 5). Callers must re-resolve on every (re)connect rather
+    than reusing indices from before a disconnect (T159), and *also* on
+    every phase transition within one connection, via
+    :meth:`NexusClient.refresh_state_indices` or
+    :meth:`NexusClient.resolve_game_states` -- the same name can be a
+    different index in a different phase, so an index from before a
+    transition is not just potentially outdated, it may silently be valid
+    for an unrelated state after one.
     """
 
     by_name: Mapping[str, int]
@@ -192,7 +257,11 @@ class NexusClient:
     :meth:`resolve_game_states` is the separate, later step -- call it once
     a game is loaded -- that requires ``GameCore_Tuner`` and ``InGame`` and
     raises :class:`~civsim_harness.errors.PreflightError` naming whichever
-    is still missing.
+    is still missing. :meth:`refresh_state_indices` is the general form of
+    that same re-resolution, for any other known phase boundary. Indices
+    are invalidated by a phase transition just as much as by a reconnect
+    (module docstring) -- :meth:`execute_command` refuses to send a command
+    against a ``state_index`` no longer present in the current table.
     """
 
     def __init__(
@@ -345,30 +414,44 @@ class NexusClient:
             in_game=by_name.get("InGame"),
         )
 
+    def _require_connected(self) -> None:
+        if self._writer is None or self._reader is None:
+            raise NexusError(
+                "Nexus client is not connected", detail={"reason": REASON_NOT_CONNECTED}
+            )
+
     async def resolve_game_states(self) -> StateIndices:
         """Require ``GameCore_Tuner`` and ``InGame`` to be present, right now.
 
         Call this once a game is loaded -- :meth:`connect` deliberately does
         not require these two states, since (verified against a real
-        client) they do not exist in the state table at the main menu.
-        Sequencing "connect" and "the game is actually loaded" as two
-        distinct steps lets a caller like ``doctor`` report "tuner
-        reachable, no game loaded" as a normal, useful diagnostic instead of
-        connect() failing with a confusing preflight error.
+        client) they do not exist in the state table at the main menu, nor
+        at the Create Game screen. Sequencing "connect" and "the game is
+        actually loaded" as two distinct steps lets a caller like ``doctor``
+        report "tuner reachable, no game loaded" as a normal, useful
+        diagnostic instead of connect() failing with a confusing preflight
+        error.
 
         Re-sends ``LSQ:`` (not the full handshake -- ``APP:`` identifies the
         session once, at :meth:`connect`) so this reflects the state table
-        as it is *now*, and updates :attr:`state_indices` on success.
+        as it is *now*, and updates :attr:`state_indices` **only on
+        success** -- a failed attempt (missing state(s)) leaves the last
+        resolved :attr:`state_indices` untouched rather than clobbering it
+        with an incomplete table, so a caller that races this against a
+        transient loading screen cannot lose a last-known-good table it
+        already had.
 
         Raises :class:`PreflightError` naming exactly which required
         state(s) are still missing if either is absent -- this is an
         expected, reportable condition (no game loaded yet), not a broken
         handshake.
+
+        This is the "entering a game" special case of the more general
+        :meth:`refresh_state_indices` -- call that one instead at a phase
+        boundary that is not specifically "a game just loaded" (e.g.
+        returning to a menu), since it does not require these two states.
         """
-        if self._writer is None or self._reader is None:
-            raise NexusError(
-                "Nexus client is not connected", detail={"reason": REASON_NOT_CONNECTED}
-            )
+        self._require_connected()
 
         async with self._lock:
             indices = await self._query_states()
@@ -383,6 +466,39 @@ class NexusClient:
                     "states": sorted(indices.by_name),
                 },
             )
+
+        self._state_indices = indices
+        return indices
+
+    async def refresh_state_indices(self) -> StateIndices:
+        """Re-resolve whatever Lua states currently exist and adopt them unconditionally.
+
+        Call this at every *known* phase boundary within a single
+        connection -- not on a schedule and not before every command (see
+        the module docstring for why a periodic poll or a per-operation
+        network round trip is rejected here). "Known phase boundary" means
+        a point the run sequence itself recognises: a game finishes
+        loading, the run returns to a menu, a save/load submenu is entered
+        or left, and so on.
+
+        Verified against a real client (module docstring, 2026-09-20
+        capture): the same *name* can sit at a different index
+        in each phase's table (``LoadGameMenu``/``SaveGameMenu`` are 18/19
+        at the Create Game screen but 112/113 once in game), so an index
+        resolved before a phase transition cannot be assumed valid --
+        or, worse, may silently be valid for something else -- after one.
+
+        Unlike :meth:`resolve_game_states`, this does not require
+        ``GameCore_Tuner``/``InGame`` to be present and always replaces
+        :attr:`state_indices` with whatever the fresh ``LSQ:`` reports,
+        whether that is more states, fewer, or none of the game-play ones
+        -- a phase boundary can just as easily be *leaving* the game as
+        entering it. Re-sends ``LSQ:`` only, not the full handshake.
+        """
+        self._require_connected()
+
+        async with self._lock:
+            indices = await self._query_states()
 
         self._state_indices = indices
         return indices
@@ -411,10 +527,36 @@ class NexusClient:
         :class:`asyncio.Lock` around the send-and-wait sequence serializes
         access to the shared socket so two concurrent callers cannot
         interleave output across nonces.
+
+        Before sending anything, *state_index* is checked -- a cheap,
+        in-memory membership test, not a network round trip -- against the
+        state table :attr:`state_indices` currently holds. If it is not
+        present there, this raises :class:`NexusError` with
+        ``REASON_STALE_STATE_INDEX`` instead of forwarding a command that
+        might silently execute against whatever now occupies that slot
+        (module docstring: indices are invalidated by a phase transition,
+        not only a reconnect). This only catches an index that has become
+        entirely absent from the current table; it cannot catch one that
+        happens to still be valid there for a *different* state, which is
+        why a caller must still re-resolve at known phase boundaries via
+        :meth:`refresh_state_indices` or :meth:`resolve_game_states`
+        rather than rely on this check alone.
         """
-        if self._writer is None or self._reader is None:
+        self._require_connected()
+
+        current_indices = self._state_indices
+        if current_indices is not None and state_index not in current_indices.by_name.values():
             raise NexusError(
-                "Nexus client is not connected", detail={"reason": REASON_NOT_CONNECTED}
+                "Nexus command targets a Lua state index that is not in the "
+                "current state table -- it was likely resolved before a "
+                "phase transition (or reconnect) invalidated it; call "
+                "refresh_state_indices() or resolve_game_states() again "
+                "rather than reusing an index resolved earlier",
+                detail={
+                    "reason": REASON_STALE_STATE_INDEX,
+                    "state_index": state_index,
+                    "known_indices": sorted(set(current_indices.by_name.values())),
+                },
             )
 
         bound = timeout_s if timeout_s is not None else self._command_timeout_s
