@@ -62,6 +62,7 @@ packages = ["src/civsim_harness"]
 # --------------------------------------------------------------------------
 
 [tool.ruff]
+extend-exclude = ["specs/**/spikes/**"]
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]

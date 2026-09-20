@@ -31,8 +31,8 @@ from civsim_harness.capability.loader import Catalog, load_catalog
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOGS_ROOT = _REPO_ROOT / "catalogs"
 
-EXPECTED_DECLARATION_COUNT = 50
-EXPECTED_CAPABILITY_COUNT = 22
+EXPECTED_DECLARATION_COUNT = 51
+EXPECTED_CAPABILITY_COUNT = 23
 
 
 def test_real_catalog_tree_loads() -> None:

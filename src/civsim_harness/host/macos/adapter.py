@@ -274,6 +274,11 @@ class MacOSHostPlatform:
             quartz.CGEventPost(quartz.kCGHIDEventTap, up)
 
     def resolve_game_directories(self, *, home: Path | None = None) -> GameDirectories:
+        # Deliberately no existence check anywhere in this method (T077/T078
+        # audit): the R5 spike confirmed on Linux that `Saves/Single/` does
+        # not exist until the first save creates it, and a preflight probe
+        # that required it to pre-exist would false-negative on a fresh
+        # install. Pure path construction below has the same property here.
         root = (home if home is not None else Path.home()) / "Library" / "Application Support"
         # NOTE / discrepancy, reported rather than silently reconciled:
         # research.md's own R1 and R5 disagree on this directory's shape.
