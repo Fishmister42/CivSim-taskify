@@ -1,4 +1,70 @@
-# R8 — the pinned-leader question cannot be answered yet, because nothing starts a game
+# R8 — a verified programmatic new-game start, and the pinned leader DOES survive
+
+> **RESOLVED — see "The complete sequence" below.** The question this spike opened is answered: a
+> leader pinned before the start **survives map generation and plays the game**. The missing piece
+> was a human player slot. The rest of this document records how it was established, including one
+> claim of mine that turned out to be wrong.
+
+## ✅ The complete sequence, verified end to end
+
+```
+  OK    SlotStatus.SS_TAKEN                      = 3
+  OK    SetToDefaults                            = done
+  OK    LoadGame(GAME_CONFIGURATION)             = true
+  OK    humanCount BEFORE slot assign            = 0
+  OK    SetSlotStatus(0, SS_TAKEN)               = done
+  OK    humanCount AFTER slot assign             = 1      <- the missing piece
+  OK    leader (setup)                           = LEADER_CYRUS
+  OK    civ    (setup)                           = CIVILIZATION_PERSIA
+  OK    turnTimer                                = -1525060181  (TURNTIMER_NONE)
+  HostGame ok=true ret=1
+  ...game starts, 1 Escape press dismisses the intro...
+  OK    leader (in-game)       = LEADER_CYRUS
+  OK    civ    (in-game)       = CIVILIZATION_PERSIA
+  OK    turn                   = 1
+  OK    turnTimer (in-game)    = -1525060181     (TURNTIMER_NONE)
+  PINNED LEADER SURVIVED = true
+  PINNED CIV SURVIVED    = true
+```
+
+```lua
+GameConfiguration.SetToDefaults()
+Network.LoadGame({ Location = SaveLocations.LOCAL_STORAGE,
+                   Type = SaveTypes.SINGLE_PLAYER,
+                   FileType = SaveFileTypes.GAME_CONFIGURATION,
+                   IsAutosave = false, IsQuicksave = false,
+                   Directory = SaveDirectories.DEFAULT,
+                   Name = "CivSim DEFAULT" }, ServerType.SERVER_TYPE_NONE)
+PlayerConfigurations[0]:SetSlotStatus(SlotStatus.SS_TAKEN)      -- SS_TAKEN = 3, human
+PlayerConfigurations[0]:SetLeaderTypeName("LEADER_CYRUS")
+PlayerConfigurations[0]:SetCivilizationTypeName("CIVILIZATION_PERSIA")
+Network.HostGame(ServerType.SERVER_TYPE_NONE)
+-- then: Escape until the tuner rebinds (the intro screen, as for a load)
+```
+
+**What this settles:**
+
+- **The pinned leader survives.** `Play Now` randomising the leader does not generalise to the
+  `HostGame` path — read back in-game, the run plays as the pinned leader. V2's read-back at
+  preparation time is therefore meaningful, not a check on a value that is about to be replaced.
+- **`TURNTIMER_NONE` survives into the game too.** Read in-game, not just at setup. The turn-timer
+  blocker is closed on this path.
+- **A run can be started from nothing but Lua** — no UI, no `Play Now`, no hand-made save.
+
+## ❌ Correction: `HostGame` returning `1` is NOT an error, and I said it was
+
+This spike previously stated that `Network.HostGame(SERVER_TYPE_NONE)` *"returns `1` and the game
+does not start"*, treating `1` as a refusal code. **That was wrong.**
+
+The successful run above **also** returned `ret=1`. The return value is identical whether the game
+starts or not — so it carries **no information at all** about the outcome. The real difference was
+`GetHumanPlayerCount()`: 0 in the failing runs, 1 in the successful one.
+
+This is the project's own boundary rule catching me: I read a return value and inferred an outcome
+from it, exactly the thing that has burned this codebase repeatedly. **Never branch on `HostGame`'s
+return.** Assert on the far side — the game states appearing, `UI.IsInFrontEnd()` going false.
+
+## 🔴 `Network.HostGame` appears nowhere in `src/`
 
 **Date:** 2026-09-20 · **Host:** Linux live node · Client `1.0.12.9 (564030)`, native Aspyr.
 
