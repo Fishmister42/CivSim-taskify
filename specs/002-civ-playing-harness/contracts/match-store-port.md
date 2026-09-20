@@ -33,6 +33,8 @@ class MatchStore(Protocol):
     def turn_gaps(self, run_id: RunId) -> list[int]: ...
     def step_gaps(self, run_id: RunId, turn: int) -> list[int]: ...
     def list_eligible_save_points(self) -> list[SavePoint]: ...
+    def get_capture(self, capture_id: CaptureId) -> ScreenCapture | None: ...
+    def list_run_events(self, run_id: RunId, *, event_types: Sequence[RunEventType] | None = None) -> list[RunEvent]: ...
 
     # --- health ---
     def ping(self) -> StoreHealth: ...
@@ -83,6 +85,8 @@ until it ends, which is bounded by the turn and paid once per turn.
 | `list_save_points` | Branching, retention | Retention must be able to see which saves a resumable run still needs (FR-036) |
 | `list_eligible_save_points` | The reaper | Returns save points whose run has been archived, and only those. It is the *only* way a deletion path learns what it may touch (FR-036, R17) |
 | `list_active_runs` | Run-identity guard | Second gate on FR-006 alongside the single-tuner limit |
+| `get_capture` | Parity, capabilities audit | Looks up one `ScreenCapture` by id so a visual declaration (`view_declaration_id`) can be resolved without reaching past the port |
+| `list_run_events` | Prompt audit | Returns a run's `RunEvent` timeline, chronological by `occurred_at`, optionally filtered by `event_types`; what makes "every prompt is a recorded `prompt_response` decision or a recorded stall" (FR-005) checkable from the record alone |
 
 ## Archival and retention
 
@@ -108,6 +112,9 @@ decided to give up, long after the fact, with no one watching.
   operation on turn records in this port, which is deliberate.
 - **Withheld captures are recorded without their blob** (`blob=None`). The record is the evidence
   screening worked; removing it would hide a signal SC-009 audits.
+- **Captures and events have no delete or mutate path either** (same reasoning as turn records,
+  FR-034, I12). `get_capture` and `list_run_events` are reads only — nothing in this port lets a
+  caller remove or revise a capture or event once written.
 
 ## Schema evolution
 
@@ -122,7 +129,8 @@ field it has not declared in a published schema version.
 reference adapter today, deliverable 3's store when it lands. Swapping implementations is a
 configuration change, and the suite is what makes that claim true rather than hopeful. It asserts:
 D1–D6, A1–A4, idempotency under repeated writes, parent-immutability rejection, turn **and step**
-gap detection, step-order preservation on read-back, authoritative-attempt selection, and that a
+gap detection, step-order preservation on read-back, authoritative-attempt selection, `get_capture`
+and `list_run_events` (including chronological ordering and `event_types` filtering), and that a
 failed write surfaces as a raise rather than a falsy return.
 
 Two cases are deliberately adversarial: a turn of several hundred steps must round-trip with its

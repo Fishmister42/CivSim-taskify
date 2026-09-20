@@ -48,7 +48,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -791,6 +791,31 @@ class SqliteMatchStore:
                 (RetentionStatus.ELIGIBLE.value,),
             ).fetchall()
             return [SavePoint.model_validate_json(row[0]) for row in rows]
+
+        return self._with_lock(body)
+
+    def get_capture(self, capture_id: CaptureId) -> ScreenCapture | None:
+        def body(conn: sqlite3.Connection) -> ScreenCapture | None:
+            row = conn.execute(
+                "SELECT capture_json FROM captures WHERE capture_id = ?", (capture_id,)
+            ).fetchone()
+            return ScreenCapture.model_validate_json(row[0]) if row is not None else None
+
+        return self._with_lock(body)
+
+    def list_run_events(
+        self, run_id: RunId, *, event_types: Sequence[RunEventType] | None = None
+    ) -> list[RunEvent]:
+        def body(conn: sqlite3.Connection) -> list[RunEvent]:
+            rows = conn.execute(
+                "SELECT event_json FROM run_events WHERE run_id = ? ORDER BY occurred_at ASC",
+                (run_id,),
+            ).fetchall()
+            events = [RunEvent.model_validate_json(row[0]) for row in rows]
+            if event_types is not None:
+                allowed = set(event_types)
+                events = [event for event in events if event.event_type in allowed]
+            return events
 
         return self._with_lock(body)
 
