@@ -1,10 +1,12 @@
 ﻿"""Unit tests for agent context assembly (T103).
 
 Covers the two hard exclusions the task calls out explicitly: no image is
-ever attached unless a caller passes one (US2/T134 is not wired yet), and no
-harness telemetry (FR-020) -- model identity, cost, latency, retry counts,
-save lineage, run configuration, wall-clock timing, or the game build --
-reaches the assembled ``system``/``observation`` text.
+ever attached unless a caller passes one (the production caller is
+``run/decision_loop.py``, which builds its ``images`` through
+``select_screened_images`` -- T134/T238), and no harness telemetry (FR-020)
+-- model identity, cost, latency, retry counts, save lineage, run
+configuration, wall-clock timing, or the game build -- reaches the
+assembled ``system``/``observation`` text.
 """
 
 from __future__ import annotations
@@ -158,8 +160,9 @@ def test_assemble_context_attaches_no_image_by_default() -> None:
 def test_assemble_context_attaches_no_image_even_with_captures_listed() -> None:
     """Observation.captures listing a CaptureId must never, by itself, attach an image.
 
-    Images are only attached once screening exists (US2/T134); this module
-    never even reads ``Observation.captures``.
+    Images are only attached by a caller passing them explicitly (T134's
+    ``select_screened_images`` is the one builder); this module never even
+    reads ``Observation.captures``.
     """
     observation = Observation(
         observation_id=ObservationId("obs-2"),
@@ -181,7 +184,8 @@ def test_assemble_context_attaches_no_image_even_with_captures_listed() -> None:
 
 
 def test_assemble_context_forwards_explicit_images_from_future_caller() -> None:
-    """The extension point works: a caller (future T134) can pass screened images through."""
+    """The extension point works: a caller (the T238 loop wiring) can pass screened images
+    through."""
     image = Image(media_type="image/png", data=b"fake-bytes")
     request = assemble_context(
         observation=_observation(),

@@ -65,10 +65,15 @@ from civsim_harness.act.dispatch import (
 )
 from civsim_harness.act.prompts import PromptRouteStatus, route_prompt
 from civsim_harness.act.verify import verify_execution
-from civsim_harness.agent.context import assemble_context
+from civsim_harness.agent.context import assemble_context, select_screened_images
 from civsim_harness.agent.decisions import RESPONSE_SCHEMA, build_decision
 from civsim_harness.capability.registry import CapabilityRegistry
-from civsim_harness.errors import HarnessError, ObservationAssemblyError, ProviderChainExhausted
+from civsim_harness.errors import (
+    HarnessError,
+    ObservationAssemblyError,
+    ParityViolation,
+    ProviderChainExhausted,
+)
 from civsim_harness.host.detect import HostInfo
 from civsim_harness.host.port import GameWindow, HostPlatform
 from civsim_harness.models.common import (
@@ -87,14 +92,21 @@ from civsim_harness.models.common import (
 from civsim_harness.models.config import GuidanceSet
 from civsim_harness.models.decision import DecisionTrigger, RejectionReason
 from civsim_harness.models.records import CallOutcome, RunEvent
-from civsim_harness.models.turn import DecisionStep, Observation, StepProgress, TurnOutcome
+from civsim_harness.models.run import ComparabilityStatus, HostSupportTier
+from civsim_harness.models.turn import (
+    DecisionStep,
+    Observation,
+    ScreenCapture,
+    StepProgress,
+    TurnOutcome,
+)
 from civsim_harness.observe.assemble import CapabilityResult, assemble_observation
-from civsim_harness.observe.capture import capture_for_step
+from civsim_harness.observe.capture import StepCapture, capture_for_step
 from civsim_harness.observe.screen_identity import interpret_screen_state
 from civsim_harness.parity.forbidden import enforce_parity_boundary
 from civsim_harness.parity.screening import ScreeningProfiles
 from civsim_harness.provider.accounting import build_model_call
-from civsim_harness.provider.port import ModelProvider
+from civsim_harness.provider.port import Image, ModelProvider
 from civsim_harness.run.no_progress import NoProgressTracker, build_no_progress_event
 from civsim_harness.store.port import DecisionStepBundle, MatchStore
 
@@ -270,13 +282,21 @@ class DecisionLoopResult:
 
 @dataclass(frozen=True)
 class _FreshObservation:
-    """One ``_observe`` call's full result: the assembled ``Observation``, whether *this* step's
-    own capture was clean enough to show the agent (T157's ``visually_degraded``, carried forward
-    into the ``DecisionStep`` this observation eventually belongs to), and every event the capture
-    attempt produced."""
+    """One ``_observe`` call's full result: the assembled ``Observation``, plus this step's own
+    **not-yet-persisted** capture (T238).
+
+    The capture is deliberately unwritten here. ``shown_to_agent`` is a statement about a
+    decision request actually dispatched to the provider, and no such request exists when the
+    frame is taken -- so the loop persists the record only at the moment the attachment question
+    is genuinely settled: its own step's provider dispatch, or one of the paths where the frame
+    demonstrably reached no request at all (loop exit, stall, refused context). The persisted
+    flag therefore reports what happened, never an intention (FR-015, SC-019).
+    ``step_capture.visually_degraded`` is T157's per-step flag, carried into the ``DecisionStep``
+    this observation eventually belongs to; ``events`` is every event the capture attempt
+    produced."""
 
     observation: Observation
-    visually_degraded: bool
+    step_capture: StepCapture
     events: tuple[RunEvent, ...]
 
 
@@ -297,6 +317,82 @@ async def _resolve_camera_state(ctx: DecisionLoopContext) -> Mapping[str, Any]:
     return produced
 
 
+def _downgrade_run_comparability(ctx: DecisionLoopContext) -> None:
+    """T240, FR-050, SC-013: downgrade the *run's* recorded comparability when a capture
+    degrades mid-run.
+
+    ``Run.comparability_status`` is set once at preparation from the host gate
+    (``observe/host_gate.py``) and until this function existed was never written again -- so a
+    run that started ``COMPARABLE`` on a validated host and then lost its images kept
+    ``comparable`` on record while its steps carried ``visually_degraded`` flags. The step/turn
+    flags say *which* steps lost images; this is the run-level rollup the spec names
+    (``observe/capture.py``'s own docstring promises it), persisted through the existing
+    ``MatchStore.update_run`` port surface. Only ``COMPARABLE`` downgrades: a run already
+    ``VISUALLY_DEGRADED`` or ``NOT_COMPARABLE`` is left alone, and nothing here can ever move a
+    status *up*. A run the store does not know (compositions that never ``create_run``) has no
+    record to downgrade, so ``None`` is a no-op rather than an error.
+    """
+    run = ctx.store.get_run(ctx.run_id)
+    if run is None or run.comparability_status is not ComparabilityStatus.COMPARABLE:
+        return
+    ctx.store.update_run(ctx.run_id, comparability_status=ComparabilityStatus.VISUALLY_DEGRADED)
+
+
+def _images_permitted_for_run(ctx: DecisionLoopContext) -> bool:
+    """T099's rule: until a platform's R6 capture-hygiene spike has passed, no run on that
+    platform may show images to the agent.
+
+    The spike's status reaches this loop through the run's own record: preparation resolves the
+    per-platform probe (``host/detect.py::probe_host_support``) through the host gate
+    (``observe/host_gate.py::evaluate_host_gate``), and ``Run.host_support_tier`` is
+    ``VALIDATED`` exactly when this platform *and session*'s own R6 spike passed --
+    ``SUPPORTED`` means quicksave-verified with capture hygiene *not* established, and such a
+    run proceeds visually degraded under FR-050: every clean frame is still screened and stored,
+    but none is ever attached to a decision request. Fails closed when the run record cannot be
+    read at all -- no evidence of a passed spike means no images.
+    """
+    run = ctx.store.get_run(ctx.run_id)
+    return run is not None and run.host_support_tier is HostSupportTier.VALIDATED
+
+
+def _step_images(
+    ctx: DecisionLoopContext,
+    *,
+    observation: Observation,
+    step_capture: StepCapture,
+    images_permitted: bool,
+) -> list[Image]:
+    """Build this step's agent-visible images -- through T134's one chokepoint, or not at all.
+
+    The only candidate is this step's own fresh capture (FR-015 already forbids any other), and
+    it must clear three layers: the run-level R6 gate (*images_permitted*, T099); wire readiness
+    (a clean blob whose frame format has a real media type -- a raw framebuffer has no wire form
+    and cannot be attached as-is); and :func:`~civsim_harness.agent.context.
+    select_screened_images` itself, which re-checks screened-clean status, catalog resolution of
+    the view, and current-step binding (FR-024, FR-025, FR-015). Nothing in this module hands an
+    ``Image`` to ``assemble_context`` by any other path -- keeping T134's function the only way
+    a capture becomes an agent-visible image.
+    """
+    if not images_permitted:
+        return []
+    if step_capture.blob is None or step_capture.blob_media_type is None:
+        return []
+    candidate = Image(media_type=step_capture.blob_media_type, data=step_capture.blob)
+    return select_screened_images(
+        observation=observation,
+        registry=ctx.registry,
+        candidates=[(step_capture.capture, candidate)],
+    )
+
+
+def _as_shown(capture: ScreenCapture) -> ScreenCapture:
+    """A copy of *capture* with ``shown_to_agent=True`` -- rebuilt through ``model_validate``
+    rather than ``model_copy`` so the model's own withheld-never-shown invariant re-runs on the
+    exact record persisted (a withheld capture can never be flipped shown, even by a bug in the
+    attachment logic above this)."""
+    return ScreenCapture.model_validate({**capture.model_dump(), "shown_to_agent": True})
+
+
 async def _observe(
     ctx: DecisionLoopContext, *, step_id: DecisionStepId, step_index: int
 ) -> _FreshObservation:
@@ -304,10 +400,13 @@ async def _observe(
     FR-015, invariant I14). Called once before the first decision, and once again after every
     executed (or rejected) decision -- see module docstring.
 
-    The capture (clean or withheld) and its blob, if any, are durably written through
-    ``ctx.store.write_capture`` right here -- ``observe.capture``'s own docstring names
-    ``run/turn_cycle.py`` as the writer, and this module is the part of that turn cycle that
-    actually produces one, sharing the same store handle (FR-051, D5).
+    The capture is *not* written here (T238): its ``shown_to_agent`` cannot be truthful until the
+    loop knows whether the frame actually rode a decision request out of the harness, so the
+    write happens at that settling point instead -- see :class:`_FreshObservation`. The two
+    exceptions, handled right here because the loop never gets the chance: a capture whose
+    observation cannot even be assembled (persisted un-shown before the T096 failure propagates),
+    and the run-level comparability downgrade (T240), applied the moment degradation is detected
+    regardless of what later happens to this attempt -- the frames were lost either way.
     """
     results, screen_identity = await ctx.read_observation_inputs()
 
@@ -334,22 +433,36 @@ async def _observe(
         registry=ctx.registry,
         profiles=ctx.screening_profiles,
     )
-    ctx.store.write_capture(step_capture.capture, step_capture.blob)
-    captures = (step_capture.capture.capture_id,) if step_capture.capture.shown_to_agent else ()
+    if step_capture.visually_degraded:
+        # T240, FR-050, SC-013: capture degradation is a *run*-level comparability fact, not
+        # only a per-step flag -- applied here, at detection, so it lands even when this attempt
+        # is later abandoned (the frames were lost in reality either way).
+        _downgrade_run_comparability(ctx)
 
-    observation = assemble_observation(
-        observation_id=ObservationId(uuid.uuid4().hex),
-        decision_step_id=step_id,
-        catalog_version=ctx.catalog_version,
-        registry=ctx.registry,
-        results=results,
-        screen_identity=screen_identity,
-        assembled_at=ctx.clock(),
-        captures=captures,
-    )
+    try:
+        observation = assemble_observation(
+            observation_id=ObservationId(uuid.uuid4().hex),
+            decision_step_id=step_id,
+            catalog_version=ctx.catalog_version,
+            registry=ctx.registry,
+            results=results,
+            screen_identity=screen_identity,
+            assembled_at=ctx.clock(),
+            # The capture-id listing is finalized by the loop at attachment time, exactly like
+            # the capture's own shown_to_agent -- an id appears here only once its image
+            # genuinely rode this step's decision request (T238, FR-015).
+            captures=(),
+        )
+    except ObservationAssemblyError:
+        # This attempt dies here (T096) and the capture never reaches any decision request --
+        # persist it saying exactly that before the failure propagates: the record (clean or
+        # withheld) is evidence either way and may not be lost (FR-051, D5, SC-019).
+        ctx.store.write_capture(step_capture.capture, step_capture.blob)
+        raise
+
     return _FreshObservation(
         observation=observation,
-        visually_degraded=step_capture.visually_degraded,
+        step_capture=step_capture,
         events=step_capture.events,
     )
 
@@ -451,6 +564,10 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
     steps: list[DecisionStepBundle] = []
     events: list[RunEvent] = []
 
+    # T238 / T099: resolved once per attempt -- the tier is fixed on the run record at
+    # preparation, so re-reading it per step could never change the answer mid-attempt.
+    images_permitted = _images_permitted_for_run(ctx)
+
     step_index = 1
     step_id = DecisionStepId(uuid.uuid4().hex)
     initial = await _observe_or_wrap(
@@ -462,15 +579,40 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
         no_progress_streak=tracker.streak,
     )
     observation = initial.observation
-    degraded = initial.visually_degraded
+    step_capture = initial.step_capture
     events.extend(initial.events)
 
     while True:
         started_at = ctx.clock()
 
-        trigger, prompt_type = _resolve_trigger(
-            observation, ctx=ctx, step_index=step_index, occurred_at=started_at
+        try:
+            trigger, prompt_type = _resolve_trigger(
+                observation, ctx=ctx, step_index=step_index, occurred_at=started_at
+            )
+        except UnknownScreenEncountered:
+            # The run stalls before this step's decision request ever exists (FR-049), so its
+            # capture demonstrably reached no agent -- persisted saying exactly that on the way
+            # out (T238; the record may not be lost, FR-051/D5).
+            ctx.store.write_capture(step_capture.capture, step_capture.blob)
+            raise
+
+        # T238, FR-024/FR-015, T134: this step's own clean capture -- and only it -- may become
+        # the request's image, and only through `select_screened_images`. `shown_to_agent` and
+        # the observation's capture listing are finalized here, from the *actual* attachment,
+        # never from the screening outcome alone: a clean-but-unattached frame (R6 gate closed,
+        # no wire form) stays recorded not shown with an empty listing.
+        images = _step_images(
+            ctx,
+            observation=observation,
+            step_capture=step_capture,
+            images_permitted=images_permitted,
         )
+        capture_record = step_capture.capture
+        if images:
+            capture_record = _as_shown(capture_record)
+            observation = observation.model_copy(
+                update={"captures": [capture_record.capture_id]}
+            )
 
         request = assemble_context(
             observation=observation,
@@ -478,6 +620,7 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             model=ctx.model,
             step_index=step_index,
             response_schema=RESPONSE_SCHEMA,
+            images=images,
         )
 
         # T225 / Constitution Principle I (NON-NEGOTIABLE), FR-019, FR-020: the detective
@@ -490,15 +633,28 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
         # assurance SC-006/SC-008 rest on came from tests invoking it directly rather than from
         # the path the agent's context actually travels.
         #
-        # `ParityViolation` is a `HarnessError` and is deliberately NOT caught here or anywhere
-        # below: `run/runner.py` turns it into a recorded run failure. Principle I says a failure
-        # to satisfy it must be *blocked*, not shipped with a caveat -- so the run stops rather
-        # than continuing with the offending step withheld.
-        enforce_parity_boundary(
-            observation=observation,
-            decision_request=request,
-            extra_forbidden_values=_run_forbidden_literals(ctx),
-        )
+        # `ParityViolation` is a `HarnessError` and is deliberately NOT swallowed here or
+        # anywhere below: `run/runner.py` turns it into a recorded run failure. Principle I says
+        # a failure to satisfy it must be *blocked*, not shipped with a caveat -- so the run
+        # stops rather than continuing with the offending step withheld. The re-raise below
+        # exists only so the step's capture record is not lost with the halted attempt: the
+        # refused request never left the harness, so the capture is persisted un-shown -- the
+        # truth -- before the violation propagates unchanged (T238).
+        try:
+            enforce_parity_boundary(
+                observation=observation,
+                decision_request=request,
+                extra_forbidden_values=_run_forbidden_literals(ctx),
+            )
+        except ParityViolation:
+            ctx.store.write_capture(step_capture.capture, step_capture.blob)
+            raise
+
+        # T238: the capture record is written at the moment its fate is settled -- the request
+        # dispatched on the very next line is the one it describes, so `shown_to_agent` reports
+        # actual attachment and the durable write still precedes anything that could interrupt
+        # the step afterwards (FR-051, D5).
+        ctx.store.write_capture(capture_record, step_capture.blob)
 
         response = ctx.provider.complete(request)
 
@@ -639,7 +795,7 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             model_call_id=model_call.model_call_id,
             progress=progress,
             no_progress_streak_after=no_progress_streak_after,
-            visually_degraded=degraded,
+            visually_degraded=step_capture.visually_degraded,
             started_at=started_at,
             ended_at=ended_at,
         )
@@ -652,6 +808,10 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
         steps.append(bundle)
 
         if raw_decision.is_end_turn:
+            # The turn's final fresh read (taken to verify the end-turn effect, I14) never
+            # serves another decision, so its capture reached no request -- persisted un-shown,
+            # which is the truth of what happened (T238).
+            ctx.store.write_capture(next_fresh.step_capture.capture, next_fresh.step_capture.blob)
             return DecisionLoopResult(
                 outcome=TurnOutcome.ENDED_BY_AGENT,
                 steps=tuple(steps),
@@ -660,6 +820,9 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             )
 
         if tracker.tripped:
+            # Same as the agent-ended exit above: the backstop ends the turn before this fresh
+            # read's capture could serve any decision request (T238).
+            ctx.store.write_capture(next_fresh.step_capture.capture, next_fresh.step_capture.blob)
             events.append(
                 build_no_progress_event(
                     run_id=ctx.run_id,
@@ -679,4 +842,4 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
         step_index = next_step_index
         step_id = next_step_id
         observation = next_observation
-        degraded = next_fresh.visually_degraded
+        step_capture = next_fresh.step_capture
