@@ -488,3 +488,30 @@ its three UNRESOLVED findings, ruled 2026-09-20:
   wiring gap on the Linux side** - hygiene preconditions that run only in tests are exactly the
   pattern. Referred to the Linux peer (their adapter, their live evidence). QUEUED for the next
   issue #1 post (rides with ACCOUNT FREE).
+
+### Run 6 results: first model-driven run attempt - BLOCKED at bring-up (host, not harness)
+
+**Zero turns, zero model calls, $0 spent (auth/key: 80 remaining).** Steam shut itself down ~7s
+after the tuner opened, on BOTH windows (bootstrap Shutdown 17:21:01 and 17:32:40 local); game
+never left IntroScreen. Agent honored the single-relaunch rule and stopped. Evidence:
+spikes/demo-evidence/model-driven-run-2026-09-20.md + two bringup JSON logs (uncommitted... commit
+them with the doctor fix).
+
+**CONTENTION HYPOTHESIS (posted to peer for correlation):** the Windows "Steam relaunch loop /
+LogonFailure" and the peer's account contention may be ONE problem - two machines fighting over
+one Steam logon. Peer asked to correlate their launch attempts against 17:21:01/17:32:40. If it
+matches, the fix is pure scheduling: one side owns the account at a time.
+
+**DECISION: account handed to the peer (ACCOUNT FREE posted).** Windows client cannot stay up
+anyway; peer has raw_command_probe.py + SaveLoader checklist + T218/T213 queued. WINDOWS STANDS
+DOWN FROM STEAM until the peer posts the account back. Windows continues headless.
+
+**What the attempt proved live anyway:** composition root loads clean (catalog 53/0), provider
+layer fully healthy through the production resolver - preflight_chain confirms sonnet-5 and
+opus-5 (images, 1M ctx). The one unreachable step was nexus connect against a dead client.
+
+**Findings:** A - doctor false-negative on file-only key -> FIXED as T236 (revert-confirmed).
+B - no cold-client-to-turn-1 path -> FILED as T237 (DEFERRED-LIVE; the old T217-B UI-driver
+authorization is SPENT, a new one needs an owner ruling). C - V2 getters would fail vs an
+arbitrary loaded save (major_count 16-vs-majors, map_type "Continents.lua", RANDOM_SEED vs
+GAME_SYNC_RANDOM_SEED) - corroborates T218, relayed to the peer who owns it. Suite: 1569/2/0.
