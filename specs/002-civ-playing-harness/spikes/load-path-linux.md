@@ -68,12 +68,64 @@ calling it returns `0` (a query handle) rather than erroring. The strong hypothe
 `Network.LoadGame` requires a **file record produced by that query** — carrying internal fields that
 cannot be reproduced by hand — rather than a name-shaped table.
 
-Completing that path needs the query's async results, and **the results event was not found**:
+Completing that path needs the query's async results. **The events were eventually found — in a
+different Lua state — but wiring a handler to them still does not produce results.**
+
+### Round 1: looked in `InGame`, found nothing
 
 - `Events.FileListQueryResults` → **`nil`**
 - Scanning `Events` for any member matching `file` / `save` / `load` yields exactly one:
   `Events.LoadGameViewStateDone`
 - `LuaEvents` yields none
+
+### Round 2: the events live in `LoadGameMenu`, under `LuaEvents`
+
+Acting on the hypothesis that the file-list machinery would be wired in the state that *displays* the
+file list rather than in `InGame` — which follows from every UI screen being its own Lua state — a
+rescan of state **112 (`LoadGameMenu`)** found them:
+
+```
+=== LoadGameMenu (112) LuaEvents: 5 ===
+  LuaEvents.FileListQueryComplete
+  LuaEvents.FileListQueryResults
+  LuaEvents.HostGame_SetLoadGameServerType
+  LuaEvents.InGameTopOptionsMenu_SetLoadGameServerType
+  LuaEvents.MainMenu_SetLoadGameServerType
+
+=== SaveGameMenu (113) LuaEvents: 1 ===
+  LuaEvents.FileListQueryComplete
+```
+
+They are on **`LuaEvents`, not `Events`**, and **only in the menu states** — which is exactly why the
+`InGame` scan came back empty. Worth generalising: *a symbol's absence in one state says nothing
+about the others.*
+
+### Round 3: the handler registers, the query runs, the event never fires
+
+```
+handler registered ok=true err=nil
+query issued ok=true ret=0
+...
+fired=0
+CIVSIM_SAVES type=nil
+```
+
+Tried twice: once with the Load Game screen closed, once with it **open and confirmed active**
+(`ContextPtr:IsHidden() == false`). Identical result both times. The handler attaches without error
+and `UI.QuerySaveGameList` returns without error, but nothing is ever delivered to it.
+
+`ret=0` is ambiguous and may be a result *count* rather than a query handle — in which case the query
+itself is matching nothing and the parameters are wrong, rather than the event being mis-wired.
+
+**A further avenue is closed: `getfenv` returns `nil` in this sandbox**, so the menu state's globals
+cannot be enumerated to find the file list the screen demonstrably populated (it renders all five
+saves correctly).
+
+**Status: unresolved.** The location hypothesis was correct and is real progress; the mechanism is
+still not reachable from a one-shot tuner command. Remaining leads, cheapest first: vary the query
+parameter names/values (`Directory` vs `Location`, other `SaveLocations`/`SaveFileTypes` members),
+and `LuaEvents.FileListQueryComplete` as the completion signal with the results fetched some other
+way.
 
 **A useful enabling fact was established along the way: Lua globals persist across tuner commands.**
 `CIVSIM_PERSIST_TEST = 4242` set in one command read back in the next. So the async pattern *is*
