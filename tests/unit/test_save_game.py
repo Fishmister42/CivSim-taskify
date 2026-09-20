@@ -43,7 +43,12 @@ from civsim_harness.saves.verify import (
     verify_save,
 )
 from fakes.fake_host import FakeHostPlatform
-from fakes.fake_nexus import STATE_INDEX_GAME_CORE_TUNER, STATE_INDEX_IN_GAME, FakeNexusServer
+from fakes.fake_nexus import (
+    STATE_INDEX_GAME_CORE_TUNER,
+    STATE_INDEX_IN_GAME,
+    FakeNexusServer,
+    loaded_game_state_table,
+)
 
 _SAVE_NAME = "civsim__abc123__t0007"
 
@@ -71,8 +76,11 @@ async def test_lua_save_capability_issues_the_verified_call_in_the_in_game_conte
     client = NexusClient(host="127.0.0.1", port=server.port)
     try:
         await client.connect()
-        indices = await client.resolve_game_states()
-        capability = LuaSaveCapability(_executor(client), in_game_state_index=indices.in_game)
+        await client.resolve_game_states()
+        # The client itself is a valid resolver source (it exposes
+        # `.state_indices`) -- LuaSaveCapability asks it for the current
+        # InGame index on every call rather than caching one.
+        capability = LuaSaveCapability(_executor(client), in_game_state_index=client)
 
         await capability.save_game(_SAVE_NAME)
     finally:
@@ -93,6 +101,65 @@ async def test_lua_save_capability_issues_the_verified_call_in_the_in_game_conte
     assert f'"{_SAVE_NAME}"' in received.lua_body
 
 
+async def test_capability_built_before_a_phase_change_uses_the_new_index_afterwards() -> None:
+    # Live-confirmed hazard (this module's docstring): the same state name
+    # can sit at a different index after a phase transition or reconnect --
+    # LoadGameMenu is 18 at Create Game but 112 once in game. A
+    # LuaSaveCapability constructed early must never keep replaying the
+    # index that was true at construction time.
+    server = FakeNexusServer()
+    server.queue_response({"issued": True, "save_name": _SAVE_NAME, "error": ""})
+    server.queue_response({"issued": True, "save_name": _SAVE_NAME, "error": ""})
+    await server.start()
+    client = NexusClient(host="127.0.0.1", port=server.port)
+    try:
+        await client.connect()
+        await client.resolve_game_states()
+        # Built while InGame sits at the original index -- and never
+        # rebuilt afterwards.
+        capability = LuaSaveCapability(_executor(client), in_game_state_index=client)
+
+        await capability.save_game(_SAVE_NAME)
+
+        # A phase transition moves InGame to a different index; the run
+        # sequence would call refresh_state_indices() at exactly this kind
+        # of known boundary.
+        new_in_game_index = STATE_INDEX_IN_GAME + 100
+        server.set_state_table(
+            loaded_game_state_table(
+                game_core_tuner=STATE_INDEX_GAME_CORE_TUNER + 100,
+                in_game=new_in_game_index,
+            )
+        )
+        await client.refresh_state_indices()
+
+        await capability.save_game(_SAVE_NAME)
+    finally:
+        await client.close()
+        await server.stop()
+
+    assert len(server.received) == 2
+    # The old index the capability first saw -- never replayed after the
+    # phase change.
+    assert server.received[0].state_index == STATE_INDEX_IN_GAME
+    # The new index, resolved fresh on the second call rather than the
+    # stale one captured at construction.
+    assert server.received[1].state_index == new_in_game_index
+    assert server.received[1].state_index != STATE_INDEX_IN_GAME
+
+
+def test_constructing_with_a_raw_int_state_index_is_rejected() -> None:
+    # The removed footgun: a bare int captured once at construction can go
+    # silently stale after a reconnect or phase transition. There is no
+    # backward-compatible path for it -- construction must fail immediately
+    # and loudly instead.
+    async def _execute(state_index: int, lua_body: str) -> Any:  # pragma: no cover
+        raise AssertionError("must never be called")
+
+    with pytest.raises(TypeError):
+        LuaSaveCapability(_execute, in_game_state_index=STATE_INDEX_IN_GAME)  # type: ignore[arg-type]
+
+
 async def test_lua_save_capability_raises_when_the_lua_call_itself_errors() -> None:
     # The Lua-side pcall failing (e.g. a future client removing/renaming
     # Network.SaveGame) is a real failure this module must surface, never
@@ -106,8 +173,8 @@ async def test_lua_save_capability_raises_when_the_lua_call_itself_errors() -> N
     client = NexusClient(host="127.0.0.1", port=server.port)
     try:
         await client.connect()
-        indices = await client.resolve_game_states()
-        capability = LuaSaveCapability(_executor(client), in_game_state_index=indices.in_game)
+        await client.resolve_game_states()
+        capability = LuaSaveCapability(_executor(client), in_game_state_index=client)
 
         with pytest.raises(NexusError):
             await capability.save_game(_SAVE_NAME)
@@ -132,8 +199,8 @@ async def test_a_save_that_never_appears_on_disk_fails_verification_despite_bein
     client = NexusClient(host="127.0.0.1", port=server.port)
     try:
         await client.connect()
-        indices = await client.resolve_game_states()
-        capability = LuaSaveCapability(_executor(client), in_game_state_index=indices.in_game)
+        await client.resolve_game_states()
+        capability = LuaSaveCapability(_executor(client), in_game_state_index=client)
         # The Lua call is issued and reports success -- but the fake
         # transport never touches a real filesystem, exactly like the real
         # game between the call returning and the file actually landing.

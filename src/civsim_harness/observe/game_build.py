@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from civsim_harness.errors import NexusError, PreflightError
 from civsim_harness.host.detect import OperatingSystem
@@ -152,10 +152,74 @@ _VERSION_LUA = (
 )
 
 
+# --------------------------------------------------------------------------
+# GameCore_Tuner state index resolution -- never a raw int captured once
+# --------------------------------------------------------------------------
+#
+# Same hazard ``saves/save_game.py`` documents and fixes for the InGame
+# index: a later live capture established that Lua state indices differ by
+# *game phase*, not only by client version or reconnect (see
+# ``civsim_harness.nexus.client``'s module docstring,
+# ``REASON_STALE_STATE_INDEX``, ``refresh_state_indices()``). The
+# :data:`TunerVersionReader` this factory returns is a stored callable that
+# can outlive the phase it was built in -- exactly the shape that let a
+# captured int go silently stale -- so it resolves the index fresh on every
+# call instead of closing over one.
+
+
+class _StateIndicesLike(Protocol):
+    """Structural shape of ``civsim_harness.nexus.client.StateIndices`` --
+    duck-typed, never imported, so this module keeps no hard dependency on
+    the transport (matching *execute*'s own convention below)."""
+
+    @property
+    def game_core_tuner(self) -> int | None: ...
+
+
+@runtime_checkable
+class _HasStateIndices(Protocol):
+    """Structural shape of a connected ``NexusClient`` (or anything alike):
+    "the client itself", read fresh on every call rather than snapshotted
+    once."""
+
+    @property
+    def state_indices(self) -> _StateIndicesLike | None: ...
+
+
+GameCoreTunerIndexResolver = Callable[[], int]
+"""Zero-argument, synchronous callable returning the *current*
+``GameCore_Tuner`` Lua state index -- synchronous and in-memory by design,
+matching ``saves.save_game.InGameStateIndexResolver``."""
+
+GameCoreTunerIndexSource = GameCoreTunerIndexResolver | _HasStateIndices
+"""What :func:`make_tuner_version_reader` accepts in place of a raw ``int``:
+either a :data:`GameCoreTunerIndexResolver`, or a connected Nexus session
+itself (anything shaped like ``NexusClient``, i.e. exposing
+``.state_indices``). Passing the client directly is the common case: it
+already holds the current state table in memory."""
+
+
+def _resolve_game_core_tuner_index(source: GameCoreTunerIndexSource) -> int:
+    """Ask *source* for the current ``GameCore_Tuner`` Lua state index,
+    right now -- never a value captured earlier."""
+    if isinstance(source, _HasStateIndices):
+        indices = source.state_indices
+        if indices is None or indices.game_core_tuner is None:
+            raise NexusError(
+                "Cannot resolve the GameCore_Tuner Lua state index -- this "
+                "Nexus session has not connected, or resolve_game_states() "
+                "has not yet succeeded, so no game-play state table is "
+                "available to read the build from",
+                detail={"reason": "game_core_tuner_state_index_unresolved"},
+            )
+        return indices.game_core_tuner
+    return source()
+
+
 def make_tuner_version_reader(
     execute: Callable[[int, str], Awaitable[Any]],
     *,
-    game_core_tuner_state_index: int,
+    game_core_tuner_state_index: GameCoreTunerIndexSource,
 ) -> TunerVersionReader:
     """Build a :data:`TunerVersionReader` bound to an already-connected Nexus
     session's ``GameCore_Tuner`` state.
@@ -165,11 +229,24 @@ def make_tuner_version_reader(
     ``execute(state_index, lua_body)``; it is accepted as a plain callable
     (rather than importing ``NexusClient`` directly) so this module's pure
     logic has no hard dependency on the transport.
+
+    *game_core_tuner_state_index* is deliberately **not** a bare ``int``:
+    the returned reader is a stored callable that may be invoked more than
+    once over the life of a run, and a phase transition (or reconnect)
+    between two of those calls can make a captured index silently wrong
+    rather than merely absent -- see this module's docstring. Pass either a
+    zero-argument resolver or the connected ``NexusClient`` itself; the
+    index is re-resolved fresh on every call. A resolution failure (no
+    ``GameCore_Tuner`` state available yet) is treated exactly like any
+    other ``NexusError`` from this reader: "not reachable right now",
+    falling through to the host-based fallback rather than failing the
+    whole read.
     """
 
     async def _read() -> str | None:
         try:
-            result = await execute(game_core_tuner_state_index, _VERSION_LUA)
+            state_index = _resolve_game_core_tuner_index(game_core_tuner_state_index)
+            result = await execute(state_index, _VERSION_LUA)
         except NexusError:
             return None
         if isinstance(result, dict) and result.get("ok") and result.get("version"):
