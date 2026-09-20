@@ -144,9 +144,9 @@ until they exist.
 
 **Test doubles**
 
-- [ ] T055 [P] Implement the fake host adapter in `tests/fakes/fake_host.py` with scriptable capability availability and tier, so the turn cycle, preflight tier gate, and degradation paths run deterministically on any CI platform
-- [ ] T056 [P] Implement the recorded-transcript fake Nexus server in `tests/fakes/fake_nexus.py`, replaying captured request/response transcripts so the full turn cycle runs deterministically without Civ VI, with scriptable mid-turn drops and per-operation stalls (research R15)
-- [ ] T057 [P] Implement the fake `ModelProvider` in `tests/fakes/fake_provider.py` with scriptable outcomes: a single decision, empty response, rate limit, context rejection, failure, and the contract-violating multi-decision response T180 asserts against
+- [X] T055 [P] Implement the fake host adapter in `tests/fakes/fake_host.py` with scriptable capability availability and tier, so the turn cycle, preflight tier gate, and degradation paths run deterministically on any CI platform
+- [X] T056 [P] Implement the recorded-transcript fake Nexus server in `tests/fakes/fake_nexus.py`, replaying captured request/response transcripts so the full turn cycle runs deterministically without Civ VI, with scriptable mid-turn drops and per-operation stalls (research R15)
+- [X] T057 [P] Implement the fake `ModelProvider` in `tests/fakes/fake_provider.py` with scriptable outcomes: a single decision, empty response, rate limit, context rejection, failure, and the contract-violating multi-decision response T180 asserts against
 
 **Checkpoint**: Boundary machinery, records, transport, and store exist — user story work can begin
 
