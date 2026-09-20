@@ -241,6 +241,142 @@ def test_find_game_window_never_raises_an_opaque_error(
     assert window is None or isinstance(window, GameWindow)
 
 
+class _FakeWin32Process:
+    """Fake stand-in for the `win32process` module, scoped to the one call
+    `find_game_window` makes on it: `GetWindowThreadProcessId`. `pywin32` is not
+    installed in this venv (deliberately, per this wave's instructions), so the
+    Windows adapter's window-identity/rect-translation logic can only be exercised
+    by faking the two modules it lazily imports (`win32gui`, `win32process`) and
+    installing them into `sys.modules` under their real names -- `import win32gui`
+    finds whatever is already in `sys.modules` before it would try (and fail) to
+    load the real package from disk."""
+
+    def __init__(self, pid_by_hwnd: dict[int, int]) -> None:
+        self._pid_by_hwnd = pid_by_hwnd
+
+    def GetWindowThreadProcessId(self, hwnd: int) -> tuple[int, int]:
+        return (0, self._pid_by_hwnd[hwnd])
+
+
+class _FakeWin32Gui:
+    """Fake stand-in for the `win32gui` module, scripted with a single window's
+    client rect and its true screen-space origin. `GetClientRect` is documented
+    Win32 behaviour to return CLIENT-relative coordinates (left/top always 0) --
+    scripting it that way here and scripting `ClientToScreen` to apply a
+    (possibly nonzero) offset is what actually exercises the translation `T:
+    windows-position-fix` adds, rather than merely re-asserting a stub."""
+
+    def __init__(
+        self,
+        hwnd: int,
+        title: str,
+        client_rect: tuple[int, int, int, int],
+        screen_origin: tuple[int, int],
+    ) -> None:
+        self._hwnd = hwnd
+        self._title = title
+        self._client_rect = client_rect
+        self._screen_origin = screen_origin
+
+    def EnumWindows(self, callback: object, extra: object) -> None:
+        callback(self._hwnd, extra)  # type: ignore[operator]
+
+    def IsWindowVisible(self, hwnd: int) -> bool:
+        return hwnd == self._hwnd
+
+    def GetWindowText(self, hwnd: int) -> str:
+        return self._title if hwnd == self._hwnd else ""
+
+    def GetClientRect(self, hwnd: int) -> tuple[int, int, int, int]:
+        assert hwnd == self._hwnd
+        return self._client_rect
+
+    def ClientToScreen(self, hwnd: int, point: tuple[int, int]) -> tuple[int, int]:
+        # Real ClientToScreen maps a client-relative point into screen space by
+        # adding the client area's screen-space origin. GetClientRect's own
+        # left/top are always (0, 0), so the point passed in practice is (0, 0);
+        # this fake honours whatever point it is given, matching the real API.
+        assert hwnd == self._hwnd
+        origin_x, origin_y = self._screen_origin
+        point_x, point_y = point
+        return (origin_x + point_x, origin_y + point_y)
+
+
+def _install_fake_win32(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    hwnd: int,
+    pid: int,
+    title: str,
+    client_rect: tuple[int, int, int, int],
+    screen_origin: tuple[int, int],
+) -> None:
+    monkeypatch.setitem(
+        sys.modules, "win32gui", _FakeWin32Gui(hwnd, title, client_rect, screen_origin)
+    )
+    monkeypatch.setitem(sys.modules, "win32process", _FakeWin32Process({hwnd: pid}))
+
+
+def test_windows_find_game_window_translates_client_rect_to_screen_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`GetClientRect` returns coordinates relative to the client area, so its
+    left/top are always 0 by definition -- that is correct Win32 behaviour, not a
+    bug in the fake below. Without a `ClientToScreen` translation, a window that is
+    actually on a second monitor at (2560, 0) would incorrectly report (0, 0),
+    which is exactly the bug shape a live client found and fixed (and verified
+    against `xwininfo`) in the Linux adapter's `get_geometry()`/reparenting-WM case
+    the night before this task. This test mirrors that same scenario -- a
+    1920x1200 client area whose true screen origin is (2560, 0) -- so both
+    platforms are guarded by the identical case."""
+    adapter = _build_windows()
+    hwnd = 4242
+    pid = 54321
+    _install_fake_win32(
+        monkeypatch,
+        hwnd=hwnd,
+        pid=pid,
+        title="Sid Meier's Civilization VI (DX12)",
+        client_rect=(0, 0, 1920, 1200),
+        screen_origin=(2560, 0),
+    )
+    process = GameProcess(pid=pid, name="CivilizationVI_DX12.exe", executable_path=None)
+
+    window = adapter.find_game_window(process)
+
+    assert window is not None
+    assert window.rect == WindowRect(left=2560, top=0, width=1920, height=1200)
+
+
+def test_windows_find_game_window_reports_true_zero_when_window_is_genuinely_at_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The degenerate-but-plausible case the bug hid behind: a window that really
+    is at screen position (0, 0) (e.g. the only monitor, or the primary display)
+    must still report (0, 0) after the fix. This guards against a translation that
+    merely swaps one hard-coded constant for another rather than doing a genuine
+    `ClientToScreen` call -- left=0 has to come out of the fake's `ClientToScreen`
+    honouring a (0, 0) screen_origin, not out of `find_game_window` skipping the
+    translation for this case."""
+    adapter = _build_windows()
+    hwnd = 7777
+    pid = 13579
+    _install_fake_win32(
+        monkeypatch,
+        hwnd=hwnd,
+        pid=pid,
+        title="Sid Meier's Civilization VI",
+        client_rect=(0, 0, 1920, 1080),
+        screen_origin=(0, 0),
+    )
+    process = GameProcess(pid=pid, name="CivilizationVI.exe", executable_path=None)
+
+    window = adapter.find_game_window(process)
+
+    assert window is not None
+    assert window.rect == WindowRect(left=0, top=0, width=1920, height=1080)
+
+
 @pytest.mark.parametrize("adapter_id,factory", _ADAPTERS, ids=_ADAPTER_IDS)
 def test_capture_window_reports_unavailable_or_failed_rather_than_raising(
     adapter_id: str, factory: Callable[[], HostPlatform]

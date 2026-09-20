@@ -108,15 +108,31 @@ class WindowsHostPlatform:
             return None
 
         hwnd = found_handles[0]
-        # UNVERIFIED: `GetClientRect` returns client-area-relative
-        # coordinates (left/top are always 0); translating to screen
-        # coordinates for capture cropping would additionally need
-        # `ClientToScreen`. Left as a follow-up for whichever capture path
-        # the R6 spike settles on, since rank 1 (WGC) and rank 3
-        # (PrintWindow) consume the rect differently.
-        left, top, right, bottom = win32gui.GetClientRect(hwnd)
+        # `GetClientRect` returns the client rectangle in CLIENT coordinates
+        # by definition -- left/top are always 0, regardless of where the
+        # window actually sits on screen. width/height from it are correct
+        # (they are just a size), but left/top are not a screen position at
+        # all yet. `ClientToScreen` maps the client-area origin (0, 0) into
+        # screen space; that is the standard Win32 idiom for "client rect,
+        # in screen coordinates" -- GetClientRect for the size,
+        # ClientToScreen for the position -- and is used deliberately
+        # instead of `GetWindowRect`, which returns the *window* rect
+        # (including the title bar and frame), a different rectangle that
+        # would desync from the client-area frames the capture path
+        # produces and break the geometry screening gate that compares
+        # against the client rect.
+        #
+        # UNVERIFIED: corrected by reasoning and Win32 documentation
+        # precedent (and by analogy with the identical bug shape just fixed
+        # and verified against `xwininfo` on the Linux adapter), not
+        # verified against a real Civilization VI window -- no such client
+        # exists on this machine to confirm against.
+        left_rel, top_rel, right_rel, bottom_rel = win32gui.GetClientRect(hwnd)
+        width = int(right_rel - left_rel)
+        height = int(bottom_rel - top_rel)
+        screen_left, screen_top = win32gui.ClientToScreen(hwnd, (left_rel, top_rel))
         rect = WindowRect(
-            left=int(left), top=int(top), width=int(right - left), height=int(bottom - top)
+            left=int(screen_left), top=int(screen_top), width=width, height=height
         )
         title = str(win32gui.GetWindowText(hwnd))
         return GameWindow(handle=int(hwnd), title=title, rect=rect, pid=process.pid)
