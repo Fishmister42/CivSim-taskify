@@ -59,7 +59,14 @@ from civsim_harness.run.runner import Runner
 from civsim_harness.run.turn_cycle import run_turn_cycle
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
 from fakes.fake_host import FakeHostPlatform
-from fakes.fake_nexus import FakeNexusServer, ReceivedCommand
+from fakes.fake_nexus import (
+    STATE_INDEX_IN_GAME,
+    STATE_INDEX_MAIN_MENU,
+    FakeNexusServer,
+    ReceivedCommand,
+    front_end_state_table,
+    loaded_game_state_table,
+)
 from fakes.fake_provider import FakeModelProvider
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -991,9 +998,10 @@ def test_run_branch_reaches_a_branch_instead_of_failing_at_configuration_load(
     began, and the whole branch machinery (`load_branch_configuration_file`, `parse_branch_from`,
     `check_branch_build`, `create_branch`, `BranchSource`) had zero production callers.
 
-    The save load is supplied here; T217 is still open, and the production default
-    (`_NoLiveSaveLoader`) raises on every call -- that half is the next test. Everything else is
-    real: the real CLI, the real composition root, the real `create_branch`, the real store.
+    The save load is a scripted recording loader here, so the assertions can be about *which*
+    save was loaded; the production default (`saves/load_game.py`'s `LuaSaveLoader`, T217) is
+    exercised by the two tests that follow. Everything else is real: the real CLI, the real
+    composition root, the real `create_branch`, the real store.
     """
     _write_seed_set(tmp_path / "seedsets")
     config_path = tmp_path / "run.yaml"
@@ -1072,17 +1080,126 @@ def test_run_branch_reaches_a_branch_instead_of_failing_at_configuration_load(
     assert store.turn_gaps(RunId(parent_run_id)) == []
 
 
-def test_run_branch_without_a_save_load_path_fails_loudly_naming_the_missing_capability(
+def _script_load_path(server: FakeNexusServer, game: _FakeGame) -> None:
+    """The three commands the production `LuaSaveLoader` (T217) issues, answered the way the
+    T217 spike measured a real client answering them: the exit flips the phase to the front
+    end, an accepted `Network.LoadGame` flips it back to a loaded game *and restores the saved
+    position*, and the far-side read-back reports that position. Queued after `_script_game`'s
+    entries, which none of these commands match, and each pinned to the Lua state the loader
+    must issue it in -- a mis-targeted command falls through to the fake's generic default,
+    which the loader correctly refuses."""
+
+    def _exit_to_menu(_command: ReceivedCommand) -> dict[str, Any]:
+        server.set_state_table(front_end_state_table())
+        return {"issued": True, "error": ""}
+
+    def _load_game(command: ReceivedCommand) -> dict[str, Any]:
+        # A real load restores the saved position; save `civsim__<run>__t000N` was taken at the
+        # start of turn N, so the counter the far side reports afterwards is N.
+        marker = 'loadGame.Name = "'
+        start = command.lua_body.index(marker) + len(marker)
+        name = command.lua_body[start : command.lua_body.index('"', start)]
+        game.turn = int(name.rsplit("__t", 1)[1])
+        server.set_state_table(loaded_game_state_table())
+        return {"issued": True, "accepted": True, "error": ""}
+
+    def _verify_position(_command: ReceivedCommand) -> dict[str, Any]:
+        return {
+            "issued": True,
+            "error": "",
+            "turn": game.turn,
+            "local_player": 0,
+            "in_front_end": False,
+        }
+
+    server.queue_response(
+        _exit_to_menu,
+        match="Events.ExitToMainMenu",
+        state_index=STATE_INDEX_IN_GAME,
+        repeatable=True,
+    )
+    server.queue_response(
+        _load_game,
+        match="Network.LoadGame",
+        state_index=STATE_INDEX_MAIN_MENU,
+        repeatable=True,
+    )
+    server.queue_response(
+        _verify_position,
+        match="UI.IsInFrontEnd",
+        state_index=STATE_INDEX_IN_GAME,
+        repeatable=True,
+    )
+
+
+def test_run_branch_through_the_production_loader_loads_the_parent_save_and_plays(
     tmp_path: Path,
 ) -> None:
-    """T226 x T217: the blocked half refuses by name rather than starting an unbranched run.
+    """T217 x T226: with **no** `save_loader=` injected, the composition default is the
+    production `LuaSaveLoader`, and a branch completes end to end through it: exit to the front
+    end, the verified `Network.LoadGame` table from `MainMenu`, the far-side position
+    verification, then the branch's own preparation and a played turn. This is the wiring test
+    that fails if the composition root stops constructing the production loader."""
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
 
-    The production `SaveLoader` default is `run/composition.py`'s `_NoLiveSaveLoader`, which
-    raises on every call because no verified live save-*load* path exists in this codebase yet
-    (T217, blocked on `spikes/load-path-linux.md`). A branch that cannot load its parent's save is
-    not a branch, and starting from turn 1 of a fresh game while claiming to be one is far worse
-    than refusing -- so the refusal names the missing capability, exactly as `Runner.resume_from`
-    already does for the same gap, and **creates nothing**.
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        _script_load_path(server, game)
+        # No `save_loader=` -- the production default (LuaSaveLoader) applies.
+        deps, store = _compose_dependencies(
+            tmp_path, port=server.port, provider=_build_provider()
+        )
+        runner = Runner(deps)
+        cli.configure_runner_factory(lambda: runner)
+
+        started = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert started.exit_code == 0, _failure_report(started.output, store)
+        parent_run_id = _wait_for_terminal_run(runner, store, started.output)
+
+        branch_path = tmp_path / "branch.yaml"
+        _write_branch_config(branch_path, parent_run_id=parent_run_id, turn=1)
+        branched = CliRunner().invoke(
+            cli.app, _branch_argv(parent_run_id, 1, branch_path, tmp_path)
+        )
+        assert branched.exit_code == 0, _failure_report(branched.output, store)
+        child_run_id = _parse_run_id(branched.output)
+        _wait_for_terminal_run(runner, store, branched.output)
+
+        load_commands = [
+            cmd for cmd in server.received if "Network.LoadGame" in cmd.lua_body
+        ]
+
+    # -- the parent's own turn-1 save went through the verified front-end call ----------------
+    assert len(load_commands) == 1
+    assert f'loadGame.Name = "civsim__{parent_run_id}__t0001"' in load_commands[0].lua_body
+    assert "ServerType.SERVER_TYPE_NONE" in load_commands[0].lua_body
+
+    # -- and the branch is a real branch: lineage recorded, its own turn played ---------------
+    child = store.get_run(RunId(child_run_id))
+    assert child is not None
+    assert child.parent_run_id == parent_run_id
+    assert child.parent_turn == 1
+    assert store.get_turn_cycle(RunId(child_run_id), 1) is not None, (
+        "the branch never played its first turn after the load"
+    )
+
+
+def test_run_branch_whose_live_load_fails_refuses_loudly_and_creates_nothing(
+    tmp_path: Path,
+) -> None:
+    """T226 x T217: a branch whose live save load fails must refuse by name, never start an
+    unbranched run.
+
+    The production default (`saves/load_game.py`'s `LuaSaveLoader`) is wired and reached -- but
+    this fake game does not implement the load path, so its first step
+    (`Events.ExitToMainMenu()`) comes back without the shape a real client prints, and the
+    loader fails loudly naming that step and the save. A branch that cannot load its parent's
+    save is not a branch, and starting from turn 1 of a fresh game while claiming to be one is
+    far worse than refusing -- so the refusal is specific, and **creates nothing**.
     """
     _write_seed_set(tmp_path / "seedsets")
     config_path = tmp_path / "run.yaml"
@@ -1092,6 +1209,7 @@ def test_run_branch_without_a_save_load_path_fails_loudly_naming_the_missing_cap
 
     with _ServerThread(FakeNexusServer()) as server:
         _script_game(server, game)
+        # Deliberately no `_script_load_path`: the load path is what fails here.
         # No `save_loader=` -- the production default applies, which is the point.
         deps, store = _compose_dependencies(
             tmp_path, port=server.port, provider=_build_provider()
@@ -1110,8 +1228,9 @@ def test_run_branch_without_a_save_load_path_fails_loudly_naming_the_missing_cap
         )
 
     assert branched.exit_code == 1, branched.output
-    # Names the missing capability, not a generic "preparation failed".
-    assert "save-load path" in branched.output, branched.output
+    # Names the failing load step and the save, not a generic "preparation failed".
+    assert "Events.ExitToMainMenu" in branched.output, branched.output
+    assert f"civsim__{parent_run_id}__t0001" in branched.output, branched.output
     # ...and nothing was created: no run anywhere carries a branch lineage.
     assert _runs_with_a_parent(tmp_path / "match-store.db") == []
 

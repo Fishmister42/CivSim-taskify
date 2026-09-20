@@ -148,6 +148,7 @@ from civsim_harness.saves.branching import (
     BranchSource,
     create_branch,
 )
+from civsim_harness.saves.load_game import LuaSaveLoader
 from civsim_harness.saves.save_game import LuaSaveCapability
 from civsim_harness.store.port import MatchStore
 from civsim_harness.telemetry.logging import get_harness_logger, log_event
@@ -625,7 +626,7 @@ async def _prepare_run(
     clock: Callable[[], Timestamp],
     run_contexts: dict[RunId, _RunContext],
     run_lock: RunIdentityLock,
-    save_loader: SaveLoader,
+    save_loader_factory: Callable[[NexusClient], SaveLoader],
     branch_from: BranchFrom | None = None,
 ) -> PreparedRun:
     """T210: chain every preparation step this codebase has, in an order deliberately justified
@@ -741,7 +742,7 @@ async def _prepare_run(
             clock=clock,
             run_contexts=run_contexts,
             run_lock=run_lock,
-            save_loader=save_loader,
+            save_loader_factory=save_loader_factory,
             branch_from=branch_from,
         )
     except BaseException:
@@ -767,7 +768,7 @@ async def _prepare_connected_run(
     clock: Callable[[], Timestamp],
     run_contexts: dict[RunId, _RunContext],
     run_lock: RunIdentityLock,
-    save_loader: SaveLoader,
+    save_loader_factory: Callable[[NexusClient], SaveLoader],
     branch_from: BranchFrom | None = None,
 ) -> PreparedRun:
     """Steps 3b-8 of :func:`_prepare_run`, split out purely so its caller can own one
@@ -792,13 +793,13 @@ async def _prepare_connected_run(
 
     if not _has_game_states(nexus_client):
         raise HarnessError(
-            "the client has no game loaded, so this run cannot begin. Civ VI exposes no verified "
-            "FireTuner path to load a setup preset or start a game "
-            "(specs/002-civ-playing-harness/spikes/load-path-linux.md: Network.LoadGame returns "
-            "false for every argument shape tried, and the file-list query never delivers its "
-            "results), so bringing the client to a loaded game is an operator step this harness "
-            "cannot perform for you. Load the seed set's setup preset and start the game, then "
-            "run this command again.",
+            "the client has no game loaded, so this run cannot begin. Loading a *named save* "
+            "through the front end is a verified FireTuner path now (T217, "
+            "specs/002-civ-playing-harness/spikes/t217-RESOLVED-frontend-loadgame.md), but a "
+            "fresh run starts from a seed preset, not from a save -- and no verified FireTuner "
+            "path exists to load a setup preset or start a *new* game. Bringing the client to a "
+            "loaded game is therefore still an operator step for a fresh run: load the seed "
+            "set's setup preset, start the game, then run this command again.",
             detail={
                 "reason": "no_game_loaded",
                 "states": sorted(_state_names(nexus_client)),
@@ -843,7 +844,10 @@ async def _prepare_connected_run(
         # `preparing -> playing` transition below that every other run does.
         run, _save_point, _branch_event = await create_branch(
             store,
-            save_loader,
+            # T217: bound to this run's own just-connected client -- the same instance every
+            # later per-turn call dispatches through, so the fresh indices the load resolves
+            # are the ones the rest of preparation sees.
+            save_loader_factory(nexus_client),
             branch_from=SaveBranchFrom(run_id=branch_from.run_id, turn=branch_from.turn),
             child=BranchSource(
                 run_id=RunId(f"run-{uuid.uuid4().hex}"),
@@ -1125,9 +1129,6 @@ def build_runner_dependencies(
     resolved_window_provider = (
         window_provider if window_provider is not None else (lambda: _default_window_provider(host))
     )
-    resolved_save_loader: SaveLoader = (
-        save_loader if save_loader is not None else _NoLiveSaveLoader()
-    )
     resolved_run_lock = run_lock if run_lock is not None else RunIdentityLock()
     resolved_disk_check_path = disk_check_path if disk_check_path is not None else Path.cwd()
     resolved_screening_profiles = (
@@ -1140,6 +1141,23 @@ def build_runner_dependencies(
     )
 
     run_contexts: dict[RunId, _RunContext] = {}
+
+    def _save_loader_for(client: NexusClient) -> SaveLoader:
+        """T217: the production `LuaSaveLoader`, bound to *client* -- the same connected
+        `NexusClient` the run dispatches everything else through. The tuner accepts one
+        connection at a time (research R4), so the load path must drive (and, across the load's
+        own measured port-closure, reconnect) that one connection, never open a second; binding
+        happens per use rather than once at composition time because each run constructs its own
+        client. An injected *save_loader* (a test's scripted seam) still wins everywhere, at
+        both call sites: branch creation's `create_branch` and each turn's `RecoveryEngine`.
+        `host`/`home` enable the loader's pre-load filesystem existence check -- the same
+        `resolve_saves_dir` path every quicksave is verified through -- which is what lets a
+        genuinely-gone save surface as `FileNotFoundError` (recovery's durable `save_missing`
+        signal, T172/FR-036) instead of an opaque in-client refusal.
+        """
+        if save_loader is not None:
+            return save_loader
+        return LuaSaveLoader(client, host=host, home=home)
 
     async def _prepare(
         config: RunConfiguration, branch_from: BranchFrom | None
@@ -1168,7 +1186,7 @@ def build_runner_dependencies(
             clock=clock,
             run_contexts=run_contexts,
             run_lock=resolved_run_lock,
-            save_loader=resolved_save_loader,
+            save_loader_factory=_save_loader_for,
             branch_from=branch_from,
         )
 
@@ -1187,8 +1205,10 @@ def build_runner_dependencies(
         Fails loudly and specifically rather than starting an unbranched run: a missing parent
         (`BranchSourceMissingError`), a build disagreement (`BranchBuildMismatchError` /
         `BranchPlatformSpikeRequiredError`), an absent save (`SaveAddressingError`, never
-        retargeted), or -- today, universally -- the missing save-*load* capability itself
-        (`_NoLiveSaveLoader`, T217), each raised by name before any child `Run` is constructed.
+        retargeted, or `FileNotFoundError` when the file itself is gone), or a live load that
+        does not land on the named save's exact position (`LuaSaveLoader`'s own far-side
+        assertion, T217/Principle IV) -- each raised by name before any child `Run` is
+        constructed.
         """
         return await _prepare(config, branch_from)
 
@@ -1270,7 +1290,11 @@ def build_runner_dependencies(
             recovery=RecoveryEngine(
                 run_id=run_id,
                 store=store,
-                loader=resolved_save_loader,
+                # T217: the same production loader construction the branch path uses, bound to
+                # this run's own connected client -- so a mid-turn recovery and an operator
+                # `resume-from` (which reaches this engine through `Runner.resume_from`) both
+                # reload saves through the one verified front-end `Network.LoadGame` path.
+                loader=_save_loader_for(ctx.nexus_client),
                 recovery_attempt_limit=config.recovery_attempt_limit,
             ),
             home=home,
@@ -1385,24 +1409,6 @@ def build_runner_dependencies(
         disk_headroom_gb=disk_headroom_gb,
         clock=clock,
     )
-
-
-class _NoLiveSaveLoader:
-    """The honest default `SaveLoader` (`resilience/recovery.py`): no verified live "load this
-    save back into the client" Lua path exists anywhere in this codebase yet -- `saves/save_game.py`
-    (T078) only ever *takes* a quicksave (`Network.SaveGame`); the bespoke save/load dialog driver
-    is explicitly forbidden now that a FireTuner save path is verified (Principle II), and no
-    FireTuner *load* path has been spiked. Raising here, loudly and by name, is strictly better
-    than pretending to reload a save this composition root cannot actually reload -- recovery is
-    only ever reached after a mid-turn observation-assembly failure, which is not the normal path.
-    """
-
-    async def load(self, save: Any) -> None:
-        raise HarnessError(
-            "no verified live save-load path exists in this codebase yet (saves/save_game.py "
-            "only ever takes a quicksave); recovery cannot reload a save until one does",
-            detail={"save_point_id": getattr(save, "save_point_id", None)},
-        )
 
 
 __all__ = [
