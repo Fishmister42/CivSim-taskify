@@ -61,12 +61,12 @@ def _make_config(config_id: str) -> RunConfiguration:
     )
 
 
-def _make_run(run_id: str, config_id: str = "cfg1") -> Run:
+def _make_run(run_id: str, config_id: str = "cfg1", *, lifecycle_state: str = "playing") -> Run:
     return Run.model_validate(
         {
             "run_id": run_id,
             "config_id": config_id,
-            "lifecycle_state": "playing",
+            "lifecycle_state": lifecycle_state,
             "record_completeness_status": "unknown",
             "comparability_status": "comparable",
             "observation_catalog_version": _catalog_ref(),
@@ -293,4 +293,81 @@ def test_turn_level_gap_is_reported_even_when_present_turns_are_step_complete(
     assert (
         record_completeness_status(store, "run-mixed")  # type: ignore[arg-type]
         is RecordCompletenessStatus.HAS_GAPS
+    )
+
+
+# --------------------------------------------------------------------------
+# Trailing attempted-but-unrecorded turn (T158 defect fix): the highest
+# attempted turn (per list_save_points) has a quicksave and zero TurnCycle
+# rows at all -- invisible to a "present turn_cycle numbers" range check
+# alone, since there is no later recorded turn to expose it as a hole.
+# --------------------------------------------------------------------------
+
+
+def test_trailing_unrecorded_turn_on_a_terminal_run_forces_has_gaps(
+    store: SqliteMatchStore,
+) -> None:
+    """A run that has reached a terminal lifecycle_state (here, failed) with a quicksave for
+    its highest attempted turn but no TurnCycle for it at all -- the run crashed or exhausted
+    its provider chain right after quicksaving and before ever persisting that turn -- must
+    report has_gaps (Principle III, FR-052). Before this fix, turn_gaps derived its checked
+    range solely from MAX(turn_number) in turn_cycles, so this trailing gap was invisible to
+    it and record_completeness_status silently reported complete."""
+    store.create_run(
+        _make_run("run-trailing-failed", lifecycle_state="failed"),
+        _make_config("cfg-trailing-failed"),
+    )
+    _write_turn(store, "run-trailing-failed", 1, step_indices=[1, 2])
+    # Turn 2 only ever got its FR-007 quicksave -- no TurnCycle was ever written.
+    store.write_save_point(_make_save_point("run-trailing-failed", 2))
+
+    assert (
+        record_completeness_status(store, "run-trailing-failed")  # type: ignore[arg-type]
+        is RecordCompletenessStatus.HAS_GAPS
+    )
+
+
+def test_trailing_unrecorded_turn_on_a_paused_run_forces_has_gaps(
+    store: SqliteMatchStore,
+) -> None:
+    """The same shape as the terminal case above, but on a `paused` run: not a terminal
+    lifecycle_state, yet not `playing` either. FR-042 pauses a run rather than fabricating a
+    turn on chain exhaustion, so treating "terminal" as the whole test would leave exactly
+    this -- the realistic provider-chain-exhaustion shape -- silently complete. A `paused`
+    run with a trailing attempted-but-unrecorded turn must report has_gaps just like a
+    terminal one."""
+    store.create_run(
+        _make_run("run-trailing-paused", lifecycle_state="paused"),
+        _make_config("cfg-trailing-paused"),
+    )
+    _write_turn(store, "run-trailing-paused", 1, step_indices=[1, 2])
+    # Turn 2 only ever got its FR-007 quicksave -- the run paused (e.g. chain exhaustion)
+    # before ever persisting a TurnCycle for it.
+    store.write_save_point(_make_save_point("run-trailing-paused", 2))
+
+    assert (
+        record_completeness_status(store, "run-trailing-paused")  # type: ignore[arg-type]
+        is RecordCompletenessStatus.HAS_GAPS
+    )
+
+
+def test_trailing_unrecorded_turn_on_a_still_playing_run_is_not_a_spurious_gap(
+    store: SqliteMatchStore,
+) -> None:
+    """The exact same shape as the terminal case above -- a quicksave for the highest attempted
+    turn and no TurnCycle for it -- must NOT be reported while the run is still playing: that
+    turn is simply the one currently in progress, whose quicksave legitimately precedes its
+    TurnCycle (FR-007). Getting this backwards would make every healthy running run report
+    has_gaps."""
+    store.create_run(
+        _make_run("run-trailing-playing", lifecycle_state="playing"),
+        _make_config("cfg-trailing-playing"),
+    )
+    _write_turn(store, "run-trailing-playing", 1, step_indices=[1, 2])
+    # Turn 2 is in progress: its quicksave is taken, its TurnCycle is not written yet.
+    store.write_save_point(_make_save_point("run-trailing-playing", 2))
+
+    assert (
+        record_completeness_status(store, "run-trailing-playing")  # type: ignore[arg-type]
+        is RecordCompletenessStatus.COMPLETE
     )

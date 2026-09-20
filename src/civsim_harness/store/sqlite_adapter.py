@@ -80,6 +80,30 @@ from civsim_harness.telemetry.redaction import redact_text
 
 _TERMINAL_LIFECYCLE_STATES = frozenset({LifecycleState.FINISHED, LifecycleState.FAILED})
 
+#: The lifecycle states in which a run is actively cycling through its own turn loop --
+#: `run/lifecycle.py`'s legal-transition graph shows all three only ever return to
+#: `playing` (`waiting_on_model -> playing`, `waiting_on_game -> playing`, and `playing`
+#: itself), so together they are exactly "this run is mid-turn right now": a fresh
+#: quicksave with no `TurnCycle` behind it yet is the expected, momentary shape of the
+#: turn currently in progress, not a gap. Every other reachable state --  `paused`,
+#: `interrupted`, `resuming`, and the two terminal states `finished`/`failed` -- means the
+#: run has *stopped* advancing (for now or for good): FR-042 pauses a run rather than
+#: fabricating a turn on chain exhaustion, for instance, so "not terminal" alone is too
+#: narrow a test here -- a `paused` run with an unrecorded trailing turn is exactly the
+#: silent-gap shape Principle III forbids treating as `complete`, even though `paused` can
+#: legally resume. `turn_gaps` below uses this set (inverted) to decide whether to widen
+#: its checked range to a save-point-only turn that never produced a `TurnCycle`.
+_ACTIVELY_PLAYING_LIFECYCLE_STATES = frozenset(
+    {LifecycleState.PLAYING, LifecycleState.WAITING_ON_MODEL, LifecycleState.WAITING_ON_GAME}
+)
+#: `lifecycle_state` is stored as its plain string value in the `runs` table
+#: (see `_SCHEMA_SQL`/`create_run`), so `turn_gaps` -- which reads that column directly
+#: rather than reconstructing a `Run` -- compares against this string-valued mirror of
+#: `_ACTIVELY_PLAYING_LIFECYCLE_STATES` instead of the enum.
+_ACTIVELY_PLAYING_LIFECYCLE_STATE_VALUES = frozenset(
+    state.value for state in _ACTIVELY_PLAYING_LIFECYCLE_STATES
+)
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
@@ -757,9 +781,43 @@ class SqliteMatchStore:
                 (run_id,),
             ).fetchall()
             present = {row[0] for row in rows}
-            if not present:
+            highest_recorded = max(present) if present else 0
+
+            # A turn that was attempted -- it has an FR-007 quicksave -- but
+            # never produced a TurnCycle at all is invisible to `present`
+            # above: there is no *later recorded* turn to expose it as a hole
+            # in range(1, highest_recorded). That is exactly right while the
+            # run is actively playing (or one of its momentary waiting
+            # sub-states, see _ACTIVELY_PLAYING_LIFECYCLE_STATES): the
+            # quicksave for the turn currently in progress legitimately lands
+            # before that turn's TurnCycle does (FR-007), so a trailing
+            # attempted-but-unrecorded turn there is normal, not a gap.
+            #
+            # Once the run has *stopped* advancing -- paused (e.g. FR-042 on
+            # chain exhaustion), interrupted, resuming, or one of the two
+            # terminal states -- no TurnCycle for that turn is coming right
+            # now: a trailing attempted turn with none means the run stopped
+            # after quicksaving it but before ever persisting it. That is a
+            # genuine gap Principle III and FR-052 require this method to
+            # surface, so the checked range is extended up to the highest
+            # *attempted* turn (from save_points) in that case.
+            run_row = conn.execute(
+                "SELECT lifecycle_state FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if (
+                run_row is not None
+                and run_row[0] not in _ACTIVELY_PLAYING_LIFECYCLE_STATE_VALUES
+            ):
+                attempted_row = conn.execute(
+                    "SELECT MAX(turn_number) FROM save_points WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                highest_attempted = attempted_row[0] if attempted_row is not None else None
+                if highest_attempted is not None and highest_attempted > highest_recorded:
+                    highest_recorded = highest_attempted
+
+            if highest_recorded == 0:
                 return []
-            return sorted(set(range(1, max(present) + 1)) - present)
+            return sorted(set(range(1, highest_recorded + 1)) - present)
 
         return self._with_lock(body)
 

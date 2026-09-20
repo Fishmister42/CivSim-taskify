@@ -80,7 +80,7 @@ until it ends, which is bounded by the turn and paid once per turn.
 |---|---|---|
 | `get_turn_cycle(authoritative_only=True)` | Recovery, audit, replay | Returns the authoritative attempt with its steps in order; abandoned attempts remain retrievable with the flag off (FR-047) |
 | `get_last_known_good` | Crash recovery, failed-state reporting | Must identify the save a failed run stopped at (FR-048, SC-021) |
-| `turn_gaps` | Completeness status | Returns turn numbers with no authoritative attempt (FR-052, SC-011) |
+| `turn_gaps` | Completeness status | Returns turn numbers between 1 and the highest recorded turn with no authoritative attempt (FR-052, SC-011). "Highest recorded turn" is the highest `turn_number` with an authoritative `TurnCycle` -- except on a run whose `lifecycle_state` (`Run.lifecycle_state`) is not one of the three states in which a run is actively cycling through its own turn loop (`playing`, `waiting_on_model`, `waiting_on_game`), where it is instead the highest of that value and the highest turn with a save point at all (`list_save_points`). That extension is what makes a **trailing** attempted-but-never-recorded turn a reported gap once a run has stopped advancing -- paused (FR-042, e.g. after chain exhaustion), interrupted, resuming, or terminal (`finished`/`failed`) alike: a run's quicksave for turn N always precedes N's `TurnCycle` (FR-007), so on a run still actively playing that same shape is normal, not a gap, and is deliberately left unreported |
 | `step_gaps` | Completeness status | Returns missing `step_index` values within a turn. SC-003 requires step-level contiguity, so a turn present but internally incomplete must be detectable — turn-level gap detection alone would call it complete |
 | `list_save_points` | Branching, retention | Retention must be able to see which saves a resumable run still needs (FR-036) |
 | `list_eligible_save_points` | The reaper | Returns save points whose run has been archived, and only those. It is the *only* way a deletion path learns what it may touch (FR-036, R17) |
@@ -131,7 +131,13 @@ configuration change, and the suite is what makes that claim true rather than ho
 D1–D6, A1–A4, idempotency under repeated writes, parent-immutability rejection, turn **and step**
 gap detection, step-order preservation on read-back, authoritative-attempt selection, `get_capture`
 and `list_run_events` (including chronological ordering and `event_types` filtering), and that a
-failed write surfaces as a raise rather than a falsy return.
+failed write surfaces as a raise rather than a falsy return. It also covers `turn_gaps`'s
+stopped-vs-actively-playing distinction above directly: a trailing attempted-but-unrecorded turn
+is asserted as a reported gap on a run that has stopped advancing (covering both a terminal run
+and a merely `paused` one, since FR-042 pauses rather than fails a run on chain exhaustion), and
+asserted as **not** reported on an otherwise identical still-playing run — so a future change to
+either side of that distinction fails this suite rather than silently drifting from what this
+table documents.
 
 Two cases are deliberately adversarial: a turn of several hundred steps must round-trip with its
 order intact and no truncation, and a finished-but-unarchived run's save points must never appear in

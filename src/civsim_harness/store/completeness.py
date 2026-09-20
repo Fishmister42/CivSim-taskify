@@ -16,6 +16,18 @@ attempted yet" from "every attempted turn is gap-free" -- both resolve to an emp
 same way this module does: FR-007 guarantees a quicksave at the start of every turn attempt, so the
 distinct turn numbers across ``MatchStore.list_save_points`` are exactly the turns this run has
 ever attempted, and their maximum is the range this function checks ``step_gaps`` against.
+
+**A trailing attempted-but-unrecorded turn is ``turn_gaps``'s job, not this function's.**
+``store.sqlite_adapter.turn_gaps`` (contracts/match-store-port.md) already accounts for the case
+where the *highest attempted* turn (per ``list_save_points``) has a quicksave but no ``TurnCycle``
+at all on a run that has *stopped* advancing -- ``paused`` (FR-042, e.g. after chain exhaustion),
+``interrupted``, ``resuming``, or either terminal state -- rather than one still actively cycling
+through its own turn loop (``playing``, ``waiting_on_model``, ``waiting_on_game``). This function
+relies on that: it calls ``turn_gaps`` first and returns ``HAS_GAPS`` immediately if it names
+anything, so the trailing case surfaces here for free, with no separate check against
+``list_save_points`` needed on top of the one ``turn_gaps`` already does internally. A run still
+actively playing the highest attempted turn is deliberately left alone by that same check -- its
+quicksave legitimately precedes its ``TurnCycle`` (FR-007), and that is not a gap.
 """
 
 from __future__ import annotations

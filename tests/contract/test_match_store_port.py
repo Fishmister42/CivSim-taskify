@@ -679,6 +679,73 @@ def test_step_gaps_is_empty_when_the_turn_has_no_authoritative_attempt(
     assert store.step_gaps("run-sg2", 1) == []
 
 
+def test_turn_gaps_reports_a_trailing_attempted_turn_on_a_terminal_run(
+    store: SqliteMatchStore,
+) -> None:
+    """A turn that was attempted (it has a quicksave) but never produced a
+    TurnCycle is invisible to turn_gaps by turn-number-range alone, since
+    there is no later recorded turn to expose it as a hole. On a run that
+    has reached a terminal lifecycle_state (finished/failed), that trailing
+    attempted-but-unrecorded turn means the run ended without ever
+    persisting it -- a genuine gap (Principle III, FR-052) -- so it must be
+    reported.
+    """
+    store.create_run(
+        _make_run("run-trailing-terminal", lifecycle_state="failed"),
+        _make_config("cfg-trailing-terminal"),
+    )
+    store.write_turn_cycle(_make_turn_cycle_record("run-trailing-terminal", 1, 0))
+    store.write_save_point(
+        _make_save_point("run-trailing-terminal-sp2", "run-trailing-terminal", 2)
+    )
+    # Turn 2 has a quicksave and nothing else -- the run failed before ever
+    # persisting a TurnCycle for it.
+
+    assert store.turn_gaps("run-trailing-terminal") == [2]
+
+
+def test_turn_gaps_reports_a_trailing_attempted_turn_on_a_paused_run(
+    store: SqliteMatchStore,
+) -> None:
+    """The same shape as the terminal case above, but on a `paused` run --
+    not a terminal lifecycle_state, yet not `playing` either. FR-042 pauses
+    a run rather than fabricating a turn on chain exhaustion, so `paused`
+    with a trailing attempted-but-unrecorded turn must be a reported gap
+    exactly like the terminal case: "not terminal" alone is too narrow a
+    test for whether the run is still actively producing this turn's
+    record.
+    """
+    store.create_run(
+        _make_run("run-trailing-paused", lifecycle_state="paused"),
+        _make_config("cfg-trailing-paused"),
+    )
+    store.write_turn_cycle(_make_turn_cycle_record("run-trailing-paused", 1, 0))
+    store.write_save_point(_make_save_point("run-trailing-paused-sp2", "run-trailing-paused", 2))
+    # Turn 2 has a quicksave and nothing else -- the run paused (e.g. its
+    # provider chain exhausted, FR-042) before ever persisting a TurnCycle.
+
+    assert store.turn_gaps("run-trailing-paused") == [2]
+
+
+def test_turn_gaps_does_not_report_a_trailing_attempted_turn_on_a_still_playing_run(
+    store: SqliteMatchStore,
+) -> None:
+    """The exact same shape as the terminal case above -- turn 2 has a
+    quicksave and no TurnCycle -- must NOT be reported while the run is
+    still playing: turn 2 is simply the turn currently in progress, whose
+    quicksave legitimately lands before its TurnCycle does (FR-007). Getting
+    this backwards would make every healthy running run report gaps.
+    """
+    store.create_run(
+        _make_run("run-trailing-playing", lifecycle_state="playing"),
+        _make_config("cfg-trailing-playing"),
+    )
+    store.write_turn_cycle(_make_turn_cycle_record("run-trailing-playing", 1, 0))
+    store.write_save_point(_make_save_point("run-trailing-playing-sp2", "run-trailing-playing", 2))
+
+    assert store.turn_gaps("run-trailing-playing") == []
+
+
 # --------------------------------------------------------------------------
 # Step-order preservation on read-back
 # --------------------------------------------------------------------------

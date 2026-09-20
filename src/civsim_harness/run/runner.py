@@ -43,6 +43,7 @@ planned.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import uuid
 from collections.abc import Callable
@@ -53,7 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from civsim_harness.config.run_config import load_run_configuration_file
-from civsim_harness.errors import HarnessError
+from civsim_harness.errors import HarnessError, ProviderChainExhausted, RecoveryLimitReached
 from civsim_harness.models.common import EventId, RunId, Timestamp
 from civsim_harness.models.config import RunConfiguration, StopCondition
 from civsim_harness.models.records import RunEvent, RunEventType
@@ -65,10 +66,13 @@ from civsim_harness.operator.schemas import (
     LastKnownGoodSave,
     RunStatusView,
 )
-from civsim_harness.run.lifecycle import transition
+from civsim_harness.run.decision_loop import UnknownScreenEncountered
+from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
 from civsim_harness.run.stop import StopEvaluation, evaluate_stop
 from civsim_harness.run.turn_cycle import TurnCycleDependencies, run_turn_cycle
+from civsim_harness.saves.addressing import SaveAddressingError
 from civsim_harness.store.port import MatchStore
+from civsim_harness.telemetry.logging import get_harness_logger, log_event
 
 
 def _utcnow() -> Timestamp:
@@ -306,38 +310,55 @@ class Runner(RunnerProtocol):
         what was planned, per FR-009's "the game auto-advancing a turn... recording what actually
         happened". A pause or stop request lands here, at the turn boundary, never mid-turn
         (FR-004, FR-008, SC-022).
+
+        **Every exception path below is deliberately made loud.** This coroutine is always
+        scheduled fire-and-forget (``_schedule``, ``asyncio.run_coroutine_threadsafe``) -- nothing
+        awaits its ``Future`` or inspects ``Future.exception()`` -- so an exception that escapes
+        this method uncaught is silently discarded and the run is stranded exactly as it was the
+        moment this coroutine stopped running: stuck in ``playing`` forever, recorded nowhere,
+        with nothing surfacing that anything went wrong. The outer ``except Exception`` exists only
+        to catch a failure *inside* ``_handle_run_failure`` itself (most plausibly ``transition()``
+        raising a second time, because the run reached a state its routing did not anticipate) --
+        it still re-raises after recording what it can, because a truly unexpected failure
+        surfacing loudly is strictly better than it vanishing here a second time.
         """
         state = self._require_state(run_id)
         try:
-            while True:
-                with self._lock:
-                    if state.stop_requested:
-                        self._finish(state, resolution=StopResolution.OPERATOR_STOP)
-                        return
-                    if state.pause_requested:
-                        state.run, _event = self._advance(state, LifecycleState.PAUSED)
-                        return
+            try:
+                while True:
+                    with self._lock:
+                        if state.stop_requested:
+                            self._finish(state, resolution=StopResolution.OPERATOR_STOP)
+                            return
+                        if state.pause_requested:
+                            state.run, _event = self._advance(state, LifecycleState.PAUSED)
+                            return
 
-                    turn_number = (state.current_turn or 0) + 1
-                    state.current_turn = turn_number
-                    state.current_step = None
-                    turn_deps = self._deps.build_turn_dependencies(state.prepared, turn_number)
+                        turn_number = (state.current_turn or 0) + 1
+                        state.current_turn = turn_number
+                        state.current_step = None
+                        turn_deps = self._deps.build_turn_dependencies(state.prepared, turn_number)
 
-                outcome = await run_turn_cycle(turn_deps, run=state.run)
+                    outcome = await run_turn_cycle(turn_deps, run=state.run)
 
-                with self._lock:
-                    state.run = outcome.run
-                    facts = self._deps.evaluate_stop_facts(state.prepared, turn_number)
-                    decision = evaluate_stop(state.prepared.stop_condition, facts)
-                    for coincident in decision.coincident:
-                        self._deps.store.write_run_event(
-                            _coincident_event(run_id, turn_number, coincident, self._deps.clock())
-                        )
-                    if decision.resolution is not None:
-                        self._finish(state, resolution=decision.resolution)
-                        return
-        except HarnessError as exc:
-            self._fail(state, exc)
+                    with self._lock:
+                        state.run = outcome.run
+                        facts = self._deps.evaluate_stop_facts(state.prepared, turn_number)
+                        decision = evaluate_stop(state.prepared.stop_condition, facts)
+                        for coincident in decision.coincident:
+                            self._deps.store.write_run_event(
+                                _coincident_event(
+                                    run_id, turn_number, coincident, self._deps.clock()
+                                )
+                            )
+                        if decision.resolution is not None:
+                            self._finish(state, resolution=decision.resolution)
+                            return
+            except HarnessError as exc:
+                self._handle_run_failure(state, exc)
+        except Exception as exc:
+            self._record_unexpected_failure(state, exc)
+            raise
 
     def _finish(self, state: _RunState, *, resolution: StopResolution) -> None:
         """Caller holds ``self._lock``. Transition to ``finished`` with exactly one recorded stop
@@ -357,28 +378,95 @@ class Runner(RunnerProtocol):
             stop_resolution=state.run.stop_resolution,
         )
 
-    def _fail(self, state: _RunState, exc: HarnessError) -> None:
-        """Record *exc* and, if the run is not already terminal, transition it to ``failed`` with
-        ``stop_resolution = unrecoverable_failure`` (FR-005, FR-048)."""
+    def _handle_run_failure(self, state: _RunState, exc: HarnessError) -> None:
+        """Route one ``HarnessError`` raised out of a turn's play loop to the lifecycle state
+        data-model.md SS4 actually permits for its kind (FR-003), and unconditionally record
+        ``state.last_error`` first so ``get_status`` reflects that something went wrong even if
+        everything below it fails too.
+
+        - ``RecoveryLimitReached``/``SaveAddressingError``: ``resilience.recovery.RecoveryEngine``
+          has already legally transitioned the run all the way to ``failed``
+          (``resuming -> failed``, identifying the last-known-good save, FR-048/FR-036) and
+          persisted it *before* raising -- this runner's own ``state.run`` is stale here (it is
+          only ever updated when ``run_turn_cycle`` *returns*, which never happens on this path),
+          so the fix is to resync from the store, never to call ``transition()`` again (that would
+          attempt an illegal ``failed -> failed`` no-op and raise a second time).
+        - ``ProviderChainExhausted`` (FR-042: "pause the run in a recorded state") and
+          ``UnknownScreenEncountered`` (FR-049: "stall the run visibly") both land in ``paused`` --
+          legal from ``playing``, unlike ``failed``, and exactly the recorded-but-not-terminal
+          character both FRs describe. ``UnknownScreenEncountered`` additionally carries an
+          ``unknown_screen`` ``RunEvent`` (``act/prompts.py``'s ``route_prompt``) that nothing else
+          in this codebase persists -- written here before the pause.
+        - Anything else: ``failed`` is reachable only from ``preparing`` or ``resuming`` -- never
+          from ``playing`` -- per the legal transition graph this module must not widen, so every
+          other unclassified mid-play ``HarnessError`` lands in ``paused`` too: the one legal,
+          recorded, non-destructive state ``playing`` can still reach.
+        """
         with self._lock:
             state.last_error = (type(exc).__name__, self._deps.clock())
-            if state.run.lifecycle_state in (LifecycleState.FINISHED, LifecycleState.FAILED):
+            if isinstance(exc, (RecoveryLimitReached, SaveAddressingError)):
+                self._resync_after_external_termination(state, exc)
                 return
-            state.run, event = transition(
-                state.run,
-                LifecycleState.FAILED,
-                occurred_at=self._deps.clock(),
-                turn_number=state.current_turn,
-                stop_resolution=StopResolution.UNRECOVERABLE_FAILURE,
-                detail={"reason": str(exc)},
-            )
-            self._deps.store.write_run_event(event)
-            self._deps.store.update_run(
-                state.run.run_id,
-                lifecycle_state=state.run.lifecycle_state,
-                ended_at=state.run.ended_at,
-                stop_resolution=state.run.stop_resolution,
-            )
+            if isinstance(exc, UnknownScreenEncountered):
+                self._deps.store.write_run_event(exc.event)
+                self._pause_on_failure(state, exc)
+                return
+            if isinstance(exc, ProviderChainExhausted):
+                self._pause_on_failure(state, exc)
+                return
+            # Anything else unclassified: `paused` too -- see this method's own docstring.
+            self._pause_on_failure(state, exc)
+
+    def _resync_after_external_termination(self, state: _RunState, exc: HarnessError) -> None:
+        """Caller holds ``self._lock`` with ``state.last_error`` already set. See
+        :meth:`_handle_run_failure` -- *exc* here is always ``RecoveryLimitReached`` or
+        ``SaveAddressingError``, both raised only after ``RecoveryEngine`` already drove the run
+        to ``failed`` through the legal ``resuming -> failed`` edge and persisted it."""
+        refreshed = self._deps.store.get_run(state.run.run_id)
+        if refreshed is not None:
+            state.run = refreshed
+        if state.run.lifecycle_state not in TERMINAL_STATES:
+            # Defensive only: RecoveryEngine's own contract guarantees `failed` is already
+            # recorded before either exception is raised. Reaching here would mean that contract
+            # was violated elsewhere -- still not ours to swallow, so fall back to the same legal
+            # pause every other unclassified failure gets, rather than trusting a stale `playing`.
+            self._pause_on_failure(state, exc)
+
+    def _pause_on_failure(self, state: _RunState, exc: HarnessError) -> None:
+        """Caller holds ``self._lock`` with ``state.last_error`` already set. Transition to
+        ``paused`` -- legal from ``playing`` (data-model.md SS4) -- recording *exc* on the
+        transition event. A no-op if the run already reached a terminal state (a second failure
+        racing the first)."""
+        if state.run.lifecycle_state in TERMINAL_STATES:
+            return
+        state.run, event = transition(
+            state.run,
+            LifecycleState.PAUSED,
+            occurred_at=self._deps.clock(),
+            turn_number=state.current_turn,
+            detail={"reason": str(exc), "error_type": type(exc).__name__},
+        )
+        self._deps.store.write_run_event(event)
+        self._deps.store.update_run(state.run.run_id, lifecycle_state=state.run.lifecycle_state)
+
+    def _record_unexpected_failure(self, state: _RunState, exc: Exception) -> None:
+        """Last-resort safety net for :meth:`_play_run`: something failed *while this runner was
+        already trying to record why the run stopped* (most plausibly ``transition()`` raising a
+        second time because the run reached a state ``_handle_run_failure`` did not anticipate).
+        ``state.last_error`` -- read by ``get_status``, and settable purely in-memory under
+        ``self._lock`` -- is set here unconditionally, since it is the one guarantee that survives
+        even this; the failure is also logged loudly (``telemetry.logging``, T015) rather than left
+        for the scheduled coroutine's ``Future`` to silently discard, which is the defect this
+        module exists to close."""
+        with self._lock:
+            state.last_error = (type(exc).__name__, self._deps.clock())
+        log_event(
+            get_harness_logger(),
+            logging.ERROR,
+            "run/runner: unhandled failure while recording why a run stopped playing",
+            extra={"run_id": state.run.run_id, "error_type": type(exc).__name__},
+            exc_info=True,
+        )
 
     def _advance(self, state: _RunState, to_state: LifecycleState) -> tuple[Run, RunEvent]:
         """Caller holds ``self._lock``. Record and persist one lifecycle transition."""
