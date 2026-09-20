@@ -44,7 +44,17 @@ citycount=0                                 citycount=0
 Byte-identical across every compared field, from a state 18 turns downstream. **The save/load
 round-trip preserves the game position.**
 
-## `Network.LoadGame` does not work from Lua
+## ~~`Network.LoadGame` does not work from Lua~~ — ❌ RETRACTED 2026-09-20
+
+> **This entire section is wrong.** `Network.LoadGame` **works**, returns `true`, and loads the save.
+> It is **front-end only** — every attempt below was made from `InGame`, where the call is callable
+> but always refuses. Firaxis' own shipped automation gates it on `UI.IsInFrontEnd()`. The enum names
+> used below (`SaveGameTypes`, `SaveFileTypes.GAME_STATE`) are also wrong; the real table is
+> `SaveTypes`. See **`t217-RESOLVED-frontend-loadgame.md`** for the verified recipe.
+>
+> The "needs a record from `UI.QuerySaveGameList`" hypothesis is **unsupported** — a hand-built table
+> loads fine, and the query is not on the load path at all. Do not spend further sessions on the
+> query, the event names, or a bespoke UI driver.
 
 It exists as a `function` in `InGame`, and it is callable — but it returns **`false`** and nothing
 loads. **Six different `gameFile` shapes were tried, including the exact table that

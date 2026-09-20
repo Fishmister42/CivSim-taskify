@@ -464,6 +464,58 @@ confirms production forever*. Here the fake is `DEFAULT_WINDOW`. **Generalised r
 anything crossing a process or protocol boundary, assert on what the far side received, never on
 what our side returned** — a fake cannot fabricate an X server's error reply or an `xev` stream.
 
+### 🔑 T217 RESOLVED — the save load works from Lua; there is no Firetuner gap
+
+`spikes/t217-RESOLVED-frontend-loadgame.md`. `Network.LoadGame` returned **`true`** and the client
+came up in the saved position — verified on a fresh connection after the phase transition (turn 1,
+`LEADER_ELEANOR_ENGLAND`, 2 units, 10 gold), not from the call's own return value.
+
+The three failed rounds had **two** causes, neither of them the argument shape they were chasing:
+
+1. **Phase.** Every previous attempt ran in `InGame`. The call is **front-end only** — Firaxis' own
+   shipped automation gates it on `UI.IsInFrontEnd()` and calls `Events.ExitToMainMenu()` otherwise
+   (`automation_dailysmoketest.lua:241`). In `InGame` it is callable and always refuses, which is
+   why `ok=true ret=false` looked so much like a bad table.
+2. **Enum names.** The real table is `SaveTypes`; `SaveGameTypes` does not exist, so the guessed
+   member was a nil index inside a `pcall` — a missing field, not an error.
+
+Consequences for the design, all measured:
+
+- **Option B (bespoke UI driver) is withdrawn**, and the Principle II `firetuner_gap` is **not**
+  declared — the gap does not exist. T177, T226's load and every `resume-from` are unblocked.
+- **The tuner port closes for the duration of the load** and rebinds ~5 s after the game is
+  interactive. A `SaveLoader` — and the crash detector of T233 — must treat connection-refused
+  during a load as expected, not as a crash.
+- ⚠️ **Open:** the load stopped on the leader-intro screen with a `CONTINUE GAME` button and waited
+  indefinitely; one click dismissed it. Whether that screen appears for every load or only for a
+  turn-1 save is **not yet known**, so a loader must assume one dismissal click may be needed. That
+  is a narrow, single-purpose input — and the first real caller for the input layer that had none.
+- **Reading Firaxis' shipped Lua** (`steamassets/base/assets/ui/automation/`) answered in one file
+  what three rounds of probing could not. It also yields the event names option A was hunting
+  (`LuaEvents.AutomationMainMenuStarted`, `AutomationGameStarted`, `AutoPlayEnd`) and an
+  `AutoplayManager` API, none of which are needed now but none of which were known.
+
+### 🔴 T218 — `major_count` reads the wrong number in-game
+
+`spikes/t218-RESULTS-setting-getters.md`. Five of six getters resolve; one is unavailable; and one
+returns a **plausible wrong answer** that no test against a fake can catch.
+
+`GameConfiguration.GetAIPlayerCount()` returned **16** in-game, against **6** for the same call at
+the Create Game screen. The per-player decomposition is unambiguous: **16 = 5 AI majors + 9
+city-states + Free Cities + Barbarians**. In-game it counts every non-human player; at setup, where
+city-states are not yet instantiated, it means major AI count. A preparation that records the setup
+value and a verification that re-reads it in-game compare 6 against 16 and disagree forever.
+
+Derive it instead by counting `player:IsAlive() and player:IsMajor()` over `Players`, minus the
+local player — measured to give 6 majors / 5 opponents on the same client where the getter said 16.
+
+Also settled: `map_seed` works via `GAME_SYNC_RANDOM_SEED`, and **there are two seeds** (game
+`-986870912` vs map `-986870911`) — recording one loses the other. `map_size` resolves through
+`GameInfo.Maps`, **not** `GameInfo.MapSizes`. `mod_set` works via `Modding.GetActiveMods()` and must
+be keyed on `Id`, since names are partly unlocalised. **`resources` has no getter at all** in-game —
+it should be recorded as not-observable rather than left returning `UnreadSetting`, which compares
+unequal to everything and lands a run `failed` before turn 1.
+
 ### Steam is a hard dependency of the live node
 
 `spikes/steam-dependency-linux.md`. Civ VI **cannot** run without a running, signed-in Steam client:
