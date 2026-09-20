@@ -35,6 +35,14 @@ uv sync --extra macos     # on macOS
 uv sync --extra linux     # on Linux
 ```
 
+**Linux prerequisite**: `uv sync --extra linux` builds `dbus-python` from source, which needs the
+D-Bus development headers already present on the system — install them first, or the build fails
+with a meson error that never actually names the missing package:
+
+```bash
+sudo apt-get install -y libdbus-1-dev
+```
+
 `uv sync` alone installs the portable core only. The per-OS extra pulls in that platform's host
 adapter dependencies (`pywin32`/`winsdk` on Windows, `pyobjc-framework-*` on macOS,
 `python-xlib`/`dbus-python` on Linux) — each also carries a `sys_platform` marker as a second line

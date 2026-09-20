@@ -16,6 +16,7 @@ asserted.
 | Civilization VI, with the configured ruleset and mod set installed and active | The exact versions the run configuration names — a mismatch is meant to fail the run |
 | The tuner interface enabled, and the client restarted | Platform-specific — see below. The Windows-only SDK/Development Tools are **not** required: the harness speaks the protocol directly and never opens the FireTuner GUI |
 | Python 3.12+ and `uv` | |
+| Linux only: `libdbus-1-dev` installed before `uv sync` | `uv sync --extra linux` builds `dbus-python` from source; without the D-Bus headers it fails with a meson build error that never names the missing package. `sudo apt-get install -y libdbus-1-dev` |
 | An OpenRouter API key in the environment | `OPENROUTER_API_KEY`. Never in run configuration (FR-043) |
 | A reachable match store | Deliverable 3, or the local reference adapter (plan C2) |
 | Auto-end-turn disabled in the game's options | Otherwise the game advances turns out from under the harness |
@@ -31,7 +32,10 @@ asserted.
 | macOS | Set `EnableTuner 1` in `~/Library/Application Support/Sid Meier's Civilization VI/Firaxis Games/Sid Meier's Civilization VI/AppOptions.txt` — not exposed in the menu |
 | Linux | Set `EnableTuner 1` in `~/.local/share/aspyr-media/Sid Meier's Civilization VI/AppOptions.txt` — not exposed in the menu |
 
-Restart the client afterwards; it then listens on TCP `127.0.0.1:4318`.
+On macOS and Linux this means hand-editing `AppOptions.txt`. **Edit it with the game closed** — the
+client rewrites this file on exit, so an edit made while the game is still running is silently
+overwritten the moment you quit it. Restart the client afterwards; it then listens on TCP
+`127.0.0.1:4318`.
 
 ## Setup
 

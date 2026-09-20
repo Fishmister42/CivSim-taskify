@@ -47,9 +47,21 @@ from civsim_harness.host.port import (
 )
 
 # UNVERIFIED: exact process name as it appears for the binary inside the
-# .app bundle's Contents/MacOS/ -- psutil reports that binary's own name,
-# which is not necessarily "CivilizationVI" for a bundled Mac app.
-_PROCESS_NAMES = ("CivilizationVI",)
+# .app bundle's Contents/MacOS/ -- psutil reports that binary's own name
+# (CFBundleExecutable), which need not match the bundle's display name
+# ("Sid Meier's Civilization VI.app") or the Windows executable name at
+# all. "Civ6" is listed alongside "CivilizationVI" because the Linux
+# adapter's process name was live-corrected from "CivilizationVI" (the
+# Windows name, copied in by mistake) to "Civ6", the name Aspyr's own
+# published Linux binary actually uses; since Aspyr also publishes the
+# macOS port, "Civ6" is at least as plausible here as the Windows-style
+# name, and no machine in this repo can execute this adapter to confirm
+# either one. Both are kept rather than guessing a single name (the same
+# fix class as the Linux correction). There is no bundle-identifier-based
+# matching in this adapter -- only this process-name list, consumed by
+# psutil -- so there is nothing else to audit on that axis; if a
+# bundle-identifier lookup is added later it needs the same treatment.
+_PROCESS_NAMES = ("CivilizationVI", "Civ6")
 
 # UNVERIFIED: virtual keycodes below cover only the keys the bespoke save
 # dialog needs (R5: Escape, Enter, Tab); values are the long-documented

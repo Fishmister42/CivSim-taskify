@@ -42,6 +42,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import psutil
 import pytest
 
 from civsim_harness.errors import PreflightError
@@ -114,6 +115,78 @@ def test_locate_game_process_never_raises(
     adapter = factory()
     result = adapter.locate_game_process()
     assert result is None or isinstance(result, GameProcess)
+
+
+def _process_names_for(adapter_id: str) -> tuple[str, ...]:
+    """Return the adapter's hard-coded candidate process-name tuple.
+
+    This is what the live Linux adjudication (this wave's audit) turned on: the
+    Linux adapter's `_PROCESS_NAMES` held only the Windows executable name until a
+    real client proved it wrong, and `locate_game_process()` silently returned
+    `None` forever as a result -- the "returns None on every real machine" failure
+    mode this suite now guards against structurally, for every platform, since none
+    of windows/macos has a machine here to catch the same mistake the way Linux's
+    live client did.
+    """
+    if adapter_id == "windows":
+        from civsim_harness.host.windows.adapter import _PROCESS_NAMES
+    elif adapter_id == "macos":
+        from civsim_harness.host.macos.adapter import _PROCESS_NAMES
+    else:  # "linux-x11", "linux-wayland" -- one module, one constant
+        from civsim_harness.host.linux.adapter import _PROCESS_NAMES
+    return _PROCESS_NAMES
+
+
+class _FakePsutilProcess:
+    """A minimal stand-in for `psutil.Process`, scripted with a fixed name/pid.
+
+    Only the surface `locate_process_by_names` (host/_shared.py) actually calls:
+    `.pid`, `.name()`, `.exe()`.
+    """
+
+    def __init__(self, name: str, pid: int) -> None:
+        self.pid = pid
+        self._name = name
+
+    def name(self) -> str:
+        return self._name
+
+    def exe(self) -> str:
+        return f"/fake/install/dir/{self._name}"
+
+
+@pytest.mark.parametrize("adapter_id,factory", _ADAPTERS, ids=_ADAPTER_IDS)
+def test_process_name_candidates_are_non_empty(
+    adapter_id: str, factory: Callable[[], HostPlatform]
+) -> None:
+    """Guards the emptiest version of the Linux failure: an adapter with zero
+    candidate names could never match a running client under any circumstance."""
+    assert len(_process_names_for(adapter_id)) > 0
+
+
+@pytest.mark.parametrize("adapter_id,factory", _ADAPTERS, ids=_ADAPTER_IDS)
+def test_locate_game_process_matches_every_candidate_name(
+    adapter_id: str, factory: Callable[[], HostPlatform], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scripts a fake running process named after each of the adapter's own
+    candidate names in turn, and asserts `locate_game_process()` actually matches
+    it -- so a wrong or stale candidate name is a test failure, not silence, on
+    every platform this suite runs on regardless of which OS is hosting it."""
+    adapter = factory()
+    for candidate in _process_names_for(adapter_id):
+        fake_process = _FakePsutilProcess(name=candidate, pid=54321)
+        monkeypatch.setattr(
+            psutil, "process_iter", lambda proc=fake_process: iter([proc])
+        )
+        result = adapter.locate_game_process()
+        assert result is not None, (
+            f"{adapter_id}: locate_game_process() failed to match its own "
+            f"candidate name {candidate!r} -- this is exactly the silent-None "
+            "failure mode that killed the Linux adapter before a live client "
+            "caught it."
+        )
+        assert result.pid == 54321
+        assert result.name == candidate
 
 
 @pytest.mark.parametrize("adapter_id,factory", _ADAPTERS, ids=_ADAPTER_IDS)

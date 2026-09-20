@@ -45,10 +45,24 @@ from civsim_harness.host.port import (
 )
 
 # UNVERIFIED: exact Windows executable name/casing shipped by the Steam
-# release. Civ VI has historically offered a DirectX-version launch choice
-# with its own executable; both plausible candidates are listed
-# defensively rather than guessing a single one.
-_PROCESS_NAMES = ("CivilizationVI.exe", "CivilizationVI_DX12.exe")
+# release, and whether `psutil.Process.name()` reports it with or without
+# the ".exe" suffix on this host (that has varied historically by how a
+# process was spawned). Civ VI has historically offered a DirectX-version
+# launch choice with its own executable, so both the default and "_DX12"
+# binaries are listed, each with and without the suffix -- the same
+# "match a set of plausible candidates, not one confident guess" fix that
+# corrected the Linux adapter's process-name bug (that binary turned out
+# to be "Civ6", not the Windows name "CivilizationVI" this constant was
+# once copied from). `locate_process_by_names` (host/_shared.py) also
+# does a case-insensitive prefix match as a second line of defence, so
+# this list is deliberately redundant with that rather than relying on it
+# alone.
+_PROCESS_NAMES = (
+    "CivilizationVI.exe",
+    "CivilizationVI_DX12.exe",
+    "CivilizationVI",
+    "CivilizationVI_DX12",
+)
 
 # UNVERIFIED: research R5 states the Saves directory explicitly
 # (".../My Games/Sid Meier's Civilization VI/Saves/Single/") but only
