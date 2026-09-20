@@ -1,0 +1,98 @@
+{
+  "window": {
+    "hwnd": 30216112,
+    "rect": {
+      "left": 0,
+      "top": 0,
+      "width": 2560,
+      "height": 1440
+    }
+  },
+  "baseline": {
+    "width": 2560,
+    "height": 1440,
+    "shape": [
+      1440,
+      2560,
+      4
+    ],
+    "mean_luma": 71.73898835358796,
+    "saved": "C:\\Users\\Matthew LAne\\CivSim\\taskify\\specs\\002-civ-playing-harness\\spikes\\demo-evidence\\r6-baseline-clean.png"
+  },
+  "occluded": {
+    "width": 2560,
+    "height": 1440,
+    "shape": [
+      1440,
+      2560,
+      4
+    ],
+    "mean_luma": 71.73795364945023,
+    "saved": "C:\\Users\\Matthew LAne\\CivSim\\taskify\\specs\\002-civ-playing-harness\\spikes\\demo-evidence\\r6-occluded-window-scoped.png"
+  },
+  "zorder": {
+    "game_zpos": 7,
+    "occluders": [
+      {
+        "hwnd": 853852,
+        "zpos": 4,
+        "rect": [
+          400,
+          350,
+          1400,
+          650
+        ],
+        "above_game": true
+      },
+      {
+        "hwnd": 17631136,
+        "zpos": 5,
+        "rect": [
+          400,
+          760,
+          1400,
+          1020
+        ],
+        "above_game": true
+      }
+    ],
+    "all_above_game": true
+  },
+  "checks": [
+    {
+      "occluder": "HARNESS CONSOLE -- THIS TEXT MUST NOT REACH THE AGENT",
+      "colour": "#FF00FF",
+      "crop_rect": [
+        400,
+        350,
+        1000,
+        300
+      ],
+      "matching_pixel_fraction": 0.0,
+      "leaked": false
+    },
+    {
+      "occluder": "UNRELATED WINDOW -- ALSO MUST NOT APPEAR",
+      "colour": "#00FF00",
+      "crop_rect": [
+        400,
+        760,
+        1000,
+        260
+      ],
+      "matching_pixel_fraction": 0.0,
+      "leaked": false
+    }
+  ],
+  "border_required_requested_false": true,
+  "any_leak": false,
+  "transcript": [
+    "[15:33:27] client window hwnd=30216112 rect=WindowRect(left=0, top=0, width=2560, height=1440)",
+    "[15:33:28] baseline capture: {'width': 2560, 'height': 1440, 'shape': (1440, 2560, 4), 'mean_luma': 71.73898835358796, 'saved': 'C:\\\\Users\\\\Matthew LAne\\\\CivSim\\\\taskify\\\\specs\\\\002-civ-playing-harness\\\\spikes\\\\demo-evidence\\\\r6-baseline-clean.png'}",
+    "[15:33:30] z-order: game zpos=7 occluders=[{'hwnd': 853852, 'zpos': 4, 'rect': (400, 350, 1400, 650), 'above_game': True}, {'hwnd': 17631136, 'zpos': 5, 'rect': (400, 760, 1400, 1020), 'above_game': True}]",
+    "[15:33:31] occluded capture: {'width': 2560, 'height': 1440, 'shape': (1440, 2560, 4), 'mean_luma': 71.73795364945023, 'saved': 'C:\\\\Users\\\\Matthew LAne\\\\CivSim\\\\taskify\\\\specs\\\\002-civ-playing-harness\\\\spikes\\\\demo-evidence\\\\r6-occluded-window-scoped.png'}",
+    "[15:33:31] occluder #FF00FF: matching fraction 0.00000000 -> ABSENT (pass)",
+    "[15:33:31] occluder #00FF00: matching fraction 0.00000000 -> ABSENT (pass)",
+    "[15:33:31] saved top-left corner crop (in-frame FPS overlay evidence)"
+  ]
+}

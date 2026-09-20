@@ -352,11 +352,12 @@ class Runner(RunnerProtocol):
         set, map and game settings from it and is refused if it restates any of them differently
         (`config/run_config.py`), so there is no way to validate a branch document without it.
 
-        **The save load itself is not satisfiable today (T217).** `run/composition.py`'s
-        `_NoLiveSaveLoader` raises on every call, so a real `civsim run branch` fails inside
-        `prepare_branch` naming the missing capability -- exactly as :meth:`resume_from` already
-        does, and for the same reason. The failure is surfaced with the branch's own lineage
-        attached rather than flattened into a generic "preparation failed".
+        **The save load is the production `LuaSaveLoader` (T217).** `run/composition.py` binds
+        `saves/load_game.py`'s verified front-end `Network.LoadGame` path to the run's own
+        connected client, so a real `civsim run branch` reaches an actual load; a load that
+        fails -- or lands anywhere but the named save's exact position -- still refuses the
+        branch by name, exactly as :meth:`resume_from` does. The failure is surfaced with the
+        branch's own lineage attached rather than flattened into a generic "preparation failed".
         """
         prepare_branch = self._deps.prepare_branch
         if prepare_branch is None:
@@ -593,10 +594,10 @@ class Runner(RunnerProtocol):
         refuses a second authoritative attempt for a ``(run_id, turn_number)`` that already has
         one, invariant I9) and is the FR-047-shaped record of the abandonment -- never a delete.
         But doing it first would mean a rewind that then fails to load had stripped the run's
-        authoritative record for nothing. Today that is not hypothetical: ``run/composition.py``'s
-        ``_NoLiveSaveLoader`` raises on every call (T217, blocked on the unfinished
-        ``spikes/load-path-linux.md``), so every real ``civsim run resume-from`` fails at the load.
-        Ordering the supersede after it is what keeps that failure non-destructive.
+        authoritative record for nothing. A live load can still genuinely fail -- the production
+        ``LuaSaveLoader`` (T217, ``saves/load_game.py``) refuses a load that does not land on the
+        named save's exact position, and the client can simply not come back up -- so ordering
+        the supersede after the load is what keeps every such failure non-destructive.
 
         **Why the replayed turn can persist at all (T223).** Superseding an attempt does not free
         its ``(run_id, turn_number, attempt_index)`` triple -- ``store/sqlite_adapter.py``'s D4

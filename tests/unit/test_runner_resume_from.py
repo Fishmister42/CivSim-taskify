@@ -13,10 +13,11 @@ things the method is responsible for:
    lineage it resumed from is recorded, both on the ``turn_abandoned`` event written before the
    load (so even a rewind that never completes leaves an auditable claim) and on the ``resumed``
    event written after it, naming every ``(turn_number, attempt_index)`` superseded.
-3. **That a failed rewind is non-destructive.** ``run/composition.py``'s ``_NoLiveSaveLoader``
-   raises on every call today (T217, blocked on ``spikes/load-path-linux.md``), so every real
-   ``resume-from`` currently fails at the load. It must fail *specifically* -- naming the loader's
-   own reason -- and must leave the run's authoritative turn record exactly as it was.
+3. **That a failed rewind is non-destructive.** A live load can genuinely fail -- the production
+   ``LuaSaveLoader`` (T217, ``saves/load_game.py``) refuses a load the client rejects or that
+   lands on the wrong position -- so a failed ``resume-from`` must fail *specifically* -- naming
+   the loader's own reason -- and must leave the run's authoritative turn record exactly as it
+   was.
 
 Nothing here re-implements recovery: the rewind is delegated to ``resilience.recovery.
 RecoveryEngine``, reached through the seam that already carries it
@@ -85,8 +86,10 @@ class _RecordingSaveLoader:
 
 
 class _NoLoadPathLoader:
-    """The shape ``run/composition.py``'s ``_NoLiveSaveLoader`` has today (T217): every call
-    raises, by name, because no verified live save-*load* path exists in this codebase yet."""
+    """A ``SaveLoader`` whose every call raises, by name -- the scripted stand-in for any load
+    the production ``LuaSaveLoader`` (T217) itself refuses (a client rejection, a wrong
+    far-side position). The message is this test file's own fixture text, asserted verbatim
+    below to prove the loader's *own* reason survives to the operator unflattened."""
 
     async def load(self, save: SavePoint) -> None:
         raise HarnessError(
@@ -427,16 +430,17 @@ def test_a_save_recorded_removed_is_refused_rather_than_resumed_from_a_different
 
 
 # --------------------------------------------------------------------------
-# The T217 shape: no live save-load path exists yet
+# A loader that cannot load: the rewind stays non-destructive
 # --------------------------------------------------------------------------
 
 
 def test_a_loader_that_cannot_load_fails_specifically_and_leaves_the_record_intact(
     store: SqliteMatchStore, tmp_path: Path
 ) -> None:
-    """``run/composition.py``'s ``_NoLiveSaveLoader`` raises on every call (T217). The rewind must
-    surface *that* reason rather than a generic failure, and -- because the supersede is ordered
-    after the load -- must leave every recorded attempt exactly as authoritative as it was."""
+    """A ``SaveLoader`` whose load raises -- as the production ``LuaSaveLoader`` (T217) does for
+    a load the client refuses or that lands on the wrong position -- must surface *that* reason
+    rather than a generic failure, and -- because the supersede is ordered after the load --
+    must leave every recorded attempt exactly as authoritative as it was."""
     prepared = _seed_run(store, through_turn=3)
     runner = _build_runner(
         store, prepared, loader=_NoLoadPathLoader(), tmp_path=tmp_path, current_turn=3

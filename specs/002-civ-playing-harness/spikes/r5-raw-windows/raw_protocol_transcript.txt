@@ -1,0 +1,6 @@
+--- immediately after connect, before we send anything: 0 frame(s) ---
+--- after APP:: 1 frame(s) ---
+  [0] tag=4 payload="Civ6\x00Sid Meier's Civilization 6\x00C:\\Program Files (x86)\\Steam\\steamapps\\common\\Sid Meier's Civilization VI\\Base\\Binaries\\Debug"
+--- after LSQ:: 2 frame(s) ---
+  [0] tag=4 payload='0\x00Main State\x001\x00DebugHotloadCache\x002\x00Options\x003\x00CreditsScreen\x004\x00My2K\x005\x00LoadGameMenu\x006\x00PBCNotifyRemind\x007\x00Lobby\x008\x00Mods\x009\x00LoadGameMenu\x0010\x00SaveGameMenu\x0011\x00MultiSelectWindow\x0012\x00CityStatePicker\x0013\x00LeaderPicker\x0014\x00HostGame\x0015\x00ConfirmKick\x0016\x00EditHotseatPlayer\x0017\x00StagingRoom\x0018\x00LoadGameMenu\x0019\x00SaveGameMenu\x0020\x00FrontEndPopup\x0021\x00CivRoyaleIntro\x0022\x00PiratesIntro\x0023\x00CrossPlayLogin\x0024\x00MainMenu\x0025\x00StateTransition\x0026\x00JoiningRoom\x0027\x00UserSetupWarning\x0028\x00SwitchLayoutPopup\x0029\x00Test\x0030\x00FrontEnd\x0031\x00InvitePopup'
+  [1] tag=-1 payload='O\x00StagingRoom: RefreshStatus()\tSun Sep 20 15:19:10 2026\tfalse'

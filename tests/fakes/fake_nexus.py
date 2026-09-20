@@ -105,6 +105,26 @@ def loaded_game_state_table(
     return {"GameCore_Tuner": game_core_tuner, "InGame": in_game}
 
 
+# The `MainMenu` index a real front-end table reported in the T217 spike
+# (`specs/002-civ-playing-harness/spikes/t217-RESOLVED-frontend-loadgame.md`:
+# the enums are "present in LoadGameMenu (18), MainMenu (24) and SaveGameMenu
+# (19)"). Deliberately non-contiguous with the other entries, for the same
+# reason `loaded_game_state_table` accepts arbitrary indices.
+STATE_INDEX_MAIN_MENU = 24
+
+
+def front_end_state_table(*, main_menu: int = STATE_INDEX_MAIN_MENU) -> dict[str, int]:
+    """The FrontEnd phase, as the T217 load spike measured it: `MainMenu`
+    present (the state verified to carry both `Network.LoadGame` and the
+    `SaveLocations`/`SaveTypes`/`SaveDirectories`/`ServerType` enums), and no
+    game-play states at all -- `GameCore_Tuner`/`InGame` do not exist until a
+    game is loaded. This is the table a save *load* must be issued from;
+    `menu_only_state_table()` remains the sparser two-state capture from an
+    earlier client observation and deliberately has no `MainMenu`, so a
+    loader polling for the front end must keep waiting on it."""
+    return {"Main State": 0, "DebugHotloadCache": 1, "MainMenu": main_menu}
+
+
 def _encode_state_table(state_table: Mapping[str, int]) -> str:
     """Encode a `{name: index}` mapping as the real wire's NUL-separated,
     alternating `<index>\\0<name>\\0` payload -- the exact inverse of
@@ -313,6 +333,8 @@ class FakeNexusServer:
         self._session_active = False
 
         self._drop_at: int | None = None
+        self._drop_after: int | None = None
+        self._refuse_connections = 0
         self._stall_at: set[int] = set()
         self._stall_matches: list[str] = []
         self._stray_before: dict[int, list[str]] = {}
@@ -371,6 +393,25 @@ class FakeNexusServer:
 
     def clear_drop(self) -> None:
         self._drop_at = None
+        self._drop_after = None
+
+    def drop_connection_after(self, command_index: int) -> None:
+        """Close the connection immediately *after* responding to the
+        `command_index`-th command (1-based). This is the shape the T217 load
+        spike measured for `Network.LoadGame`: the call's own response (`true`)
+        is delivered, and then the tuner port goes away for the duration of
+        the load -- distinct from `drop_connection_at`, which eats the command
+        without ever answering it (a crash mid-operation)."""
+        self._drop_after = command_index
+
+    def refuse_next_connections(self, count: int) -> None:
+        """Close the next `count` incoming connections during their handshake,
+        before any session is established -- simulating the window the T217
+        spike measured while a load is in flight, when the tuner port refuses
+        every connection until the game is back up. Connections after the
+        `count`-th proceed normally, which is the 'rebound' half of that same
+        measurement."""
+        self._refuse_connections = count
 
     def stall_at(self, command_index: int) -> None:
         """Never respond to the `command_index`-th command (1-based); every
@@ -443,6 +484,16 @@ class FakeNexusServer:
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        if self._refuse_connections > 0:
+            # See `refuse_next_connections`: the tuner port is "closed" while a
+            # load is in flight. Closing during the handshake is how a fake TCP
+            # listener that cannot un-listen models a refused port.
+            self._refuse_connections -= 1
+            writer.close()
+            with contextlib.suppress(OSError):
+                await writer.wait_closed()
+            return
+
         if self._session_active:
             # "The game accepts one tuner connection at a time"
             # (contracts/nexus-protocol.md) -- mirror that rather than
@@ -504,6 +555,12 @@ class FakeNexusServer:
                 payload = f"{begin_marker(nonce)}\n{json.dumps(response)}\n{end_marker(nonce)}"
                 writer.write(encode_frame(TAG_COMMAND, payload))
                 await writer.drain()
+
+                if self._drop_after is not None and commands_seen == self._drop_after:
+                    # The response above was delivered; now the connection goes
+                    # away, as it does for the duration of a real load. See
+                    # `drop_connection_after`.
+                    return
         finally:
             self._session_active = False
             writer.close()

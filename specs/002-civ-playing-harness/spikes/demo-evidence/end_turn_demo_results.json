@@ -1,0 +1,28 @@
+{
+  "turn_before": {
+    "turn": 8,
+    "player": 0
+  },
+  "end_turn": {
+    "ok": "true",
+    "err": "nil"
+  },
+  "turn_after": {
+    "turn": 9,
+    "player": 0
+  },
+  "advanced": true,
+  "frames": 7,
+  "model_calls": 0,
+  "decisions": "scripted, not model-generated",
+  "log": [
+    "[15:37:05] connected; InGame=132",
+    "[15:37:05] TURN BEFORE -> {\"turn\": 8, \"player\": 0}",
+    "[15:37:07] issuing UI.RequestAction(ACTION_ENDTURN)",
+    "[15:37:07] END TURN -> {\"ok\": \"true\", \"err\": \"nil\"}",
+    "[15:37:09] TURN ADVANCED 8 -> 9",
+    "[15:37:12] captured 7 window-scoped frames",
+    "[15:37:14] wrote harness-ends-a-turn.gif (2449 KB, 7 frames)",
+    "[15:37:14] wrote 3 key frames"
+  ]
+}

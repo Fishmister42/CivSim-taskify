@@ -1,0 +1,75 @@
+{
+  "states": 136,
+  "in_game_index": 132,
+  "game_core_tuner_index": 10,
+  "game_state": {
+    "turn": 8,
+    "local_player": 0,
+    "lua_version": "2013.2.0 r13768"
+  },
+  "save_surface": {
+    "Network": "table",
+    "Network_SaveGame": "function",
+    "Network_LoadGame": "function",
+    "SaveLocations_LOCAL_STORAGE": "1",
+    "SaveTypes_SINGLE_PLAYER": "1"
+  },
+  "saves": [
+    {
+      "name": "civsim__winspike__t0001",
+      "lua": {
+        "pcall_ok": "true",
+        "returned": "true",
+        "turn": 8
+      },
+      "path": "C:\\Users\\Matthew LAne\\Documents\\My Games\\Sid Meier's Civilization VI\\Saves\\Single\\civsim__winspike__t0001.Civ6Save",
+      "exists": true,
+      "stable_size": 1164811
+    },
+    {
+      "name": "civsim__winspike__t0002",
+      "lua": {
+        "pcall_ok": "true",
+        "returned": "true",
+        "turn": 8
+      },
+      "path": "C:\\Users\\Matthew LAne\\Documents\\My Games\\Sid Meier's Civilization VI\\Saves\\Single\\civsim__winspike__t0002.Civ6Save",
+      "exists": true,
+      "stable_size": 1164811
+    },
+    {
+      "name": "civsim__winspike__t0003",
+      "lua": {
+        "pcall_ok": "true",
+        "returned": "true",
+        "turn": 8
+      },
+      "path": "C:\\Users\\Matthew LAne\\Documents\\My Games\\Sid Meier's Civilization VI\\Saves\\Single\\civsim__winspike__t0003.Civ6Save",
+      "exists": true,
+      "stable_size": 1164811
+    },
+    {
+      "name": "civsim__winspike__t0004",
+      "lua": {
+        "pcall_ok": "true",
+        "returned": "true",
+        "turn": 8
+      },
+      "path": "C:\\Users\\Matthew LAne\\Documents\\My Games\\Sid Meier's Civilization VI\\Saves\\Single\\civsim__winspike__t0004.Civ6Save",
+      "exists": true,
+      "stable_size": 1164811
+    }
+  ],
+  "saves_written": 4,
+  "transcript": [
+    "[15:26:53] saves dir : C:\\Users\\Matthew LAne\\Documents\\My Games\\Sid Meier's Civilization VI\\Saves\\Single",
+    "[15:26:53] APP: reply -> \"Civ6\\x00Sid Meier's Civilization 6\\x00C:\\\\Program Files (x86)\\\\Steam\\\\steamapps\\\\common\\\\Sid Meier's \"",
+    "[15:26:53] IN GAME: 136 states, GameCore_Tuner=10, InGame=132",
+    "[15:26:53] GAME STATE -> {\"turn\": 8, \"local_player\": 0, \"lua_version\": \"2013.2.0 r13768\"}",
+    "[15:26:53] SAVE SURFACE -> {\"Network\": \"table\", \"Network_SaveGame\": \"function\", \"Network_LoadGame\": \"function\", \"SaveLocations_LOCAL_STORAGE\": \"1\", \"SaveTypes_SINGLE_PLAYER\": \"1\"}",
+    "[15:26:54] SAVE civsim__winspike__t0001: lua={\"pcall_ok\": \"true\", \"returned\": \"true\", \"turn\": 8} exists=True stable_size=1164811",
+    "[15:26:55] SAVE civsim__winspike__t0002: lua={\"pcall_ok\": \"true\", \"returned\": \"true\", \"turn\": 8} exists=True stable_size=1164811",
+    "[15:26:55] SAVE civsim__winspike__t0003: lua={\"pcall_ok\": \"true\", \"returned\": \"true\", \"turn\": 8} exists=True stable_size=1164811",
+    "[15:26:56] SAVE civsim__winspike__t0004: lua={\"pcall_ok\": \"true\", \"returned\": \"true\", \"turn\": 8} exists=True stable_size=1164811"
+  ]
+}
