@@ -97,6 +97,43 @@ deserves a check of the call before a theory about the game.**
 Re-measuring with the correct order against a game with real progress is still worth doing, but the
 parity question above is settled by the UI source regardless of what the call returns.
 
+## Corroboration from two more shipped call sites
+
+A full-tree search turned up two more, and both add something.
+
+**`steamassets/debug/victories.ltp:53`** — a debug Live Tuner Panel — independently confirms the
+argument order *and* tells us what the value means:
+
+```lua
+	local percent = Game.GetVictoryProgressForTeam(row.VictoryType, g_TeamId) or 0;
+	local progress = tostring(percent * 100) .. "%";
+```
+
+**The return is a fraction in `0..1`**, multiplied by 100 for display — not a raw score and not a
+percentage. Anyone implementing the redacted accessor should surface it as such. The same panel shows
+two sibling APIs worth knowing: `Game.GetVictoryRequirements(teamId, victoryType)` and
+`Game.IsVictoryEnabled(victoryType)`.
+
+**`steamassets/base/assets/ui/arxmanager.lua:180`** — *"Logitech ARX Support"*, the second-screen
+companion that mirrors game state onto a phone or keyboard display — iterates every alive major
+player and calls the same function:
+
+```lua
+	for i = 0, PlayerManager.GetWasEverAliveCount() - 1 do
+		local pPlayer = Players[i];
+		if (pPlayer:IsAlive() == true and pPlayer:IsMajor() == true) then
+			table.insert(playersData, {
+				Score = Game.GetVictoryProgressForTeam(victoryType, pPlayer:GetTeam()), -- Game Core Call
+```
+
+Worth stating the weight honestly: ARX is a **peripheral** surface, not the standard in-game UI, so
+it is corroboration rather than the load-bearing evidence. `worldrankings.lua` — the screen a player
+opens with one keypress — remains the argument. But two independent shipped surfaces presenting the
+same data to a human, neither gated on `HasMet` for the *values*, is a stronger position than one.
+
+The DLC scenarios (`blackdeathscenario`, `polandscenario`) ship replacements that repeat the pattern
+unchanged.
+
 ## Victory types, for reference
 
 From `GameInfo.Victories()` on this client:
