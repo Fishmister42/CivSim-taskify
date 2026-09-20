@@ -1,0 +1,47 @@
+# Example run configuration (contracts/run-configuration.md).
+#
+# A short, deterministic validation run: play to turn 50 against the
+# shuffle-classic-2026q3 seed set. Used to exercise the full run lifecycle
+# (preparation, the decision-step loop, quicksave, and the stop condition)
+# without committing to a full 300+ turn game.
+#
+# NOTE: there is deliberately no `turn_time_budget_s` field. A turn has no
+# time bound (FR-014) -- `no_progress_step_limit` is the only backstop that
+# can end a turn the agent has not chosen to end itself.
+schema_version: 1
+config_id: turn50-validation
+
+seed_set: shuffle-classic-2026q3
+map_seed: "1849275663"
+civilization: CIVILIZATION_ROME
+leader: LEADER_TRAJAN
+ruleset: RULESET_EXPANSION_2
+mod_set:
+  - { id: bbg-community-balance, version: "4.2.1" }
+
+map_settings:
+  map_type: MAPTYPE_CONTINENTS
+  map_size: MAPSIZE_SMALL
+  resources: RESOURCES_STANDARD
+game_settings:
+  game_speed: GAMESPEED_STANDARD
+  starting_era: ERA_ANCIENT
+  victory_types: [SCIENCE, CULTURE, DOMINATION, RELIGIOUS]
+difficulty: DIFFICULTY_PRINCE
+opponents:
+  major_count: 5
+  city_state_count: 10
+
+stop_condition:
+  type: turn_reached
+  turn: 50
+
+model_config:
+  primary: { provider: openrouter, model: "anthropic/claude-opus-5" }
+  fallbacks:
+    - { provider: openrouter, model: "anthropic/claude-sonnet-5" }
+  request_params: { temperature: 0.7 }
+
+no_progress_step_limit: 8
+recovery_attempt_limit: 3
+min_free_disk_gb: 25

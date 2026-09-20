@@ -1,0 +1,136 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "civsim-harness"
+version = "0.1.0"
+description = "Unattended Civilization VI playing harness (CivSim deliverable 2)."
+requires-python = ">=3.12"
+
+# Portable core only. Platform-specific libraries live exclusively in the
+# per-platform extras below (research R19) -- a macOS or Linux install must
+# never pull pywin32, and a Windows install must never pull pyobjc or Xlib.
+dependencies = [
+  "pydantic>=2",
+  "httpx",
+  "psutil",
+  "typer",
+  "fastapi",
+  "uvicorn",
+  "SQLAlchemy",
+  "Pillow",
+  "PyYAML",
+]
+
+[project.scripts]
+civsim = "civsim_harness.operator.cli:app"
+
+# Per-platform host adapters (src/civsim_harness/host/{windows,macos,linux}/).
+# Each dependency also carries its own `sys_platform` marker as a second line
+# of defence: even if the wrong extra is requested on the wrong host, the
+# marker keeps the resolver from trying to install an unusable wheel there.
+[project.optional-dependencies]
+windows = [
+  "pywin32>=306; sys_platform == 'win32'",
+  "winsdk>=1.0.0b10; sys_platform == 'win32'",
+  "pydirectinput>=1.0.4; sys_platform == 'win32'",
+]
+macos = [
+  "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+  "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
+]
+linux = [
+  "python-xlib>=0.33; sys_platform == 'linux'",
+  "dbus-python>=1.3.2; sys_platform == 'linux'",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "syrupy>=4",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/civsim_harness"]
+
+# --------------------------------------------------------------------------
+# ruff
+# --------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "TID"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["civsim_harness"]
+
+# The portable core must run unchanged on every target platform (research
+# R19); host/ is the one directory permitted to speak to an OS directly
+# (plan.md Structure Decision). This is "is the harness platform-neutral?"
+# made answerable from the import graph instead of a code review.
+[tool.ruff.lint.per-file-ignores]
+"src/civsim_harness/host/**" = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"pywin32".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32api".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32con".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32gui".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32com".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32comext".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32event".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32file".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32pipe".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32process".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32security".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32clipboard".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32service".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32serviceutil".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"win32ui".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"pywintypes".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"pythoncom".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"winerror".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"winsdk".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"pydirectinput".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"Quartz".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"AppKit".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"Xlib".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+"ctypes.windll".msg = "OS-specific imports are only permitted in src/civsim_harness/host/ (research R19)."
+
+# --------------------------------------------------------------------------
+# mypy -- strict on the portable core (src/civsim_harness); tests are looser
+# --------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+explicit_package_bases = true
+ignore_missing_imports = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "civsim_harness.*"
+strict = true
+
+# --------------------------------------------------------------------------
+# pytest -- four tiers (unit, contract, integration, live); only the first
+# three run by default / in CI (plan.md Testing). `live` needs a real Civ VI
+# client and is excluded from the default run via addopts, not deleted from
+# discovery, so `pytest tests/live -m live` still works explicitly.
+# --------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--ignore=tests/live"
+markers = [
+  "live: exercises a real Civilization VI client; excluded from the default run (see plan.md Testing)",
+]

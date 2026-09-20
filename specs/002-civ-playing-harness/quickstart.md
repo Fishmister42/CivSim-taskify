@@ -101,7 +101,7 @@ uv run civsim run status <run_id>        # lifecycle only — records live in th
 
 - The game reaches exactly the configured seed, civilization, ruleset, build, and settings, then
   begins playing with no further input (US1 §1).
-- The run terminates at turn 50 with `stop_condition_recorded = turn_reached`.
+- The run terminates at turn 50 with `stop_resolution = turn_reached`.
 - Every turn from 1 to 50 has a persisted record containing **every decision step in order** — the
   observation given at that step, the image shown, the decision issued, the reasoning stated, and
   the verified outcome — plus the turn's resulting yields. **No turn number is missing, and no step
@@ -274,11 +274,16 @@ point, and only an operator may decide to give one up (FR-036, research R17).
 **Validates**: User Story 5 · FR-037 – FR-043 · SC-015, SC-016, SC-017, SC-018
 
 Run the same seed twice, changing **only** `model_config` between them — no code, no new
-integration, no rebuild.
+integration, no rebuild. To discharge SC-015's "verified on at least two providers" — which means two
+distinct vendors, not two models from one — route the two runs through `anthropic/claude-sonnet-5`
+and `google/gemini-3-pro` via OpenRouter, both image-capable, for the identical seed and
+configuration otherwise.
 
 **Expected**:
 
 - Both runs complete through the same observation and action surface.
+- The `anthropic/claude-sonnet-5` run and the `google/gemini-3-pro` run both reach the same stop
+  condition, exercising two distinct vendors rather than two models from the same one.
 - Every model call records the model that actually served it, its latency, cost, and retry count.
 - Where a fallback served a turn, that turn is distinguishable from primary-served turns.
 - Zero calls made with images dropped to fit a limit.
@@ -378,7 +383,7 @@ report, then start a run on that set.
 Then take the override path:
 
 ```bash
-uv run civsim seedset accept-build shuffle-classic-2026q3 --to 1.0.12.11 --reason "MP-only patch"
+uv run civsim seedset accept-build shuffle-classic-2026q3 --to win/1.0.12.11 --reason "MP-only patch"
 uv run civsim run start ./configs/turn50-validation.yaml
 uv run civsim audit builds shuffle-classic-2026q3
 # expect: the set reports as NON-uniform, its runs partitioned by build, and every run played

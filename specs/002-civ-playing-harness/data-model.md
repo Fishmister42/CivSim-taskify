@@ -58,7 +58,18 @@ runs within the set are comparable (FR-031).
 | `created_at` | timestamp | |
 
 **BuildAcceptance** — `acceptance_id`, `from_build`, `to_build`, `accepted_by`, `accepted_at`,
-`reason`. Recorded once on the set and referenced by every run that relied on it (FR-002).
+`reason`, `is_platform_transition` (derived: true when the platform component of `from_build` and
+`to_build` differ), `r20_spike_ref` (id?; **required when `is_platform_transition` is true** — the
+recorded passing result of the R20 cross-platform save spike, T199). Recorded once on the set and
+referenced by every run that relied on it (FR-002).
+
+**Platform-crossing acceptances are gated on R20.** A version-only transition (e.g.
+`win/1.0.12.9 → win/1.0.12.11`) needs no spike result and `r20_spike_ref` stays null. A transition
+that also crosses platform (e.g. `win/1.0.12.9 → mac/1.0.12.9`) is rejected at creation unless
+`r20_spike_ref` resolves to a recorded **passing** R20 result — this is the field that makes the gate
+enforceable at runtime without moving T199 out of Phase 8: T174 and T175 ship the check early, but it
+stays refusing every platform-crossing case until T199 records a passing result to reference
+(FR-002, FR-031, R20).
 
 **Why `game_build` is composite.** The macOS and Linux ports are separately built binaries whose
 version numbering need not track the Windows build's, so a set whose runs span two platforms carries
@@ -75,6 +86,8 @@ accepting `win/1.0.12.9 → win/1.0.12.11` does **not** also accept `win → mac
 - **A set carrying any `accepted_build_changes` is not uniform**, and must be reportable as such.
   Every run in it resolves to exactly one build, and the set's runs are partitionable by build — this
   is the property that stops a mixed set from reading like a clean one (FR-031).
+- **A platform-crossing `BuildAcceptance` cannot be created without a passing R20 spike result on
+  record.** A version-only transition needs none (FR-002, FR-031, R20).
 
 ---
 
@@ -107,9 +120,12 @@ entirely: a turn runs for as many decision steps and as long as the agent needs,
 `no_progress_step_limit` is the only backstop (FR-008, FR-014). A field of that name reappearing in
 this model would be a regression, not an addition.
 
-**StopCondition** — exactly one: `turn_reached(n)`, `game_outcome` (victory or defeat),
-`operator_stop`. A run may also terminate on `unrecoverable_failure`, which is an outcome rather
-than a configurable condition.
+**StopCondition** — the **configured** stop condition, exactly one of: `turn_reached(n)`,
+`game_outcome`, `operator_stop`. This is the 3-way set an operator sets before a run starts, and it
+does not grow. The **recorded** resolution of a finished run is a separate, broader concept — see
+`Run.stop_resolution` in §4 — because a run can also terminate on `unrecoverable_failure`, which is
+not a configurable `StopCondition.type`, and because a `game_outcome` condition resolves to one of
+two distinct recorded outcomes, victory or defeat.
 
 **ModelConfig** — `primary: ModelRef`, `fallbacks: list[ModelRef]` (ordered, possibly empty),
 `request_params: object`. Contains **no credentials** — keys resolve from environment or a secrets
@@ -152,7 +168,7 @@ same hash — guidance that varies per run is a contract violation, not a featur
 | `config_id` | id | |
 | `lifecycle_state` | enum | See state machine |
 | `started_at` / `ended_at` | timestamp? | |
-| `stop_condition_recorded` | enum? | Exactly one on termination (FR-005) |
+| `stop_resolution` | enum? | Exactly one on termination — `turn_reached` \| `victory` \| `defeat` \| `operator_stop` \| `unrecoverable_failure` (FR-005) |
 | `record_completeness_status` | enum | `complete` \| `has_gaps` \| `unknown` (FR-052) |
 | `comparability_status` | enum | `comparable` \| `visually_degraded` \| `not_comparable` (FR-050) |
 | `observation_catalog_version` | CatalogVersionRef | In force while it played (FR-022) |
@@ -182,9 +198,14 @@ preparing ──> playing <──> waiting_on_model
 **Validation**:
 
 - Every transition is recorded as a `RunEvent` (FR-003).
-- `finished` requires exactly one `stop_condition_recorded`. Where a stop condition coincides with a
-  victory, defeat, or crash on the same turn, one is recorded as the stop condition and the others
-  appear as events (spec edge case).
+- `finished` requires exactly one `stop_resolution`. Where a stop resolution coincides with a
+  victory, defeat, or crash on the same turn, one is recorded as the stop resolution and the others
+  appear as events (spec edge case, invariant I10).
+- **`stop_resolution` is deliberately broader than `StopCondition.type`.** `unrecoverable_failure`
+  already terminates a run without being a configurable `StopCondition.type`, which is proof the
+  recorded set of outcomes is necessarily broader than the configured set of conditions — victory and
+  defeat are recorded for the same reason, as the two ways a configured `game_outcome` condition can
+  actually resolve (FR-005).
 - `record_completeness_status` is derived, not asserted: `complete` requires a contiguous
   authoritative turn sequence from 1 to the stop turn with no gap markers, **and** a contiguous
   step sequence within each of those turns (SC-003).
@@ -487,10 +508,14 @@ equivalent. Stored as versioned YAML under `catalogs/`; see
 | `availability_predicate` | string? | When it is available to a human (actions) |
 | `verification_predicate` | string? | How its effect is verified (actions) |
 | `output_schema` | json-schema? | Shape of the value produced (observations) |
+| `camera_requirements` | object? | **Required when `kind == view`, absent otherwise.** `mode` ∈ {world, strategic, city_screen, diplomacy, congress}, `zoom_range` (must be within what the standard UI allows), `target_must_be_revealed: true` (FR-024, FR-026) |
+| `screening_profile` | string? | **Required when `kind == view`, absent otherwise.** Which detector profile applies (R7) |
 | `introduced_in_version` | string | Catalog version of first appearance |
 
-**Validation**: a declaration missing `parity_basis` fails catalog load. Declarations are immutable
-within a version; a change produces a new catalog version (FR-022).
+**Validation**: a declaration missing `parity_basis` fails catalog load, as does a `view` declaration
+missing `camera_requirements` or `screening_profile` — matching the `view` entry shape in
+contracts/capability-catalog.md exactly. Declarations are immutable within a version; a change
+produces a new catalog version (FR-022).
 
 ### CatalogVersion
 
@@ -652,7 +677,7 @@ Stated once here because they hold across entities and are what the test suites 
 | **I7** | No model call carries fewer images than the observation contains | FR-039, SC-017 |
 | **I8** | No credential appears in any record, capture, log, or agent context | FR-043, SC-018 |
 | **I9** | Exactly one authoritative attempt per `(run, turn)`; abandoned attempts are retained | FR-047 |
-| **I10** | Exactly one recorded stop condition per terminated run | FR-005 |
+| **I10** | Exactly one recorded stop resolution per terminated run | FR-005 |
 | **I11** | Every gap in the turn sequence is explicitly marked and reflected in completeness status | FR-052, SC-011 |
 | **I12** | A branch never modifies or invalidates its parent's record | FR-034, SC-014 |
 | **I13** | Exactly one decision and one model call per decision step; no step carries a batch | FR-008 |

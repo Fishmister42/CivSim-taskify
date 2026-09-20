@@ -1,0 +1,28 @@
+# Seed set definition (contracts/run-configuration.md "Seed set definition").
+#
+# civilization, leader, ruleset, and mod_set are immutable after creation --
+# changing one creates a new seed set, otherwise runs inside a set stop being
+# comparable, which is the only reason the set exists (FR-031).
+schema_version: 1
+name: shuffle-classic-2026q3
+civilization: CIVILIZATION_ROME
+leader: LEADER_TRAJAN
+ruleset: RULESET_EXPANSION_2
+mod_set:
+  - { id: bbg-community-balance, version: "4.2.1" }
+
+# Composite platform/version identity, checked against the live client at
+# every run's preflight (V10). A mismatch fails the run before turn 1 unless
+# covered by an entry below (FR-002, FR-031, R20).
+game_build: "win/1.0.12.9"
+
+seeds:
+  - "1849275663"
+  - "2273910055"
+  - "3141592653"
+  - "2718281828"
+  - "1618033988"
+
+# Appended to only by an explicit operator action (`civsim seedset accept-build`).
+# Empty here: no build drift has yet been accepted for this set.
+accepted_build_changes: []

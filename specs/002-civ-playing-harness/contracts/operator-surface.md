@@ -75,7 +75,9 @@ this project cannot afford.
 sit on one turn for hours, and without this an operator cannot tell a working run from a wedged one.
 It is a bare integer for exactly that reason — the step's observation, decision, and reasoning stay
 on the other side of the FR-053 line. `requested_state` exposes a pause that has been accepted but
-not yet landed on a turn boundary, for the same diagnostic reason.
+not yet landed on a turn boundary, for the same diagnostic reason. `archived` is derived, not
+separately stored: `archived = (Run.archived_at is not null)` (data-model.md §4) — the boolean is a
+projection for operator convenience, not a second source of truth.
 
 The enforcement is structural rather than a rule someone must remember:
 

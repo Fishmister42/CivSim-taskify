@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            uv-extra: windows
+          - os: macos-latest
+            uv-extra: macos
+          - os: ubuntu-latest
+            uv-extra: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (portable core + this host's platform extra)
+        run: uv sync --extra ${{ matrix.uv-extra }}
+
+      # tests/live is excluded via pytest addopts (pyproject.toml) and is never
+      # invoked here regardless -- it requires a real Civ VI client (research
+      # R19; plan.md Testing). Only the three portable tiers run in CI, on all
+      # three platforms, which is what catches an accidental OS-specific
+      # import in the portable core.
+      - name: Run portable test tiers
+        run: uv run pytest tests/unit tests/contract tests/integration
