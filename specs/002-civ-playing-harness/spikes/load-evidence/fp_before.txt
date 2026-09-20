@@ -1,0 +1,12 @@
+turn=1
+localplayer=0
+gold=10.00
+science=0.00
+culture=0.00
+faith=0.00
+civ=CIVILIZATION_MALI
+leader=LEADER_MANSA_MUSA
+unitcount=2
+  unit[1] 0@20,32 hp=0 moves=2
+  unit[2] 21@19,32 hp=0 moves=2
+citycount=0
