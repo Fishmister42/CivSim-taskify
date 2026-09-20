@@ -442,13 +442,31 @@ tuner connection at a time and can refuse a rapid reconnect while the prior sock
   `Pangaea.lua` (Small), unlimited turns, 6 AI players. **This directly contradicts the worked
   example in `contracts/run-configuration.md`**, which shows `GAMESPEED_STANDARD` /
   `DIFFICULTY_PRINCE` — the preset this project built uses the fastest game speed and a harder
-  difficulty than the contract's own example assumes. Recorded as a contradiction, not resolved
-  here; see the open item below.
+  difficulty than the contract's own example assumes.
+  ✅ **RESOLVED by the owner: `GAMESPEED_ONLINE` is deliberate.** The preset is authoritative and the
+  contract's worked example is the thing that is out of date. **Consequence to carry forward:** the
+  constitution's "100 science / 100 culture by turn 50" goal was not calibrated at this speed —
+  turns cover far fewer game-years at Online — so that threshold means something materially
+  different here and must not be compared against any standard-speed baseline without restating it.
 - **The fixed leader is NOT set in the preset**, despite the intent behind building it — every
   player slot reads back `civ=nil leader=nil human=false`, and the UI shows `Random Leader` in
   every slot after loading it. (`LEADER_CYRUS`/`CIVILIZATION_PERSIA` strings visible in a raw
   `strings` dump are the installation's available-options roster, not a selection — an earlier read
   mistook them for one and was corrected in the same document.)
+- ✅ **RESOLVED — the preset does not need to pin it.** The owner confirmed the saved configuration
+  will not hold a civ selection and **ruled that runs start with `LEADER_CYRUS` (Persia)**.
+  `PlayerConfigurations` exposes working setters at the `HostGame` state, so preparation pins it
+  itself after loading the configuration:
+  `pc:SetLeaderTypeName("LEADER_CYRUS")` / `pc:SetCivilizationTypeName("CIVILIZATION_PERSIA")`.
+  Verified live with read-back (`slot0` went `nil`/`nil` → `LEADER_CYRUS`/`CIVILIZATION_PERSIA`) and
+  the Create Game UI refreshed to show Cyrus with the Persia icon. **The UI does not repaint
+  immediately on the Lua write**, so it must not be used as the verification signal — read back
+  through `PlayerConfigurations`, which is the FR-002/V2 pattern regardless. Related setters
+  confirmed present: `GameConfiguration.RemovePlayer` (returns `true`),
+  `SetParticipatingPlayerCount`, `GetAIPlayerIDs`; **`SetAIPlayerCount` does not exist** — player
+  count changes by adding/removing players.
+  The full preparation path is therefore reachable without UI automation beyond loading the
+  configuration: load preset → set leader/civ in Lua → read back field by field → start.
 - `Play Now` is confirmed unusable for seeded work independent of the timer finding: it randomized
   the leader across three consecutive launches (England/Eleanor, Korea/Seondeok, Mali/Mansa Musa).
 
