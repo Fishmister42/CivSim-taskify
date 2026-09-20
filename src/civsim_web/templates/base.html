@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en"{% block root_attrs %}{% endblock %}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}CivSim{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  {#
+    The interface is read-only (FR-026, UP-010). There is no form, no button,
+    and no script that issues anything but a GET -- `poll.js` reads the same
+    JSON endpoint the directing Claude Code session reads, and nothing else.
+  #}
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">CivSim</a>
+    <span class="site-note">read-only view of the match-tracking store &mdash;
+      the game client is never required (UP-008)</span>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    {% block footer %}{% endblock %}
+    <p class="site-footer-note">
+      This interface reports and never acts. To start, pause, stop, or branch a
+      run, use the harness.
+    </p>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

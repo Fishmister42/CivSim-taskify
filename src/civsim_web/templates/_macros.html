@@ -1,0 +1,292 @@
+{#
+  Shared rendering macros (T030).
+
+  These exist to make one property true by construction rather than by
+  diligence: **every field in a response's JSON body is present in its rendered
+  HTML, and no field is present in the HTML that the JSON lacks**
+  (contracts/web-read-api.md, FR-007, UP-002).
+
+  `node` walks the view model's own serialized form -- the same `data` the JSON
+  body is built from -- and emits one `data-field="<dotted.path>"` element per
+  leaf. The paths are exactly the JSON paths, which is what lets
+  `tests/contract/test_web_read_api.py` assert parity mechanically instead of
+  by a per-field checklist, and what lets `static/poll.js` update the page in
+  place without knowing anything about the schema.
+
+  The consequence worth stating for later stories: **a field added to a view
+  model appears on the page with no template change.** Add fields to the models;
+  add bespoke markup here only when a value needs more than a label and a value
+  (an image, a link, an expandable block).
+
+  Every macro takes `path`, the dotted JSON path of the value it is rendering.
+  An empty `path` means "this value is the whole response body", so the paths
+  it emits are bare field names -- which is what a top-level view model's JSON
+  paths actually are.
+
+  No macro here emits a `<form>`, `<button>`, or `<input>`. The interface
+  reports and never acts (FR-026, UP-010); `<details>`/`<summary>` is a
+  disclosure of content already in the response, not a control over a run.
+#}
+
+{% macro humanize(key) -%}
+{{ key.replace('_', ' ')|capitalize }}
+{%- endmacro %}
+
+{% macro scalar(value) -%}
+{%- if value is none -%}<span class="none" title="not recorded">&mdash;</span>
+{%- elif value is boolean -%}{{ 'yes' if value else 'no' }}
+{%- else -%}{{ value }}
+{%- endif -%}
+{%- endmacro %}
+
+{# One leaf: a labelled value carrying its JSON path. #}
+{% macro leaf(path, label, value) -%}
+<div class="field" data-field="{{ path }}">
+  <span class="field-key">{{ label }}</span>
+  <span class="field-value">{{ scalar(value) }}</span>
+</div>
+{%- endmacro %}
+
+{#
+  Recursively render any serialized value.
+
+  An *empty* container is itself a leaf: `cost: {}` renders as an explicit
+  "nothing recorded" row rather than vanishing, because a row that is simply
+  absent is indistinguishable from one nobody thought about (UP-005).
+#}
+{% macro node(path, label, value) -%}
+{%- set p = (path ~ '.') if path else '' -%}
+{%- if value is mapping -%}
+  {%- if value -%}
+<section class="group" data-group="{{ path }}">
+  <h3 class="group-title">{{ label }}</h3>
+  {% for key, item in value.items() %}{{ node(p ~ key, humanize(key), item) }}{% endfor %}
+</section>
+  {%- else -%}{{ leaf(path, label, none) }}{%- endif -%}
+{%- elif value is sequence and value is not string -%}
+  {%- if value -%}
+<section class="group list" data-group="{{ path }}">
+  <h3 class="group-title">{{ label }} <span class="count">({{ value|length }})</span></h3>
+  {% for item in value %}{{ node(p ~ loop.index0, label ~ ' ' ~ loop.index, item) }}{% endfor %}
+</section>
+  {%- else -%}{{ leaf(path, label, none) }}{%- endif -%}
+{%- else -%}{{ leaf(path, label, value) }}
+{%- endif -%}
+{%- endmacro %}
+
+{#
+  The health badge. Bespoke because FR-003's seven states (plus the two the
+  foundation had to add) are the one thing SC-001 asks a user to read at a
+  glance, and a plain key/value row does not read at a glance.
+#}
+{% macro health_badge(path, health) -%}
+{%- set p = (path ~ '.') if path else '' -%}
+<div class="health health-{{ health.state }}" data-field="{{ p }}state">
+  <span class="health-dot"></span>
+  <span class="health-state">{{ health.state.replace('_', ' ') }}</span>
+</div>
+{%- endmacro %}
+
+{#
+  A capture, beside the numbers (UP-009, FR-031).
+
+  When unavailable it still renders -- explicitly, with its reason -- because
+  FR-034 and SC-015 both require the structured panels to render normally with
+  the capture marked unavailable, never a turn that looks broken.
+#}
+{% macro capture_figure(path, capture) -%}
+{%- set p = (path ~ '.') if path else '' -%}
+<figure class="capture" data-group="{{ path }}">
+  {% if capture.available and capture.image_url %}
+  <img class="capture-image"
+       data-field="{{ p }}image_url"
+       src="{{ capture.image_url }}"
+       loading="lazy"
+       alt="Screen capture for turn {{ capture.turn_number }}">
+  {% else %}
+  <div class="capture-unavailable">
+    <span class="capture-unavailable-mark">no capture shown</span>
+    <span data-field="{{ p }}image_url">{{ scalar(capture.image_url) }}</span>
+    <span class="capture-unavailable-reason" data-field="{{ p }}unavailable_reason">
+      {{ capture.unavailable_reason or 'missing_record' }}
+    </span>
+  </div>
+  {% endif %}
+  <figcaption>
+    {{ leaf(p ~ 'available', 'Available', capture.available) }}
+    {{ leaf(p ~ 'capture_id', 'Capture', capture.capture_id) }}
+    {{ leaf(p ~ 'captured_at', 'Captured at', capture.captured_at) }}
+    {{ leaf(p ~ 'turn_number', 'Turn', capture.turn_number) }}
+    {{ leaf(p ~ 'screening_status', 'Screening status', capture.screening_status) }}
+    {% if capture.available %}{{ leaf(p ~ 'unavailable_reason', 'Unavailable reason', none) }}{% endif %}
+    {{ node(p ~ 'unavailable', 'Unavailable fields', capture.unavailable) }}
+  </figcaption>
+</figure>
+{%- endmacro %}
+
+{#
+  Reasoning, per data-model.md SS8's Validation clause: empty renders as an
+  explicit "no reasoning recorded" label, long renders truncated with an expand
+  affordance. The full text is always in the same response either way.
+#}
+{% macro reasoning_block(path, decision) -%}
+{%- set p = (path ~ '.') if path else '' -%}
+<div class="reasoning">
+  {{ leaf(p ~ 'reasoning_is_empty', 'Reasoning recorded', decision.reasoning_is_empty) }}
+  {% if decision.reasoning_is_empty %}
+  <p class="reasoning-empty" data-field="{{ p }}reasoning_label">{{ decision.reasoning_label }}</p>
+  <span class="hidden" data-field="{{ p }}reasoning">{{ scalar(decision.reasoning) }}</span>
+  <span class="hidden" data-field="{{ p }}reasoning_preview">{{ scalar(decision.reasoning_preview) }}</span>
+  {% elif decision.reasoning_is_truncated %}
+  <p class="reasoning-label" data-field="{{ p }}reasoning_label">{{ decision.reasoning_label }}</p>
+  <p class="reasoning-preview" data-field="{{ p }}reasoning_preview">{{ decision.reasoning_preview }}</p>
+  <details class="reasoning-expand">
+    <summary>Show the full reasoning</summary>
+    <p data-field="{{ p }}reasoning">{{ decision.reasoning }}</p>
+  </details>
+  {% else %}
+  <p class="reasoning-label" data-field="{{ p }}reasoning_label">{{ decision.reasoning_label }}</p>
+  <p class="reasoning-full" data-field="{{ p }}reasoning">{{ decision.reasoning }}</p>
+  <span class="hidden" data-field="{{ p }}reasoning_preview">{{ decision.reasoning_preview }}</span>
+  {% endif %}
+  {{ leaf(p ~ 'reasoning_is_truncated', 'Truncated in this panel', decision.reasoning_is_truncated) }}
+</div>
+{%- endmacro %}
+
+{#
+  The decision, with the evidence it is never shown without (UP-004), and with
+  the out-of-game cost & latency panel visually separated from the in-game
+  observation panels (data-model.md SS8 Validation).
+#}
+{% macro decision_panel(path, decision) -%}
+{%- set p = (path ~ '.') if path else '' -%}
+{% if decision %}
+<div class="decision" data-group="{{ path }}">
+  <div class="decision-action">
+    {{ leaf(p ~ 'action_label', 'Action', decision.action_label) }}
+    {{ leaf(p ~ 'action_declaration_id', 'Declaration', decision.action_declaration_id) }}
+    {{ leaf(p ~ 'action_label_is_declaration_id', 'Label is the raw declaration id',
+            decision.action_label_is_declaration_id) }}
+    {{ leaf(p ~ 'is_end_turn', 'Ends the turn', decision.is_end_turn) }}
+    {{ leaf(p ~ 'execution_outcome', 'Execution outcome', decision.execution_outcome) }}
+    {{ leaf(p ~ 'rejection_reason', 'Rejection reason', decision.rejection_reason) }}
+    {{ leaf(p ~ 'parity_basis', 'Parity basis', decision.parity_basis) }}
+    {{ node(p ~ 'parameters', 'Parameters', decision.parameters) }}
+  </div>
+  {{ reasoning_block(path, decision) }}
+  <div class="telemetry" data-group="{{ p }}model_call">
+    <h3 class="telemetry-title">Cost &amp; latency <span class="telemetry-tag">out of game</span></h3>
+    {{ leaf(p ~ 'model_call.category', 'Category', decision.model_call.category) }}
+    {{ leaf(p ~ 'model_call.model_served', 'Model served', decision.model_call.model_served) }}
+    {{ leaf(p ~ 'model_call.latency_ms', 'Latency (ms)', decision.model_call.latency_ms) }}
+    {{ leaf(p ~ 'model_call.fallback_occurred', 'Provider fallback',
+            decision.model_call.fallback_occurred) }}
+    {{ leaf(p ~ 'model_call.outcome', 'Outcome', decision.model_call.outcome) }}
+    {{ node(p ~ 'model_call.cost', 'Cost', decision.model_call.cost) }}
+    {{ node(p ~ 'model_call.unavailable', 'Unavailable fields', decision.model_call.unavailable) }}
+  </div>
+  {{ node(p ~ 'unavailable', 'Unavailable fields', decision.unavailable) }}
+</div>
+{% else %}
+{{ leaf(path, 'Decision', none) }}
+{% endif %}
+{%- endmacro %}
+
+{#
+  One decision step: the observation it was made from, the capture taken at it,
+  and the decision itself -- non-optional siblings, always rendered together.
+#}
+{% macro step_panel(path, step) -%}
+{%- set p = (path ~ '.') if path else '' -%}
+<article class="step" data-group="{{ path }}" id="step-{{ step.step_index }}">
+  <header class="step-header">
+    <h3>Step {{ step.step_index }}</h3>
+    {{ leaf(p ~ 'step_index', 'Step', step.step_index) }}
+    {{ leaf(p ~ 'run_id', 'Run', step.run_id) }}
+    {{ leaf(p ~ 'turn_number', 'Turn', step.turn_number) }}
+    {{ leaf(p ~ 'progress', 'Progress', step.progress) }}
+    <a class="ref" data-field="{{ p }}reference" href="{{ step.reference }}">{{ step.reference }}</a>
+  </header>
+  <div class="step-body">
+    <div class="step-observation">
+      <h3 class="observation-title">What the agent could see</h3>
+      {% if step.observation %}
+      {% for entry in step.observation %}
+      {% set ep = p ~ 'observation.' ~ loop.index0 ~ '.' %}
+      <div class="observation-entry">
+        {{ leaf(ep ~ 'label', 'Panel', entry.label) }}
+        {{ leaf(ep ~ 'panel_id', 'Panel id', entry.panel_id) }}
+        {{ node(ep ~ 'value', 'Value', entry.value) }}
+        <p class="parity-basis" data-field="{{ ep }}panel_basis">{{ entry.panel_basis }}</p>
+      </div>
+      {% endfor %}
+      {% else %}
+      {{ leaf(p ~ 'observation', 'Observation entries', none) }}
+      {% endif %}
+      {{ leaf(p ~ 'dropped_observation_count', 'Entries dropped (no registered panel)',
+              step.dropped_observation_count) }}
+    </div>
+    {{ capture_figure(p ~ 'capture', step.capture) }}
+  </div>
+  {{ decision_panel(p ~ 'decision', step.decision) }}
+  {{ node(p ~ 'unavailable', 'Unavailable fields', step.unavailable) }}
+</article>
+{%- endmacro %}
+
+{% macro turn_panel(path, turn) -%}
+{%- set p = (path ~ '.') if path else '' -%}
+{% if turn %}
+<section class="turn" data-group="{{ path }}">
+  <header class="turn-header">
+    <h2>Turn {{ turn.turn_number }}</h2>
+    {{ leaf(p ~ 'run_id', 'Run', turn.run_id) }}
+    {{ leaf(p ~ 'turn_number', 'Turn', turn.turn_number) }}
+    {{ leaf(p ~ 'attempt_index', 'Attempt', turn.attempt_index) }}
+    {{ leaf(p ~ 'is_authoritative', 'Authoritative', turn.is_authoritative) }}
+    {{ leaf(p ~ 'superseded_by', 'Superseded by attempt', turn.superseded_by) }}
+    {{ leaf(p ~ 'outcome', 'Outcome', turn.outcome) }}
+    {{ leaf(p ~ 'step_count', 'Recorded step count', turn.step_count) }}
+    {{ leaf(p ~ 'started_at', 'Started at', turn.started_at) }}
+    {{ leaf(p ~ 'ended_at', 'Ended at', turn.ended_at) }}
+    <a class="ref" data-field="{{ p }}reference" href="{{ turn.reference }}">{{ turn.reference }}</a>
+  </header>
+  {{ node(p ~ 'yields', 'Yields', turn.yields) }}
+  <section class="completeness{% if not turn.completeness.is_complete %} incomplete{% endif %}">
+    {{ leaf(p ~ 'completeness.is_complete', 'Record complete', turn.completeness.is_complete) }}
+    {{ leaf(p ~ 'completeness.is_gap', 'Recorded as a gap', turn.completeness.is_gap) }}
+    {{ node(p ~ 'completeness.missing_step_indices', 'Missing steps',
+            turn.completeness.missing_step_indices) }}
+  </section>
+  {{ node(p ~ 'step_window', 'Step window', turn.step_window) }}
+  {% if turn.steps %}
+  {% for step in turn.steps %}{{ step_panel(p ~ 'steps.' ~ loop.index0, step) }}{% endfor %}
+  {% else %}
+  {{ leaf(p ~ 'steps', 'Decision steps', none) }}
+  {% endif %}
+  {{ node(p ~ 'provenance', 'Provenance', turn.provenance) }}
+  {{ node(p ~ 'unavailable', 'Unavailable fields', turn.unavailable) }}
+</section>
+{% else %}
+{{ leaf(path, 'Current turn', none) }}
+{% endif %}
+{%- endmacro %}
+
+{#
+  FR-027 / UP-010: what the user needs to act *elsewhere*. There is deliberately
+  no control here, and none anywhere else on the page -- the view model itself
+  carries nothing a control could be wired to (invariant V9).
+#}
+{% macro intervention_panel(path, info) -%}
+{%- set p = (path ~ '.') if path else '' -%}
+<section class="intervention" data-group="{{ path }}">
+  <h2>To intervene, act through the harness</h2>
+  <p class="note">This interface reports; it never acts. Everything needed to act
+    elsewhere is below.</p>
+  {{ leaf(p ~ 'run_id', 'Run id', info.run_id) }}
+  {{ leaf(p ~ 'lifecycle_status', 'Lifecycle status', info.lifecycle_status) }}
+  {{ leaf(p ~ 'last_known_good_turn', 'Last known good turn', info.last_known_good_turn) }}
+  {{ leaf(p ~ 'last_known_good_save_id', 'Last known good save', info.last_known_good_save_id) }}
+  {{ leaf(p ~ 'last_known_good_save_name', 'Save name', info.last_known_good_save_name) }}
+  {{ node(p ~ 'unavailable', 'Unavailable fields', info.unavailable) }}
+</section>
+{%- endmacro %}

@@ -210,66 +210,152 @@ action taken, the stated reason for it, and the run's health at any moment.
 
 ### Implementation for User Story 1
 
-- [ ] T019 [P] [US1] Author `panels/live.yaml` declarations for the live/glance view (current-turn
+- [X] T019 [P] [US1] Author `panels/live.yaml` declarations for the live/glance view (current-turn
   overview fields, agent decision + reasoning, run header, intervention info) with a restated,
   non-empty `parity_basis` for every `category: in_game` entry, and `category: out_of_game_telemetry`
   with `parity_basis: null` for cost/latency fields (panel-registry P1/P2).
-- [ ] T020 [P] [US1] Implement `TurnCycleView` and `TurnCompleteness` in
+- [X] T020 [P] [US1] Implement `TurnCycleView` and `TurnCompleteness` in
   `src/civsim_web/viewmodels/turn.py` per data-model.md §5. Enforce verbatim: "A `TurnCycleView` for a
   turn number present in `turn_gaps()` is never constructed as if it were a normal turn."
-- [ ] T021 [P] [US1] Implement `DecisionStepView` and `ObservationEntryView` in
+- [X] T021 [P] [US1] Implement `DecisionStepView` and `ObservationEntryView` in
   `src/civsim_web/viewmodels/step.py` per data-model.md §6. Enforce verbatim: "an
   `ObservationEntry.declaration_id` that does not resolve to a Panel Registry entry is dropped, not
   passed through with a placeholder label."
-- [ ] T022 [P] [US1] Implement `CaptureView` in `src/civsim_web/viewmodels/capture.py` per
+- [X] T022 [P] [US1] Implement `CaptureView` in `src/civsim_web/viewmodels/capture.py` per
   data-model.md §7. Enforce the fail-closed rule verbatim: "`available` is computed as
   `screening_status == \"screened_clean\"`, full stop. Any other value ... resolves to
   `available = false`" — including a `screening_status` value this code does not recognize.
-- [ ] T023 [P] [US1] Implement `DecisionView` and `ModelCallView` in
+- [X] T023 [P] [US1] Implement `DecisionView` and `ModelCallView` in
   `src/civsim_web/viewmodels/decision.py` per data-model.md §8. Enforce verbatim: "an empty `reasoning`
   renders as an explicit 'no reasoning recorded' label ... a very long `reasoning` is truncated in the
   collapsed panel view with an expand affordance."
-- [ ] T024 [P] [US1] Implement `RunEventView` in `src/civsim_web/viewmodels/event.py` per
+- [X] T024 [P] [US1] Implement `RunEventView` in `src/civsim_web/viewmodels/event.py` per
   data-model.md §9.
-- [ ] T025 [US1] Implement `RunDetailView` in `src/civsim_web/viewmodels/run_detail.py` per
+- [X] T025 [US1] Implement `RunDetailView` in `src/civsim_web/viewmodels/run_detail.py` per
   data-model.md §3, assembling `summary`, `current_turn`, `latest_decision`,
   `last_confirmed_current_at`, `intervention_info`, and `recent_events`. A run with zero authoritative
   turns MUST populate `current_turn = None` rather than a placeholder value. Depends on T009, T020,
   T021, T022, T023, T024.
-- [ ] T026 [US1] Implement `GET /` and `GET /runs/{run_id}` in `src/civsim_web/routes/live.py`,
+- [X] T026 [US1] Implement `GET /` and `GET /runs/{run_id}` in `src/civsim_web/routes/live.py`,
   returning `RunDetailView` through T012's negotiation seam. Depends on T014, T025.
-- [ ] T027 [US1] Implement `GET /runs/{run_id}/turns/{turn_number}` and
+- [X] T027 [US1] Implement `GET /runs/{run_id}/turns/{turn_number}` and
   `GET /runs/{run_id}/turns/{turn_number}/steps/{step_index}` in `src/civsim_web/routes/turns.py`.
   Depends on T020, T021.
-- [ ] T028 [US1] Implement `GET /runs/{run_id}/events` in `src/civsim_web/routes/events.py`. Depends
+- [X] T028 [US1] Implement `GET /runs/{run_id}/events` in `src/civsim_web/routes/events.py`. Depends
   on T024.
-- [ ] T029 [US1] Implement `GET /captures/{capture_id}/image` in `src/civsim_web/routes/captures.py`,
+- [X] T029 [US1] Implement `GET /captures/{capture_id}/image` in `src/civsim_web/routes/captures.py`,
   returning `404` naming `unavailable_reason` whenever `CaptureView.available` is false. Depends on
   T022.
-- [ ] T030 [P] [US1] Author `templates/live/landing.html` and `templates/live/run_detail.html`
+- [X] T030 [P] [US1] Author `templates/live/landing.html` and `templates/live/run_detail.html`
   rendering `RunDetailView`: current turn, last decision + reasoning, health indicator, capture beside
   structured panels, and intervention info (`run_id`, `lifecycle_status`, last-known-good save/turn) —
   with an explicit empty state when `current_turn` is null, and with no control of any kind rendered
   anywhere on the page (FR-026, FR-027).
-- [ ] T031 [P] [US1] Author `static/poll.js`: polls `/runs/{run_id}` with `Accept: application/json`
+- [X] T031 [P] [US1] Author `static/poll.js`: polls `/runs/{run_id}` with `Accept: application/json`
   every 2 seconds (research R5), updates the DOM in place, refreshes the "last confirmed current at"
   indicator every successful poll, and silently continues after a missed poll with no manual reload
   required.
-- [ ] T032 [P] [US1] Author `static/style.css` for the landing and run-detail layout, including a
+- [X] T032 [P] [US1] Author `static/style.css` for the landing and run-detail layout, including a
   visually distinct treatment for the out-of-game "cost & latency" sub-panel versus in-game observation
   panels (data-model.md §8 Validation).
-- [ ] T033 [US1] Contract tests in `tests/contract/test_web_read_api.py`: JSON/HTML field parity for
+- [X] T033 [US1] Contract tests in `tests/contract/test_web_read_api.py`: JSON/HTML field parity for
   `GET /`, `GET /runs/{run_id}`, `GET /runs/{run_id}/turns/{turn_number}`, and
   `GET /runs/{run_id}/events`; and the `CaptureView.available` fail-closed matrix across
   `screened_clean`, `withheld`, a missing capture record, and one intentionally-unrecognized
   `screening_status` value. Depends on T026, T027, T028, T029.
-- [ ] T034 [US1] Integration tests in `tests/integration/test_live_view.py`: an `advancing_run` case
+- [X] T034 [US1] Integration tests in `tests/integration/test_live_view.py`: an `advancing_run` case
   (a fake store seeded to add a turn every few seconds; asserts each new turn appears within 5 seconds
   and that stopping advancement plus recording a `hang_detected` event surfaces `stalled` within 60
   seconds); and an `empty_state` case (zero authoritative turns renders an explicit empty state, never
   a blank panel). Depends on T026.
 
 **Checkpoint**: User Story 1 is fully functional and independently testable — this is the MVP.
+
+### US1 notes for Phase 4-6 contributors
+
+Written when T019–T034 landed. Read alongside the Foundation notes above.
+
+**What US1 added that later stories build on**
+
+- `routes/common.py` — `WebError`/`ErrorView` (raise this, **not** FastAPI's
+  `HTTPException`: the latter bypasses the negotiation seam and would answer a
+  browser with raw JSON), `load_run_context` (the read every run-scoped route
+  starts with, returning run + events + provenance), `require_store` (the
+  contract's blanket 503).
+- `routes/__init__.py` — `ROUTER_MODULES`. A new route is **one appended line
+  here**; `app.py` needs no further edit by any story.
+- `store_client/reads.py` — every store read composition, and the single place
+  the two optional capabilities are probed for. `highest_recorded_turn` and
+  `latest_authoritative_turn` live here.
+- `viewmodels/gate.py` — `GatedReader`. **Every view-model constructor reads
+  store fields through this**, which is what makes UP-001 structural; it also
+  accumulates the `UnavailableField` entries a model carries.
+- `registry/lookup.py` — `panel_for_observation_entry` / `panel_for_action`,
+  the `[declaration_id=…]` selector resolution behind SS6's drop rule.
+- `viewmodels/provenance.py` — `Provenance` (invariant V10's four strings) for
+  responses without a `RunSummaryView` to carry catalog versions.
+- `templates/_macros.html` — `node()` walks a model's serialized form and emits
+  `data-field="<json.path>"` per leaf. **A field added to a view model appears
+  on the page with no template edit**, which is what keeps T039's parity matrix
+  passing as models grow. Add bespoke markup only for values needing more than
+  a label (images, links, expanders).
+
+**Extending the two shared files**
+
+- `routes/turns.py` — its module docstring names exactly where T036 (`?attempt=`)
+  and T043 (step-window pagination) hook in. Both are query-parameter additions
+  forwarded to `build_turn_view`, which already accepts `attempt`,
+  `superseded_by`, `step_offset`, and `step_limit`. `TurnCycleView` already
+  carries `is_authoritative`, `superseded_by`, and `StepWindow` (including
+  `skipped_step_indices` for SS5's "no page may skip an index without marking
+  it"), so neither task needs a view-model change.
+- `tests/contract/test_web_read_api.py` — `ROUTES` is the parity matrix. T039's
+  "full matrix across every route registered so far" is discharged by appending
+  a `Route`, not by writing a second parity test. Add cases under your story's
+  banner section.
+
+**Findings recorded against the design artifacts**
+
+1. **`GET /captures/{id}/image` is implementable but leans on an optional
+   capability.** The published port resolves no `blob_ref` to bytes, so
+   `store_client/port.py` now declares a probed `CaptureBlobReader` alongside
+   `RunConfigurationReader`. A store without it gets a `503` naming the port
+   gap, distinct from the `404` a non-`screened_clean` capture gets. Reading
+   `blob_ref` off the filesystem was rejected — it would reach around the port
+   into 002's storage layout. **Raise with deliverable 3 alongside C1.**
+2. **`data-model.md` SS7's `unavailable_reason` enum has no value for the case
+   the same paragraph requires.** An unrecognized `screening_status` must fail
+   closed, but `withheld`/`capture_failed`/`never_captured`/`missing_record`
+   all assert something nobody recorded. `unrecognized_status` was added, in
+   the same spirit as the foundation's `HealthState.unknown`.
+3. **No published read answers "what turn is this run on".** FR-001's first
+   question. `highest_recorded_turn` composes `list_save_points` (Principle IV
+   guarantees a quicksave per turn) with a bounded `get_turn_cycle` probe. A
+   single indexed read would replace both — same conversation as C1.
+4. **`GET /runs/{id}/events` returns a wrapper, not a bare list.** The contract
+   says `list[RunEventView]`, but a bare list can carry neither the pagination
+   the same line asks for nor V10's provenance stamp. `RunEventPage` wraps it.
+5. **`DecisionView.action_label` has no registry-sourced label for most
+   actions.** SS8 wants the label from the registry, but the panel schema has
+   no per-action label field. `live.yaml` demonstrates the mechanism with
+   `[declaration_id=…]` selector panels for four actions; everything else falls
+   back to the raw declaration id and sets
+   `action_label_is_declaration_id: true` rather than inventing one.
+6. **`/runs/{id}/turns/{n}/steps/{i}` is a top-level response V10's enumeration
+   omits.** SS13 lists `RunDetailView`, `TurnCycleView`, `ComparisonView`, and
+   catalog listings. `DecisionStepView` carries no provenance, per that list.
+7. **`panels/VERSION` was not bumped.** `live.yaml` went from `[]` to 29
+   declarations, all `introduced_in_version: "1"`. No `panels/VERSION.lock`
+   exists, so version 1 is still under authorship and rule P6's freeze check is
+   not in force. US2/US3/US4 should likewise add to version 1 until someone
+   writes the lock file; after that, adding a panel means bumping VERSION.
+
+**One unnumbered file was added**: `tests/contract/test_web_parity_boundary.py`
+— the counterpart to `test_read_only_boundary.py` in the other direction. It
+asserts no module in `civsim_web` imports `civsim_harness` or holds an outbound
+HTTP client (so plan.md's "no code path back into 002's agent-context
+assembly" is checked rather than only claimed), plus quickstart Scenario 5's
+"no harness telemetry declared `in_game`".
 
 ---
 

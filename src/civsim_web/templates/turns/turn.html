@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  One turn's full record (T027; FR-014, UP-004).
+
+  The same `TurnCycleView` the directing session receives as JSON, rendered.
+  US3's replay view (T044) builds the navigation on top of this; the turn's own
+  content lives here so the two can never show different turns.
+#}
+
+{% block title %}Run {{ view.run_id }} &mdash; turn {{ view.turn_number }}{% endblock %}
+{% block root_attrs %} data-run-id="{{ view.run_id }}"{% endblock %}
+
+{% block content %}
+<article class="turn-page">
+  <nav class="crumbs">
+    <a href="/runs/{{ view.run_id }}">&larr; Run {{ view.run_id }}</a>
+    {% if view.turn_number > 1 %}
+    <a href="/runs/{{ view.run_id }}/turns/{{ view.turn_number - 1 }}">&larr; Turn {{ view.turn_number - 1 }}</a>
+    {% endif %}
+    <a href="/runs/{{ view.run_id }}/turns/{{ view.turn_number + 1 }}">Turn {{ view.turn_number + 1 }} &rarr;</a>
+  </nav>
+
+  {% if not view.is_authoritative %}
+  <p class="superseded-banner">
+    This is not the authoritative attempt for turn {{ view.turn_number }}.
+  </p>
+  {% endif %}
+
+  {{ m.turn_panel('', data) }}
+</article>
+{% endblock %}

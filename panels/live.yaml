@@ -9,8 +9,430 @@
 # Declarations are immutable within a version (rule P6). Changing one means
 # bumping panels/VERSION, not editing in place.
 #
-# Empty for now by design (T008): the loader needs a valid target from the
-# start, and each user story authors its own declarations -- live.yaml in US1
-# (T019), shared.yaml in US2 (T037), history.yaml in US3 (T040), catalog.yaml
-# in US4 (T048).
-[]
+# Authored by T019 (US1) for the live/glance view. Two categories appear below
+# and the split is the point:
+#
+#   category: in_game              -- information a human player obtains through
+#                                     Civ VI's standard UI. `parity_basis` names
+#                                     the in-client action, restated from 002's
+#                                     own ParityDeclaration in
+#                                     catalogs/observations/ and catalogs/actions/
+#                                     so SC-005's audit reads one document.
+#   category: out_of_game_telemetry -- harness operational data: model identity,
+#                                     cost, latency, errors, save lineage, run
+#                                     configuration (FR-013). `parity_basis` is
+#                                     null by rule P2, because this data has no
+#                                     in-client equivalent and must not acquire
+#                                     a fabricated one.
+
+# --------------------------------------------------------------------------
+# Run-scoped: the header, its configuration, the timeline, and FR-027's
+# intervention facts. All out-of-game telemetry -- FR-013 names run
+# configuration, save lineage, and harness errors explicitly.
+# --------------------------------------------------------------------------
+
+- panel_id: run.header
+  title: "Run Header"
+  story: [US1, US2, US3, US4]
+  scope: run
+  source_fields:
+    - Run.run_id
+    - Run.lifecycle_state
+    - Run.started_at
+    - Run.ended_at
+    - Run.record_completeness_status
+    - Run.comparability_status
+    - Run.observation_catalog_version
+    - Run.action_catalog_version
+    - Run.parent_run_id
+    - Run.parent_turn
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: run.configuration
+  title: "Run Configuration"
+  story: [US1, US4]
+  scope: run
+  source_fields:
+    - RunConfiguration.map_seed
+    - RunConfiguration.civilization
+    - RunConfiguration.leader
+    - RunConfiguration.ruleset
+    - RunConfiguration.model_config
+    - ModelConfig.primary
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: run.intervention
+  title: "Intervention Information"
+  story: [US1, US2]
+  scope: run
+  source_fields:
+    - SavePoint.save_point_id
+    - SavePoint.turn_number
+    - SavePoint.save_name
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: run.timeline
+  title: "Run Timeline"
+  story: [US1, US3]
+  scope: run
+  source_fields:
+    - RunEvent.event_id
+    - RunEvent.event_type
+    - RunEvent.turn_number
+    - RunEvent.step_index
+    - RunEvent.occurred_at
+    - RunEvent.detail
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+# --------------------------------------------------------------------------
+# Turn-scoped: what a human reads off the HUD, and what only the harness knows
+# about how the turn was recorded.
+# --------------------------------------------------------------------------
+
+- panel_id: current_turn.number
+  title: "Current Turn"
+  story: [US1, US3]
+  scope: turn
+  source_fields:
+    - TurnCycle.turn_number
+  parity_basis: >-
+    Read the turn counter in the top bar of the in-game HUD.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: current_turn.yields
+  title: "Turn Yields"
+  story: [US1, US3, US4]
+  scope: turn
+  source_fields:
+    - TurnCycle.yields
+  parity_basis: >-
+    Read the per-turn yield totals from the resource bar across the top of the
+    in-game HUD, and the per-city breakdown from each city's own panel.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: turn.record
+  title: "Turn Record"
+  story: [US1, US2, US3]
+  scope: turn
+  source_fields:
+    - TurnCycle.run_id
+    - TurnCycle.attempt_index
+    - TurnCycle.is_authoritative
+    - TurnCycle.outcome
+    - TurnCycle.step_count
+    - TurnCycle.started_at
+    - TurnCycle.ended_at
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: step.record
+  title: "Decision Step"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - DecisionStep.step_index
+    - DecisionStep.progress
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+# --------------------------------------------------------------------------
+# Step-scoped observations. One panel per 002 observation declaration, keyed by
+# the `[declaration_id=...]` selector: an ObservationEntry whose declaration_id
+# matches none of these is dropped, not rendered with a placeholder label
+# (data-model.md SS6). Each parity_basis is restated from the matching
+# declaration in catalogs/observations/.
+# --------------------------------------------------------------------------
+
+- panel_id: observation.turn_state
+  title: "Turn State"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=game.turn_state]
+  parity_basis: >-
+    Look at the turn counter in the top bar and whether the end-turn button is
+    enabled (it is only enabled during the local player's own turn).
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.screen_state
+  title: "Screen State"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=game.screen_state]
+  parity_basis: >-
+    Look at whichever screen or panel is currently open on the local player's
+    own display -- obvious to any human player observing their own screen.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.cities
+  title: "Cities"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=cities.state]
+  parity_basis: >-
+    Look at city banners on the map and open a city's production/purchase panel
+    for full detail on an owned city.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.units
+  title: "Units"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=units.state]
+  parity_basis: >-
+    Look at unit flags on the map and the unit panel for a selected unit;
+    movement range and available promotions are exactly what that panel
+    highlights.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.map
+  title: "Map"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=map.state]
+  parity_basis: >-
+    Look at the revealed portion of the map on the main map view or minimap,
+    and hover a revealed plot to see its terrain, feature, resource, and
+    improvement in the plot tooltip.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.research
+  title: "Research & Civics"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=research.state]
+  parity_basis: >-
+    Open the Research or Civics tree screen and look at the highlighted current
+    item and the set of unlocked, researchable entries.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.government
+  title: "Government"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=government.state]
+  parity_basis: >-
+    Open the Government screen and look at the current government, the policy
+    card slots, and the governors panel.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.religion
+  title: "Religion"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=religion.state]
+  parity_basis: >-
+    Open the Religion overview screen for the local player's own
+    pantheon/religion/beliefs, and read a city banner or the religion
+    overview's per-city breakdown for a visible city's majority religion.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.great_people
+  title: "Great People"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=great_people.state]
+  parity_basis: >-
+    Open the Great People screen and read the currently recruitable individuals
+    and the local player's own point totals per class.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.diplomacy
+  title: "Diplomacy"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=diplomacy.state]
+  parity_basis: >-
+    Open the Diplomacy overview (or the leader list) and read each met
+    civilization's relationship status.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.espionage
+  title: "Espionage"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=espionage.state]
+  parity_basis: >-
+    Open the Espionage panel and look at the local player's own spy list and
+    their assigned missions.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: observation.congress
+  title: "World Congress"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Observation.entries[declaration_id=congress.state]
+  parity_basis: >-
+    Open the World Congress screen while a session is active and read the
+    currently proposed resolutions.
+  category: in_game
+  introduced_in_version: "1"
+
+# --------------------------------------------------------------------------
+# Step-scoped: the decision, its reasoning, and what the model call cost.
+#
+# `decision.action` is declared before the per-action label panels below, so a
+# view model asking "what is the basis for Decision.action_declaration_id?"
+# gets the general action basis; the per-action panels are reached only through
+# their `[declaration_id=...]` selector, which is how an action acquires a
+# human-facing label instead of showing its raw id.
+# --------------------------------------------------------------------------
+
+- panel_id: decision.action
+  title: "Agent Decision"
+  story: [US1, US2, US3]
+  scope: step
+  source_fields:
+    - Decision.action_declaration_id
+    - Decision.parameters
+    - Decision.is_end_turn
+    - Decision.execution
+    - ActionExecution.outcome
+    - ActionExecution.rejection_reason
+  parity_basis: >-
+    Issue the same order through the game's standard UI -- select the unit,
+    city, or screen the order targets and click the corresponding command --
+    and read whether it was accepted from the map and the HUD.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: decision.reasoning
+  title: "Agent Reasoning"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Decision.reasoning
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: decision.model_call
+  title: "Model Call Cost & Latency"
+  story: [US1, US2, US3]
+  scope: step
+  source_fields:
+    - ModelCall.model_served
+    - ModelCall.latency_ms
+    - ModelCall.cost
+    - ModelCall.fallback_occurred
+    - ModelCall.outcome
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"
+
+- panel_id: action.units.found_city
+  title: "Found City"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Decision.action_declaration_id[declaration_id=units.found_city]
+  parity_basis: >-
+    Select a settler unit and click the "Found City" command in its unit action
+    panel.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: action.units.move_to
+  title: "Move Unit"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Decision.action_declaration_id[declaration_id=units.move_to]
+  parity_basis: >-
+    Select the unit, then left-click a reachable plot within its movement range
+    (or its multi-turn path indicator).
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: action.units.promote
+  title: "Promote Unit"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Decision.action_declaration_id[declaration_id=units.promote]
+  parity_basis: >-
+    Select a unit with an available promotion and click that promotion in its
+    promotion tree panel.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: action.turn.end_turn
+  title: "End Turn"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - Decision.action_declaration_id[declaration_id=turn.end_turn]
+  parity_basis: >-
+    Click the end-turn button in the lower-right action panel, or press its
+    hotkey.
+  category: in_game
+  introduced_in_version: "1"
+
+# --------------------------------------------------------------------------
+# Step-scoped: the capture beside the numbers (UP-009, FR-031).
+#
+# The image itself is in-game -- it is the player's own screen. The *screening
+# decision* about it is not: `screening_status` and `withheld_reason` are
+# harness telemetry describing what the screening gate concluded, never what a
+# withheld image contained.
+# --------------------------------------------------------------------------
+
+- panel_id: capture.screen
+  title: "Screen Capture"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - ScreenCapture.capture_id
+    - ScreenCapture.captured_at
+    - ScreenCapture.turn_number
+  parity_basis: >-
+    Look at the game's own screen at that moment -- the capture is the local
+    player's own view, and it is shown only when screening has cleared it of
+    non-player UI.
+  category: in_game
+  introduced_in_version: "1"
+
+- panel_id: capture.screening
+  title: "Capture Screening"
+  story: [US1, US3]
+  scope: step
+  source_fields:
+    - ScreenCapture.screening_status
+    - ScreenCapture.withheld_reason
+  parity_basis: null
+  category: out_of_game_telemetry
+  introduced_in_version: "1"

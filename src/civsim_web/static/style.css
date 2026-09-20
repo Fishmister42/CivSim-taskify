@@ -1,0 +1,209 @@
+/*
+ * Layout for the landing and run-detail views (T032).
+ *
+ * The one rule here that is a requirement rather than a preference: the
+ * out-of-game "cost & latency" sub-panel is given a visually distinct
+ * treatment from the in-game observation panels (data-model.md SS8 Validation,
+ * FR-013). The two categories appear on the same page and a reader must never
+ * have to guess which they are looking at -- so telemetry is dashed, cool, and
+ * explicitly tagged, while in-game observation panels are solid and warm and
+ * carry their parity basis underneath.
+ *
+ * No rule in this file styles a control, because there are none to style
+ * (FR-026, UP-010).
+ *
+ * Target is a wide desktop browser (spec Assumptions); a phone layout is out of
+ * scope, though nothing here breaks on a narrow viewport.
+ */
+
+:root {
+  --bg: #12141a;
+  --panel: #1b1e27;
+  --panel-2: #222633;
+  --ink: #e7e9ee;
+  --ink-dim: #99a0b0;
+  --line: #2e3342;
+  --in-game: #c9a227;
+  --telemetry: #5aa0c4;
+  --ok: #4cae7a;
+  --warn: #d6a13a;
+  --bad: #cc5b5b;
+  --unknown: #7d8494;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: #8ab4f8; }
+
+main { padding: 0 1.25rem 3rem; max-width: 1600px; margin: 0 auto; }
+
+/* -- chrome -------------------------------------------------------------- */
+
+.site-header {
+  display: flex; align-items: baseline; gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.site-title { font-weight: 700; text-decoration: none; letter-spacing: 0.02em; }
+.site-note, .site-footer-note { color: var(--ink-dim); font-size: 0.85rem; }
+.site-footer { padding: 1rem 1.25rem; border-top: 1px solid var(--line); }
+.crumbs { display: flex; gap: 1rem; padding: 0.75rem 0; }
+.more-links { margin-top: 1.5rem; }
+
+/* -- the glance (UP-003, SC-001) ----------------------------------------- */
+
+.glance {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) auto minmax(20rem, 2fr) auto;
+  gap: 1.5rem;
+  align-items: start;
+  padding: 1.25rem;
+  margin: 1.25rem 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.glance h1 { margin: 0 0 0.35rem; font-size: 1.15rem; font-family: ui-monospace, monospace; }
+.glance-label { display: block; color: var(--ink-dim); font-size: 0.78rem; text-transform: uppercase; }
+.glance-value { font-size: 1.35rem; font-weight: 600; }
+.glance-reasoning { margin: 0.35rem 0 0; color: var(--ink-dim); }
+.lifecycle { color: var(--ink-dim); font-family: ui-monospace, monospace; font-size: 0.85rem; }
+
+/* Health, at a glance -- FR-003's vocabulary, one colour per state. */
+.health { display: inline-flex; align-items: center; gap: 0.4rem; font-weight: 600; }
+.health-dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--unknown); }
+.health-running .health-dot { background: var(--ok); }
+.health-finished .health-dot { background: var(--ok); }
+.health-waiting_on_model .health-dot,
+.health-waiting_on_game .health-dot,
+.health-resumed .health-dot,
+.health-paused .health-dot { background: var(--warn); }
+.health-stalled .health-dot, .health-crashed .health-dot { background: var(--bad); }
+.health-stalled, .health-crashed { color: var(--bad); }
+
+.stale-marker { display: block; margin-top: 0.4rem; color: var(--warn); font-size: 0.85rem; }
+[data-stale="true"] .glance { border-color: var(--warn); }
+
+/* -- honest states ------------------------------------------------------- */
+
+.empty-state {
+  padding: 1.5rem; margin: 1.25rem 0;
+  border: 1px dashed var(--line); border-radius: 10px; color: var(--ink-dim);
+}
+.none { color: var(--unknown); }
+.completeness.incomplete { border-left: 3px solid var(--warn); padding-left: 0.75rem; }
+.superseded-banner {
+  padding: 0.75rem 1rem; border-left: 3px solid var(--warn);
+  background: var(--panel); color: var(--warn);
+}
+
+/* -- generic field rendering --------------------------------------------- */
+
+.field {
+  display: grid; grid-template-columns: minmax(10rem, 22%) 1fr;
+  gap: 0.75rem; padding: 0.2rem 0; border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.field-key { color: var(--ink-dim); font-size: 0.85rem; }
+.field-value { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.88rem; word-break: break-word; }
+.hidden { display: none; }
+
+.group {
+  margin: 0.75rem 0; padding: 0.75rem 1rem;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+}
+.group .group { background: var(--panel-2); }
+.group-title { margin: 0 0 0.5rem; font-size: 0.82rem; text-transform: uppercase; color: var(--ink-dim); letter-spacing: 0.04em; }
+.count { color: var(--unknown); }
+
+/* -- turn and step ------------------------------------------------------- */
+
+.turn, .step, .intervention, .evidence, .detail { margin: 1.25rem 0; }
+.turn-header h2, .step-header h3 { margin: 0 0 0.5rem; }
+.step {
+  padding: 1rem; background: var(--panel);
+  border: 1px solid var(--line); border-left: 3px solid var(--in-game); border-radius: 8px;
+}
+.step-body { display: grid; grid-template-columns: 1fr minmax(18rem, 34%); gap: 1.25rem; }
+.observation-title { margin: 0 0 0.5rem; font-size: 0.82rem; text-transform: uppercase; color: var(--in-game); }
+.observation-entry { padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
+
+/* The in-client action behind the panel, always visible -- FR-012's
+ * "auditable panel by panel" is not auditable if it is hidden behind a hover. */
+.parity-basis {
+  margin: 0.35rem 0 0; font-size: 0.82rem; color: var(--ink-dim);
+  border-left: 2px solid var(--in-game); padding-left: 0.6rem;
+}
+
+/* -- the capture, beside the numbers (UP-009) ---------------------------- */
+
+.capture { margin: 0; }
+.capture-image { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; }
+.capture-unavailable {
+  display: flex; flex-direction: column; gap: 0.25rem; align-items: center; justify-content: center;
+  min-height: 9rem; padding: 1rem; color: var(--ink-dim);
+  border: 1px dashed var(--line); border-radius: 6px;
+}
+.capture-unavailable-reason { font-family: ui-monospace, monospace; color: var(--warn); }
+
+/* -- decision, reasoning, and the out-of-game telemetry split ------------ */
+
+.decision { margin-top: 1rem; }
+.reasoning { margin: 0.75rem 0; padding: 0.75rem 1rem; background: var(--panel-2); border-radius: 8px; }
+.reasoning-empty { color: var(--unknown); font-style: italic; margin: 0; }
+.reasoning-label { margin: 0 0 0.35rem; font-weight: 600; }
+.reasoning-preview, .reasoning-full { margin: 0; white-space: pre-wrap; }
+.reasoning-expand summary { cursor: pointer; color: var(--ink-dim); margin-top: 0.5rem; }
+
+/*
+ * FR-013 / data-model.md SS8: harness telemetry is visually distinct from
+ * in-game observation. Dashed border, cool accent, explicit tag -- deliberately
+ * unlike the solid, warm, parity-basis-bearing observation panels above.
+ */
+.telemetry {
+  margin: 0.75rem 0; padding: 0.75rem 1rem;
+  border: 1px dashed var(--telemetry); border-radius: 8px;
+  background: rgba(90, 160, 196, 0.06);
+}
+.telemetry-title { margin: 0 0 0.5rem; font-size: 0.82rem; text-transform: uppercase; color: var(--telemetry); }
+.telemetry-tag {
+  margin-left: 0.5rem; padding: 0.05rem 0.4rem; border: 1px solid var(--telemetry);
+  border-radius: 999px; font-size: 0.7rem; letter-spacing: 0.04em;
+}
+
+/* -- intervention: information, never a control (UP-010) ----------------- */
+
+.intervention {
+  padding: 1rem 1.25rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.intervention h2 { margin: 0 0 0.35rem; font-size: 1rem; }
+.note { color: var(--ink-dim); font-size: 0.85rem; margin: 0 0 0.75rem; }
+
+/* -- timeline ------------------------------------------------------------ */
+
+.timeline { list-style: none; margin: 0; padding: 0; }
+.timeline-event {
+  padding: 0.75rem 1rem; margin-bottom: 0.5rem;
+  background: var(--panel); border-left: 3px solid var(--telemetry); border-radius: 6px;
+}
+.timeline-when { color: var(--ink-dim); font-family: ui-monospace, monospace; font-size: 0.85rem; margin-right: 0.75rem; }
+.timeline-what { font-weight: 600; }
+.timeline-crash_detected, .timeline-hang_detected, .timeline-unresponsive_detected { border-left-color: var(--bad); }
+.timeline-resumed { border-left-color: var(--ok); }
+.pager { display: flex; gap: 1rem; margin-top: 1rem; }
+
+/* -- run chooser and errors ---------------------------------------------- */
+
+.run-chooser { list-style: none; padding: 0; }
+.run-chooser li { display: flex; gap: 1rem; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
+.error h1 { color: var(--bad); }
+.error-message { color: var(--ink-dim); max-width: 60ch; }
+.ref { font-family: ui-monospace, monospace; font-size: 0.8rem; color: var(--ink-dim); }

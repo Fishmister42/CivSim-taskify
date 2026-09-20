@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  `GET /` when it cannot resolve to a single run (T030).
+
+  With exactly one active run, `/` redirects to `/runs/{run_id}` -- the route
+  contract's own words. This page covers the two cases that have nowhere to
+  redirect to:
+
+  - several runs are active, so the interface asks which rather than picking
+    one (spec Edge Cases: the user can tell which run they are looking at at
+    all times, and the live view never mixes turns from different runs);
+  - none is active, which is an explanatory empty state and not an error.
+#}
+
+{% block title %}CivSim &mdash; active runs{% endblock %}
+
+{% block content %}
+<article class="landing">
+  {% if view.empty_state_reason %}
+  <section class="empty-state">
+    <h1>Nothing is running</h1>
+    <p data-field="empty_state_reason">{{ view.empty_state_reason }}</p>
+  </section>
+  {% else %}
+  <h1>Active runs</h1>
+  <p class="note">More than one run is active. Open the one you mean &mdash; the
+    live view never mixes turns from different runs.</p>
+  {{ m.leaf('empty_state_reason', 'Empty state', none) }}
+  <ul class="run-chooser">
+    {% for run in view.active_runs %}
+    <li>
+      <a href="/runs/{{ run.run_id }}">{{ run.run_id }}</a>
+      {{ m.health_badge('active_runs.' ~ loop.index0 ~ '.health', data.active_runs[loop.index0].health) }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <section class="detail">
+    {{ m.node('active_runs', 'Active runs', data.active_runs) }}
+    {{ m.leaf('last_confirmed_current_at', 'Last confirmed current at',
+              data.last_confirmed_current_at) }}
+    {{ m.node('panel_registry', 'Panel registry in force', data.panel_registry) }}
+  </section>
+</article>
+{% endblock %}

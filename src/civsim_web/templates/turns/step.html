@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  One decision step (T027).
+
+  The same object the step occupies inside its turn -- selected from the turn's
+  own view rather than rebuilt -- so opening a step directly and scrolling to it
+  inside its turn can never show different content (invariant V8).
+#}
+
+{% block title %}Run {{ view.run_id }} &mdash; turn {{ view.turn_number }}, step {{ view.step_index }}{% endblock %}
+{% block root_attrs %} data-run-id="{{ view.run_id }}"{% endblock %}
+
+{% block content %}
+<article class="step-page">
+  <nav class="crumbs">
+    <a href="/runs/{{ view.run_id }}">&larr; Run {{ view.run_id }}</a>
+    <a href="/runs/{{ view.run_id }}/turns/{{ view.turn_number }}">&larr; Turn {{ view.turn_number }}</a>
+  </nav>
+  {{ m.step_panel('', data) }}
+</article>
+{% endblock %}

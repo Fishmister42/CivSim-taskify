@@ -30,6 +30,8 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 from civsim_web.negotiate.respond import respond
 from civsim_web.net.bind import resolve_bind_addresses
 from civsim_web.registry.loader import PanelRegistry, load_panel_registry
+from civsim_web.routes import include_routers
+from civsim_web.routes.common import ERROR_TEMPLATE, WebError
 from civsim_web.store_client.port import MatchStore
 from civsim_web.viewmodels.base import PanelRegistryVersion, ViewModel
 
@@ -194,4 +196,23 @@ def create_app(
         # unreachable store look like a broken endpoint.
         return respond(request, view)
 
+    @app.exception_handler(WebError)
+    def web_error(request: Request, exc: Exception) -> Response:
+        """Errors go through the *same* seam as successes.
+
+        A 404 rendered as a page for the browser and as JSON for the directing
+        session is still one view model serialized two ways, so Principle VI
+        holds on the unhappy path too -- the two parties never get different
+        accounts of why something is not there.
+        """
+        error = exc if isinstance(exc, WebError) else WebError(500, _unexpected(exc))
+        return respond(request, error.view, ERROR_TEMPLATE, status_code=error.status_code)
+
+    include_routers(app)
     return app
+
+
+def _unexpected(exc: Exception) -> Any:
+    from civsim_web.routes.common import ErrorView
+
+    return ErrorView(kind="internal_error", message=str(exc))

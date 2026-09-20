@@ -45,6 +45,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 
 __all__ = [
+    "CaptureBlobReader",
     "CaptureId",
     "MatchStore",
     "ModelConfigLike",
@@ -289,6 +290,37 @@ class RunConfigurationReader(Protocol):
 
     def get_run_configuration(self, config_id: str) -> RunConfigurationLike | None:
         """Resolve a ``Run.config_id`` to its recorded configuration."""
+        ...
+
+
+class CaptureBlobReader(Protocol):
+    """A second **optional** capability, and the second half of the same gap.
+
+    ``get_capture`` returns the capture *record*, carrying ``blob_ref`` -- a
+    content address. The published ``match-store-port.md`` has no operation that
+    resolves that address to bytes, so ``GET /captures/{id}/image`` (T029) has
+    nothing to serve from the port as published.
+
+    Probed for rather than required, exactly as ``RunConfigurationReader`` is. A
+    store that offers it serves images; a store that does not gets an honest
+    "this store cannot resolve capture blobs" response naming the port gap,
+    never a placeholder image standing in for the real one -- which
+    contracts/web-read-api.md rules out explicitly, since a placeholder could be
+    mistaken for content.
+
+    The alternative -- reading ``blob_ref`` off the record and opening the file
+    ourselves -- is deliberately not taken. It would reach around the port into
+    002's storage layout, which is precisely the coupling plan.md's "pure reader
+    of the MatchStore port" constraint exists to prevent, and it would make this
+    process's correctness depend on a path convention nobody published.
+
+    **This is a dependency to raise with deliverable 3, not a decision taken
+    here.** When the port publishes a blob read, this Protocol should be deleted
+    and ``MatchStore`` widened to match.
+    """
+
+    def get_capture_blob(self, capture_id: CaptureId) -> bytes | None:
+        """Resolve a capture's ``blob_ref`` to its image bytes."""
         ...
 
 

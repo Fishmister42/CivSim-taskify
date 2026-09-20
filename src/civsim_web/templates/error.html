@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  Errors go through the same content-negotiation seam as successes, so the page
+  a user sees and the JSON the directing session receives are one view model
+  serialized twice -- Principle VI on the unhappy path too. The two must never
+  get different accounts of why something is not there.
+
+  `kind` is the part that matters most: contracts/web-read-api.md requires a
+  client be able to tell "store unreachable" from "run not found", and a
+  recorded gap from a turn that never existed, without parsing prose.
+#}
+
+{% block title %}{{ view.kind }}{% endblock %}
+
+{% block content %}
+<article class="error">
+  <h1 data-field="kind">{{ view.kind.replace('_', ' ') }}</h1>
+  <p class="error-message" data-field="message">{{ view.message }}</p>
+  {{ m.leaf('error', 'Error', data.error) }}
+  {{ m.leaf('run_id', 'Run', data.run_id) }}
+  {{ m.leaf('turn_number', 'Turn', data.turn_number) }}
+  {{ m.node('detail', 'Detail', data.detail) }}
+  <p class="more-links"><a href="/">Back to the live view</a></p>
+</article>
+{% endblock %}

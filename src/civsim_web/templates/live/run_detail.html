@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  The live/glance view (T030, FR-001 - FR-006, FR-026, FR-027, FR-031).
+
+  UP-003: this page answers "what is happening right now and is it healthy"
+  with no interaction. The glance strip at the top carries the four facts
+  SC-001 times a user against -- current turn, last action, its stated reason,
+  and health -- and everything below it is drill-down.
+
+  Every field of `RunDetailView` is rendered, because the sections below walk
+  the serialized model itself (see `_macros.html`). A field added to the model
+  by a later story appears here with no edit to this file, which is what keeps
+  the JSON/HTML parity contract test honest as the models grow.
+#}
+
+{% block title %}Run {{ view.summary.run_id }} &mdash; turn {{ view.summary.turn_count }}{% endblock %}
+{% block root_attrs %} data-run-id="{{ view.summary.run_id }}" data-live="true"{% endblock %}
+
+{% block content %}
+<article class="run-detail">
+
+  {# ---- the glance (UP-003, SC-001) ------------------------------------ #}
+  <section class="glance">
+    <div class="glance-run">
+      <h1 data-field="summary.run_id">{{ view.summary.run_id }}</h1>
+      {{ m.health_badge('summary.health', data.summary.health) }}
+      <span class="lifecycle" data-field="summary.lifecycle_state">{{ view.summary.lifecycle_state }}</span>
+    </div>
+
+    <div class="glance-turn">
+      <span class="glance-label">Current turn</span>
+      <span class="glance-value" data-field="summary.turn_count">{{ view.summary.turn_count }}</span>
+    </div>
+
+    <div class="glance-decision">
+      <span class="glance-label">Last decision</span>
+      {% if view.latest_decision %}
+      <span class="glance-value" data-field="latest_decision.action_label">
+        {{ view.latest_decision.action_label }}
+      </span>
+      <p class="glance-reasoning" data-field="latest_decision.reasoning_label">
+        {{ view.latest_decision.reasoning_label }}
+      </p>
+      {% else %}
+      <span class="glance-value none">&mdash;</span>
+      {% endif %}
+    </div>
+
+    <div class="glance-currency">
+      <span class="glance-label">Last confirmed current at</span>
+      <span class="glance-value" id="currency" data-field="last_confirmed_current_at">
+        {{ view.last_confirmed_current_at }}
+      </span>
+      <span class="stale-marker" id="stale-marker" hidden>
+        connection lost &mdash; this view may be stale
+      </span>
+    </div>
+  </section>
+
+  {# ---- the empty state, said out loud (data-model.md SS3 Validation) --- #}
+  {% if view.empty_state_reason %}
+  <section class="empty-state">
+    <h2>No turns recorded yet</h2>
+    <p data-field="empty_state_reason">{{ view.empty_state_reason }}</p>
+  </section>
+  {% else %}
+  {{ m.leaf('empty_state_reason', 'Empty state', none) }}
+  {% endif %}
+
+  {# ---- the picture beside the numbers (UP-009, FR-031) ---------------- #}
+  {% if view.current_turn and view.current_turn.steps %}
+  <section class="evidence">
+    <h2>What the screen looked like</h2>
+    {{ m.capture_figure('current_turn.steps.' ~ (view.current_turn.steps|length - 1) ~ '.capture',
+                        data.current_turn.steps[-1].capture) }}
+  </section>
+  {% endif %}
+
+  {# ---- FR-027: what is needed to act elsewhere ------------------------ #}
+  {{ m.intervention_panel('intervention_info', data.intervention_info) }}
+
+  {# ---- the full record, field for field ------------------------------- #}
+  <section class="detail">
+    {{ m.node('summary', 'Run summary', data.summary) }}
+    {{ m.turn_panel('current_turn', data.current_turn) }}
+    {{ m.decision_panel('latest_decision', data.latest_decision) }}
+    {{ m.node('recent_events', 'Recent events', data.recent_events) }}
+    {{ m.leaf('last_confirmed_current_at', 'Last confirmed current at',
+              data.last_confirmed_current_at) }}
+    {{ m.node('panel_registry', 'Panel registry in force', data.panel_registry) }}
+  </section>
+
+  <p class="more-links">
+    <a href="/runs/{{ view.summary.run_id }}/events">Full timeline</a>
+  </p>
+</article>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/poll.js" defer></script>
+{% endblock %}

@@ -473,8 +473,21 @@ class FakeMatchStore:
             ok=False, detail=self._health_detail or "fake store marked unreachable"
         )
 
-    # -- optional capability (plan.md Complexity Tracking C1) ---------------
+    # -- optional capabilities (plan.md Complexity Tracking C1) -------------
 
     def get_run_configuration(self, config_id: str) -> RunConfigurationLike | None:
         """See ``port.RunConfigurationReader`` -- not a published port read."""
         return self._configurations.get(config_id)
+
+    def get_capture_blob(self, capture_id: CaptureId) -> bytes | None:
+        """See ``port.CaptureBlobReader`` -- not a published port read.
+
+        Returns the in-memory ``blob`` seeded on the record. **Screening is not
+        re-checked here**, deliberately: this is the store half of the seam and
+        it answers "can these bytes be resolved", while the decision about
+        whether anyone may look at them belongs to ``CaptureView``'s fail-closed
+        gate and is made before this is ever called. Putting the gate in two
+        places would invite the two copies to disagree.
+        """
+        record = self._captures.get(capture_id)
+        return None if record is None else record.blob

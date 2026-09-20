@@ -124,8 +124,17 @@ def make_turn_cycle(
     reasoning: str = "Settled the capital on the river for the housing and the aqueduct.",
     capture_status: str = "screened_clean",
     yields: dict[str, Any] | None = None,
+    action_declaration_id: str = "units.found_city",
+    observation_declaration_ids: Sequence[str] = ("game.turn_state", "cities.state"),
 ) -> Any:
-    """One turn attempt, with `step_count` fully-populated decision steps."""
+    """One turn attempt, with `step_count` fully-populated decision steps.
+
+    `observation_declaration_ids` are *real* declaration ids from 002's
+    `catalogs/observations/`, so the Panel Registry can resolve them to a panel.
+    A test that wants to exercise data-model.md SS6's drop rule ("an
+    `ObservationEntry.declaration_id` that does not resolve to a Panel Registry
+    entry is dropped") passes an id nobody registered.
+    """
     from civsim_web.store_client.fake import (
         FakeDecision,
         FakeDecisionStep,
@@ -166,12 +175,13 @@ def make_turn_cycle(
                 observation=FakeObservation(
                     observation_id=f"obs-{step_id}",
                     decision_step_id=step_id,
-                    entries=(
+                    entries=tuple(
                         FakeObservationEntry(
-                            declaration_id="cities.yields",
-                            key="capital.science_per_turn",
-                            value=4,
-                        ),
+                            declaration_id=declaration_id,
+                            key=declaration_id,
+                            value={"turn_number": turn_number, "science_per_turn": 4},
+                        )
+                        for declaration_id in observation_declaration_ids
                     ),
                     captures=(capture.capture_id,),
                     assembled_at=at(turn_number),
@@ -179,7 +189,7 @@ def make_turn_cycle(
                 decision=FakeDecision(
                     decision_id=f"dec-{step_id}",
                     decision_step_id=step_id,
-                    action_declaration_id="units.found_city",
+                    action_declaration_id=action_declaration_id,
                     model_call_id=f"mc-{step_id}",
                     reasoning=reasoning,
                 ),
@@ -224,34 +234,58 @@ def make_store(
     lifecycle_state: str = "playing",
     events: Sequence[Any] = (),
     healthy: bool = True,
+    capture_status: str = "screened_clean",
+    withheld_reason: str | None = None,
+    with_captures: bool = True,
+    with_configuration: bool = True,
+    step_count: int = 1,
+    reasoning: str | None = None,
+    turn_gaps: dict[str, list[int]] | None = None,
+    extra_runs: Sequence[Any] = (),
 ) -> Any:
     """A fake store holding one run with `turns` recorded turns.
 
     `turns=0` produces the "opened before the first turn was recorded" empty
-    state the spec's Edge Cases call out.
+    state the spec's Edge Cases call out. `capture_status` drives the
+    `CaptureView` fail-closed matrix (including a deliberately unrecognised
+    value); `with_captures=False` seeds the turn records without any capture
+    record at all, which is the `missing_record` case.
     """
     from civsim_web.store_client.fake import FakeMatchStore
 
     configuration = make_configuration()
     run = make_run(run_id, config_id=configuration.config_id, lifecycle_state=lifecycle_state)
-    records = [make_turn_cycle(n, run_id=run_id) for n in range(1, turns + 1)]
-    captures = [
-        _capture_for(record, position)
-        for record in records
-        for position in range(len(record.steps))
-    ]
+    kwargs: dict[str, Any] = {"step_count": step_count, "capture_status": capture_status}
+    if reasoning is not None:
+        kwargs["reasoning"] = reasoning
+    records = [make_turn_cycle(n, run_id=run_id, **kwargs) for n in range(1, turns + 1)]
+    captures = (
+        [
+            _capture_for(record, position, capture_status, withheld_reason)
+            for record in records
+            for position in range(len(record.steps))
+        ]
+        if with_captures
+        else []
+    )
     return FakeMatchStore(
-        runs=[run],
-        configurations=[configuration],
+        runs=[run, *extra_runs],
+        configurations=[configuration] if with_configuration else [],
         turn_cycles=records,
         events=list(events),
         save_points=[make_save_point(n, run_id=run_id) for n in range(1, turns + 1)],
         captures=captures,
         healthy=healthy,
+        turn_gaps=turn_gaps,
     )
 
 
-def _capture_for(record: Any, step_position: int) -> Any:
+def _capture_for(
+    record: Any,
+    step_position: int,
+    screening_status: str = "screened_clean",
+    withheld_reason: str | None = None,
+) -> Any:
     from civsim_web.store_client.fake import FakeScreenCapture
 
     bundle = record.steps[step_position]
@@ -260,9 +294,10 @@ def _capture_for(record: Any, step_position: int) -> Any:
         run_id=record.turn_cycle.run_id,
         turn_number=record.turn_cycle.turn_number,
         decision_step_id=bundle.step.decision_step_id,
-        screening_status="screened_clean",
+        screening_status=screening_status,
+        withheld_reason=withheld_reason,
         captured_at=bundle.step.started_at,
-        blob=b"\x89PNG\r\n\x1a\n",
+        blob=b"\x89PNG\r\n\x1a\n" if screening_status == "screened_clean" else None,
     )
 
 

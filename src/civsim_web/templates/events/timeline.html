@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{#
+  The run timeline (T028, FR-004).
+
+  Model-provider failures, retries, provider fallbacks, crash detection, and
+  save/resume points, in the order the store recorded them. This is what keeps
+  a stuck provider chain from reading as an unexplained pause on the live view
+  (spec Acceptance Scenario US1 SS5).
+#}
+
+{% block title %}Run {{ view.run_id }} &mdash; timeline{% endblock %}
+{% block root_attrs %} data-run-id="{{ view.run_id }}"{% endblock %}
+
+{% block content %}
+<article class="timeline-page">
+  <nav class="crumbs">
+    <a href="/runs/{{ view.run_id }}">&larr; Run {{ view.run_id }}</a>
+  </nav>
+
+  <h1>Run timeline</h1>
+
+  <ol class="timeline">
+    {% for event in view.events %}
+    {% set ep = 'events.' ~ loop.index0 ~ '.' %}
+    <li class="timeline-event timeline-{{ event.event_type }}">
+      <span class="timeline-when" data-field="{{ ep }}occurred_at">{{ event.occurred_at }}</span>
+      <span class="timeline-what" data-field="{{ ep }}event_type">{{ event.event_type }}</span>
+      {{ m.leaf(ep ~ 'event_id', 'Event id', event.event_id) }}
+      {{ m.leaf(ep ~ 'turn_number', 'Turn', event.turn_number) }}
+      {{ m.leaf(ep ~ 'step_index', 'Step', event.step_index) }}
+      {{ m.node(ep ~ 'detail', 'Detail', data.events[loop.index0].detail) }}
+      {{ m.node(ep ~ 'unavailable', 'Unavailable fields', data.events[loop.index0].unavailable) }}
+    </li>
+    {% endfor %}
+  </ol>
+  {% if not view.events %}
+  {{ m.leaf('events', 'Events', none) }}
+  <p class="empty-state">No events have been recorded for this run yet.</p>
+  {% endif %}
+
+  <section class="detail">
+    {{ m.leaf('run_id', 'Run id', data.run_id) }}
+    {{ m.leaf('page', 'Page', data.page) }}
+    {{ m.leaf('page_size', 'Page size', data.page_size) }}
+    {{ m.leaf('total', 'Total events', data.total) }}
+    {{ m.leaf('has_more', 'More pages', data.has_more) }}
+    {{ m.node('provenance', 'Provenance', data.provenance) }}
+  </section>
+
+  <nav class="pager">
+    {% if view.page > 1 %}
+    <a href="/runs/{{ view.run_id }}/events?page={{ view.page - 1 }}&amp;page_size={{ view.page_size }}">
+      &larr; Newer page</a>
+    {% endif %}
+    {% if view.has_more %}
+    <a href="/runs/{{ view.run_id }}/events?page={{ view.page + 1 }}&amp;page_size={{ view.page_size }}">
+      Older page &rarr;</a>
+    {% endif %}
+  </nav>
+</article>
+{% endblock %}
