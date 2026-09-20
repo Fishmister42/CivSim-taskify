@@ -123,12 +123,12 @@ until they exist.
 - [ ] T040 Implement archival and eligibility in `src/civsim_harness/store/sqlite_adapter.py` per contracts/match-store-port.md A1–A4: `archive_run` sets `Run.archived_at`, writes a `run_archived` event, and transitions that run's save points to `eligible`; it is rejected on a non-terminal run; **nothing else may set `archived_at` or produce an `eligible` save point** — no TTL, no age rule, no quota, no retention window, no thinning (FR-036)
 - [ ] T041 Port conformance suite in `tests/contract/test_match_store_port.py` asserting D1–D6, A1–A4, idempotency under repeated writes, parent-immutability rejection, `turn_gaps` **and `step_gaps`**, step-order preservation on read-back, authoritative-attempt selection, and that a failed write surfaces as a raise rather than a falsy return
 - [ ] T042 Adversarial store tests in `tests/contract/test_match_store_port.py`: a turn of several hundred steps round-trips with its order intact and no truncation, and a finished-but-unarchived run's save points never appear in `list_eligible_save_points()` no matter how old the run is (invariant I17)
-- [ ] T043 Define the `ModelProvider` Protocol plus `ModelCapabilities`, `DecisionRequest` (carrying `step_index`), and `DecisionResponse` (carrying a **singular** `decision`, not a list) in `src/civsim_harness/provider/port.py` exactly as specified in contracts/model-provider-port.md
+- [X] T043 Define the `ModelProvider` Protocol plus `ModelCapabilities`, `DecisionRequest` (carrying `step_index`), and `DecisionResponse` (carrying a **singular** `decision`, not a list) in `src/civsim_harness/provider/port.py` exactly as specified in contracts/model-provider-port.md
 
 **Lifecycle and guards**
 
-- [ ] T044 Implement the run lifecycle state machine in `src/civsim_harness/run/lifecycle.py` per data-model.md §4, emitting a `lifecycle_transition` `RunEvent` on every transition (FR-003)
-- [ ] T045 [P] Unit test in `tests/unit/test_lifecycle.py`: legal and illegal transitions, an event recorded for every transition, `finished` requiring exactly one `stop_resolution`, and `archived_at` being orthogonal to `lifecycle_state` — an archived run keeps its records and stays readable (data-model.md §4)
+- [X] T044 Implement the run lifecycle state machine in `src/civsim_harness/run/lifecycle.py` per data-model.md §4, emitting a `lifecycle_transition` `RunEvent` on every transition (FR-003)
+- [X] T045 [P] Unit test in `tests/unit/test_lifecycle.py`: legal and illegal transitions, an event recorded for every transition, `finished` requiring exactly one `stop_resolution`, and `archived_at` being orthogonal to `lifecycle_state` — an archived run keeps its records and stays readable (data-model.md §4)
 - [ ] T046 Implement the write-before-advance guard in `src/civsim_harness/store/guard.py`: the end-turn action is reachable only downstream of an acknowledged durable write, and a failed write raises and halts the run (FR-013, invariant I3)
 
 **The host platform port — the only place OS-specific code may live**
