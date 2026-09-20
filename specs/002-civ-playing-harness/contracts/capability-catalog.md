@@ -112,12 +112,19 @@ implementation_ref: lua/ingame/unit_orders.lua
 reads: [unit state, plot reachability]
 writes: [unit orders]
 firetuner_gap: null                    # REQUIRED and non-empty when path == bespoke
+parity_basis: null                     # OPTIONAL, non-empty when present — see below
 ```
 
 **The bespoke rule** (FR-028, SC-020): `path: bespoke` with an empty or missing `firetuner_gap`
 fails catalog load. The gap statement must say what the capability does, what it reads or writes,
 and why Firetuner could not do it. This is why SC-020's "100 % coverage" is checkable by loading the
 catalog rather than by reviewing code.
+
+**`parity_basis` is optional here.** Every `ParityDeclaration` that resolves to this capability
+already carries its own required, non-empty `parity_basis`, so omitting the field on the capability
+means it is inherited from those declarations — this is the normal case, and is why none of the
+catalog's entries restate it. Set it only to override or clarify at the capability level; if
+present, it must be non-empty, same as the declaration-level field.
 
 Example of a compliant bespoke entry:
 

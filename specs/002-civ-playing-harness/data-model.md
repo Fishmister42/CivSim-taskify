@@ -541,10 +541,11 @@ spec edge case on mid-project capability additions).
 | `implementation_ref` | string | Lua file or module path |
 | `reads` / `writes` | list[string] | What it touches (FR-028) |
 | `firetuner_gap` | string? | **Required when `path = bespoke`** — why Firetuner could not do it |
-| `parity_basis` | string | Inherited or restated |
+| `parity_basis` | string? | **Optional — inherited or restated.** Omitted means inherited: the `ParityDeclaration`(s) this capability implements already each carry their own required, non-empty `parity_basis`, so the fact need not be duplicated here. When present, it is a restatement and must be non-empty, same as the declaration-level field |
 
 **Validation**: `path = bespoke` without a non-empty `firetuner_gap` fails catalog load — this is
-what makes SC-020's 100 % coverage checkable rather than aspirational (FR-028).
+what makes SC-020's 100 % coverage checkable rather than aspirational (FR-028). A present-but-empty
+`parity_basis` also fails catalog load; an absent `parity_basis` is valid and means inherited.
 
 ---
 
