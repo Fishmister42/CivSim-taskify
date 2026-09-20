@@ -443,3 +443,48 @@ commit. Windows blockers noted: Steam relaunches every few minutes (LogonFailure
 no unattended Windows runs until it settles; DX12 exe exits instantly (DX11 only).
 
 **In flight:** nexus transport fix (the critical one); scribe publishing the demo.
+
+---
+
+## Run 6 - 2026-09-20 evening (usage restored; repo PUBLIC; key provisioned)
+
+**Landed and pushed (remote head `f45a5ed`):** `97180f5` T234 nexus transport fix - all three
+client defects fixed, each revert-confirmed against its exact live symptom; fake corrected to the
+REAL protocol with a raw-socket wire audit; `civsim doctor` handshakes live (GameCore_Tuner=10,
+InGame=132). `f45a5ed` provider-test hermeticity (delenv fell through to the real repo-root
+secrets.yaml; now CIVSIM_SECRETS_FILE points at an absent tmp file). Suite: **1547/2/0**.
+
+**OpenRouter key provisioned** via Claude remote, gitignored secrets.yaml, verified live
+(200, spend-capped, paid tier). Owner ruling recorded above: the cap is PRE-SPENT, never ask.
+
+**In flight (three agents):** (1) live-run operator - FIRST model-driven run, bounded 3-5 turns,
+evidence to spikes/demo-evidence/model-driven-*, no code edits allowed; (2) reachability CI +
+negative controls - tests/contract/test_reachability.py + Phase 11 ledger entry, allowlist seeded
+from T229-T234, UNRESOLVED findings come back for hypervisor review; (3) scribe posted the
+bundled update (issue #2 owner comment 5752698028, issue #1 peer comment 5752699811; GIF
+confirmed rendering publicly).
+
+**STANDING OBLIGATION - Steam account handoff:** the Linux peer is BLOCKED on account contention
+(their launch resolves to Remote Play from this machine). Scribe posted a hold request: peer
+holds all launches until the Windows side posts an **ACCOUNT FREE** comment on issue #1. OWED:
+when the model-driven run completes, shut the Windows client down cleanly, then have the scribe
+post ACCOUNT FREE. Peer's next uses: raw_command_probe.py re-run (the empty-tag-3 universality
+gap in nexus-protocol.md) + SaveLoader live checklist + T218/T213. A Linux login mid-run would
+kick the Windows client and gap the run (Principle III).
+
+**Peer hazard relayed:** X11 `import -window` without a timeout froze their desktop 80 min when
+the window closed mid-grab. Correctness argument for the harness capture_window() path; the
+harness never shells out to display-server grab tools.
+
+**T235 landed (reachability enforcement + negative controls), 1568/2/0.** Hypervisor review of
+its three UNRESOLVED findings, ruled 2026-09-20:
+- `send_input` + `InputEvent` (host port, all three adapters, zero src/ callers): **retained
+  dormant.** The planned consumer was T217 option B (bespoke UI driver), which died when C
+  resolved (Network.LoadGame from FrontEnd). The owner-authorized fallback class - UI driving
+  for operations the tuner cannot perform - remains plausible future work; the allowlist keeps
+  the surface visible instead of silently dead. THE NEXT CONSUMER MUST DELETE THE ALLOWLIST
+  ENTRIES. Do not build consumers to launder the entry away.
+- `capture_preconditions` (linux adapter, callers only live tests + spikes): **suspected REAL
+  wiring gap on the Linux side** - hygiene preconditions that run only in tests are exactly the
+  pattern. Referred to the Linux peer (their adapter, their live evidence). QUEUED for the next
+  issue #1 post (rides with ACCOUNT FREE).
