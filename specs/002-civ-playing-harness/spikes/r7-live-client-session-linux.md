@@ -102,6 +102,66 @@ intro screen is exactly what a human does.
 No setting was found to skip the intro: `UserOptions.txt` has only `HasSeenCivRoyaleIntro` and
 `HasSeenPiratesIntro`, neither of which covers leader intros.
 
+## 🔴 The production `LuaSaveLoader` fails **every** load on this host — measured, with the fix
+
+`tests/live/test_production_save_loader.py`, driving the shipped `saves/load_game.py` against the
+live client. Its module docstring carries the open item honestly — *"This loader cannot click it"* —
+and since R7 measured the intro screen appearing on **every** load, that open item is not a
+contingency on this host. It is the normal path.
+
+```
+save='civsim__spike__t0001'  short timeout=150s (default is 300s)
+
+=== ATTEMPT 1 - production loader, exactly as shipped ===
+  RESULT: load() FAILED after 160.4s
+    HarnessError: timed out after 150s waiting for the game states (GameCore_Tuner, InGame)
+    to reappear after Network.LoadGame accepted save 'civsim__spike__t0001'
+
+=== ATTEMPT 2 - same loader + send_input(Escape) retried until the port returns ===
+    [dismisser] Escape #1..#7 -> ok
+  RESULT: load() SUCCEEDED in 40.1s
+
+  as shipped       : FAIL
+  with one Escape  : PASS
+  => the gap is exactly the missing keystroke
+```
+
+**As shipped it cannot complete a load — it can only time out.** With the 300 s default that is five
+minutes per attempt, and every retry re-enters the same state. Note also that a failed attempt
+**strands the client**: the intro screen holds the port closed, so the *next* attempt cannot even
+connect, which is why the test has to press Escape before it can start at all.
+
+### The fix is a retry loop, not a single press — and that distinction is the real finding
+
+The obvious implementation — wait a fixed delay after the port closes, press Escape once — **was
+tried first and failed** (attempt 2 of the earlier run, one press at +6 s: FAIL). The reason is
+structural:
+
+- the tuner port closes the *instant* the load is issued;
+- the intro screen only appears once the load *finishes*, tens of seconds later;
+- and the intro screen **cannot be observed through the tuner**, because the tuner is precisely what
+  it is holding closed.
+
+So there is no signal that says "the intro screen is up now." The only observable is **the port
+coming back**, which happens *after* the dismissal succeeds. Dismissal therefore has to be a loop
+that presses Escape and re-checks the port until it rebinds — seven presses on the measured run. The
+early presses land during loading and are harmless; the loop exits without pressing once the port is
+back, so it cannot leave a stray Escape in the running game.
+
+A capture-based check (look for the intro screen in a frame) would be the alternative, and is worth
+considering, since `capture_window()` keeps working while the tuner is closed.
+
+### ✅ Checklist items this closes
+
+- **The 300 s load bound is generous, not tight.** A successful load took **40.1 s** end to end on
+  this hardware, *including* the dismissal loop — roughly 7.5× headroom. The failing path is what
+  consumes the budget, not the loading.
+- **Turn agreement post-load holds.** `load()` only returns after its own `_verify_far_side` /
+  `_check_position` have compared the client against the `SavePoint`; it returned, so the position
+  the client came up in matched the save's recorded `turn_number`.
+- **Dismissal behaviour:** `Escape` only. Re-confirmed three separate times today, including twice
+  as incidental recovery between attempts.
+
 ## 🔴 Trap 2 — the client exited cleanly mid-session, and the cause is NOT established
 
 After the load, an end-turn was issued to build a genuine mid-game save:

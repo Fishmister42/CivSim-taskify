@@ -1,0 +1,20 @@
+save='civsim__spike__t0001'  short timeout=150s (default is 300s)
+  [recover] sent Escape
+  [recover] tuner is up
+=== ATTEMPT 1 - production loader, exactly as shipped ===
+  RESULT: load() FAILED after 160.4s
+    HarnessError: timed out after 150s waiting for the game states (GameCore_Tuner, InGame) to reappear after Network.LoadGame accepted save 'civsim__spike__t0001' while loading save 'civsim__spike__t0001' -- the tuner port closes for the whole load and rebinds ~5s after the game becomes interactive; a load stopped on the leader-intro screen (CONTINUE GAME) holds the port closed indefinitely and needs one manual dismissal click (spikes/t217-RESOLVED-frontend-loadgame.md, 'One open item') | detail={'save_name': 'civsim__spike__t0001', 'save_point_id': 'sp-live-probe', 'waited_s': 150.0, 'last_state_table': None, 'last_transport_error': 'PreflightError: Could not connect to the Nexus tuner interface'}
+  [recover] sent Escape
+  [recover] tuner is up
+=== ATTEMPT 2 - same loader + one send_input(Escape) ===
+    [dismisser] Escape #1 -> ok
+    [dismisser] Escape #2 -> ok
+    [dismisser] Escape #3 -> ok
+    [dismisser] Escape #4 -> ok
+    [dismisser] Escape #5 -> ok
+    [dismisser] Escape #6 -> ok
+    [dismisser] Escape #7 -> ok
+  RESULT: load() SUCCEEDED in 40.1s
+  as shipped              : FAIL
+  with one Escape         : PASS
+  => the gap is exactly the missing keystroke
