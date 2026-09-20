@@ -10,6 +10,11 @@
 -- executed through InGame Lua"). Added as necessary supporting infrastructure within this
 -- assignment's owned lua/ directory.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
 -- Parity note (FR-026, R8): every move/zoom/toggle here is validated by the harness before this
 -- file is invoked — target plot must already be revealed, zoom must be within the standard UI's
 -- range, and the view mode must be one a human can toggle to. This file performs the camera change
@@ -71,14 +76,21 @@ local function CivSim_Camera_Zoom(zoomLevel)
 end
 
 -- UNVERIFIED: view-mode toggle (world <-> strategic view) is known in the base game as a hotkey
--- action; `UI.RequestAction(ActionTypeIndex["ToggleStrategicView"])` is a placeholder pending
--- confirmation of the actual action-type key.
+-- action; the exact `ActionTypes` key (`ToggleStrategicView` is a placeholder name) is not
+-- confirmed. CORRECTED against a live client (spike P1) in one respect: the table this must be
+-- read from is `ActionTypes`, not `ActionTypeIndex` — `ActionTypeIndex` was the same wrong table
+-- name lua/ingame/turn_control.lua used to guess at for ACTION_ENDTURN; the confirmed table is
+-- `ActionTypes` (observed holding `ACTION_ENDTURN = 751412917`, a Civ VI type hash, not a small
+-- stable enum — read any member from this table at call time and never hard-code its value, the
+-- same rule turn_control.lua follows). Whether `ActionTypes.ToggleStrategicView` (or whatever its
+-- real key is) actually exists remains unconfirmed — only the table name is corrected here, not
+-- the key.
 local function CivSim_Camera_SetViewMode(mode)
     local ok, result = pcall(function()
         if mode == "strategic" then
-            return UI.RequestAction(ActionTypeIndex["ToggleStrategicView"]) -- UNVERIFIED
+            return UI.RequestAction(ActionTypes and ActionTypes["ToggleStrategicView"]) -- UNVERIFIED: key name
         else
-            return UI.RequestAction(ActionTypeIndex["ToggleStrategicView"]) -- UNVERIFIED: same
+            return UI.RequestAction(ActionTypes and ActionTypes["ToggleStrategicView"]) -- UNVERIFIED: same
             -- hotkey is assumed to toggle back; a client that requires two distinct action types
             -- would need this branch corrected against the live client.
         end

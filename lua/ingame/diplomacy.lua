@@ -4,10 +4,16 @@
 -- Backs declaration_ids: diplomacy.declare_war, diplomacy.make_peace,
 -- diplomacy.send_delegation (catalogs/actions/diplomacy.yaml), capability_id: diplomacy.orders.
 --
--- UNVERIFIED (whole file): the InGame diplomatic-action Lua surface is not confidently known. A
--- `DiplomacyManager` / `Game.GetDiplomacyManager()` request pattern is assumed by analogy with
--- CityManager/UnitManager's RequestOperation shape, but the exact type and method names are not
--- confirmed against a live client.
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- UNVERIFIED (whole file): the InGame diplomatic-action Lua surface is not confidently known, and
+-- this file's domain was not covered by the live-client sweep at all. A `DiplomacyManager` /
+-- `Game.GetDiplomacyManager()` request pattern is assumed by analogy with CityManager/UnitManager's
+-- RequestOperation shape, but the exact type and method names are not confirmed against a live
+-- client.
 --
 -- Parity note: only the diplomatic actions the standard diplomacy screen offers against a met
 -- civilization (declare war, make peace when eligible, send a delegation) are exposed — no

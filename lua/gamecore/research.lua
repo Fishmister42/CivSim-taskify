@@ -2,6 +2,15 @@
 -- Context: GameCore_Tuner (read-only).
 -- Backs declaration_id: research.state (catalogs/observations/research.yaml), capability_id: research.read.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- This file's own accessors (Player:GetTechs(), Player:GetCulture(), GameInfo.Technologies()
+-- iteration, etc.) were not covered by the live-client sweep and remain unconfirmed guesses; the
+-- per-call UNVERIFIED markers below are left as-is because the sweep did not test them.
+--
 -- Parity note: reports only the local player's own tech tree progress and choices, matching the
 -- standard Research/Civics tree screen. No opponent research or civic progress — FR-019
 -- explicitly names "other civilizations' undisclosed research or civic progress" as forbidden.

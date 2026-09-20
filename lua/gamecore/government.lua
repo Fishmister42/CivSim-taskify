@@ -3,6 +3,16 @@
 -- Backs declaration_id: government.state (catalogs/observations/government.yaml),
 -- capability_id: government.read.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- This file's own accessors (Player:GetCulture():GetCurrentGovernment()/GetSlottablePolicies()/
+-- HasGovernment(), Player:GetGovernors(), etc.) were not covered by the live-client sweep and
+-- remain unconfirmed guesses; the per-call UNVERIFIED markers below are left as-is because the
+-- sweep did not test them.
+--
 -- Parity note: reports only the local player's own government, policy slots, and governor
 -- assignments — everything visible on the standard Government screen. No opponent government
 -- data (their form of government is generally public in Civ VI's diplomacy overview, but their

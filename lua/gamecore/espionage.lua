@@ -3,10 +3,16 @@
 -- Backs declaration_id: espionage.state (catalogs/observations/espionage.yaml),
 -- capability_id: espionage.read.
 --
--- UNVERIFIED (whole file): the espionage Lua accessor surface is not confidently known. The
--- calls below follow the Player-scoped-manager pattern used elsewhere in this catalog
--- (GetTreasury, GetCulture, GetTechs) by analogy, but `Player:GetEspionage()` and its methods are
--- not confirmed against a live client and must be validated before first use.
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- UNVERIFIED (whole file): the espionage Lua accessor surface is not confidently known, and this
+-- file's domain was not covered by the live-client sweep at all. The calls below follow the
+-- Player-scoped-manager pattern used elsewhere in this catalog (GetTreasury, GetCulture,
+-- GetTechs) by analogy, but `Player:GetEspionage()` and its methods are not confirmed against a
+-- live client and must be validated before first use.
 --
 -- Parity note: only the local player's own spies, their current missions, and *outcomes* of
 -- resolved missions the human would see in the notification/reports log are reported. Never an

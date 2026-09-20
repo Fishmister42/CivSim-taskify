@@ -4,6 +4,19 @@
 -- Backs declaration_ids: units.move_to, units.found_city, units.promote (catalogs/actions/units.yaml),
 -- capability_id: units.orders.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- CORRECTED against a live client (spike P4): `Units.GetUnit` is confirmed `nil` — there is no
+-- `Units` global with that shape. This file's own per-ID lookup used a different guess
+-- (`UnitManager.GetUnit(playerID, unitID)`), also never confirmed to exist under that name and
+-- absent from the spike's confirmed list; it has been replaced below with a lookup built entirely
+-- from confirmed primitives (`Players`, `Player:GetUnits()`, `Units:Members()`, `Unit:GetID()` —
+-- P4 spot-check, and the `Player:GetUnits():Members()` idiom already used in
+-- lua/gamecore/units.lua), per the correction's guidance that unit access goes through `Players`.
+--
 -- Parity note: every function here issues exactly the order a human could issue by selecting the
 -- unit and clicking the corresponding UI command; none accepts a target the availability
 -- predicate would not already have accepted (movement outside declared reachable_plots, an
@@ -50,39 +63,58 @@ local function CivSim_JsonEncode(value)
     end
 end
 
--- Move the given unit to (x, y). UNVERIFIED: UnitOperationTypes.MOVE_TO and the
--- UnitOperationTypes.PARAM_X / PARAM_Y parameter-table keys are the pattern recalled from Civ VI's
--- own move-order UI Lua, but are not confirmed against a live client.
-local function CivSim_UnitOrders_MoveTo(unitId, x, y)
+-- VERIFIED (P4 spot-check): finds one of the local player's own units by id, built from confirmed
+-- primitives (Players, Player:GetUnits(), Units:Members(), Unit:GetID()) rather than the
+-- unconfirmed single-shot `UnitManager.GetUnit(playerID, unitID)` this file used to guess at (see
+-- header). A unit belonging to another player is deliberately not found here — every action in
+-- this file only ever targets the local player's own units, matching this catalog's parity rule.
+local function CivSim_FindLocalUnit(unitId)
     local localPlayer = Game.GetLocalPlayer()
-    local unit = UnitManager.GetUnit(localPlayer, unitId) -- UNVERIFIED: UnitManager.GetUnit(playerID, unitID)
+    local units = Players[localPlayer]:GetUnits()
+    for _, u in units:Members() do
+        if u:GetID() == unitId then
+            return u
+        end
+    end
+    return nil
+end
+
+-- Move the given unit to (x, y). VERIFIED (P4 spot-check): UnitManager.RequestOperation,
+-- UnitOperationTypes.MOVE_TO, and UnitOperationTypes.PARAM_X/PARAM_Y are all confirmed to exist.
+-- UNVERIFIED: existence is not arity — that this exact parameter-table shape
+-- (`tParameters[PARAM_X] = x`) is how RequestOperation consumes them was not independently
+-- exercised by the spike (no function beyond UI.RequestAction/UI.CanEndTurn/GetCurrentGameTurn/
+-- ContextPtr:IsHidden/the GameConfiguration getters was actually called).
+local function CivSim_UnitOrders_MoveTo(unitId, x, y)
+    local unit = CivSim_FindLocalUnit(unitId)
     if unit == nil then
         return { ok = false, reason = "unit_not_found" }
     end
     local tParameters = {}
-    tParameters[UnitOperationTypes.PARAM_X] = x -- UNVERIFIED
-    tParameters[UnitOperationTypes.PARAM_Y] = y -- UNVERIFIED
-    local accepted = UnitManager.RequestOperation(unit, UnitOperationTypes.MOVE_TO, tParameters) -- UNVERIFIED
+    tParameters[UnitOperationTypes.PARAM_X] = x
+    tParameters[UnitOperationTypes.PARAM_Y] = y
+    local accepted = UnitManager.RequestOperation(unit, UnitOperationTypes.MOVE_TO, tParameters)
     return { ok = (accepted ~= false), unit_id = unitId, requested_plot = { x = x, y = y } }
 end
 
--- Found a city with the given settler unit at its current plot.
+-- Found a city with the given settler unit at its current plot. VERIFIED (P4 spot-check):
+-- UnitManager.RequestOperation and UnitOperationTypes.FOUND_CITY both confirmed to exist
+-- (existence only — see the MoveTo comment above on arity).
 local function CivSim_UnitOrders_FoundCity(unitId)
-    local localPlayer = Game.GetLocalPlayer()
-    local unit = UnitManager.GetUnit(localPlayer, unitId) -- UNVERIFIED
+    local unit = CivSim_FindLocalUnit(unitId)
     if unit == nil then
         return { ok = false, reason = "unit_not_found" }
     end
-    local accepted = UnitManager.RequestOperation(unit, UnitOperationTypes.FOUND_CITY, {}) -- UNVERIFIED
+    local accepted = UnitManager.RequestOperation(unit, UnitOperationTypes.FOUND_CITY, {})
     return { ok = (accepted ~= false), unit_id = unitId }
 end
 
 -- Apply a promotion to a unit that has one available. UNVERIFIED: the exact operation/command for
 -- applying a promotion (as opposed to querying availability) is not confirmed; some Civ VI builds
--- may expose this as a direct Unit method rather than an operation request.
+-- may expose this as a direct Unit method rather than an operation request. Not covered by the
+-- sweep's P4 spot-check list.
 local function CivSim_UnitOrders_Promote(unitId, promotionType)
-    local localPlayer = Game.GetLocalPlayer()
-    local unit = UnitManager.GetUnit(localPlayer, unitId) -- UNVERIFIED
+    local unit = CivSim_FindLocalUnit(unitId)
     if unit == nil then
         return { ok = false, reason = "unit_not_found" }
     end

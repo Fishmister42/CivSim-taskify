@@ -3,6 +3,17 @@
 -- Backs declaration_id: cities.state (catalogs/observations/cities.yaml), capability_id: cities.read.
 -- Also supplies the `city.*` predicate symbols (catalogs/README.md §4).
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- CORRECTED against a live client (spike P4): `Cities.GetCity` is confirmed `nil` — there is no
+-- `Cities` global with that shape. This file never used it directly (it already enumerated cities
+-- via `Players`), so nothing here needed changing for that specific finding; it is documented
+-- because lua/ingame/city_orders.lua's per-ID lookup did need correcting for the same reason (see
+-- that file).
+--
 -- Parity note: only the local player's own cities (full detail, matching the city screen) and
 -- other civilizations' cities that are currently visible (name, owner, approximate population —
 -- what a human sees on a visible city banner) are reported. No hidden production queues, no
@@ -103,15 +114,23 @@ local function CivSim_DescribeCity(city, localPlayer)
     return entry
 end
 
+-- VERIFIED (P4 spot-check): PlayerManager.GetAlive() exists. The previous `GetAliveMajors` name
+-- here was an untested guess and is not confirmed to exist under that name; it has been replaced.
+-- UNVERIFIED: whether GetAlive() returns every alive player (including city-states) or majors
+-- only was not checked. Player:IsMajor() is applied defensively (only if present) so this file
+-- keeps reporting majors only, matching its parity note, even if GetAlive() turns out to include
+-- minors; if IsMajor is unavailable every returned player is kept, preserving prior behavior.
 local function CivSim_Cities_GetState()
     local localPlayer = Game.GetLocalPlayer()
     local cities = {}
-    for _, player in ipairs(PlayerManager.GetAliveMajors()) do -- UNVERIFIED: exact enumerator name
-        for _, city in player:GetCities():Members() do
-            local plot = Map.GetPlot(city:GetX(), city:GetY())
-            local isOwn = (player:GetID() == localPlayer)
-            if isOwn or (plot ~= nil and plot:IsVisible(localPlayer)) then
-                cities[#cities + 1] = CivSim_DescribeCity(city, localPlayer)
+    for _, player in ipairs(PlayerManager.GetAlive()) do
+        if not player.IsMajor or player:IsMajor() then -- UNVERIFIED: Player:IsMajor()
+            for _, city in player:GetCities():Members() do
+                local plot = Map.GetPlot(city:GetX(), city:GetY())
+                local isOwn = (player:GetID() == localPlayer)
+                if isOwn or (plot ~= nil and plot:IsVisible(localPlayer)) then
+                    cities[#cities + 1] = CivSim_DescribeCity(city, localPlayer)
+                end
             end
         end
     end

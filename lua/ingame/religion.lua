@@ -4,9 +4,17 @@
 -- Backs declaration_ids: religion.select_pantheon, religion.found_religion,
 -- religion.select_belief (catalogs/actions/religion.yaml), capability_id: religion.orders.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
 -- UNVERIFIED (whole file): the set-side religion API is not confidently known; see the read-side
--- caveats in lua/gamecore/religion.lua. Choices offered are restricted to what
--- CivSim_Religion.state()'s available_beliefs already reported.
+-- caveats in lua/gamecore/religion.lua. `Player:GetReligion()` itself was not covered by the P3
+-- spot-check (which confirmed the *global* `Game.GetReligion()` manager accessor, a different
+-- symbol) and every method called on it below (`ChoosePantheon`, `FoundReligion`, `AddBelief`)
+-- remains an unconfirmed guess. Choices offered are restricted to what CivSim_Religion.state()'s
+-- available_beliefs already reported.
 --
 -- Parity note: a pantheon/religion/belief may only be chosen from the options the standard
 -- pantheon/religion-founding screen would offer for the local player right now.

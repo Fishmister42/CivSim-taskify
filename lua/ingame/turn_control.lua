@@ -4,6 +4,12 @@
 -- turn.end_turn's whole capability — request and readback — lives in one reviewable place).
 -- Backs declaration_id: turn.end_turn (catalogs/actions/turn.yaml), capability_id: turn.control.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library (`json`/`JSON`/
+-- `cjson`/`dkjson`/`Serialize`) exists in either. This file, like every file under lua/, must stay
+-- entirely self-contained — no shared module can ever be factored out and `require`d elsewhere —
+-- and carries its own hand-rolled JSON encoder rather than assuming a library is present.
+--
 -- Parity note: this is the click on the end-turn button (or its hotkey) and nothing else. It does
 -- not decide anything about whether ending the turn is currently wise or legal — that is what
 -- turn.end_turn's availability_predicate is for, evaluated by the harness before this is ever
@@ -50,33 +56,51 @@ local function CivSim_JsonEncode(value)
     end
 end
 
--- UNVERIFIED: `UI.RequestAction(ActionTypeIndex["EndTurn"])` and `Game.EndTurn()` are both
--- recalled, from different eras of Civ modding lineage, as plausible ways to trigger the same
--- button the player clicks; which one (if either) exists unmodified in this Civ VI build is not
--- confirmed. `Game.EndTurn()` is tried first as the more direct call, falling back to the
--- UI-action route, so a client exposing only one of the two still works.
+-- VERIFIED (spikes/lua-api-verification-linux.md, P1): `Game.EndTurn` does not exist — it is
+-- `nil` in both InGame and GameCore_Tuner. The previous primary path (tried here first, before
+-- falling back to UI.RequestAction) never worked and has been removed rather than kept as a dead
+-- first attempt. `UI.RequestAction(ActionTypes.ACTION_ENDTURN)` is the confirmed real mechanism,
+-- live-proven to advance the turn counter (1 -> 2).
+--
+-- ACTION_ENDTURN is read from the `ActionTypes` table at call time and never hard-coded: the
+-- spike observed it as a Civ VI type hash (751412917), not a small stable enum value, and the
+-- same hash-not-string issue recurs across this API's configuration surface generally.
+--
+-- `UI.RequestAction` itself was observed to return `nil` unconditionally (ok=true ret=nil in the
+-- live proof), so its return value carries zero information about whether the end-turn was
+-- accepted or silently swallowed — `ok` below means only "the call did not error", never "the
+-- turn advanced". The turn-number readback in CivSim_TurnControl_ReadTurnNumber, taken before and
+-- after this call by the caller, is the only real signal and is mandatory under FR-011, not a
+-- nicety (see turn.end_turn's verification_predicate in catalogs/actions/turn.yaml).
 local function CivSim_TurnControl_EndTurn()
-    local ok1, result1 = pcall(function() return Game.EndTurn() end) -- UNVERIFIED
-    if ok1 then
-        return { ok = (result1 ~= false), path = "Game.EndTurn" }
+    local actionId = ActionTypes and ActionTypes.ACTION_ENDTURN
+    if actionId == nil then
+        return { ok = false, reason = "action_endturn_unavailable" }
     end
-    local ok2, result2 = pcall(function()
-        return UI.RequestAction(ActionTypeIndex["EndTurn"]) -- UNVERIFIED
-    end)
-    return { ok = (ok2 and result2 ~= false), path = "UI.RequestAction" }
+    local ok, result = pcall(function() return UI.RequestAction(actionId) end)
+    return { ok = ok, result_is_informative = false, path = "UI.RequestAction" }
 end
 
 -- Read back the current turn number for the end_turn verification_predicate
 -- (`game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players`).
+--
+-- VERIFIED (P1): `Game.GetCurrentGameTurn()` and `UI.CanEndTurn()` are both real, confirmed
+-- functions in InGame; UI.CanEndTurn() in particular is "a genuine boolean, readable before
+-- acting" per the spike, and is used here as is_local_player_turn's source. This replaces an
+-- earlier guess (`Players[localPlayer]:IsTurnActive()`) that the sweep never exercised and that
+-- has been removed rather than kept as an untested stand-in now that a verified boolean exists.
+-- Caveat: UI.CanEndTurn() answers "can the local player end their turn right now", which may also
+-- go false while a blocking prompt is up, not only while waiting on other players — the same
+-- underlying condition turn.end_turn's availability_predicate already checks via
+-- `game.has_blocking_prompt` as a separate, ANDed clause, so this does not loosen that check.
 local function CivSim_TurnControl_ReadTurnNumber()
-    local localPlayer = Game.GetLocalPlayer()
-    local isLocalTurn = false
-    local ok, result = pcall(function() return Players[localPlayer]:IsTurnActive() end) -- UNVERIFIED
-    if ok then isLocalTurn = result end
+    local canEndTurn = false
+    local ok, result = pcall(function() return UI.CanEndTurn() end)
+    if ok then canEndTurn = (result == true) end
     return {
         turn_number = Game.GetCurrentGameTurn(),
-        is_local_player_turn = isLocalTurn,
-        is_waiting_for_other_players = (not isLocalTurn),
+        is_local_player_turn = canEndTurn,
+        is_waiting_for_other_players = (not canEndTurn),
     }
 end
 

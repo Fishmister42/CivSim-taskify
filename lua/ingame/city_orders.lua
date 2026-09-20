@@ -4,6 +4,19 @@
 -- Backs declaration_ids: cities.set_production, cities.purchase_with_gold,
 -- cities.purchase_with_faith (catalogs/actions/cities.yaml), capability_id: cities.orders.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- CORRECTED against a live client (spike P4): `Cities.GetCity` is confirmed `nil` — there is no
+-- `Cities` global with that shape. This file's own per-ID lookup used a different guess
+-- (`CityManager.GetCity(playerID, cityID)`), also never confirmed to exist under that name and
+-- absent from the spike's confirmed list; it has been replaced below with a lookup built entirely
+-- from confirmed primitives (`Players`, `Player:GetCities()`, `Cities:Members()`, `City:GetID()` —
+-- P4 spot-check, and the `Player:GetCities():Members()` idiom already used in
+-- lua/gamecore/cities.lua), per the correction's guidance that city access goes through `Players`.
+--
 -- Parity note: production and purchase choices are restricted to what CivSim_Cities.state()
 -- already reported as available_productions / purchasable_with_gold / purchasable_with_faith for
 -- that city — exactly the items the standard production/purchase panel would show as choosable.
@@ -49,40 +62,58 @@ local function CivSim_JsonEncode(value)
     end
 end
 
--- UNVERIFIED: CityManager.RequestOperation with CityOperationTypes.BUILD and a
--- CityOperationTypes.PARAM_* parameter table is the pattern recalled from Civ VI's own production
--- panel Lua, but the exact enum members and parameter keys are not confirmed.
-local function CivSim_CityOrders_SetProduction(cityId, productionType)
+-- VERIFIED (P4 spot-check): finds one of the local player's own cities by id, built from
+-- confirmed primitives (Players, Player:GetCities(), Cities:Members(), City:GetID()) rather than
+-- the unconfirmed single-shot `CityManager.GetCity(playerID, cityID)` this file used to guess at
+-- (see header). A city belonging to another player is deliberately not found here — every action
+-- in this file only ever targets the local player's own cities, matching this catalog's parity
+-- rule.
+local function CivSim_FindLocalCity(cityId)
     local localPlayer = Game.GetLocalPlayer()
-    local city = CityManager.GetCity(localPlayer, cityId) -- UNVERIFIED: CityManager.GetCity(playerID, cityID)
+    local cities = Players[localPlayer]:GetCities()
+    for _, c in cities:Members() do
+        if c:GetID() == cityId then
+            return c
+        end
+    end
+    return nil
+end
+
+-- VERIFIED (P4 spot-check): CityManager.RequestOperation confirmed to exist as a function.
+-- UNVERIFIED: CityOperationTypes.BUILD and the CityOperationTypes.PARAM_PRODUCTION_ITEM parameter
+-- key are not on the spike's confirmed list (only CityCommandTypes.PARAM_X specifically was
+-- spot-checked, not this operation's own enum members) — existence of the enum members used below
+-- remains an untested guess, unlike the RequestOperation call itself.
+local function CivSim_CityOrders_SetProduction(cityId, productionType)
+    local city = CivSim_FindLocalCity(cityId)
     if city == nil then
         return { ok = false, reason = "city_not_found" }
     end
     local tParameters = {}
     tParameters[CityOperationTypes.PARAM_PRODUCTION_ITEM] = productionType -- UNVERIFIED
-    local accepted = CityManager.RequestOperation(city, CityOperationTypes.BUILD, tParameters) -- UNVERIFIED
+    local accepted = CityManager.RequestOperation(city, CityOperationTypes.BUILD, tParameters) -- UNVERIFIED: BUILD
     return { ok = (accepted ~= false), city_id = cityId, production = productionType }
 end
 
--- UNVERIFIED: CityManager.RequestCommand with CityCommandTypes.PURCHASE is the pattern recalled
--- from Civ VI's own purchase panel Lua, but the exact command name and parameter keys are not
--- confirmed.
+-- VERIFIED (P4 spot-check): CityManager.RequestCommand confirmed to exist as a function, and a
+-- `CityCommandTypes.PARAM_X`-style member is confirmed to exist on CityCommandTypes generally.
+-- UNVERIFIED: CityCommandTypes.PURCHASE, PARAM_PRODUCTION_ITEM, and PARAM_YIELD_TYPE specifically
+-- are not on the spike's confirmed list — only that the table has at least one PARAM_X-shaped
+-- member was checked, not these particular names.
 local function CivSim_CityOrders_PurchaseWithGold(cityId, itemType)
-    local localPlayer = Game.GetLocalPlayer()
-    local city = CityManager.GetCity(localPlayer, cityId) -- UNVERIFIED
+    local city = CivSim_FindLocalCity(cityId)
     if city == nil then
         return { ok = false, reason = "city_not_found" }
     end
     local tParameters = {}
     tParameters[CityCommandTypes.PARAM_PRODUCTION_ITEM] = itemType -- UNVERIFIED
     tParameters[CityCommandTypes.PARAM_YIELD_TYPE] = GameInfo.Yields["YIELD_GOLD"].Index -- UNVERIFIED
-    local accepted = CityManager.RequestCommand(city, CityCommandTypes.PURCHASE, tParameters) -- UNVERIFIED
+    local accepted = CityManager.RequestCommand(city, CityCommandTypes.PURCHASE, tParameters) -- UNVERIFIED: PURCHASE
     return { ok = (accepted ~= false), city_id = cityId, item = itemType, currency = "gold" }
 end
 
 local function CivSim_CityOrders_PurchaseWithFaith(cityId, itemType)
-    local localPlayer = Game.GetLocalPlayer()
-    local city = CityManager.GetCity(localPlayer, cityId) -- UNVERIFIED
+    local city = CivSim_FindLocalCity(cityId)
     if city == nil then
         return { ok = false, reason = "city_not_found" }
     end

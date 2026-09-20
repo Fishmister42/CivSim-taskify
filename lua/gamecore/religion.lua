@@ -3,6 +3,16 @@
 -- Backs declaration_id: religion.state (catalogs/observations/religion.yaml),
 -- capability_id: religion.read.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
+-- either. This file must stay entirely self-contained — no shared module can ever be factored out
+-- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
+--
+-- This file's own accessors (Player:GetReligion(), Game.GetReligion(), etc.) were not covered by
+-- the live-client sweep and remain unconfirmed guesses; see the per-call UNVERIFIED markers below,
+-- left as-is because the sweep did not test them. The one correction made here (P4 spot-check) is
+-- PlayerManager.GetAlive() replacing the unconfirmed PlayerManager.GetAliveMajors() guess.
+--
 -- Parity note: pantheon/religion state is reported only for the local player and only the
 -- majority religion of a visible city (exactly what the standard religion overview and city
 -- banners show) — never an opponent's undisclosed belief choices or founding intentions.
@@ -48,10 +58,13 @@ local function CivSim_JsonEncode(value)
     end
 end
 
--- UNVERIFIED: Game.GetReligion() as a global religion-game singleton (analogous to
--- Game.GetGreatPeople()) is believed to exist based on community modding references to
--- religion-founding and belief-availability queries, but the exact method names below are not
--- confirmed against a live client.
+-- VERIFIED (P3, per-context probe: spikes/sweep-raw/GameCore_Tuner__P3_congress_greatpeople_religion.txt):
+-- `Game.GetReligion()` as a global religion-game singleton is confirmed to exist as a function in
+-- both InGame and this file's own GameCore_Tuner context (one of only 4 of the 8 manager
+-- accessors present in GameCore_Tuner — see lua/gamecore/congress.lua's header for the full
+-- breakdown and the contrasting case where the accessor is GameCore_Tuner-absent). UNVERIFIED:
+-- existence is not arity — every method called on it below, and on the separate
+-- `Player:GetReligion()` call, remains an unconfirmed guess.
 local function CivSim_Religion_GetState()
     local localPlayer = Game.GetLocalPlayer()
     local player = Players[localPlayer]
@@ -72,6 +85,7 @@ local function CivSim_Religion_GetState()
     end
 
     local availableBeliefs = {}
+    -- VERIFIED (P3): Game.GetReligion() itself confirmed to exist. UNVERIFIED: :GetAvailableBeliefs(...).
     local ok3, beliefList = pcall(function() return Game.GetReligion():GetAvailableBeliefs(localPlayer) end) -- UNVERIFIED
     if ok3 and type(beliefList) == "table" then
         for _, beliefType in ipairs(beliefList) do
@@ -80,20 +94,25 @@ local function CivSim_Religion_GetState()
     end
 
     -- Majority religion of visible cities only (what a city banner shows).
+    -- VERIFIED (P4 spot-check): PlayerManager.GetAlive() exists, replacing the unconfirmed
+    -- GetAliveMajors() guess. UNVERIFIED: whether it returns majors only or all alive players;
+    -- Player:IsMajor() is applied defensively (kept if unavailable) as in lua/gamecore/cities.lua.
     local cityReligions = {}
-    for _, otherPlayer in ipairs(PlayerManager.GetAliveMajors()) do -- UNVERIFIED
-        for _, city in otherPlayer:GetCities():Members() do
-            local plot = Map.GetPlot(city:GetX(), city:GetY())
-            local isOwn = (otherPlayer:GetID() == localPlayer)
-            if isOwn or (plot ~= nil and plot:IsVisible(localPlayer)) then
-                local ok4, majorityReligion = pcall(function()
-                    return city:GetReligion():GetMajorityReligion() -- UNVERIFIED: City:GetReligion()
-                end)
-                if ok4 and majorityReligion and majorityReligion ~= -1 then
-                    cityReligions[#cityReligions + 1] = {
-                        city_id = city:GetID(),
-                        majority_religion = GameInfo.Religions[majorityReligion].ReligionType, -- UNVERIFIED
-                    }
+    for _, otherPlayer in ipairs(PlayerManager.GetAlive()) do
+        if not otherPlayer.IsMajor or otherPlayer:IsMajor() then -- UNVERIFIED: Player:IsMajor()
+            for _, city in otherPlayer:GetCities():Members() do
+                local plot = Map.GetPlot(city:GetX(), city:GetY())
+                local isOwn = (otherPlayer:GetID() == localPlayer)
+                if isOwn or (plot ~= nil and plot:IsVisible(localPlayer)) then
+                    local ok4, majorityReligion = pcall(function()
+                        return city:GetReligion():GetMajorityReligion() -- UNVERIFIED: City:GetReligion()
+                    end)
+                    if ok4 and majorityReligion and majorityReligion ~= -1 then
+                        cityReligions[#cityReligions + 1] = {
+                            city_id = city:GetID(),
+                            majority_religion = GameInfo.Religions[majorityReligion].ReligionType, -- UNVERIFIED
+                        }
+                    end
                 end
             end
         end

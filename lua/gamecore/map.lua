@@ -2,14 +2,24 @@
 -- Context: GameCore_Tuner (read-only).
 -- Backs declaration_id: map.state (catalogs/observations/map.yaml), capability_id: map.read.
 --
+-- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
+-- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library
+-- (`json`/`JSON`/`cjson`/`dkjson`/`Serialize`) exists in either — confirmed, not merely assumed;
+-- see the encoder note just below. This file must stay entirely self-contained — no shared module
+-- can ever be factored out and `require`d elsewhere.
+--
+-- VERIFIED (P4 spot-check): Map.GetGridSize, Map.GetPlot, Map.GetPlotByIndex, and
+-- Map.GetPlotDistance all confirmed to exist as functions.
+--
 -- Parity note: every field here is something a human player can already see on the minimap,
 -- the main map view, or by hovering a revealed plot in the standard UI. This file must never
 -- walk plots the local player has not revealed (Plot:IsRevealed / Plot:IsVisible gate every
 -- read) and must never report another civilization's units, improvements, or yields on plots
 -- outside the local player's revealed set.
 
--- Minimal JSON encoder. UNVERIFIED: Civ VI's tuner Lua states are not known to expose a global
--- JSON library, so this hand-rolled encoder is carried locally rather than assumed available.
+-- Minimal JSON encoder. VERIFIED (P5): no JSON library (`json`/`JSON`/`cjson`/`dkjson`/
+-- `Serialize`) exists in either tuner context, confirming this hand-rolled encoder is the
+-- correct approach, not merely a defensive assumption.
 local function CivSim_JsonEncode(value)
     local t = type(value)
     if value == nil then
@@ -55,13 +65,16 @@ end
 -- ownership/improvement, matching what the standard map view shows for a revealed (not
 -- necessarily currently visible-in-fog-of-war-cleared-sense) plot.
 local function CivSim_Map_GetState()
-    local localPlayer = Game.GetLocalPlayer() -- UNVERIFIED: Game.GetLocalPlayer() signature/return
-    local width, height = Map.GetGridSize()   -- UNVERIFIED: Map.GetGridSize() exact name/return order
+    -- VERIFIED: Game.GetLocalPlayer() was itself exercised successfully in the spike's bonus
+    -- GameConfiguration section (PlayerConfigurations[Game.GetLocalPlayer()] resolved
+    -- LocalPlayerID=0), not merely assumed.
+    local localPlayer = Game.GetLocalPlayer()
+    local width, height = Map.GetGridSize()   -- VERIFIED (P4): Map.GetGridSize() confirmed to exist.
 
     local plots = {}
     for y = 0, height - 1 do
         for x = 0, width - 1 do
-            local plot = Map.GetPlot(x, y) -- UNVERIFIED: Map.GetPlot(x, y) exact signature
+            local plot = Map.GetPlot(x, y) -- VERIFIED (P4): Map.GetPlot() confirmed to exist.
             if plot ~= nil and plot:IsRevealed(localPlayer) then -- Plot:IsRevealed(playerID)
                 local entry = {
                     x = x,
