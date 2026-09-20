@@ -87,9 +87,40 @@ them as the selection was my error, and the read-back corrects it.
 
 `HumanPlayerCount = 0` likewise, so the human slot is not configured at setup time either.
 
-**This needs the owner's input before any seeded run**: V3 requires `civilization` and `leader` to
-match the seed set, and a preset that randomises the leader cannot satisfy that. Either the preset
-needs the leader pinned and re-saved, or preparation must set it explicitly after loading.
+### ✅ Resolved — preparation sets the leader itself, and the owner has chosen Cyrus
+
+The owner confirmed the configuration will not hold a civ selection, and **ruled that runs start with
+`LEADER_CYRUS` (Persia)**. That decision is now fixed.
+
+**The preset does not need to carry it.** `PlayerConfigurations` exposes working setters at the
+`HostGame` state, so preparation can pin the leader itself after loading the configuration:
+
+```lua
+local pc = PlayerConfigurations[0]
+pc:SetLeaderTypeName("LEADER_CYRUS")
+pc:SetCivilizationTypeName("CIVILIZATION_PERSIA")
+```
+
+Verified live, including the read-back V3 requires:
+
+```
+before:  slot0 leader=nil          civ=nil
+set:     SetLeaderTypeName ok=true   SetCivilizationTypeName ok=true
+after:   slot0 leader=LEADER_CYRUS civ=CIVILIZATION_PERSIA
+```
+
+**The game honours it**: the Create Game UI refreshed to show **Cyrus** with the Persia icon in
+slot 1. Note the UI does *not* repaint immediately on the Lua write — it still read `Random Leader`
+right after the call and updated shortly after. **Do not treat the UI as the verification signal;
+read the value back through `PlayerConfigurations`**, which is the FR-002 / V2 pattern anyway.
+
+Related setters confirmed present on `GameConfiguration` at the same state:
+`RemovePlayer` (function, returns `true`), `SetParticipatingPlayerCount`, `GetAIPlayerIDs`.
+`SetAIPlayerCount` does **not** exist — player count is changed by adding/removing players, not by
+setting a count.
+
+So the full preparation path is reachable without UI automation beyond loading the configuration:
+load preset → set leader/civ → read back and compare field by field → start.
 
 `GAMESPEED_ONLINE` is the fastest speed in the game and is a deliberate-looking choice for an
 experimentation harness — turns resolve in far fewer game-years. It is **not** the `GAMESPEED_STANDARD`

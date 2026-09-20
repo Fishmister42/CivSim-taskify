@@ -17,10 +17,16 @@ is not the game's.**
 | A console placed over the client is absent from the capture | ✅ **Pass** — proven |
 | Unrelated windows over the client are absent | ✅ **Pass** — proven |
 | Linux desktop chrome (panels, toasts) excluded | ✅ **Pass** — excluded by construction |
-| No harness-irrelevant chrome inside the frame | ❌ **Fail** — the Steam FPS overlay |
+| No harness-irrelevant chrome inside the frame | ✅ **Pass** — *since the Steam overlay was disabled* |
 
-Until the overlay is cleared, Linux captures carry **known contamination** and runs on this host
-should be treated accordingly.
+**All four now pass on this host.** The owner disabled Steam's in-game FPS counter
+(`InGameOverlayShowFPSCorner` now reads `"0"`), and a re-capture confirms the client's top-right
+corner contains only the game's own UI — no green `60 FPS` text. Linux captures on this host are
+clean.
+
+The overlay finding below is retained because the *class* of problem it demonstrates has not gone
+away: a third party can still composite into the client's frame, and the screening profile has to
+detect that generally rather than rely on this one setting staying off.
 
 ## The occlusion test
 
