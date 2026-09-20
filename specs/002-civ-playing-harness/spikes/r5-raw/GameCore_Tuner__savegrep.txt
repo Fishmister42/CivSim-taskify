@@ -1,0 +1,7 @@
+---BEGIN:ccaa77531479---
+=== global namespaces containing save/load-ish members ===
+ERR:Runtime Error: bad argument #1 to 'pairs' (table/struct expected, got nil)
+stack traceback:
+	[C]: in function 'pairs'
+	[string "print("---BEGIN:ccaa77531479---")..."]:11: in function '(main chunk)'
+Lua callstack:
