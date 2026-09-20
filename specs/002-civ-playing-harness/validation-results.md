@@ -30,7 +30,7 @@ open items below that block calling this deliverable fully compliant.
 
 | Principle | Status | Headline |
 |---|---|---|
-| I — Human-Parity Information & Action Boundary | **Partially evidenced** | Structural boundary is real and tested; the `EnableDebugMenu` question is resolved with no constitutional tension; capture pixel extraction is stubbed everywhere and the live tier hasn't run |
+| I — Human-Parity Information & Action Boundary | **Partially evidenced** | Structural boundary is real and tested; the `EnableDebugMenu` question is resolved with no constitutional tension; capture pixel extraction now works on Linux/X11 through the harness itself, but is still stubbed on Windows/macOS/Wayland and has never run against a real Civ VI frame |
 | II — Firetuner-First, Skill-Extensible Harness | **Compliant** | All 23 capabilities are `path: firetuner`; `Network.SaveGame` is now live-verified 4/4, so the one candidate bespoke path is not merely unneeded but **forbidden** |
 | III — Complete Match Telemetry | **Compliant (structurally enforced)** | `TurnPersistedToken` still makes end-turn unreachable without a durably-acknowledged write; two real defects that would have violated this principle's spirit were found by the integration tier and fixed |
 | IV — Reproducible, Seeded Experimentation | **Partially evidenced** | FR-034's identical-position guarantee is now verified field-for-field across a save/load round trip; but `Network.LoadGame` itself refuses from Lua, so the *automated* load path does not exist — only the UI path does |
@@ -103,6 +103,13 @@ open items below that block calling this deliverable fully compliant.
   about the harness's own capture path.** It used a raw, harness-independent `import -window` call,
   not `host/linux/adapter.py`'s own (still stubbed) `capture_window`. Strong, concrete evidence the
   design will work once implemented — not proof the shipped adapter clears the same gates.
+
+  > **Superseded for Linux, 2026-09-20.** `capture_window` is implemented and returns real pixels;
+  > occlusion immunity has been re-demonstrated **through the harness's own adapter**
+  > (`spikes/r6-xcomposite-readback-linux.md`). Two caveats keep this from closing Principle I's
+  > visual half: the frames were captured from ordinary X11 windows rather than **Civilization VI
+  > itself** (the client could not be launched — `spikes/steam-dependency-linux.md`), and Windows
+  > and macOS pixel extraction remain stubbed.
 - **The live tier has not run.** `tests/live/test_capture_hygiene.py` (T194) and
   `tests/live/test_host_platform.py` (T198) are the tests that would exercise a real captured frame
   against a real client; neither has been executed as part of this audit.
@@ -359,6 +366,165 @@ cross-referenced here to avoid duplication.
   Wayland, the `xdg-desktop-portal` ScreenCast path, and reporting synthetic input as unavailable
   rather than attempting it are all unexecuted code. A Linux pass is not Linux coverage in general.
 
+### XComposite pixmap readback: implemented, and the two traps in it
+
+`spikes/r6-xcomposite-readback-linux.md` (T052, Linux/X11, `Composite` 0.4, python-xlib 0.33).
+`capture_window` is no longer a stub — it returns real `BGRA8` pixels, ~79 ms for 1920×1200.
+
+- **A running compositor is not sufficient; the harness must redirect the window itself.**
+  `NameWindowPixmap` fails with **`BadMatch`** unless the calling client has issued
+  `CompositeRedirectWindow` for that window. Muffin redirects root's *subwindows*, which does not
+  satisfy it. Measured both ways: naming without redirecting is `BadMatch`, the identical call after
+  `redirect_window` succeeds. `RedirectAutomatic` leaves the client's own display untouched.
+- **python-xlib reports X errors asynchronously, and this produced a confident false pass.** Both
+  requests return an object even when the server rejects them; the `BadMatch` above surfaced only as
+  an out-of-band print, then resurfaced later as a misleading `BadDrawable`. **Every request now
+  carries an explicit `CatchError` + `sync()`.** Without it, `capture_window` reports success while
+  holding a pixmap the server never created — the worst failure available to this function.
+- **Channel order was verified with known colours, not inferred.** `#ff0000` reads back
+  `00 00 ff ff` and `#3366cc` reads back `cc 66 33 ff` — B,G,R,pad, emitted as `BGRA8`, which the
+  screening gates already decode. A silent R/B swap would pass every size assertion while corrupting
+  every image the agent sees; MSBFirst servers are **refused rather than guessed at**.
+- **Occlusion immunity re-proven through the harness's own adapter**, not `import`: with an occluder
+  raised over 420×260 px of the target, the harness-captured target frame is complete and contains
+  no trace of it (`r6-evidence/harness-xcomposite-target.png`). No root grab appears anywhere in the
+  evidence script, including to illustrate the overlap.
+- **Preflight implemented** as `capture_preconditions()`: compositing via `_NET_WM_CM_Sn` selection
+  ownership (never `XDG_SESSION_TYPE`), plus `unredirect-fullscreen-windows`, which warns on `true`
+  *and* on unknown. It is additive to the port — **a port-level preflight hook is the right
+  long-term home, flagged for the owning side rather than changed here.**
+- **Still outstanding: a real Civilization VI frame through this path.** Verified against ordinary
+  X11 windows only, because the client could not be launched (see below). Fullscreen capture, GPU
+  overlays, and redirect churn on a live game window are all unmeasured.
+
+### XTest synthetic input: driven, with three defects found and fixed
+
+`spikes/r5-xtest-input-linux.md` (T052, R5). All input injected into a nested `Xephyr` server and
+verified by reading `xev`'s stream, never by trusting `InputResult.status`.
+
+- **XTest events arrive as real device input (`synthetic NO`)**, indistinguishable from a human's
+  keystroke — unlike `XSendEvent`, which arrives flagged `synthetic YES` and which games routinely
+  ignore. That is the load-bearing reason to use XTest.
+- 🔴 **Three defects in `send_input`, all reporting `ok` while dispatching nothing or the wrong
+  thing** — the same class as the capture false-pass, and the reason each was measured rather than
+  reviewed. (a) any key outside a five-entry table was **silently dropped**; (b)
+  `InputEventKind.text` **had no branch at all**, so a text event did nothing — and it is the event
+  the bespoke save path most needs, since a save dialog wants a filename typed into it; (c)
+  **`button` was ignored**, so a right-click request delivered button 1. All three fixed, with
+  undispatchable events now reported `failed` naming the offending event and index.
+- ⚠️ **`InputEvent.x/y` are root-absolute, and the port does not say so.** The Civ window on this
+  host sits at `2560,0` on a second monitor, so **a caller passing window-relative coordinates
+  would click on the wrong monitor**. Behaviour is pinned by a regression test; **the port should
+  state the coordinate space explicitly** — flagged, not changed.
+- ⚠️ **XTest has no window targeting and `send_input` takes no window.** It injects into whatever
+  holds focus, so **nothing stops synthetic input reaching the operator's own windows** if the
+  client is not focused. No focus management exists anywhere in the harness.
+- **Civ VI has still received no synthetic event from this adapter** — whether the client accepts
+  XTest input is inference, not measurement, until the client can be launched.
+
+### Reachability audit: capture has a window that is always `None`, and input has no caller at all
+
+Run 2026-09-20 from the Linux node against its own contribution, after the owning side found the
+same shape three times (fabricated V2, dead Lua `return`s, guards with no callers). **The question
+asked was not "is this code correct" but "does anything call it".**
+
+⚠️ **Scope caveat:** this reflects the code visible from `origin/002-civ-playing-harness` at
+`8c3d8f8` plus `live/linux`. The Phase 9 composition-root commits (`adda5c2`, `2f301c2`, `d919786`)
+**are not pushed to the remote**, so some of the below may already be wired there. Each finding
+names exactly what was searched so it can be checked off quickly rather than re-derived.
+
+- 🔴 **The synthetic input layer is reachable from nothing.** `grep -rn "InputEvent("` across `src/`
+  returns **zero constructions** outside the port's own definition, and `send_input` has **no
+  production caller** — only the three adapter definitions and the `HostPlatform` protocol.
+  `InputEventKind` appears only in `host/`. So no end-turn keystroke, no save-dialog driving, and
+  nothing that would exercise the bespoke save path. **The three `send_input` defects fixed today
+  were, in production terms, fixes to dead code** — they matter the moment a caller exists, and not
+  before.
+- 🔴 **Capture is wired, but always receives `window=None`.** The chain
+  `decision_loop -> capture_for_step -> select_capture_path -> host.capture_window` is real. But the
+  window comes from `ctx.window_provider()`, declared as
+  `window_provider: Callable[[], GameWindow | None] = field(default=lambda: None)`
+  (`run/decision_loop.py:208`) and **assigned in exactly one place in the repository: a test**
+  (`tests/integration/test_prompts.py:243`, supplying a hard-coded `DEFAULT_WINDOW`). Nothing in
+  `src/` ever sets it. In production every step therefore captures `None`, is treated as a host
+  failure, and is recorded **visually degraded** — regardless of the capture path beneath it.
+- 🔴 **`find_game_window` has no production caller either**, on any platform. So even a caller
+  wanting to set `window_provider` has nothing wired that resolves a window to give it.
+- 🟡 **`capture_preconditions()` has no production caller — this one is ours.** It was added on the
+  Linux node today, and it is the same shape: a preflight check that runs only when a test calls it.
+  Flagged against our own work rather than waiting to be caught.
+
+**The consequence worth stating plainly: the "last capture stub is gone" claim is true about the
+stub and false about the outcome.** Real `BGRA8` pixels are produced on Linux/X11, and **no image
+reaches an agent in production**, because no window is ever resolved to capture. The two gaps are
+independent and both must close before Principle I's visual half is evidenced.
+
+This is the same root cause the owning side named — *a fake that shares the defect's assumption
+confirms production forever*. Here the fake is `DEFAULT_WINDOW`. **Generalised rule proposed: for
+anything crossing a process or protocol boundary, assert on what the far side received, never on
+what our side returned** — a fake cannot fabricate an X server's error reply or an `xev` stream.
+
+### 🔑 T217 RESOLVED — the save load works from Lua; there is no Firetuner gap
+
+`spikes/t217-RESOLVED-frontend-loadgame.md`. `Network.LoadGame` returned **`true`** and the client
+came up in the saved position — verified on a fresh connection after the phase transition (turn 1,
+`LEADER_ELEANOR_ENGLAND`, 2 units, 10 gold), not from the call's own return value.
+
+The three failed rounds had **two** causes, neither of them the argument shape they were chasing:
+
+1. **Phase.** Every previous attempt ran in `InGame`. The call is **front-end only** — Firaxis' own
+   shipped automation gates it on `UI.IsInFrontEnd()` and calls `Events.ExitToMainMenu()` otherwise
+   (`automation_dailysmoketest.lua:241`). In `InGame` it is callable and always refuses, which is
+   why `ok=true ret=false` looked so much like a bad table.
+2. **Enum names.** The real table is `SaveTypes`; `SaveGameTypes` does not exist, so the guessed
+   member was a nil index inside a `pcall` — a missing field, not an error.
+
+Consequences for the design, all measured:
+
+- **Option B (bespoke UI driver) is withdrawn**, and the Principle II `firetuner_gap` is **not**
+  declared — the gap does not exist. T177, T226's load and every `resume-from` are unblocked.
+- **The tuner port closes for the duration of the load** and rebinds ~5 s after the game is
+  interactive. A `SaveLoader` — and the crash detector of T233 — must treat connection-refused
+  during a load as expected, not as a crash.
+- ⚠️ **Open:** the load stopped on the leader-intro screen with a `CONTINUE GAME` button and waited
+  indefinitely; one click dismissed it. Whether that screen appears for every load or only for a
+  turn-1 save is **not yet known**, so a loader must assume one dismissal click may be needed. That
+  is a narrow, single-purpose input — and the first real caller for the input layer that had none.
+- **Reading Firaxis' shipped Lua** (`steamassets/base/assets/ui/automation/`) answered in one file
+  what three rounds of probing could not. It also yields the event names option A was hunting
+  (`LuaEvents.AutomationMainMenuStarted`, `AutomationGameStarted`, `AutoPlayEnd`) and an
+  `AutoplayManager` API, none of which are needed now but none of which were known.
+
+### 🔴 T218 — `major_count` reads the wrong number in-game
+
+`spikes/t218-RESULTS-setting-getters.md`. Five of six getters resolve; one is unavailable; and one
+returns a **plausible wrong answer** that no test against a fake can catch.
+
+`GameConfiguration.GetAIPlayerCount()` returned **16** in-game, against **6** for the same call at
+the Create Game screen. The per-player decomposition is unambiguous: **16 = 5 AI majors + 9
+city-states + Free Cities + Barbarians**. In-game it counts every non-human player; at setup, where
+city-states are not yet instantiated, it means major AI count. A preparation that records the setup
+value and a verification that re-reads it in-game compare 6 against 16 and disagree forever.
+
+Derive it instead by counting `player:IsAlive() and player:IsMajor()` over `Players`, minus the
+local player — measured to give 6 majors / 5 opponents on the same client where the getter said 16.
+
+Also settled: `map_seed` works via `GAME_SYNC_RANDOM_SEED`, and **there are two seeds** (game
+`-986870912` vs map `-986870911`) — recording one loses the other. `map_size` resolves through
+`GameInfo.Maps`, **not** `GameInfo.MapSizes`. `mod_set` works via `Modding.GetActiveMods()` and must
+be keyed on `Id`, since names are partly unlocalised. **`resources` has no getter at all** in-game —
+it should be recorded as not-observable rather than left returning `UnreadSetting`, which compares
+unequal to everything and lands a run `failed` before turn 1.
+
+### Steam is a hard dependency of the live node
+
+`spikes/steam-dependency-linux.md`. Civ VI **cannot** run without a running, signed-in Steam client:
+launched directly it fails `SteamAPI_Init` and puts up a DRM dialog that exits. Since an account can
+be in a game on only one machine at a time, **the live node is unavailable whenever the owner is
+gaming on that account** — live tasks must be scheduled around it, and an unattended run can be
+pre-empted. Steam offline mode does not help from a signed-out state (logout clears the credential
+cache), nor does Family Sharing (borrowing is blocked while the lender plays).
+
 ### The Lua sandbox: what exists, what doesn't, and what changes by phase
 
 `spikes/lua-api-verification-linux.md`, `spikes/load-path-linux.md`, `spikes/r5-save-path.md`:
@@ -442,13 +608,31 @@ tuner connection at a time and can refuse a rapid reconnect while the prior sock
   `Pangaea.lua` (Small), unlimited turns, 6 AI players. **This directly contradicts the worked
   example in `contracts/run-configuration.md`**, which shows `GAMESPEED_STANDARD` /
   `DIFFICULTY_PRINCE` — the preset this project built uses the fastest game speed and a harder
-  difficulty than the contract's own example assumes. Recorded as a contradiction, not resolved
-  here; see the open item below.
+  difficulty than the contract's own example assumes.
+  ✅ **RESOLVED by the owner: `GAMESPEED_ONLINE` is deliberate.** The preset is authoritative and the
+  contract's worked example is the thing that is out of date. **Consequence to carry forward:** the
+  constitution's "100 science / 100 culture by turn 50" goal was not calibrated at this speed —
+  turns cover far fewer game-years at Online — so that threshold means something materially
+  different here and must not be compared against any standard-speed baseline without restating it.
 - **The fixed leader is NOT set in the preset**, despite the intent behind building it — every
   player slot reads back `civ=nil leader=nil human=false`, and the UI shows `Random Leader` in
   every slot after loading it. (`LEADER_CYRUS`/`CIVILIZATION_PERSIA` strings visible in a raw
   `strings` dump are the installation's available-options roster, not a selection — an earlier read
   mistook them for one and was corrected in the same document.)
+- ✅ **RESOLVED — the preset does not need to pin it.** The owner confirmed the saved configuration
+  will not hold a civ selection and **ruled that runs start with `LEADER_CYRUS` (Persia)**.
+  `PlayerConfigurations` exposes working setters at the `HostGame` state, so preparation pins it
+  itself after loading the configuration:
+  `pc:SetLeaderTypeName("LEADER_CYRUS")` / `pc:SetCivilizationTypeName("CIVILIZATION_PERSIA")`.
+  Verified live with read-back (`slot0` went `nil`/`nil` → `LEADER_CYRUS`/`CIVILIZATION_PERSIA`) and
+  the Create Game UI refreshed to show Cyrus with the Persia icon. **The UI does not repaint
+  immediately on the Lua write**, so it must not be used as the verification signal — read back
+  through `PlayerConfigurations`, which is the FR-002/V2 pattern regardless. Related setters
+  confirmed present: `GameConfiguration.RemovePlayer` (returns `true`),
+  `SetParticipatingPlayerCount`, `GetAIPlayerIDs`; **`SetAIPlayerCount` does not exist** — player
+  count changes by adding/removing players.
+  The full preparation path is therefore reachable without UI automation beyond loading the
+  configuration: load preset → set leader/civ in Lua → read back field by field → start.
 - `Play Now` is confirmed unusable for seeded work independent of the timer finding: it randomized
   the leader across three consecutive launches (England/Eleanor, Korea/Seondeok, Mali/Mansa Musa).
 
@@ -575,15 +759,25 @@ they are not lost between this audit and whichever future session runs `/speckit
 Stated plainly, gathered in one place rather than left scattered across the principle sections
 above:
 
-- **The live tier has not run.** No `tests/live/*` test has been executed as part of this audit.
-  Everything above from spike work is real live-client evidence gathered by hand-written probe
-  scripts deliberately independent of `civsim_harness` (per `spikes/r5-save-path.md`: "these results
-  are evidence about the game rather than about our implementation"), not the harness's own live
-  test suite against a client.
-- **Capture pixel extraction is stubbed on all three host adapters.** Linux is furthest along (the
-  `XComposite`/`NameWindowPixmap` path is confirmed viable, not yet wired up); Windows and macOS
-  remain unimplemented stubs. No platform has proven a real captured frame clears the parity
-  screening gates through the harness's own code.
+- **No live test has run against a real Civilization VI client.** Everything above from spike work is
+  real live-client evidence gathered by hand-written probe scripts deliberately independent of
+  `civsim_harness` (per `spikes/r5-save-path.md`: "these results are evidence about the game rather
+  than about our implementation"), not the harness's own live test suite against a client.
+
+  Partial exception, 2026-09-20: `tests/live/test_linux_xcomposite_capture.py` (5 tests) **has** run
+  green and does exercise the harness's own `capture_window`. It targets ordinary X11 windows rather
+  than Civ VI, so it proves the pixel pipeline, not the client integration.
+- **Capture pixel extraction is implemented on Linux/X11 only; Windows and macOS remain stubs.**
+  The Linux `XComposite`/`NameWindowPixmap` path now returns real, correctly-ordered `BGRA8` pixels
+  and is occlusion-immune through the harness's own code
+  (`spikes/r6-xcomposite-readback-linux.md`). **No platform has yet proven a real frame *of
+  Civilization VI* clears the parity screening gates through the harness's own code** — on Linux
+  because the client could not be launched (`spikes/steam-dependency-linux.md`), elsewhere because
+  the extraction is unwritten. Linux/Wayland also remains stubbed.
+- **The Linux live node depends on Steam and is not available on demand.** Civ VI refuses to launch
+  without a running, signed-in Steam client, and an account can be in a game on only one machine at
+  a time — so live work is pre-empted whenever the owner is playing. Scheduling constraint, not a
+  defect; see `spikes/steam-dependency-linux.md`.
 - **macOS has no machine anywhere that can execute it.** Every macOS-specific claim in this document
   and the codebase (`host/macos/adapter.py`) is reasoning by analogy to Linux, not independent
   verification. The **R1/R5 save-directory contradiction for macOS is unresolvable without a live

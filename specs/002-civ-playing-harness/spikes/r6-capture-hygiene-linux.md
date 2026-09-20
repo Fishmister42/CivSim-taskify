@@ -115,8 +115,13 @@ fine but contain other windows.
 
 **Therefore the host adapter must not assume this.** Recommended: verify compositing at preflight
 rather than infer it from `XDG_SESSION_TYPE=x11`, and treat "X11 without a compositor" as a distinct
-capability case — not `VALIDATED`. This is a concrete requirement for `host/linux` (T052) and is
-**not** currently implemented.
+capability case — not `VALIDATED`. This is a concrete requirement for `host/linux` (T052).
+
+> **Implemented 2026-09-20.** `LinuxHostPlatform.capture_preconditions()` now checks compositing by
+> selection ownership of `_NET_WM_CM_Sn` (never `XDG_SESSION_TYPE`) and reads
+> `unredirect-fullscreen-windows`; `capture_window` returns `unavailable` with that reason when no
+> compositor is running, and never falls back to a root grab. See
+> `r6-xcomposite-readback-linux.md`.
 
 ## Wayland is not validated by this spike
 
@@ -143,5 +148,8 @@ code, and a Wayland host should not be assumed to reach the same tier.
   **`false`**, so fullscreen windows stay redirected. But it is a **user-changeable desktop setting
   with no relationship to the harness**, and flipping it would silently turn the pass above into a
   failure. Preflight should read it alongside the compositing check rather than trust it.
+
+  > **Implemented 2026-09-20** in `capture_preconditions()`, which reports the setting and warns on
+  > both `true` and *unknown*. The fullscreen capture itself is still untested.
 - No test of capture under GPU/driver-level overlays.
 - Capture cost and latency were not measured.
