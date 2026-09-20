@@ -398,21 +398,26 @@ ALLOWLIST: dict[str, str] = {
         "tests/unit/test_telemetry_exclusion.py) with no second production role"
     ),
     "send_input": (
-        "UNRESOLVED - hypervisor review: no caller anywhere in src/ on any platform; the "
-        "demo's 'first production caller' (hypervisor log, Run 5) lives in "
-        "specs/002-civ-playing-harness/spikes/r5-raw-windows/{bringup,advance_to_frontend}"
-        ".py, outside the package, and T217's Network.LoadGame resolution removed the "
-        "planned production consumer (option B: 'no bespoke driver, ever')"
+        "Ruled retained dormant (hypervisor log, Run 6, 2026-09-20): the planned "
+        "production consumer was T217 option B (bespoke UI driver), which died when "
+        "option C resolved (Network.LoadGame from FrontEnd); the owner-authorized "
+        "fallback class -- UI driving for operations the tuner cannot perform -- remains "
+        "plausible future work, so the allowlist keeps the surface visible instead of "
+        "silently dead. THE NEXT CONSUMER MUST DELETE THIS ENTRY -- do not build a "
+        "consumer to launder it away"
     ),
     "InputEvent": (
-        "UNRESOLVED - hypervisor review: constructed nowhere in src/ (the three adapters "
-        "only annotate with it); same evidence and same open question as send_input -- "
-        "wire a portable caller or retire the synthetic-input layer by ruling"
+        "Ruled retained dormant (hypervisor log, Run 6, 2026-09-20) alongside "
+        "send_input: constructed nowhere in src/ (the three adapters only annotate with "
+        "it) since T217's Network.LoadGame resolution removed the planned consumer; "
+        "same ruling, same condition -- THE NEXT CONSUMER MUST DELETE THIS ENTRY"
     ),
     "capture_preconditions": (
-        "UNRESOLVED - hypervisor review: the Linux adapter's R6 capture preflight has "
-        "callers only in tests/live and spikes; validation-results.md already flags it "
-        "('no production caller -- this one is ours') and no Phase 11 entry covers it"
+        "Ruled (hypervisor log, Run 6, 2026-09-20): suspected REAL wiring gap on the "
+        "Linux side -- hygiene preconditions that run only in tests are exactly the "
+        "T235 pattern -- and referred to the Linux peer (their adapter, their live "
+        "evidence; queued for the next issue #1 post). The entry stays until the peer "
+        "wires or retires it in host/linux/adapter.py"
     ),
 }
 

@@ -70,6 +70,7 @@ from civsim_harness.errors import HarnessError, ObservationAssemblyError, Recove
 from civsim_harness.models.common import EventId, RunId, Timestamp
 from civsim_harness.models.records import RetentionStatus, RunEvent, RunEventType, SavePoint
 from civsim_harness.models.run import LifecycleState, Run, StopResolution
+from civsim_harness.observe.assemble import handle_assembly_failure
 from civsim_harness.run.lifecycle import transition
 from civsim_harness.saves.addressing import SaveAddressingError, report_save_missing
 from civsim_harness.store.port import MatchStore
@@ -299,16 +300,19 @@ class RecoveryEngine:
 
         Records the `observation_assembly_failed` event itself (unlike the
         four `resilience.detector` signals, nothing else produces this
-        event), then delegates to :meth:`recover`.
+        event), then delegates to :meth:`recover`. The event is built by
+        `observe.assemble.handle_assembly_failure` -- T096's named home for
+        it and, per T245, its *only* definition; this method used to carry
+        an inline twin of that builder, which left the copy in the named
+        home the dead one (T231's exact shape, resolved the same way).
         """
         occurred_at = self._clock()
         self._store.write_run_event(
-            _event(
+            handle_assembly_failure(
+                error,
                 run_id=run.run_id,
-                event_type=RunEventType.OBSERVATION_ASSEMBLY_FAILED,
-                occurred_at=occurred_at,
                 turn_number=turn_number,
-                detail={"message": error.message, **error.detail},
+                occurred_at=occurred_at,
             )
         )
         return await self.recover(

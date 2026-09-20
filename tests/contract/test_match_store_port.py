@@ -1013,6 +1013,69 @@ def test_list_active_runs_excludes_terminal_states(store: SqliteMatchStore) -> N
 
 
 # --------------------------------------------------------------------------
+# E5 -- get_run_configuration resolves run ids and nothing else (T244)
+# --------------------------------------------------------------------------
+
+
+def test_get_run_configuration_returns_none_for_an_unknown_run_id(
+    store: SqliteMatchStore,
+) -> None:
+    """E5: an id that is not a known run_id answers None -- never a guess,
+    never a resolution against any secondary key."""
+    assert store.get_run_configuration("no-such-run") is None
+
+
+def test_get_run_configuration_never_cross_resolves_a_config_id_run_id_collision(
+    store: SqliteMatchStore,
+) -> None:
+    """E5's stated worry, pinned (contracts/match-store-port.md, "The keying
+    collision"): a run whose config_id happens to equal ANOTHER run's run_id
+    must never cross-resolve. A store resolving against config_id -- the
+    secondary key E5 names specifically -- would serve the wrong run's
+    configuration silently, which is strictly worse than answering None.
+    """
+    victim_config = _make_config("cfg-e5-victim")
+    store.create_run(_make_run("run-e5-victim", "cfg-e5-victim"), victim_config)
+
+    # The collider's config_id IS the victim's run_id.
+    collider_config = _make_config("run-e5-victim")
+    store.create_run(_make_run("run-e5-collider", "run-e5-victim"), collider_config)
+
+    # The collider resolves to its own configuration -- the victim's
+    # configuration is never served for the collider.
+    served_for_collider = store.get_run_configuration("run-e5-collider")
+    assert served_for_collider == collider_config
+    assert served_for_collider != victim_config
+
+    # The victim's own id still resolves to the victim's configuration: a
+    # store keyed by config_id would find the collider's configuration row
+    # under this id and serve it here instead.
+    served_for_victim = store.get_run_configuration("run-e5-victim")
+    assert served_for_victim == victim_config
+    assert served_for_victim != collider_config
+
+    # And an id the store knows ONLY as a config_id is not a run_id at all,
+    # so it answers None rather than resolving against the secondary key.
+    assert store.get_run_configuration("cfg-e5-victim") is None
+
+
+def test_get_run_configuration_round_trips_the_written_configuration_verbatim(
+    store: SqliteMatchStore,
+) -> None:
+    """E5/T226: the configuration create_run persisted comes back exactly as
+    written -- no re-derivation, no defaults applied on top of a stored
+    value (the adapter's own docstring makes this claim; this pins it)."""
+    config = _make_config("cfg-e5-roundtrip")
+    store.create_run(_make_run("run-e5-roundtrip", "cfg-e5-roundtrip"), config)
+
+    reread = store.get_run_configuration("run-e5-roundtrip")
+
+    assert reread is not None
+    assert reread == config
+    assert reread.model_dump(mode="json") == config.model_dump(mode="json")
+
+
+# --------------------------------------------------------------------------
 # T046: the write-before-advance guard
 # --------------------------------------------------------------------------
 

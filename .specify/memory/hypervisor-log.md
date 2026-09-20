@@ -532,3 +532,21 @@ scope is now fully discharged.
 - Two further C1-family candidates if the contract grows (NOT amended, outside scope): no
   latest-turn/turn-count read (highest_recorded_turn forward-probes), no metric-series read
   (yields_by_turn is O(turns)). Parked - compositions over published reads are legal today.
+
+### Convergence audit (read-only, at 60eb482): 001 CONVERGED (65/65); 002 NOT CONVERGED
+
+Phase 12 appended and pushed (28dc5fe): T238 CRITICAL (decision loop never attaches images;
+shown_to_agent can record that it did - falsifiable record), T239 (completeness served as
+constructor constant), T240 (comparability never downgraded - docstring claims it is), T241
+(abandon_branch zero production callers; T226's "only live remains" line is FALSE), T242 (V2
+fallback vacuous incl. victory_types; stale mod_set justification), T243 (V11 footprint preflight
+uncalled), T244 (E5 conformance untested), T245 (dead assembly-failure helper, T231 shape).
+Audit verified all spot-checked Phase 10/11 claims TRUE in code; civsim_web has zero dead
+surfaces; Principle V legally dormant. Parked: DEFAULT_WORST_CASE_CONTEXT_TOKENS placeholder;
+T050/T224 Windows WGC halves are headless-progressable on this host (next wave candidate).
+
+**Phase 12 wave in flight (3 agents, disjoint lanes, ledger writes reserved to hypervisor):**
+A = T238+T240 (decision_loop/context/capture); B = T239+T241+T242+T243 (composition/runner/
+store/operator); C = T244+T245+allowlist-citation refresh (conformance tests/assemble/recovery/
+reachability). Baseline 1572/2/0 at 28dc5fe. Agents report LANDED paragraphs; hypervisor appends,
+commits per lane, pushes.
