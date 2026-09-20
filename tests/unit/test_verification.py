@@ -166,8 +166,37 @@ def test_unevaluable_verification_predicate_is_rejected_not_applied() -> None:
 
 
 def test_disallowed_grammar_in_verification_predicate_is_rejected_not_applied() -> None:
-    # Mirrors the real turn.end_turn finding (tests/unit/test_predicates.py): a predicate using
-    # arithmetic must never silently pass evaluation.
+    # A predicate the evaluator cannot handle must REJECT, never silently pass as applied --
+    # a weak or unevaluable predicate would both mis-record the action and disable the
+    # no-progress backstop (FR-011, FR-014, invariant I4).
+    #
+    # `+`/`-` on numeric operands ARE permitted (catalogs/README.md section 4); `*` is not.
+    # The operands here are chosen so the arithmetic would evaluate TRUE if multiplication
+    # were allowed (5 * 2 == 10), so this proves the construct is refused even when refusing
+    # costs a passing result -- failing closed rather than failing convenient.
+    declaration = _action_declaration(
+        verification_predicate="game.turn_number == observed_turn_number * 2"
+    )
+    post = _observation([_entry("game.turn_state", {"turn_number": 10})])
+    pre = _observation([_entry("game.turn_state", {"turn_number": 5})])
+
+    result = verify_execution(
+        declaration=declaration,
+        pre_observation=pre,
+        post_observation=post,
+        verified_at=VERIFIED_AT,
+    )
+
+    assert result.execution.outcome is ExecutionOutcome.REJECTED
+    assert result.execution.rejection_reason is RejectionReason.VERIFICATION_FAILED
+    assert result.progress is StepProgress.REJECTED
+
+
+def test_permitted_arithmetic_in_verification_predicate_applies() -> None:
+    # The companion to the test above: `+ 1` is legal grammar, and the real
+    # turn.end_turn predicate depends on it. If this ever starts rejecting, the harness
+    # can no longer verify that a turn ended -- see tests/unit/test_predicates.py, which
+    # binds the same property to the actual catalogs/actions/turn.yaml declaration.
     declaration = _action_declaration(
         verification_predicate="game.turn_number == observed_turn_number + 1"
     )
@@ -181,9 +210,8 @@ def test_disallowed_grammar_in_verification_predicate_is_rejected_not_applied() 
         verified_at=VERIFIED_AT,
     )
 
-    assert result.execution.outcome is ExecutionOutcome.REJECTED
-    assert result.execution.rejection_reason is RejectionReason.VERIFICATION_FAILED
-    assert result.progress is StepProgress.REJECTED
+    assert result.execution.outcome is ExecutionOutcome.APPLIED
+    assert result.progress is StepProgress.CHANGED_STATE
 
 
 # --------------------------------------------------------------------------
