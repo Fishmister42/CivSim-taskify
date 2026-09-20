@@ -1,0 +1,321 @@
+"""Unit tests for the catalog loader and registry (T037).
+
+Each test isolates exactly one of contracts/capability-catalog.md's seven
+load-time validations (plus the registry's runtime wrong-context refusal) by
+building a small, otherwise-valid catalog fixture under ``tmp_path`` and
+breaking a single field. These deliberately do **not** touch the real
+``catalogs/`` tree: that directory is authored and validated by a different
+task (an integration concern), and is in flux while this test was written.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+from civsim_harness.capability.loader import Catalog, load_catalog
+from civsim_harness.capability.registry import CapabilityRegistry, WrongContextError
+from civsim_harness.errors import CatalogError
+from civsim_harness.models.common import LuaContext
+
+# --------------------------------------------------------------------------
+# Fixture builders -- a minimal, otherwise-valid catalog entry per kind.
+# --------------------------------------------------------------------------
+
+
+def _capability(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "capability_id": "demo.cap",
+        "path": "firetuner",
+        "implementation_ref": "lua/gamecore/demo.lua",
+        "reads": ["demo state"],
+        "writes": [],
+        "firetuner_gap": None,
+        "parity_basis": "Look at the demo panel.",
+    }
+    base.update(overrides)
+    return base
+
+
+def _observation(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "declaration_id": "demo.state",
+        "kind": "observation",
+        "summary": "Demo state.",
+        "parity_basis": "Look at the demo panel.",
+        "context": "GameCore_Tuner",
+        "capability_id": "demo.cap",
+        "output_schema": {
+            "type": "object",
+            "properties": {"value": {"type": "integer"}},
+        },
+        "introduced_in_version": "2026.09.1",
+    }
+    base.update(overrides)
+    return base
+
+
+def _action(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "declaration_id": "demo.do_thing",
+        "kind": "action",
+        "summary": "Do the thing.",
+        "parity_basis": "Click the thing button.",
+        "context": "InGame",
+        "capability_id": "demo.cap",
+        "availability_predicate": "game.is_local_player_turn and unit.is_selected",
+        "verification_predicate": "unit.plot == target",
+        "introduced_in_version": "2026.09.1",
+    }
+    base.update(overrides)
+    return base
+
+
+def _without(entry: dict[str, Any], *keys: str) -> dict[str, Any]:
+    return {key: value for key, value in entry.items() if key not in keys}
+
+
+def _write_catalog(
+    root: Path,
+    *,
+    version: str | None = "2026.09.1",
+    capabilities: list[dict[str, Any]] | None = None,
+    observations: list[dict[str, Any]] | None = None,
+    actions: list[dict[str, Any]] | None = None,
+) -> Path:
+    if version is not None:
+        (root / "VERSION").write_text(version + "\n", encoding="utf-8")
+
+    (root / "observations").mkdir(exist_ok=True)
+    (root / "actions").mkdir(exist_ok=True)
+
+    caps = capabilities if capabilities is not None else [_capability()]
+    obs = observations if observations is not None else [_observation()]
+    acts = actions if actions is not None else [_action()]
+
+    (root / "capabilities.yaml").write_text(yaml.safe_dump(caps, sort_keys=False), encoding="utf-8")
+    (root / "observations" / "demo.yaml").write_text(
+        yaml.safe_dump(obs, sort_keys=False), encoding="utf-8"
+    )
+    (root / "actions" / "demo.yaml").write_text(
+        yaml.safe_dump(acts, sort_keys=False), encoding="utf-8"
+    )
+    return root
+
+
+# --------------------------------------------------------------------------
+# Baseline: the fixture builder itself produces a loadable catalog.
+# --------------------------------------------------------------------------
+
+
+def test_valid_catalog_loads(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path)
+
+    catalog = load_catalog(root)
+
+    assert isinstance(catalog, Catalog)
+    assert catalog.version.version == "2026.09.1"
+    assert catalog.version.content_hash
+    assert set(catalog.version.declaration_ids) == {"demo.state", "demo.do_thing"}
+    assert "demo.state" in catalog.declarations
+    assert "demo.do_thing" in catalog.declarations
+    assert "demo.cap" in catalog.capabilities
+
+
+# --------------------------------------------------------------------------
+# Validation 1 -- non-empty parity_basis
+# --------------------------------------------------------------------------
+
+
+def test_missing_parity_basis_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path, observations=[_without(_observation(), "parity_basis")])
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "parity_basis" in str(exc_info.value)
+
+
+def test_empty_parity_basis_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path, observations=[_observation(parity_basis="")])
+
+    with pytest.raises(CatalogError):
+        load_catalog(root)
+
+
+# --------------------------------------------------------------------------
+# Validation 2 -- capability_id resolution and the bespoke/firetuner_gap rule
+# --------------------------------------------------------------------------
+
+
+def test_bespoke_without_firetuner_gap_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path, capabilities=[_capability(path="bespoke", firetuner_gap="")])
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "firetuner_gap" in str(exc_info.value)
+
+
+def test_unresolved_capability_id_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path, observations=[_observation(capability_id="nonexistent.cap")])
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "capability_id" in str(exc_info.value)
+
+
+# --------------------------------------------------------------------------
+# Validation 3 -- declaration_id uniqueness across files
+# --------------------------------------------------------------------------
+
+
+def test_duplicate_declaration_id_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(
+        tmp_path,
+        observations=[_observation(declaration_id="demo.dup")],
+        actions=[_action(declaration_id="demo.dup")],
+    )
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "duplicate" in str(exc_info.value).lower()
+
+
+# --------------------------------------------------------------------------
+# Validation 4 -- actions require both predicates
+# --------------------------------------------------------------------------
+
+
+def test_action_missing_availability_predicate_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path, actions=[_without(_action(), "availability_predicate")])
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "predicate" in str(exc_info.value).lower()
+
+
+def test_action_missing_verification_predicate_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path, actions=[_without(_action(), "verification_predicate")])
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "predicate" in str(exc_info.value).lower()
+
+
+# --------------------------------------------------------------------------
+# Validation 5 -- observations/views require a valid output_schema
+# --------------------------------------------------------------------------
+
+
+def test_observation_missing_output_schema_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path, observations=[_without(_observation(), "output_schema")])
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "output_schema" in str(exc_info.value)
+
+
+def test_observation_with_malformed_output_schema_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(
+        tmp_path, observations=[_observation(output_schema={"type": "not-a-real-json-schema-type"})]
+    )
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "output_schema" in str(exc_info.value)
+
+
+# --------------------------------------------------------------------------
+# Validation 6 -- predicates reference only exposed symbols
+# --------------------------------------------------------------------------
+
+
+def test_predicate_with_unexposed_symbol_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(
+        tmp_path, actions=[_action(availability_predicate="opponent.secret_hand_visible")]
+    )
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "symbol" in str(exc_info.value).lower()
+
+
+def test_predicate_with_observed_snapshot_symbol_loads(tmp_path: Path) -> None:
+    root = _write_catalog(
+        tmp_path,
+        actions=[
+            _action(
+                declaration_id="turn.end_turn",
+                verification_predicate="game.turn_number == observed_turn_number + 1",
+            )
+        ],
+    )
+
+    catalog = load_catalog(root)
+
+    assert "turn.end_turn" in catalog.declarations
+
+
+# --------------------------------------------------------------------------
+# Validation 7 -- catalogs/VERSION presence
+# --------------------------------------------------------------------------
+
+
+def test_missing_version_file_fails_load(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path, version=None)
+
+    with pytest.raises(CatalogError) as exc_info:
+        load_catalog(root)
+
+    assert "VERSION" in str(exc_info.value)
+
+
+# --------------------------------------------------------------------------
+# Registry -- wrong-context execution refusal (T036, FR-022, research R3)
+# --------------------------------------------------------------------------
+
+
+def test_wrong_context_execution_is_refused(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path)
+    catalog = load_catalog(root)
+    registry = CapabilityRegistry(catalog=catalog)
+
+    # "demo.do_thing" is declared context: InGame.
+    with pytest.raises(WrongContextError):
+        registry.authorize("demo.do_thing", LuaContext.GAME_CORE_TUNER)
+
+    # "demo.state" is declared context: GameCore_Tuner.
+    with pytest.raises(WrongContextError):
+        registry.authorize("demo.state", LuaContext.IN_GAME)
+
+
+def test_correct_context_execution_is_authorized(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path)
+    catalog = load_catalog(root)
+    registry = CapabilityRegistry(catalog=catalog)
+
+    action = registry.authorize("demo.do_thing", LuaContext.IN_GAME)
+    observation = registry.authorize("demo.state", LuaContext.GAME_CORE_TUNER)
+
+    assert action.declaration_id == "demo.do_thing"
+    assert observation.declaration_id == "demo.state"
+
+
+def test_unregistered_declaration_id_is_refused(tmp_path: Path) -> None:
+    root = _write_catalog(tmp_path)
+    catalog = load_catalog(root)
+    registry = CapabilityRegistry(catalog=catalog)
+
+    with pytest.raises(CatalogError):
+        registry.authorize("no.such.declaration", LuaContext.IN_GAME)

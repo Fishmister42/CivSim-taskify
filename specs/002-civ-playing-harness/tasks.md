@@ -112,9 +112,9 @@ until they exist.
 
 **The parity boundary machinery**
 
-- [ ] T035 Implement the catalog YAML loader in `src/civsim_harness/capability/loader.py` enforcing all seven load-time validations from contracts/capability-catalog.md — non-empty `parity_basis`; every `capability_id` resolves and every `path: bespoke` has a non-empty `firetuner_gap`; `declaration_id` unique across all files; actions have both `availability_predicate` and `verification_predicate`; observations and views have a valid `output_schema`; predicates reference only exposed symbols; `catalogs/VERSION` present. **All failures abort startup, not turn 1.**
-- [ ] T036 Implement catalog versioning in `src/civsim_harness/capability/version.py` (content hash over all catalog files, `declaration_ids` set) and the registry with wrong-context execution refusal in `src/civsim_harness/capability/registry.py` (FR-022, research R3)
-- [ ] T037 [P] Unit test in `tests/unit/test_catalog_load.py`: a missing `parity_basis` fails load; `path: bespoke` with an empty `firetuner_gap` fails load; duplicate `declaration_id` fails load; an action missing either predicate fails load; an observation missing `output_schema` fails load; executing an entry in the wrong Lua context is refused
+- [X] T035 Implement the catalog YAML loader in `src/civsim_harness/capability/loader.py` enforcing all seven load-time validations from contracts/capability-catalog.md — non-empty `parity_basis`; every `capability_id` resolves and every `path: bespoke` has a non-empty `firetuner_gap`; `declaration_id` unique across all files; actions have both `availability_predicate` and `verification_predicate`; observations and views have a valid `output_schema`; predicates reference only exposed symbols; `catalogs/VERSION` present. **All failures abort startup, not turn 1.**
+- [X] T036 Implement catalog versioning in `src/civsim_harness/capability/version.py` (content hash over all catalog files, `declaration_ids` set) and the registry with wrong-context execution refusal in `src/civsim_harness/capability/registry.py` (FR-022, research R3)
+- [X] T037 [P] Unit test in `tests/unit/test_catalog_load.py`: a missing `parity_basis` fails load; `path: bespoke` with an empty `firetuner_gap` fails load; duplicate `declaration_id` fails load; an action missing either predicate fails load; an observation missing `output_schema` fails load; executing an entry in the wrong Lua context is refused
 
 **Store and provider ports**
 
