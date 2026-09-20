@@ -56,7 +56,11 @@ from civsim_harness.parity.screening import load_screening_profiles
 from civsim_harness.provider.port import RawDecision
 from civsim_harness.resilience.recovery import RecoveryEngine
 from civsim_harness.run.decision_loop import DecisionLoopContext
-from civsim_harness.run.turn_cycle import TurnCycleDependencies, run_turn_cycle
+from civsim_harness.run.turn_cycle import (
+    BackstopEndTurnNotConfirmed,
+    TurnCycleDependencies,
+    run_turn_cycle,
+)
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
 from fakes.fake_host import FakeHostPlatform
 from fakes.fake_provider import FakeModelProvider
@@ -64,6 +68,8 @@ from fakes.fake_provider import FakeModelProvider
 TICK_DECLARATION_ID = DeclarationId("test.tick")
 STUCK_DECLARATION_ID = DeclarationId("test.stuck")
 GAME_TURN_STATE_DECLARATION_ID = DeclarationId("game.turn_state")
+GAME_SCREEN_STATE_DECLARATION_ID = DeclarationId("game.screen_state")
+END_TURN_DECLARATION_ID = DeclarationId("turn.end_turn")
 
 
 def _build_registry() -> CapabilityRegistry:
@@ -81,6 +87,24 @@ def _build_registry() -> CapabilityRegistry:
                 "turn_number": {"type": "integer"},
                 "is_local_player_turn": {"type": "boolean"},
                 "is_waiting_for_other_players": {"type": "boolean"},
+            },
+        },
+        introduced_in_version="test",
+    )
+    screen_state = ParityDeclaration(
+        declaration_id=GAME_SCREEN_STATE_DECLARATION_ID,
+        kind=DeclarationKind.OBSERVATION,
+        summary="Test-only screen/prompt state, mirroring catalogs/observations/game.yaml.",
+        parity_basis="Look at whichever screen or panel is currently open.",
+        context=LuaContext.IN_GAME,
+        capability_id=CapabilityId("test.turn_control"),
+        output_schema={
+            "type": "object",
+            "required": ["screen", "recognized", "has_blocking_prompt"],
+            "properties": {
+                "screen": {"type": "string"},
+                "recognized": {"type": "boolean"},
+                "has_blocking_prompt": {"type": "boolean"},
             },
         },
         introduced_in_version="test",
@@ -107,6 +131,21 @@ def _build_registry() -> CapabilityRegistry:
         verification_predicate="game.turn_number == observed_turn_number + 1",
         introduced_in_version="test",
     )
+    # Mirrors catalogs/actions/turn.yaml's turn.end_turn verbatim (T114 dispatches this exact
+    # declaration on the harness's own behalf when the no-progress backstop trips).
+    end_turn = ParityDeclaration(
+        declaration_id=END_TURN_DECLARATION_ID,
+        kind=DeclarationKind.ACTION,
+        summary="End the current turn and pass play to the other civilizations.",
+        parity_basis="Click the end-turn button in the lower-right action panel.",
+        context=LuaContext.IN_GAME,
+        capability_id=CapabilityId("test.turn_control"),
+        availability_predicate="game.is_local_player_turn and not game.has_blocking_prompt",
+        verification_predicate=(
+            "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players"
+        ),
+        introduced_in_version="test",
+    )
     capability = IntegrationCapability(
         capability_id=CapabilityId("test.turn_control"),
         path=CatalogCapabilityPath.FIRETUNER,
@@ -114,7 +153,7 @@ def _build_registry() -> CapabilityRegistry:
         reads=["turn state"],
         writes=["turn state"],
     )
-    declarations = (turn_state, tick, stuck)
+    declarations = (turn_state, screen_state, tick, stuck, end_turn)
     catalog = Catalog(
         root=Path("."),
         version=CatalogVersion(
@@ -131,10 +170,20 @@ def _build_registry() -> CapabilityRegistry:
 class _FakeGame:
     """``test.tick`` always advances the counter (verifies ``changed_state``); ``test.stuck`` is
     dispatched but its execution is a deliberate no-op, so its verification always reports
-    ``rejected`` -- a stuck agent spinning on it never makes progress."""
+    ``rejected`` -- a stuck agent spinning on it never makes progress.
 
-    def __init__(self) -> None:
+    ``blocking_prompt`` mirrors ``game.screen_state.has_blocking_prompt`` (catalogs/observations/
+    game.yaml): a test sets it to simulate the T114 backstop tripping while a prompt is still up,
+    which ``turn.end_turn``'s own ``availability_predicate`` must refuse (FR-010).
+    ``end_turn_swallowed`` simulates ``UI.RequestAction`` being dispatched but the click never
+    landing (turn_number does not advance) -- the exact ambiguity the turn-number readback exists
+    to catch, per turn.end_turn's own verification_predicate.
+    """
+
+    def __init__(self, *, blocking_prompt: bool = False, end_turn_swallowed: bool = False) -> None:
         self.turn_number = 1
+        self.blocking_prompt = blocking_prompt
+        self.end_turn_swallowed = end_turn_swallowed
 
     async def read(self) -> tuple[Sequence[CapabilityResult], str]:
         return (
@@ -146,7 +195,15 @@ class _FakeGame:
                         "is_local_player_turn": True,
                         "is_waiting_for_other_players": False,
                     },
-                )
+                ),
+                CapabilityResult(
+                    declaration_id=GAME_SCREEN_STATE_DECLARATION_ID,
+                    value={
+                        "screen": "world_view",
+                        "recognized": True,
+                        "has_blocking_prompt": self.blocking_prompt,
+                    },
+                ),
             ],
             "world_view",
         )
@@ -156,7 +213,9 @@ class _FakeGame:
     ) -> None:
         if declaration_id == TICK_DECLARATION_ID:
             self.turn_number += 1
-        # test.stuck: deliberately does nothing.
+        elif declaration_id == END_TURN_DECLARATION_ID and not self.end_turn_swallowed:
+            self.turn_number += 1
+        # test.stuck, and a swallowed end_turn: deliberately do nothing.
 
 
 class _FakeSaveCapability:
@@ -469,5 +528,174 @@ async def test_the_two_endings_are_distinguishable(tmp_path: Path) -> None:
         assert record1.turn_cycle.outcome is TurnOutcome.ENDED_BY_AGENT
         assert record2.turn_cycle.outcome is TurnOutcome.ENDED_ON_NO_PROGRESS
         assert record1.turn_cycle.outcome != record2.turn_cycle.outcome
+    finally:
+        store.close()
+
+
+def _scripted_stuck_decisions(count: int) -> list[RawDecision]:
+    return [
+        RawDecision(
+            action_declaration_id=STUCK_DECLARATION_ID,
+            reasoning="try the same thing again",
+            parameters={},
+            is_end_turn=False,
+            prompt_type=None,
+        )
+        for _ in range(count)
+    ]
+
+
+async def test_the_backstop_dispatches_turn_end_turn_and_verifies_by_turn_number_readback(
+    tmp_path: Path,
+) -> None:
+    """T113/T114: the harness -- never a synthesised agent decision -- issues turn.end_turn to the
+    game once the no-progress backstop trips, and that dispatch is proven by the same turn-number
+    readback every other action uses (act.dispatch/act.verify), not merely a non-error return."""
+    run_id = RunId("run-backstop-dispatches")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    game = _FakeGame()
+    provider = FakeModelProvider()
+    for decision in _scripted_stuck_decisions(2):
+        provider.queue_decision(decision)
+
+    deps = _make_deps(
+        tmp_path=tmp_path,
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        game=game,
+        provider=provider,
+        no_progress_step_limit=2,
+    )
+
+    try:
+        outcome = await run_turn_cycle(deps, run=run)
+    finally:
+        store.close()
+
+    assert outcome.outcome is TurnOutcome.ENDED_ON_NO_PROGRESS
+    # The fake game's own turn counter only ever advances through a genuine execute() call for
+    # test.tick or turn.end_turn (see _FakeGame.execute) -- neither scripted step here was
+    # test.tick, so this advance can only be the harness's own backstop end-turn dispatch, and it
+    # is derived from the game's own state, not asserted by this test.
+    assert game.turn_number == 2
+
+    store = SqliteMatchStore(tmp_path / "match.db")
+    try:
+        record = store.get_turn_cycle(run_id, 1)
+        assert record is not None
+        assert record.turn_cycle.outcome is TurnOutcome.ENDED_ON_NO_PROGRESS
+        assert record.turn_cycle.is_authoritative is True
+
+        # No Decision, DecisionStep, or ModelCall was created for the backstop's own end-turn
+        # dispatch (T113, SC-012, SC-022): step_count and the persisted steps match the scripted
+        # stuck decisions exactly, one-for-one -- not one more.
+        assert record.turn_cycle.step_count == 2
+        assert len(record.steps) == 2
+        assert [b.decision.action_declaration_id for b in record.steps] == [
+            STUCK_DECLARATION_ID,
+            STUCK_DECLARATION_ID,
+        ]
+        assert all(not b.decision.is_end_turn for b in record.steps)
+    finally:
+        store.close()
+
+
+async def test_the_backstop_end_turn_surfaces_a_recorded_stall_when_blocked_by_a_prompt(
+    tmp_path: Path,
+) -> None:
+    """T114: turn.end_turn's own availability_predicate refuses an end-turn while a blocking
+    prompt is up (FR-010). If the backstop trips in that state, it is a genuine stuck state --
+    this must surface as a recorded, visible failure, never a silent retry loop and never a
+    fabricated success (the game's own turn counter must never move)."""
+    run_id = RunId("run-backstop-blocked")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    game = _FakeGame(blocking_prompt=True)
+    provider = FakeModelProvider()
+    for decision in _scripted_stuck_decisions(2):
+        provider.queue_decision(decision)
+
+    deps = _make_deps(
+        tmp_path=tmp_path,
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        game=game,
+        provider=provider,
+        no_progress_step_limit=2,
+    )
+
+    try:
+        with pytest.raises(BackstopEndTurnNotConfirmed) as exc_info:
+            await run_turn_cycle(deps, run=run)
+    finally:
+        store.close()
+
+    assert exc_info.value.detail["stage"] == "dispatch"
+    # No fabricated success: the game's own turn counter never moved, because turn.end_turn was
+    # never even authorized to dispatch.
+    assert game.turn_number == 1
+
+    # The turn's own record -- what the *agent* did -- is still durably persisted (write-before-
+    # advance, I3): this is a recorded, visible stall, not a turn that silently vanishes.
+    store = SqliteMatchStore(tmp_path / "match.db")
+    try:
+        record = store.get_turn_cycle(run_id, 1)
+        assert record is not None
+        assert record.turn_cycle.outcome is TurnOutcome.ENDED_ON_NO_PROGRESS
+        assert record.turn_cycle.is_authoritative is True
+        assert record.turn_cycle.step_count == 2
+    finally:
+        store.close()
+
+
+async def test_the_backstop_end_turn_is_not_treated_as_success_when_the_click_is_swallowed(
+    tmp_path: Path,
+) -> None:
+    """T114: ``UI.RequestAction``'s own return value is ``nil`` and carries no information -- a
+    non-error dispatch must never be treated as success. When the post-dispatch turn-number
+    readback does not confirm the turn actually ended (the click was swallowed), that must also
+    surface as a recorded failure rather than a fabricated success."""
+    run_id = RunId("run-backstop-swallowed")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    game = _FakeGame(end_turn_swallowed=True)
+    provider = FakeModelProvider()
+    for decision in _scripted_stuck_decisions(2):
+        provider.queue_decision(decision)
+
+    deps = _make_deps(
+        tmp_path=tmp_path,
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        game=game,
+        provider=provider,
+        no_progress_step_limit=2,
+    )
+
+    try:
+        with pytest.raises(BackstopEndTurnNotConfirmed) as exc_info:
+            await run_turn_cycle(deps, run=run)
+    finally:
+        store.close()
+
+    assert exc_info.value.detail["stage"] == "verify"
+    assert game.turn_number == 1
+
+    store = SqliteMatchStore(tmp_path / "match.db")
+    try:
+        record = store.get_turn_cycle(run_id, 1)
+        assert record is not None
+        assert record.turn_cycle.outcome is TurnOutcome.ENDED_ON_NO_PROGRESS
+        assert record.turn_cycle.step_count == 2
     finally:
         store.close()
