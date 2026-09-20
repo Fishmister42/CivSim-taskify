@@ -133,20 +133,23 @@ should not be mistaken for configuration.
 
 ## What is still needed
 
-1. **Authoritative read-back through `GameConfiguration`.** The values above come from parsing a file,
-   which is exactly the kind of inference FR-002 / V2 exist to forbid relying on. Loading the preset
-   and reading each field back is the real answer, and is also what exercises the read-back path the
-   spec requires.
-2. **🔴 Does the preset carry `TURNTIMER_STANDARD`?** This is the highest-value open question on the
-   host, because it decides whether the
-   [turn-timer blocker](./turn-timer-blocker-linux.md) is a property of `Play Now` defaults or of
-   every game on this machine. Reading `GameConfiguration.GetTurnTimerType()` after loading the
-   preset answers it in one call.
-3. **Difficulty, map size, opponent count, city-state count, victory conditions** — not recovered
-   from the plaintext regions; they are presumably in the compressed section.
-4. **Confirm it loads from the standard UI.** Selecting a saved configuration in Create Game is an
-   ordinary menu action, which is what makes it parity-valid under Principle I — but that is
-   reasoning, not something this spike observed.
+*(Items 1–4 of the original draft asked questions the read-back above has since answered — the
+authoritative read-back is done, the turn timer resolves to `TURNTIMER_NONE`, difficulty/map
+size/opponent count are recovered, and the preset was loaded through the ordinary Create Game menu,
+which settles the Principle I parity basis by observation rather than reasoning. They are removed
+rather than left contradicting the table above.)*
+
+1. **🔴 Does the leader survive the transition into the game?** The pinning above is confirmed **at
+   the setup screen only**. Whether map generation reassigns it has not been tested, and `Play Now`
+   randomising the leader proves a reassignment step exists somewhere on that path. The failure mode
+   is nasty: the write sticks, V2's read-back passes at preparation time, and the run then plays as
+   a different leader. **Do not treat the leader as pinned until this is confirmed in-game.**
+2. **Which build number is authoritative.** The client reports `1.0.12.9 (564030)` at the main menu
+   but `1.0.12.9 (363760)` in-game, in `Saved By Version`, and in this `.Civ6Cfg` header. The
+   composite build pin needs one of them named; `363760` is the one embedded in artifacts, but this
+   is not yet measured through a declared observation.
+3. **Victory conditions** — not recovered from the plaintext regions and not exposed by the getters
+   probed so far.
 
 ## Note on `Play Now`
 
