@@ -1,0 +1,132 @@
+# Seed set definition (contracts/run-configuration.md "Seed set definition").
+#
+# civilization, leader, ruleset, and mod_set are immutable after creation --
+# changing one creates a new seed set, otherwise runs inside a set stop being
+# comparable, which is the only reason the set exists (FR-031).
+#
+# Unlike shuffle-classic-2026q3.yaml (the generic worked example this file's
+# shape is copied from -- left untouched), every value below is pinned to
+# the `CivSim DEFAULT` Civ VI setup preset, read back live through
+# `GameConfiguration` on the validation host rather than inferred from the
+# `.Civ6Cfg` file on disk. See
+# specs/002-civ-playing-harness/spikes/civsim-default-preset-linux.md and
+# specs/002-civ-playing-harness/spikes/preset_readback.txt for the full
+# session this was captured from.
+schema_version: 1
+name: civsim-default
+
+# The preset itself does NOT carry a leader/civilization selection --
+# civsim-default-preset-linux.md's live read-back found every player slot
+# `civ=nil leader=nil human=false` after loading `CivSim DEFAULT`, and
+# `HumanPlayerCount = 0`. The owner has resolved this: the harness selects
+# these explicitly after loading the preset (see
+# `run/preparation.py`'s leader-selection seam --
+# `apply_and_verify_leader_selection`). Pinning them here is what lets V3
+# (`check_seed_set_agreement`) catch a run configuration that disagrees with
+# what the harness is actually supposed to select.
+civilization: CIVILIZATION_PERSIA
+leader: LEADER_CYRUS
+ruleset: RULESET_EXPANSION_2
+
+# 22 mods, pinned on id + version ONLY -- never on the in-game title string.
+# An empty list here would be a false pin: this host's preset genuinely
+# loads with 22 mods active, and a seed set that claimed "no mods" would
+# make V3's agreement check pass for a run configuration that in fact
+# disagrees with every run this set actually produces, and would make V3
+# reject every *real* run against this host outright (its mod_set would
+# never match an empty pin). `mod_set: []` is a meaningful, different
+# claim ("no mods"), not a safe placeholder for "not yet catalogued".
+#
+# Titles are deliberately NOT recorded: one live title observed on this
+# host is `[ENDCOLOR]TopPanel Extension [COLOR:ResGoldLabelCS]Pro[ENDCOLOR]`
+# -- bracket-matched parsing of exactly this kind of string has already
+# broken once (see the mod-title parsing note in the spikes). id + version
+# is stable and unambiguous where a display title is neither.
+#
+# Known-present mods whose human-readable names ARE recorded in the spikes
+# (sweep-raw/gameconfig_values.txt), but are deliberately not the pin here:
+#   - Better Balanced Game (BBG) 7.5.0
+#   - Better Balanced Map 1.39.5
+#   - Multiplayer Helper 1.7.9 (see turn-timer-blocker-linux.md: this is the
+#     suspected, unconfirmed source of the TURNTIMER_STANDARD-in-single-
+#     player finding -- irrelevant to the pin itself, since CivSim DEFAULT's
+#     own read-back confirmed TURNTIMER_NONE, but worth knowing this mod is
+#     one of the 22 ids below).
+mod_set:
+  - { id: 02a8bdde-67ea-4d38-9540-26e685e3156e, version: "v1" }
+  - { id: 113d9459-0a3b-4fcb-a49c-483f40303575, version: "v1" }
+  - { id: 1b28771a-c749-434b-9053-d1380c553de9, version: "v1" }
+  - { id: 1b394fe9-23dc-4868-8f0a-5220cb8fb427, version: "v1" }
+  - { id: 1f367231-a040-4793-bdbb-088816853683, version: "v1" }
+  - { id: 2f6e858a-28ef-46b3-beac-b985e52e9bc1, version: "v1" }
+  - { id: 3809975f-263f-40a2-a747-8bfb171d821a, version: "v1" }
+  - { id: 382a187f-c8ba-4094-a6a7-0d5315661f33, version: "v1" }
+  - { id: 4873eb62-8ccc-4574-b784-dda455e74e68, version: "v1" }
+  - { id: 619ac86e-d99d-4bf3-b8f0-8c5b8c402567, version: "v1" }
+  - { id: 643ea320-8e1a-4cf1-a01c-00d88ddd131a, version: "v1" }
+  - { id: 8424840c-92ef-4426-a9b4-b4e0cb818049, version: "v1" }
+  - { id: 9de86512-de1a-400d-8c0a-ab46ebbf76b9, version: "v1" }
+  - { id: 9e881f4f-017f-29f5-d849-04537424be3f, version: "v1" }
+  - { id: a1100fc4-70f2-4129-ac27-2a65a685ed08, version: "v1" }
+  - { id: a3f42cd4-6c3e-4f5a-bc81-be29e0c0b87c, version: "v1" }
+  - { id: ce5876cd-6900-46d1-9c9c-8dba1f28872e, version: "v1" }
+  - { id: e2749e9a-8056-45cd-901b-c368c8e83deb, version: "v1" }
+  - { id: e3f53c61-371c-440b-96ce-077d318b36c0, version: "v1" }
+  - { id: ffdf4e79-dee2-47bb-919b-f5739106627a, version: "v1" }
+  - { id: c88cba8b-8311-4d35-90c3-51a4a5d66542, version: "v1" }
+  - { id: cb84075d-5007-4207-b662-c35a5f7be260, version: "v1" }
+
+# Composite platform/version identity, checked against the live client at
+# every run's preflight (V10). A mismatch fails the run before turn 1 unless
+# covered by an entry below (FR-002, FR-031, R20).
+#
+# The validation host this preset was read back on is Linux (native Aspyr),
+# not Windows -- civsim-default-preset-linux.md's readable `.Civ6Cfg` header
+# confirms `LINUX` / `1.0.12.9 (363760)` independently of the tuner
+# read-back, and the tuner session itself reports client `1.0.12.9
+# (564030)`. The composite below deliberately follows this host's own
+# platform, unlike shuffle-classic-2026q3.yaml's `win/...` example.
+game_build: "linux/1.0.12.9"
+
+# A sensible handful of seeds for this set (digits of assorted mathematical
+# constants, for the same easy-to-recognise-as-arbitrary reason
+# shuffle-classic-2026q3.yaml uses pi/e/phi).
+seeds:
+  - "1414213562"  # sqrt(2)
+  - "1732050808"  # sqrt(3)
+  - "2236067977"  # sqrt(5)
+  - "5772156649"  # Euler-Mascheroni constant
+  - "1202056903"  # Apery's constant, zeta(3)
+
+# Appended to only by an explicit operator action (`civsim seedset accept-build`).
+# Empty here: no build drift has yet been accepted for this set.
+accepted_build_changes: []
+
+# --------------------------------------------------------------------------
+# Not part of the SeedSet schema (contracts/run-configuration.md's "Seed set
+# definition" carries only the fields above) -- but read back live from the
+# same `CivSim DEFAULT` preset in the same session, and recorded here purely
+# as documentation for whoever writes a RunConfiguration referencing this
+# seed set's map_settings/game_settings/difficulty/opponents. The owner has
+# confirmed these are intentional, including the "100 science by turn 50"
+# calibration question against GAMESPEED_ONLINE, which is settled as
+# deliberate and NOT a bug to fix here:
+#
+#   turn timer:            TURNTIMER_NONE   (-1525060181; verified live --
+#                           see turn-timer-blocker-linux.md's resolution:
+#                           Play Now's TURNTIMER_STANDARD does NOT carry
+#                           over to this preset)
+#   difficulty:             DIFFICULTY_EMPEROR    (1499830429)
+#   game speed:              GAMESPEED_ONLINE      (-1649545904 -- the
+#                           fastest speed in the game; turns resolve in far
+#                           fewer game-years than GAMESPEED_STANDARD, which
+#                           is why any standard-speed-calibrated yardstick
+#                           means something different here)
+#   start era:               ERA_ANCIENT           (-1851407529)
+#   map script:               Pangaea.lua
+#   map size:                 Small                 (-1837222328)
+#   max turns:                0 (no limit)
+#   AI players:               6
+#   participating players:    6
+#   multiplayer:               false (single-player)
+# --------------------------------------------------------------------------

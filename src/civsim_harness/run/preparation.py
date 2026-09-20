@@ -77,19 +77,44 @@ seam pattern already used throughout this codebase (``HostPlatform``,
    an explicit *unverified* precondition rather than silently treating "cannot tell" as
    "confirmed off"). See the function's own docstring for why FR-011, FR-014, and FR-015/SC-022 all
    depend on this holding.
+6. :func:`apply_and_verify_leader_selection` (**the leader-selection seam**): the
+   ``CivSim DEFAULT`` preset a run loads does not carry a civilization/leader selection at all --
+   ``spikes/civsim-default-preset-linux.md``'s live read-back found every player slot
+   ``civ=nil leader=nil human=false`` after loading it. The owner has resolved that the harness
+   itself must select ``CIVILIZATION_PERSIA``/``LEADER_CYRUS`` (or whatever the seed set pins)
+   after loading the preset, then read the selection back -- civilization and leader are already
+   two of the exact fields :func:`configured_fields`/V2 govern, so this is the same
+   apply-then-verify shape as :func:`apply_configuration`/:func:`verify_configuration` above.
+   Three outcomes, the same "verified / actively wrong / cannot confirm" shape as
+   :func:`turn_timer_preflight`, except here the third case (the write is unavailable) does **not**
+   get to proceed unverified the way an undeterminable turn-timer reading does: a run whose leader
+   was never confirmed cannot satisfy V3, and starting it anyway would attribute its data to the
+   wrong civilization, which is strictly worse than not starting. **The live Lua write is now
+   verified** (Linux client, ``HostGame`` Lua state, 2026-09-20 capture) --
+   :class:`LuaLeaderSelectionApplier` below binds it: ``PlayerConfigurations[0]
+   :SetLeaderTypeName(...)`` / ``:SetCivilizationTypeName(...)``, plain strings (not
+   ``DB.MakeHash``), verified only through a ``PlayerConfigurations`` read-back and never the
+   Create Game UI (which does not repaint synchronously with the write). It is a separate, async,
+   concrete class rather than a plug-in for :data:`LeaderSelectionApplier` -- transport dispatch
+   is inherently async (``NexusClient.execute_command``), where
+   :func:`apply_and_verify_leader_selection` itself and its injected callables stay synchronous,
+   matching every other seam already in this module (:func:`apply_configuration`/
+   :func:`verify_configuration`/:func:`turn_timer_preflight`) --
+   both share the same result types (:class:`LeaderSelectionResult` et al.) so a caller gets one
+   consistent shape regardless of which path it goes through.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from civsim_harness.capability.loader import Catalog
-from civsim_harness.errors import BuildMismatchError, PreflightError
+from civsim_harness.errors import BuildMismatchError, NexusError, PreflightError
 from civsim_harness.host.port import HostPlatform
 from civsim_harness.models.common import BuildAcceptance, CapabilityId, CatalogVersionRef
 from civsim_harness.models.config import RunConfiguration, SeedSet
@@ -632,3 +657,438 @@ def turn_timer_preflight(
             "turn_timer_hash": reading.turn_timer_hash,
         },
     )
+
+
+# --------------------------------------------------------------------------
+# Leader-selection seam -- set civilization + leader after loading the
+# CivSim DEFAULT preset, then read them back (V2, V3)
+# --------------------------------------------------------------------------
+
+
+class LeaderSelectionWriteStatus(Enum):
+    """The two-state outcome of one attempt to *write* the run's configured civilization +
+    leader into the live client.
+
+    Deliberately has no "verified" member: writing and verifying are two separate steps here,
+    exactly like :func:`apply_configuration` and :func:`verify_configuration` are two separate
+    functions above -- :func:`apply_and_verify_leader_selection` performs the read-back itself.
+    This status only ever answers "did the client report the write as having happened", never
+    "and was it correct" -- that is what the read-back is for.
+    """
+
+    APPLIED = "applied"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class LeaderSelectionWriteResult:
+    """One writer's answer to "did the civilization/leader write happen".
+
+    ``reason`` is required exactly when ``status`` is ``UNAVAILABLE`` (mirrors
+    :class:`TurnTimerReading`'s own "report the gap, never guess" discipline): a caller whose
+    real write path is not yet known -- ``spikes/civsim-default-preset-linux.md`` found every
+    player slot reading back ``civ=nil leader=nil human=false`` after loading ``CivSim
+    DEFAULT``, and the actual Lua call that sets a slot's civilization/leader has not yet been
+    located on a live client -- must say so explicitly rather than silently reporting
+    ``APPLIED`` for a write it never made.
+    """
+
+    status: LeaderSelectionWriteStatus
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status is LeaderSelectionWriteStatus.UNAVAILABLE and not self.reason:
+            raise ValueError(
+                "LeaderSelectionWriteResult.status is UNAVAILABLE but no reason was given"
+            )
+
+
+#: The injectable, synchronous writer :func:`apply_and_verify_leader_selection` is built
+#: around -- the same shape as ``turn_timer_preflight``'s own
+#: ``read_turn_timer: Callable[[], TurnTimerReading]`` seam above, kept for the same reason:
+#: this stays the small, dependency-free, unit-testable contract a stub can satisfy in a test
+#: (see ``tests/unit/test_preflight_host_config.py``), independent of any particular transport.
+#:
+#: **The live Lua write this seam represents is now verified** (Linux client, ``HostGame`` Lua
+#: state, 2026-09-20 capture) -- :class:`LuaLeaderSelectionApplier` below binds it for real,
+#: async use against a connected Nexus session. It does not itself implement this ``Callable``
+#: type, though: dispatching to a live client is inherently async
+#: (``NexusClient.execute_command``), where this seam -- like every other one already in this
+#: module -- stays synchronous, so a caller bridging async transport into this contract does so
+#: the same way it must already for ``apply_setting``/``read_setting``/``read_turn_timer``.
+#:
+#: Takes plain ``str`` civilization/leader identifiers (``"CIVILIZATION_PERSIA"`` /
+#: ``"LEADER_CYRUS"``, the same strings ``RunConfiguration``/``SeedSet`` already carry) --
+#: confirmed live, this call needs no ``DB.MakeHash`` conversion (unlike the config *getters*
+#: ``turn_timer_preflight`` above has to hash-compare against). Values still always come from
+#: the caller's seed set/configuration, never hard-coded in this module.
+LeaderSelectionApplier = Callable[[str, str], LeaderSelectionWriteResult]
+
+
+class LeaderSelectionOutcome(Enum):
+    """What happened when :func:`apply_and_verify_leader_selection` tried to establish the
+    run's configured civilization + leader on the live client."""
+
+    VERIFIED = "verified"
+    MISMATCH = "mismatch"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class LeaderSelectionResult:
+    """What :func:`apply_and_verify_leader_selection` hands back -- always a result, never a
+    raise, matching :func:`verify_configuration`/:class:`PreparationResult`'s own "returns
+    rather than persists" shape immediately above (civilization and leader are two of the exact
+    fields :func:`configured_fields`/V2 already govern, so this seam's failure shape follows
+    theirs, not :func:`build_pin_preflight`'s hard-raise shape).
+
+    ``mismatches`` is empty exactly when ``outcome`` is ``VERIFIED``; it is non-empty for both
+    ``MISMATCH`` and ``UNAVAILABLE`` -- expressed as the same :class:`SettingMismatch` tuple
+    :class:`PreparationResult` already uses, so a caller can fold this seam's result straight
+    into the same ``preparation_mismatch`` event ``verify_configuration``'s own mismatches
+    already build (``tests/integration/test_preparation.py``'s worked caller example) without a
+    second, differently-shaped code path for this one seam. A run whose leader was never
+    confirmed cannot satisfy V3, and starting it anyway would attribute its data to the wrong
+    civilization -- so ``UNAVAILABLE`` fails exactly like ``MISMATCH`` does, never proceeding
+    unverified the way :func:`turn_timer_preflight`'s ``UNVERIFIED`` state is allowed to.
+    """
+
+    outcome: LeaderSelectionOutcome
+    mismatches: tuple[SettingMismatch, ...]
+
+    @property
+    def matched(self) -> bool:
+        return self.outcome is LeaderSelectionOutcome.VERIFIED
+
+
+def _unavailable_leader_selection_result(
+    *, expected_civilization: str, expected_leader: str, reason: str
+) -> LeaderSelectionResult:
+    """Shared by the sync seam below and :class:`LuaLeaderSelectionApplier`'s live binding: a
+    write that could not be confirmed -- for whatever reason -- is recorded as a mismatch on
+    both fields, naming *reason* in each ``actual``, never silently skipped.
+    """
+    unavailable_note = f"unavailable: {reason}"
+    return LeaderSelectionResult(
+        outcome=LeaderSelectionOutcome.UNAVAILABLE,
+        mismatches=(
+            SettingMismatch(
+                field="civilization", expected=expected_civilization, actual=unavailable_note
+            ),
+            SettingMismatch(field="leader", expected=expected_leader, actual=unavailable_note),
+        ),
+    )
+
+
+def _compare_leader_selection(
+    *,
+    expected_civilization: str,
+    expected_leader: str,
+    actual_civilization: Any,
+    actual_leader: Any,
+) -> LeaderSelectionResult:
+    """Shared by the sync seam below and :class:`LuaLeaderSelectionApplier`'s live binding:
+    compare a successfully-read-back civilization/leader pair against what was configured,
+    field by field -- only the differing field(s) are recorded, matching
+    :func:`verify_configuration`'s own behaviour.
+    """
+    mismatches: list[SettingMismatch] = []
+    if actual_civilization != expected_civilization:
+        mismatches.append(
+            SettingMismatch(
+                field="civilization", expected=expected_civilization, actual=actual_civilization
+            )
+        )
+    if actual_leader != expected_leader:
+        mismatches.append(
+            SettingMismatch(field="leader", expected=expected_leader, actual=actual_leader)
+        )
+    if mismatches:
+        return LeaderSelectionResult(
+            outcome=LeaderSelectionOutcome.MISMATCH, mismatches=tuple(mismatches)
+        )
+    return LeaderSelectionResult(outcome=LeaderSelectionOutcome.VERIFIED, mismatches=())
+
+
+def apply_and_verify_leader_selection(
+    config: RunConfiguration,
+    *,
+    apply_leader_selection: LeaderSelectionApplier,
+    read_setting: Callable[[str], Any],
+) -> LeaderSelectionResult:
+    """Set *config*'s civilization + leader on the live client via *apply_leader_selection*,
+    then read them back via *read_setting* (the same injected reader
+    :func:`verify_configuration` uses, keyed the same way: ``"civilization"``/``"leader"``) and
+    compare.
+
+    **Why this exists separately from** :func:`apply_configuration`/:func:`verify_configuration`.
+    Those two already generically apply-then-verify every configured field, civilization and
+    leader included -- but per the live read-back in
+    ``spikes/civsim-default-preset-linux.md``, loading the ``CivSim DEFAULT`` preset leaves
+    civilization and leader unset (every player slot ``civ=nil leader=nil``), so they need their
+    own write, independent of the generic ``apply_setting`` dispatch used for every other field.
+    This function is the reusable, synchronous, unit-testable gate around that write -- any
+    *apply_leader_selection*/*read_setting* pair can drive it, including a plain test double
+    (``tests/unit/test_preflight_host_config.py``); :class:`LuaLeaderSelectionApplier` below is
+    the concrete, verified, async binding a live run orchestrator uses instead, sharing this
+    function's own result types rather than duplicating this gate's logic (see
+    :func:`_compare_leader_selection`/:func:`_unavailable_leader_selection_result`).
+
+    **Three outcomes:**
+
+    - The write is unavailable (*apply_leader_selection* reports
+      ``LeaderSelectionWriteStatus.UNAVAILABLE``, e.g. because the real Lua call has not yet
+      been wired in): returns ``outcome=UNAVAILABLE`` with a ``SettingMismatch`` recorded for
+      both ``civilization`` and ``leader``, each ``actual`` naming the write's own ``reason``.
+      **Does not raise, and does not proceed as though nothing needed setting** -- a caller
+      that has not yet wired a real writer must fail closed here, not silently skip this seam.
+    - The write reports success but the read-back disagrees on either field: returns
+      ``outcome=MISMATCH`` with a ``SettingMismatch`` for each field that actually differed
+      (only the differing ones, matching :func:`verify_configuration`'s own behaviour).
+    - The write reports success and the read-back agrees on both fields: returns
+      ``outcome=VERIFIED`` with no mismatches -- the only outcome a caller may treat as
+      "turn 1 may proceed".
+
+    A write that cannot be verified is not usable (FR-002/V2): there is no code path here that
+    returns ``VERIFIED`` without the read-back itself having confirmed both fields.
+    """
+    write_result = apply_leader_selection(config.civilization, config.leader)
+    if write_result.status is LeaderSelectionWriteStatus.UNAVAILABLE:
+        assert write_result.reason is not None  # guaranteed by LeaderSelectionWriteResult
+        return _unavailable_leader_selection_result(
+            expected_civilization=config.civilization,
+            expected_leader=config.leader,
+            reason=write_result.reason,
+        )
+
+    return _compare_leader_selection(
+        expected_civilization=config.civilization,
+        expected_leader=config.leader,
+        actual_civilization=read_setting("civilization"),
+        actual_leader=read_setting("leader"),
+    )
+
+
+# --------------------------------------------------------------------------
+# The verified Lua write -- PlayerConfigurations[0]:SetLeaderTypeName /
+# SetCivilizationTypeName, dispatched in the HostGame Lua state
+# --------------------------------------------------------------------------
+#
+# VERIFIED against a real Civilization VI client (Linux, native Aspyr build; HostGame Lua
+# state; 2026-09-20 capture). Observed live, including the read-back V3 needs:
+#
+#   before:  slot0 leader=nil            civ=nil
+#   set:     SetLeaderTypeName ok=true     SetCivilizationTypeName ok=true
+#   after:   slot0 leader=LEADER_CYRUS   civ=CIVILIZATION_PERSIA
+#
+# and the Create Game UI refreshed to show the selection in slot 1 -- but only a moment after
+# the call, never synchronously with it (see :meth:`LuaLeaderSelectionApplier.apply_and_verify`
+# below for why this module never verifies through that UI).
+#
+# Three things this binding is built around, all from that same capture:
+#
+# 1. Plain strings work -- "LEADER_CYRUS" / "CIVILIZATION_PERSIA", not `DB.MakeHash` values.
+#    The Lua templates below format whatever civilization/leader they are given verbatim; the
+#    names themselves are never hard-coded in this module, only supplied by the caller's seed
+#    set/configuration.
+# 2. The state is `HostGame`, and its index is resolved *by name*, at call time, from the
+#    client's current state table -- never a raw `int` captured once. A live capture
+#    (`civsim_harness.nexus.client`'s own module docstring) established that Lua state indices
+#    differ by *game phase*: the Create Game screen's own 31-state table (where `HostGame`
+#    lives) is different from the 136-state table once a game is loaded, and the same *name*
+#    can sit at a different index in each. `_resolve_host_game_index` below re-reads
+#    `state_indices.by_name["HostGame"]` on every call for exactly this reason, mirroring
+#    `saves.save_game`'s own `InGameStateIndexSource`/`_resolve_in_game_index` pattern (that
+#    module's docstring covers the identical hazard for `InGame`) and
+#    `observe.game_build`'s `GameCoreTunerIndexSource` for `GameCore_Tuner`. A caller is
+#    expected to have called `NexusClient.refresh_state_indices()` at the relevant phase
+#    boundary (arriving at the Create Game screen) before relying on this.
+# 3. Verification is a `PlayerConfigurations` read-back, never the Create Game UI -- the setup
+#    screen does not repaint immediately on the Lua write (live finding: right after the call it
+#    still read "Random Leader", updating only a moment later), so anything that screenshotted
+#    the setup screen to confirm preparation would get a false negative. This is also just the
+#    FR-002/V2 pattern already used everywhere else in this module: read the actual state back
+#    through a declared observation, never infer it from a UI paint.
+#
+# Duck-typed against the Nexus transport rather than importing `civsim_harness.nexus.client`,
+# matching `saves.save_game.LuaSaveCapability` and `observe.game_build.make_tuner_version_reader`'s
+# own convention -- this module keeps no hard dependency on the transport either.
+
+
+class _HostGameStateIndicesLike(Protocol):
+    """Structural shape of ``civsim_harness.nexus.client.StateIndices`` -- duck-typed, never
+    imported (see this section's own docstring)."""
+
+    @property
+    def by_name(self) -> Mapping[str, int]: ...
+
+
+@runtime_checkable
+class _HasHostGameStateIndices(Protocol):
+    """Structural shape of a connected ``NexusClient`` (or anything alike): "the client
+    itself", read fresh on every call rather than snapshotted once. ``@runtime_checkable`` so
+    :func:`_resolve_host_game_index` can ``isinstance``-check an injected resolver against this
+    shape instead of assuming a bare callable -- the identical convention
+    ``saves.save_game._HasStateIndices``/``observe.game_build._HasStateIndices`` already use.
+    """
+
+    @property
+    def state_indices(self) -> _HostGameStateIndicesLike | None: ...
+
+
+HostGameStateIndexResolver = Callable[[], int]
+"""Zero-argument, synchronous callable returning the *current* ``HostGame`` Lua state index.
+Synchronous and in-memory by design, matching ``saves.save_game.InGameStateIndexResolver`` --
+resolving this must never itself be a network round trip."""
+
+HostGameStateIndexSource = HostGameStateIndexResolver | _HasHostGameStateIndices
+"""What :class:`LuaLeaderSelectionApplier` accepts in place of a raw ``int``: either a
+:data:`HostGameStateIndexResolver`, or a connected Nexus session itself (anything shaped like
+``NexusClient``, i.e. exposing ``.state_indices``). Passing the client directly is the common
+case: it already holds the current state table in memory, so reading
+``.state_indices.by_name["HostGame"]`` fresh on every call costs nothing extra. A caller is
+responsible for having called ``refresh_state_indices()`` at the Create Game screen phase
+boundary -- this module does not call it itself, matching ``LuaSaveCapability``'s own division
+of responsibility (re-resolution is a phase-boundary concern the run sequence owns)."""
+
+
+def _resolve_host_game_index(source: HostGameStateIndexSource) -> int:
+    """Ask *source* for the current ``HostGame`` Lua state index, right now -- never a value
+    captured earlier. Mirrors ``saves.save_game._resolve_in_game_index`` exactly, for
+    ``HostGame`` in place of ``InGame``."""
+    if isinstance(source, _HasHostGameStateIndices):
+        indices = source.state_indices
+        if indices is None or "HostGame" not in indices.by_name:
+            raise NexusError(
+                "Cannot resolve the HostGame Lua state index -- this Nexus session has not "
+                "connected, or the client is not currently at the Create Game screen (HostGame "
+                "only exists in that phase's state table -- verified 2026-09-20 capture)",
+                detail={"reason": "host_game_state_index_unresolved"},
+            )
+        return indices.by_name["HostGame"]
+    return source()
+
+
+# `(ok and "") or tostring(err)` rather than `ok and nil or tostring(err)`: the latter is the
+# classic Lua and/or ternary trap -- see `saves.save_game`'s own `_SAVE_LUA_TEMPLATE` comment
+# for why the always-truthy `""` sidesteps it. Both pcalls are attempted regardless of whether
+# the first fails, so a caller sees whichever failed (or both) rather than only the first.
+_LEADER_SELECTION_WRITE_LUA_TEMPLATE = (
+    "local pc = PlayerConfigurations[0]; "
+    'local okL, errL = pcall(function() pc:SetLeaderTypeName("{leader}") end); '
+    'local okC, errC = pcall(function() pc:SetCivilizationTypeName("{civilization}") end); '
+    "local ok = okL and okC; "
+    'return {{ ["issued"] = ok, ["error"] = (ok and "") or tostring(errL or errC) }}'
+)
+
+# The actual verification (this section's own docstring point 3): read straight back through
+# `PlayerConfigurations`, never the Create Game UI.
+_LEADER_SELECTION_READBACK_LUA = (
+    "local pc = PlayerConfigurations[0]; "
+    'return { ["civilization"] = pc:GetCivilizationTypeName(), '
+    '["leader"] = pc:GetLeaderTypeName() }'
+)
+
+
+class LuaLeaderSelectionApplier:
+    """The verified Lua leader-selection write, bound (this section's own docstring): slot 0's
+    ``PlayerConfigurations`` civilization/leader, written and read back in the ``HostGame`` Lua
+    state.
+
+    Structured like ``saves.save_game.LuaSaveCapability`` (the established pattern for a
+    verified FireTuner Lua call in this codebase): *execute* is a plain callable, typically
+    :meth:`civsim_harness.nexus.client.NexusClient.execute_command` called as
+    ``execute(state_index, lua_body)``, accepted without importing ``NexusClient`` so this
+    module keeps no hard dependency on the transport; *host_game_state_index* is never a bare
+    ``int`` captured once, for the identical reason ``LuaSaveCapability``'s own
+    ``in_game_state_index`` is not (see :data:`HostGameStateIndexSource`).
+
+    This class is the *live, async* counterpart to :func:`apply_and_verify_leader_selection`
+    above, not an implementation of :data:`LeaderSelectionApplier` (that type is synchronous;
+    live Nexus dispatch is not) -- it shares that function's own result types
+    (:class:`LeaderSelectionResult`, :class:`LeaderSelectionOutcome`, :class:`SettingMismatch`)
+    via the same :func:`_compare_leader_selection`/:func:`_unavailable_leader_selection_result`
+    helpers, so a caller gets one consistent shape regardless of which path it goes through.
+    """
+
+    def __init__(
+        self,
+        execute: Callable[[int, str], Awaitable[Any]],
+        *,
+        host_game_state_index: HostGameStateIndexSource,
+    ) -> None:
+        if not isinstance(host_game_state_index, _HasHostGameStateIndices) and not callable(
+            host_game_state_index
+        ):
+            raise TypeError(
+                "host_game_state_index must be a zero-argument callable returning the current "
+                "HostGame Lua state index, or a connected Nexus client exposing "
+                "`.state_indices` (e.g. NexusClient itself) -- never a bare int captured once "
+                "at construction, which can silently go stale after a reconnect or phase "
+                f"transition (see this module's docstring); got "
+                f"{type(host_game_state_index).__name__!r}"
+            )
+        self._execute = execute
+        self._host_game_state_index = host_game_state_index
+
+    async def apply_and_verify(self, civilization: str, leader: str) -> LeaderSelectionResult:
+        """Write *civilization*/*leader* onto player slot 0, then read them back through
+        ``PlayerConfigurations`` and compare -- the live, bound counterpart to
+        :func:`apply_and_verify_leader_selection`, with the same three outcomes and the same
+        result types.
+
+        Never raises: a transport failure (``NexusError``, e.g. a stale ``HostGame`` index or a
+        connection problem) or a Lua-side write/read error is reported as ``UNAVAILABLE``, the
+        identical "cannot confirm, so fail closed" behaviour
+        :func:`apply_and_verify_leader_selection` already documents for its own *unavailable*
+        outcome -- a write that cannot be verified is not usable (FR-002/V2), whether it could
+        not be verified because nothing wired a writer yet, or because this live one could not
+        complete.
+
+        **Verification is the ``PlayerConfigurations`` read-back in this method, never the
+        Create Game UI** -- a live finding is that the setup screen does not repaint
+        synchronously with the write (it briefly still shows "Random Leader" after the call
+        returns), so anything screenshotting that screen to confirm preparation would observe a
+        false negative. This method's own read-back, not the write call's ``ok`` return value
+        and not any UI capture, is what ``VERIFIED`` is conditioned on.
+        """
+        try:
+            write_state_index = _resolve_host_game_index(self._host_game_state_index)
+            write_body = _LEADER_SELECTION_WRITE_LUA_TEMPLATE.format(
+                civilization=civilization, leader=leader
+            )
+            write_result = await self._execute(write_state_index, write_body)
+        except NexusError as exc:
+            return _unavailable_leader_selection_result(
+                expected_civilization=civilization, expected_leader=leader, reason=str(exc)
+            )
+        if not isinstance(write_result, dict) or not write_result.get("issued"):
+            return _unavailable_leader_selection_result(
+                expected_civilization=civilization,
+                expected_leader=leader,
+                reason=f"leader-selection Lua write did not report success: {write_result!r}",
+            )
+
+        try:
+            readback_state_index = _resolve_host_game_index(self._host_game_state_index)
+            readback = await self._execute(readback_state_index, _LEADER_SELECTION_READBACK_LUA)
+        except NexusError as exc:
+            return _unavailable_leader_selection_result(
+                expected_civilization=civilization, expected_leader=leader, reason=str(exc)
+            )
+        if not isinstance(readback, dict):
+            return _unavailable_leader_selection_result(
+                expected_civilization=civilization,
+                expected_leader=leader,
+                reason=(
+                    "HostGame PlayerConfigurations read-back did not return a table: "
+                    f"{readback!r}"
+                ),
+            )
+
+        return _compare_leader_selection(
+            expected_civilization=civilization,
+            expected_leader=leader,
+            actual_civilization=readback.get("civilization"),
+            actual_leader=readback.get("leader"),
+        )

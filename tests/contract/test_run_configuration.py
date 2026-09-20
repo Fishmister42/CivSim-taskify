@@ -42,6 +42,7 @@ from fakes.fake_host import FakeHostPlatform
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "configs" / "turn50-validation.yaml"
 SEED_SET_PATH = REPO_ROOT / "configs" / "seedsets" / "shuffle-classic-2026q3.yaml"
+CIVSIM_DEFAULT_SEED_SET_PATH = REPO_ROOT / "configs" / "seedsets" / "civsim-default.yaml"
 
 NOW = datetime(2026, 9, 20, 12, 0, 0, tzinfo=UTC)
 
@@ -137,6 +138,87 @@ def test_v3_mod_set_mismatch_names_mod_set_not_a_different_field() -> None:
 
     mismatched_fields = {m["field"] for m in excinfo.value.detail["mismatches"]}
     assert mismatched_fields == {"mod_set"}
+
+
+# --------------------------------------------------------------------------
+# civsim-default.yaml -- the pinned CivSim DEFAULT seed set (CIVILIZATION_PERSIA /
+# LEADER_CYRUS), read back live on the Linux validation host
+# (specs/002-civ-playing-harness/spikes/civsim-default-preset-linux.md,
+# preset_readback.txt). Loads/validates like any other seed set (V1-shaped), and its 22-mod pin
+# is exercised against V3 exactly like shuffle-classic-2026q3.yaml's mod_set is above.
+# --------------------------------------------------------------------------
+
+
+def test_civsim_default_seed_set_loads_and_validates() -> None:
+    seed_set = load_seed_set_yaml(CIVSIM_DEFAULT_SEED_SET_PATH.read_text(encoding="utf-8"))
+
+    assert seed_set.name == "civsim-default"
+    assert seed_set.civilization == "CIVILIZATION_PERSIA"
+    assert seed_set.leader == "LEADER_CYRUS"
+    assert seed_set.ruleset == "RULESET_EXPANSION_2"
+    # The validation host is Linux, not Windows -- unlike shuffle-classic-2026q3.yaml's
+    # `win/...` worked example (R20: platform is part of the composite identity).
+    assert seed_set.game_build == "linux/1.0.12.9"
+    assert len(seed_set.seeds) >= 1
+    assert seed_set.accepted_build_changes == []
+    assert seed_set.is_uniform is True
+
+
+def test_civsim_default_mod_set_has_22_entries_pinned_on_id_and_version() -> None:
+    """22 mods, not empty -- an empty list would be a false pin against this host, which
+    genuinely loads with 22 mods active (see the seed set file's own comments). Pinned on
+    `id`/`version` only: `ModRef` carries no title field at all, so there is no way for the
+    known-broken bracket-matched title parsing (one live title is literally
+    `[ENDCOLOR]TopPanel Extension [COLOR:ResGoldLabelCS]Pro[ENDCOLOR]`) to have leaked in here."""
+    seed_set = load_seed_set_yaml(CIVSIM_DEFAULT_SEED_SET_PATH.read_text(encoding="utf-8"))
+
+    assert len(seed_set.mod_set) == 22
+    ids = [mod.id for mod in seed_set.mod_set]
+    assert len(ids) == len(set(ids))  # no duplicate ids
+    for mod in seed_set.mod_set:
+        assert mod.id
+        assert mod.version == "v1"
+
+
+def test_v3_empty_mod_set_against_civsim_default_is_rejected() -> None:
+    """An empty `mod_set` would be a false pin against this host: 22 mods are genuinely active
+    (spikes/civsim-default-preset-linux.md, sweep-raw/gameconfig_values.txt). V3 must reject a
+    run configuration claiming no mods against a seed set that pins 22, exactly as it already
+    rejects any other mod_set disagreement
+    (test_v3_mod_set_mismatch_names_mod_set_not_a_different_field above)."""
+    seed_set = load_seed_set_yaml(CIVSIM_DEFAULT_SEED_SET_PATH.read_text(encoding="utf-8"))
+    config = load_run_configuration_yaml(CONFIG_PATH.read_text(encoding="utf-8"))
+    otherwise_agreeing = config.model_copy(
+        update={
+            "civilization": seed_set.civilization,
+            "leader": seed_set.leader,
+            "ruleset": seed_set.ruleset,
+            "mod_set": [],
+        }
+    )
+
+    with pytest.raises(PreflightError) as excinfo:
+        check_seed_set_agreement(otherwise_agreeing, seed_set)
+
+    mismatched_fields = {m["field"] for m in excinfo.value.detail["mismatches"]}
+    assert mismatched_fields == {"mod_set"}
+    # Never an override: the seed set's own 22-mod pin is untouched by the attempt.
+    assert len(seed_set.mod_set) == 22
+
+
+def test_v3_civsim_default_agreeing_configuration_passes_cleanly() -> None:
+    seed_set = load_seed_set_yaml(CIVSIM_DEFAULT_SEED_SET_PATH.read_text(encoding="utf-8"))
+    config = load_run_configuration_yaml(CONFIG_PATH.read_text(encoding="utf-8"))
+    agreeing = config.model_copy(
+        update={
+            "civilization": seed_set.civilization,
+            "leader": seed_set.leader,
+            "ruleset": seed_set.ruleset,
+            "mod_set": seed_set.mod_set,
+        }
+    )
+
+    check_seed_set_agreement(agreeing, seed_set)  # must not raise
 
 
 # --------------------------------------------------------------------------
