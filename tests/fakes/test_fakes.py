@@ -308,7 +308,7 @@ async def test_real_nexus_client_round_trips_against_the_fake_server() -> None:
         screen = await client.execute_command(
             state_index=indices.game_core_tuner, lua_body=_SCREEN_PROBE_LUA
         )
-        assert screen["screen"] == "world_view"
+        assert screen["screen"] == "world"
 
         end_turn = await client.execute_command(
             state_index=indices.in_game, lua_body=_END_TURN_LUA

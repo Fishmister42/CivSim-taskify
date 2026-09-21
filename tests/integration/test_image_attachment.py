@@ -204,7 +204,7 @@ class _FakeGame:
                     value={"turn_number": self.turn_number},
                 )
             ],
-            "world_view",
+            "world",
         )
 
     async def execute(

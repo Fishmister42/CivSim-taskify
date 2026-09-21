@@ -154,7 +154,7 @@ class _FakeGame:
                     },
                 )
             ],
-            "world_view",
+            "world",
         )
 
 

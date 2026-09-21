@@ -48,7 +48,7 @@ def _observation(entries: list[ObservationEntry], step: str = "step-1") -> Obser
         catalog_version=CatalogVersionRef(version="2026.09.3", content_hash="cafe"),
         entries=entries,
         captures=[],
-        screen_identity="world_view",
+        screen_identity="world",
     )
 
 

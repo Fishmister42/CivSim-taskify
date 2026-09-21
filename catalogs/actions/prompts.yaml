@@ -229,3 +229,34 @@
   target_hint: >
     "continue" -- the popup offers nothing else
   introduced_in_version: "2026.09.4"
+
+# MEASURED live 2026-09-21 (gameplay day, block 3, game turn 27): a relic from a tribal village
+# raised the "Your civilization has produced a Great Work" showcase. No screen id covered it, the
+# probe answered `world`, and every units.move_to issued underneath it failed verification because
+# the modal was swallowing input. Its state is `GreatWorkShowcase`
+# (steamassets/base/assets/ui/ingame.xml). Unlike the other two acknowledge-only popups this one is
+# not a UIManager popup at all -- its close button's handler is literally `ContextPtr:SetHide(true)`
+# (greatworkshowcase.lua HideScreen) -- which is why lua/ingame/screens.lua picks the dismissal
+# mechanism per popup rather than assuming DequeuePopup everywhere.
+
+- declaration_id: prompts.great_work_created
+  kind: action
+  summary: >
+    Acknowledge the "great work created" showcase ({"target": "continue"}); it appears when a
+    great work or relic enters the player's possession and blocks play until dismissed.
+  parity_basis: >
+    The showcase fills the screen with the new great work or relic, its name and its creator, and
+    a close button in the corner; a human clicks that close button (or presses Escape) to dismiss
+    it and carry on. Its "View Great Works" button is not offered by this action -- the great-works
+    overview is a separate screen, and this action is a strict subset of what the human sees.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.great_work_created"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.great_work_created"
+  target_kind: option
+  target_hint: >
+    "continue" -- the showcase offers nothing else this action exposes
+  introduced_in_version: "2026.09.4"

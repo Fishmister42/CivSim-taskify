@@ -137,7 +137,7 @@ def test_an_unrecognised_screen_routes_to_a_stall_never_a_default() -> None:
 
 def test_a_recognised_screen_with_no_blocking_prompt_routes_to_no_prompt() -> None:
     screen = ScreenIdentityResult(
-        screen="world_view", raw_screen_id="WorldView", recognized=True, has_blocking_prompt=False
+        screen="world", raw_screen_id="WorldView", recognized=True, has_blocking_prompt=False
     )
 
     route = route_prompt(
@@ -266,20 +266,20 @@ async def test_a_declared_prompt_is_answered_as_a_prompt_response_decision_at_it
                 (
                     [
                         _screen_state_result(
-                            screen="world_view", recognized=True, has_blocking_prompt=False
+                            screen="world", recognized=True, has_blocking_prompt=False
                         ),
                         _turn_state_result(turn_number=1, is_local_player_turn=True),
                     ],
-                    "world_view",
+                    "world",
                 ),
                 (
                     [
                         _screen_state_result(
-                            screen="world_view", recognized=True, has_blocking_prompt=False
+                            screen="world", recognized=True, has_blocking_prompt=False
                         ),
                         _turn_state_result(turn_number=2, is_local_player_turn=True),
                     ],
-                    "world_view",
+                    "world",
                 ),
             ]
         )

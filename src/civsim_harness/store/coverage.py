@@ -101,8 +101,9 @@ class ScreenSurface:
 
     ``screen_ids`` is every id the identity probe is able to report as *recognised*:
     ``CIVSIM_KNOWN_SCREENS``, the keys of ``CIVSIM_SCREEN_ID_BY_STATE``, and any ``screen = "..."``
-    literal the probe returns directly (that is where ``world_view`` comes from -- what the probe
-    answers at the plain world view, deliberately *not* in ``CIVSIM_KNOWN_SCREENS``).
+    literal the probe returns directly (that is where ``world`` comes from -- what the probe
+    answers at the plain world view, where no watchlisted state reports open, so no entry in
+    ``CIVSIM_SCREEN_ID_BY_STATE`` names it).
     ``watched_states`` is ``CIVSIM_SCREEN_WATCHLIST``, the Lua state names the probe scans, and
     ``state_by_screen_id`` is T253's ``CIVSIM_SCREEN_ID_BY_STATE`` -- the mapping that decides
     whether an open state has a catalog identity at all or stalls the run as an unknown screen.

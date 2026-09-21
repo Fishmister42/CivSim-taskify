@@ -62,7 +62,7 @@ def _top_bar_observation(turn: int, *, gold: bool = True) -> Observation:
             )
         ],
         captures=[],
-        screen_identity="world_view",
+        screen_identity="world",
     )
 
 

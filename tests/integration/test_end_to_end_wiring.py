@@ -113,7 +113,7 @@ class _FakeGame:
 
     def probe_screen(self, _command: ReceivedCommand) -> dict[str, Any]:
         return {
-            "screen": "world_view",
+            "screen": "world",
             "raw_screen_id": "WorldView",
             "recognized": True,
             "has_blocking_prompt": False,

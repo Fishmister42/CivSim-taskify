@@ -282,7 +282,7 @@ SYNTHETIC_TURN_TRANSCRIPT: list[TranscriptEntry] = [
         state_index=STATE_INDEX_GAME_CORE_TUNER,
         match="CivSim_Screens.probe",
         response={
-            "screen": "world_view",
+            "screen": "world",
             "raw_screen_id": "WorldView",
             "recognized": True,
             "has_blocking_prompt": False,

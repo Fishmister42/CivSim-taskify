@@ -104,7 +104,7 @@ local CIVSIM_KNOWN_SCREENS = {
     "prompt.unit_promotion", "prompt.pantheon_selection", "prompt.religion_selection",
     "prompt.great_person_selection", "prompt.diplomatic_approach", "prompt.declare_war_response",
     "prompt.city_state_quest", "prompt.congress_vote", "prompt.era_transition",
-    "prompt.tech_civic_completed", "prompt.boost_unlocked",
+    "prompt.tech_civic_completed", "prompt.boost_unlocked", "prompt.great_work_created",
 }
 
 -- T253 (MEASURED 2026-09-21, attempt 5 of the first model-driven runs): the civic "Code of Laws"
@@ -117,9 +117,63 @@ local CIVSIM_KNOWN_SCREENS = {
 -- control on the civic popup ("Change Government") is deliberately NOT offered -- a strict
 -- subset of what the human sees, never a superset (Principle I); governments and policies are
 -- reachable through the policies.* actions instead. The single offered option is "continue".
+--
+-- MEASURED 2026-09-21 (gameplay day, block 4, game turn 30): T253's acknowledge was wrong in a way
+-- only live play showed. `UIManager:DequeuePopup(ctx)` hides the popup's context but never runs the
+-- popup's OWN Continue handler, and both tech/civic and boost popups keep a private queue in their
+-- own Lua state. Firaxis's `techciviccompletedpopup.lua` Close button calls `OnClose()` ->
+-- `TryClose()` (line 319-345), which clears `m_kCurrentData`, shows the next queued entry if there
+-- is one, and only then calls `Close()` (line 303-309, the DequeuePopup). Dequeuing without that
+-- leaves `m_kCurrentData` set, so the NEXT completed civic re-queues the context, `OnShow()` ->
+-- `RealizeNextPopup()` (line 266) sees `m_kCurrentData ~= nil` and re-displays the STALE card:
+-- observed live as the turn-20 "Code of Laws" card reappearing at turn 30 under a tracker saying
+-- Craftsmanship had completed. That is a Principle I problem, not just a nuisance -- the agent was
+-- shown a card that did not describe what had just happened.
+--
+-- So the acknowledge now drives the popup's own close control first -- the literal button a human
+-- clicks, whose callback runs inside the popup's own state and therefore consumes that state's
+-- queue -- and falls back to the per-popup close primitive that IS reachable from InGame only when
+-- the control cannot be driven, recording which mechanism ran and why. Per-popup close paths, read
+-- from the shipped UI:
+--   * TechCivicCompletedPopup: `Controls.CloseButton` -> `OnClose` -> `TryClose`
+--     (techciviccompletedpopup.lua:464, :346, :319; the button is `CloseButton` in
+--     techciviccompletedpopup.xml:10). `TryClose` is a global in that popup's own isolated Lua
+--     state, so InGame cannot call it by name; DequeuePopup is the documented fallback.
+--   * BoostUnlockedPopup: `Controls.ContinueButton` -> `OnClose`, which is
+--     `UIManager:DequeuePopup(ContextPtr)` followed by `ShowNextQueuedPopup()`
+--     (boostunlockedpopup.lua:397, :313-318; button `ContinueButton` in boostunlockedpopup.xml:38).
+--     The fallback therefore matches the first half of its own handler but skips the requeue.
+--   * GreatWorkShowcase: `Controls.ModalScreenClose` -> `OnHideScreen` -> `HideScreen()`, which is
+--     exactly `ContextPtr:SetHide(true)` (greatworkshowcase.lua:240-244, :253-255, :399). This one
+--     is NOT a UIManager popup at all -- it is never queued -- so DequeuePopup would be the wrong
+--     call and `SetHide(true)` is what the human's click literally does.
+-- UNVERIFIED LIVE (all three): whether a control obtained from another state via LookUpControl
+-- exposes `CallCallback`. Every step is pcall'd and the mechanism actually used is returned, so a
+-- build without it records `close_control_uncallable` and takes the fallback rather than failing.
 local CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS = {
-    ["prompt.tech_civic_completed"] = "TechCivicCompletedPopup",
-    ["prompt.boost_unlocked"] = "BoostUnlockedPopup",
+    ["prompt.tech_civic_completed"] = {
+        state = "TechCivicCompletedPopup",
+        close_control = "CloseButton",
+        fallback = "dequeue_popup",
+    },
+    ["prompt.boost_unlocked"] = {
+        state = "BoostUnlockedPopup",
+        close_control = "ContinueButton",
+        fallback = "dequeue_popup",
+    },
+    -- MEASURED 2026-09-21 (gameplay day, block 3, game turn 27): a relic from a tribal village
+    -- raised "Your civilization has produced a Great Work" and the probe answered `world` because
+    -- no watchlist entry covered it -- every units.move_to underneath it failed verification. The
+    -- state is `GreatWorkShowcase` (base/assets/ui/ingame.xml:70, ID == FileName; Lua state 62 in
+    -- spikes/r5-raw/00_states.txt); relics reach it through
+    -- `LuaEvents.NotificationPanel_ShowRelicCreated` -> `OnShowRelicCreated` ->
+    -- `DisplayGreatWorkCreated(..., showRelics=true)` -> `ShowScreen()`
+    -- (greatworkshowcase.lua:273-275, :236-239).
+    ["prompt.great_work_created"] = {
+        state = "GreatWorkShowcase",
+        close_control = "ModalScreenClose",
+        fallback = "set_hide",
+    },
 }
 local CIVSIM_ACKNOWLEDGE_OPTION = "continue"
 
@@ -134,20 +188,68 @@ end
 -- opened mid-turn first, menu/pause screens last) for the dispatcher to resolve via `LSQ:` and
 -- probe one at a time — see the header's architectural note. This is data for that future
 -- multi-state dispatch, not something this file loops over itself.
+--
+-- CORRECTED 2026-09-21 (read, not measured — these names are now CONTROL IDs, not Lua state
+-- names). `CivSim_Screens_State` resolves each entry as `/InGame/<name>`, and Civ VI's context
+-- tree is keyed by a `<LuaContext>`'s **ID** attribute, while the Lua *state* is named after its
+-- **FileName**. For every entry below except two they are the same string. The two that differ
+-- were silently unprobeable:
+--   * `<LuaContext ID="Civilopedia" FileName="CivilopediaScreen" .../>` (base ingame.xml:129,
+--     dlc/expansion2/ui/replacements/ingame.xml:142) — so `/InGame/CivilopediaScreen` is nil and
+--     T213's note that "CivilopediaScreen is absent on this build" was reading the wrong name; the
+--     state does exist (index 109 in 00_states.txt).
+--   * `<LuaContext ID="TopOptionsMenu" FileName="InGameTopOptionsMenu" .../>` (base
+--     ingame.xml:136) — and `/InGame/TopOptionsMenu` is the path Firaxis's own Lua uses
+--     (base/assets/ui/ingame.lua, base/assets/ui/tutorialuiroot.lua). So the pause/options menu,
+--     the one screen the P2 sweep actually flipped live, was never seen by the aggregate probe.
+-- Both are corrected below. UNVERIFIED LIVE that the corrected paths resolve; the next sweep says.
+-- `Options`, `SaveGameMenu` and `LoadGameMenu` are Lua states but are NOT `<LuaContext>` children
+-- of InGame in any shipped ingame.xml, so `/InGame/<name>` cannot reach them; they are kept only
+-- as documentation of what a future per-state dispatcher would enumerate.
 local CIVSIM_SCREEN_WATCHLIST = {
     "CityPanel", "ProductionPanel", "TechTree", "CivicsTree", "GovernmentScreen", "ReligionScreen",
     "DiplomacyActionView", "DiplomacyDealView", "DeclareWarPopup", "UnitPromotionPopup",
-    "PantheonChooser", "GreatPeoplePopup", "WorldCongressPopup", "WorldCongressBetweenTurns",
-    "WorldCongressIntro", "EventPopup", "EraCompletePopup", "NaturalWonderPopup", "LeaderScene",
-    "TechCivicCompletedPopup", "BoostUnlockedPopup", "CivilopediaScreen", "InGamePopup",
-    "InGameTopOptionsMenu", "PausePanel", "Options", "SaveGameMenu", "LoadGameMenu",
+    "PantheonChooser", "GreatPeoplePopup", "GreatWorkShowcase", "WorldCongressPopup",
+    "WorldCongressBetweenTurns", "WorldCongressIntro", "EventPopup", "EraCompletePopup",
+    "NaturalWonderPopup", "LeaderScene", "TechCivicCompletedPopup", "BoostUnlockedPopup",
+    "Civilopedia", "InGamePopup", "TopOptionsMenu", "PausePanel", "Options", "SaveGameMenu",
+    "LoadGameMenu",
 }
 
 -- VERIFIED (P2, screen_identity.md) that each named state exists; UNVERIFIED that
 -- ContextPtr:IsHidden()==false on that exact state precisely coincides with the catalog concept
--- named on the left, beyond the one live-flipped case (InGameTopOptionsMenu, confirmed). Entries
--- intentionally left out below (e.g. "strategic", most `prompt.*` ids) have no confirmed 1:1 state
--- and are not guessed here.
+-- named on the left, beyond the one live-flipped case (TopOptionsMenu, confirmed).
+--
+-- DELIBERATELY UNMAPPED, 2026-09-21 (read against the shipped UI at
+-- steamassets/base/assets/ui/ and dlc/expansion2/ui/; written up in
+-- specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md). `civsim store coverage`
+-- flags each of these as a claimed screen id that no Lua state maps to. That flag is CORRECT and
+-- must stay: none of them has a UI state of its own, so any mapping here would be a fabrication
+-- that made the probe assert a screen the client never said was up.
+--   * `strategic` — `<LuaContext ID="StrategicView" FileName="StrategicView"/>` (base
+--     ingame.xml:13) carries NO Hidden attribute and strategicview.lua is six lines of comment
+--     with no show/hide logic at all, so its `IsHidden()` is false at the ordinary world view too.
+--     Strategic view is a world *render mode*, not a screen; `UI.GetWorldRenderView()` already
+--     answers it through lua/ingame/camera.lua and catalogs/observations/views.yaml.
+--   * `prompt.religion_selection` — founding a religion is a NOTIFICATION, not a modal. Activating
+--     it fires `LuaEvents.NotificationPanel_OpenReligionPanel()` (notificationpanel.lua:1322) which
+--     opens the same `ReligionScreen` the launch bar opens for browsing (religionscreen.lua:1426,
+--     :1606-1609). `IsHidden()==false` there means "the religion screen is open", never "a
+--     blocking founding prompt is up".
+--   * `prompt.diplomatic_approach` — an AI-initiated approach is `Events.DiplomacyStatement` ->
+--     `OnDiplomacyStatement` (diplomacyactionview.lua:2741), which shows the SAME
+--     `DiplomacyActionView` context in CONVERSATION_MODE/CINEMA_MODE that `diplomacy` already maps
+--     to. What separates the two is `ms_ActiveSessionID`/the view mode, private Lua state of that
+--     context that `IsHidden()` cannot see.
+--   * `prompt.congress_vote` — `WorldCongressPopup` (dlc/expansion2/ui/replacements/ingame.xml:121)
+--     is one context for every stage: proposals, voting (`OnVoteResolution`/`OnVoteProposal`,
+--     worldcongresspopup.lua:983, :1452) and results. The forced-vote moment is `m_CurrentStage`/
+--     `m_CurrentPhase` inside it, and `congress` already maps to that state.
+--   * `prompt.city_state_quest` — there is no city-state quest popup in the shipped UI at all.
+--     Quests arrive as notifications (`NotificationTypes.CITYSTATE_QUEST_COMPLETED`,
+--     notificationpanel.lua:134) and are read in the `CityStates` partial screen
+--     (base/assets/ui/partialscreens/citystates.lua); no state in 00_states.txt corresponds to a
+--     blocking quest prompt, so the catalog claim itself is what needs correcting.
 local CIVSIM_SCREEN_ID_BY_STATE = {
     city_screen = "CityPanel",
     congress = "WorldCongressPopup",
@@ -162,6 +264,10 @@ local CIVSIM_SCREEN_ID_BY_STATE = {
     -- on `TechCivicCompletedPopup` coincides with the popup being up was observed live (attempt 5).
     ["prompt.tech_civic_completed"] = "TechCivicCompletedPopup",
     ["prompt.boost_unlocked"] = "BoostUnlockedPopup",
+    -- UNVERIFIED LIVE: measured open at game turn 27 (block 3) while the probe said `world`; that
+    -- `/InGame/GreatWorkShowcase` reports hidden=false for exactly that popup is what the live
+    -- lane still has to observe.
+    ["prompt.great_work_created"] = "GreatWorkShowcase",
 }
 
 -- VERIFIED (P2): the confirmed screen-identity mechanism. This is written to be dispatched once
@@ -198,8 +304,13 @@ local function CivSim_Screens_State()
         end
     end
     if #open == 0 then
+        -- CORRECTED 2026-09-21: this answered `world_view`, a name that appeared nowhere in the
+        -- catalog. `game.current_screen`'s declared vocabulary (catalogs/README.md, "Field
+        -- vocabulary") and CIVSIM_KNOWN_SCREENS above both say `world`, so the catalog contract
+        -- wins and the probe now answers `world`. Nothing else in the catalog ever named
+        -- `world_view`; it existed only here and in the Python fakes that mirrored it.
         return {
-            screen = "world_view", raw_screen_id = "InGame", recognized = true,
+            screen = "world", raw_screen_id = "InGame", recognized = true,
             has_blocking_prompt = false, prompt_options = {},
         }
     end
@@ -256,21 +367,34 @@ end
 -- global `UI.*` function reachable from InGame. Not fixed here — untested, and reported above as
 -- part of the same architectural gap. This generic entry point exists only for prompt types with
 -- no dedicated orders file (e.g. era transition acknowledgement, city-state quest acceptance).
--- T253: dismiss an acknowledge-only popup the way its own Continue button does. From the InGame
--- state the popup's context is reachable as a Control (`ContextPtr:LookUpControl`, the same
--- resolution CivSim_Screens_State uses to see it), and `UIManager:DequeuePopup(<that context>)`
--- is the exact call the popup's own `Close()` makes (Firaxis `techciviccompletedpopup.lua` line
--- 307, `boostunlockedpopup.lua` line 315). UNVERIFIED LIVE that DequeuePopup accepts another
--- state's context from InGame and that `UIManager` is reachable here (its screen-query methods
--- are confirmed nil in InGame; the object itself was not probed) -- every step is pcall'd and
--- every outcome is returned, so a failure is recorded as itself, and the action's own
--- verification predicate (the popup is no longer the current screen) is what decides `applied`.
--- Never presses a key and never hides the control directly: SetHide would leave the popup
--- queued in UIManager, which is not what a human's click does.
-local function CivSim_Screens_AcknowledgePopup(promptType, stateName, optionId)
+-- Dismiss an acknowledge-only popup the way its own close button does. From the InGame state the
+-- popup's context is reachable as a Control (`ContextPtr:LookUpControl`, the same resolution
+-- CivSim_Screens_State uses to see it), and so is any named control inside it.
+--
+-- CORRECTED 2026-09-21 (block 4, live): T253 went straight to `UIManager:DequeuePopup(<the
+-- context>)`. That is the second half of the popup's own `Close()`, not the whole of what its
+-- button does, and skipping the first half left the popup's private queue holding the card that
+-- had just been acknowledged -- see CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS above for the measured
+-- consequence. The order is now: drive the popup's own close CONTROL first (its callback runs
+-- inside the popup's own Lua state, which is the only place that state's queue can be consumed),
+-- and only if that control cannot be driven fall back to the per-popup primitive that InGame can
+-- reach, recording which mechanism ran and why the first one did not.
+--
+-- Still never presses a key, and `set_hide` is used only for `GreatWorkShowcase`, whose own close
+-- handler IS `ContextPtr:SetHide(true)` (it is not a UIManager popup). For the two queued popups
+-- SetHide would be wrong for exactly the reason T253 gave -- it would leave them queued -- so
+-- their fallback stays DequeuePopup.
+--
+-- UNVERIFIED LIVE: that `CallCallback` exists on a control obtained from another state, that
+-- DequeuePopup accepts another state's context from InGame, and that `UIManager`/`Mouse` are
+-- reachable here. Every step is pcall'd and every outcome returned, so a failure is recorded as
+-- itself and the action's own verification predicate (the popup is no longer the current screen)
+-- is what decides `applied`.
+local function CivSim_Screens_AcknowledgePopup(promptType, descriptor, optionId)
     if optionId ~= CIVSIM_ACKNOWLEDGE_OPTION then
         return { ok = false, reason = "unknown_option", prompt = promptType, option = optionId }
     end
+    local stateName = descriptor.state
     local okC, ctx = pcall(function() return ContextPtr:LookUpControl("/InGame/" .. stateName) end)
     if not okC or ctx == nil then
         return { ok = false, reason = "popup_state_absent", prompt = promptType, option = optionId }
@@ -279,22 +403,68 @@ local function CivSim_Screens_AcknowledgePopup(promptType, stateName, optionId)
     if okH and hidden == true then
         return { ok = false, reason = "popup_not_open", prompt = promptType, option = optionId }
     end
-    local okD, err = pcall(function() UIManager:DequeuePopup(ctx) end)
-    local okA, hiddenAfter = pcall(function() return ctx:IsHidden() end)
-    return {
-        ok = okD, prompt = promptType, option = optionId, mechanism = "UIManager:DequeuePopup",
-        hidden_after = (okA and hiddenAfter == true),
-        error = (not okD) and tostring(err) or nil,
+
+    local result = {
+        prompt = promptType, option = optionId, state = stateName,
+        close_control = descriptor.close_control,
     }
+
+    -- 1. The button a human clicks. Its callback was registered in the popup's own state, so
+    --    invoking it runs that popup's own OnClose/TryClose there -- queue and all.
+    local controlPath = "/InGame/" .. stateName .. "/" .. descriptor.close_control
+    local okB, button = pcall(function() return ContextPtr:LookUpControl(controlPath) end)
+    if not okB or button == nil then
+        result.fallback_reason = "close_control_absent"
+    else
+        local okCall, callErr = pcall(function() button:CallCallback(Mouse.eLClick) end)
+        if not okCall then
+            result.fallback_reason = "close_control_uncallable"
+            result.close_control_error = tostring(callErr)
+        else
+            local okS, hiddenNow = pcall(function() return ctx:IsHidden() end)
+            if okS and hiddenNow == true then
+                result.ok = true
+                result.mechanism = "close_control_callback"
+                result.hidden_after = true
+                return result
+            end
+            -- The callback ran and the popup is still up. For a queued popup that is the CORRECT
+            -- outcome: `TryClose` showed the next card behind this one, which is exactly what a
+            -- human sees after clicking Continue. Falling back here would dequeue the whole
+            -- context and destroy a card the human would have been shown, so this path stops.
+            -- The action's verification predicate reports the popup still current and the agent
+            -- acknowledges again -- one click per card, as a human does.
+            result.ok = true
+            result.mechanism = "close_control_callback"
+            result.hidden_after = false
+            result.note = "still_open_next_queued_card_likely_shown"
+            return result
+        end
+    end
+
+    -- 2. The per-popup primitive InGame can reach, chosen from what that popup's own handler does.
+    local okD, err
+    if descriptor.fallback == "set_hide" then
+        result.mechanism = "ContextPtr:SetHide"
+        okD, err = pcall(function() ctx:SetHide(true) end)
+    else
+        result.mechanism = "UIManager:DequeuePopup"
+        okD, err = pcall(function() UIManager:DequeuePopup(ctx) end)
+    end
+    local okA, hiddenAfter = pcall(function() return ctx:IsHidden() end)
+    result.ok = okD
+    result.hidden_after = (okA and hiddenAfter == true)
+    result.error = (not okD) and tostring(err) or nil
+    return result
 end
 
 local function CivSim_Screens_RespondToPrompt(promptType, optionId)
     if not CivSim_ScreenIsKnown(promptType) then
         return { ok = false, reason = "unknown_prompt" }
     end
-    local acknowledgeState = CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS[promptType]
-    if acknowledgeState ~= nil then
-        return CivSim_Screens_AcknowledgePopup(promptType, acknowledgeState, optionId)
+    local descriptor = CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS[promptType]
+    if descriptor ~= nil then
+        return CivSim_Screens_AcknowledgePopup(promptType, descriptor, optionId)
     end
     local ok, result = pcall(function()
         return UI.RespondToPrompt(promptType, optionId) -- UNVERIFIED
@@ -312,4 +482,4 @@ CivSim_Screens = {
 -- screen state in CIVSIM_SCREEN_WATCHLIST order — folding results into game.screen_state's
 -- aggregate shape is the dispatcher's job, not this file's (see header):
 --   print(CivSim_JsonEncode(CivSim_Screens.probe()))
---   print(CivSim_JsonEncode(CivSim_Screens.respond("prompt.city_state_quest", "accept")))
+--   print(CivSim_JsonEncode(CivSim_Screens.respond("prompt.great_work_created", "continue")))

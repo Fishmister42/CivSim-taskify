@@ -127,7 +127,7 @@ def _observation() -> Observation:
         catalog_version=CatalogVersionRef(version="2026.09.1", content_hash="deadbeef"),
         entries=entries,
         captures=[],
-        screen_identity="world_view",
+        screen_identity="world",
     )
 
 
@@ -334,7 +334,7 @@ def test_structural_scan_flags_a_telemetry_shaped_key_nested_in_observation_valu
             )
         ],
         captures=[],
-        screen_identity="world_view",
+        screen_identity="world",
     )
 
     violations = scan_observation_entries(leaky_observation)

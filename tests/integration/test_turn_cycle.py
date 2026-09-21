@@ -146,7 +146,7 @@ class _FakeGame:
                     },
                 )
             ],
-            "world_view",
+            "world",
         )
 
     async def execute(

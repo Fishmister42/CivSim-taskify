@@ -34,7 +34,7 @@ CATALOGS_ROOT = _REPO_ROOT / "catalogs"
 # Bumped from 51/23 by T216 (game.outcome_state + the game.outcome capability, so FR-005's
 # `game_outcome` stop condition can resolve at all) and T221 (camera.read_state, so a capture's
 # camera state stops being empty and a view's declared camera_requirements can be satisfied).
-EXPECTED_DECLARATION_COUNT = 59
+EXPECTED_DECLARATION_COUNT = 60
 EXPECTED_CAPABILITY_COUNT = 27
 
 

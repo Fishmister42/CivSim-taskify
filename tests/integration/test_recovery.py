@@ -201,7 +201,7 @@ class _NexusBackedGame:
             ) from exc
         return (
             [CapabilityResult(declaration_id=GAME_TURN_STATE_DECLARATION_ID, value=result)],
-            "world_view",
+            "world",
         )
 
     async def execute(

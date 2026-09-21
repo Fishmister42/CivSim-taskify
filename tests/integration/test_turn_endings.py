@@ -199,13 +199,13 @@ class _FakeGame:
                 CapabilityResult(
                     declaration_id=GAME_SCREEN_STATE_DECLARATION_ID,
                     value={
-                        "screen": "world_view",
+                        "screen": "world",
                         "recognized": True,
                         "has_blocking_prompt": self.blocking_prompt,
                     },
                 ),
             ],
-            "world_view",
+            "world",
         )
 
     async def execute(

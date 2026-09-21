@@ -187,7 +187,7 @@ def _build_observation_via_filter(
         ),
         entries=entries,
         captures=[],
-        screen_identity="world_view",
+        screen_identity="world",
     )
 
 
@@ -207,7 +207,7 @@ def _build_observation_via_assemble(
         ),
         registry=registry,
         results=results,
-        screen_identity="world_view",
+        screen_identity="world",
         assembled_at="2026-09-20T00:00:00Z",  # type: ignore[arg-type]
     )
 

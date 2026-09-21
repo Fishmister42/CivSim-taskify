@@ -78,7 +78,7 @@ def _entries(*, cities_value: Any, units_value: Any, raw_screen_id: str) -> list
             "declaration_id": "game.screen_state",
             "key": "game.screen_state",
             "value": {
-                "screen": "world_view",
+                "screen": "world",
                 "raw_screen_id": raw_screen_id,
                 "recognized": True,
                 "has_blocking_prompt": False,
@@ -96,7 +96,7 @@ def _bundle(
     action: str,
     outcome: str = "applied",
     rejection_reason: str | None = None,
-    screen_identity: str = "world_view",
+    screen_identity: str = "world",
     raw_screen_id: str = "InGame",
     prompt_type: str | None = None,
     image_count: int = 0,
@@ -391,13 +391,13 @@ CLAIMED = ClaimedSurface(
     observation_ids=("cities.state", "game.screen_state", "research.state", "units.state"),
     view_ids=("views.city_screen", "views.world"),
     screens=ScreenSurface(
-        screen_ids=("prompt.tech_civic_completed", "prompt.unit_promotion", "world", "world_view"),
+        screen_ids=("prompt.tech_civic_completed", "prompt.unit_promotion", "strategic", "world"),
         watched_states=("CityPanel", "TechCivicCompletedPopup", "UnitPromotionPopup"),
         state_by_screen_id={
             "prompt.tech_civic_completed": "TechCivicCompletedPopup",
             "prompt.unit_promotion": "UnitPromotionPopup",
         },
-        direct_screen_ids=("world_view",),
+        direct_screen_ids=("world",),
         source=Path("lua/ingame/screens.lua"),
     ),
     catalog_version="test.1",
@@ -490,7 +490,7 @@ def test_the_never_demonstrated_lists_name_every_undemonstrated_id(
     assert never["actions_never_attempted"] == ("camera.move",)
     assert never["observations"] == ("research.state", "units.state")
     assert never["views"] == ("views.city_screen",)
-    assert never["screens"] == ("prompt.unit_promotion", "world")
+    assert never["screens"] == ("prompt.unit_promotion", "strategic")
     assert never["watched_states"] == ("CityPanel", "UnitPromotionPopup")
 
 
@@ -534,7 +534,7 @@ def test_screens_and_watchlist_states_are_counted_from_the_record(
 ) -> None:
     scorecard = _score(store, run_ids=(RUN_ID,))
     screens = {row.screen_id: row for row in scorecard.screens}
-    assert screens["world_view"].encountered_steps == 4
+    assert screens["world"].encountered_steps == 4
     assert screens["prompt.tech_civic_completed"].encountered_steps == 1
     assert screens["prompt.tech_civic_completed"].prompt_responses == 1
     assert screens["prompt.tech_civic_completed"].mapped_state == "TechCivicCompletedPopup"
@@ -551,11 +551,11 @@ def test_a_screen_no_lua_state_maps_to_is_reported_as_unattestable(
 ) -> None:
     scorecard = _score(store, run_ids=(RUN_ID,))
     surfaces = {finding.surface: finding.reason for finding in scorecard.unattested}
-    assert "screen world" in surfaces
-    assert "CIVSIM_SCREEN_ID_BY_STATE" in surfaces["screen world"]
-    # `world_view` has no state mapping either, but the probe answers it directly and the store
+    assert "screen strategic" in surfaces
+    assert "CIVSIM_SCREEN_ID_BY_STATE" in surfaces["screen strategic"]
+    # `world` has no state mapping either, but the probe answers it directly and the store
     # has 4 steps proving it -- it must never be called unattestable.
-    assert "screen world_view" not in surfaces
+    assert "screen world" not in surfaces
     # A delivered capture exists, so the capture path is attested.
     assert "capture/image path" not in surfaces
 
@@ -778,9 +778,49 @@ def test_the_screen_surface_is_read_from_the_real_screens_lua() -> None:
     assert "TechCivicCompletedPopup" in surface.watched_states
     assert "CityPanel" in surface.watched_states
     # The plain world view's id is the literal the probe returns, not a mapped state.
-    assert "world_view" in surface.direct_screen_ids
-    assert "world_view" in surface.screen_ids
+    assert "world" in surface.direct_screen_ids
+    assert "world" in surface.screen_ids
     assert "unknown" not in surface.screen_ids
+
+
+def test_the_probes_world_view_id_is_the_one_the_catalog_vocabulary_declares() -> None:
+    """The probe used to answer `world_view`, a name no catalog file ever used;
+    `catalogs/README.md`'s `game.current_screen` vocabulary and the Lua's own
+    CIVSIM_KNOWN_SCREENS both say `world`. One name, and it is the catalog's."""
+    screens_lua = REPO_ROOT / "lua" / "ingame" / "screens.lua"
+    surface = load_screen_surface(screens_lua)
+    assert surface.direct_screen_ids == ("world",)
+    assert '"world_view"' not in screens_lua.read_text(encoding="utf-8")
+    assert "world_view" not in (REPO_ROOT / "catalogs" / "README.md").read_text(encoding="utf-8")
+
+
+def test_the_great_work_showcase_is_mapped_and_watched() -> None:
+    """MEASURED 2026-09-21 (block 3, turn 27): the relic showcase blocked play while the probe
+    reported the world view. UNVERIFIED LIVE that the state reports open for it."""
+    surface = load_screen_surface(REPO_ROOT / "lua" / "ingame" / "screens.lua")
+    assert surface.state_by_screen_id["prompt.great_work_created"] == "GreatWorkShowcase"
+    assert "GreatWorkShowcase" in surface.watched_states
+
+
+@pytest.mark.parametrize(
+    "screen_id",
+    [
+        "strategic",
+        "prompt.religion_selection",
+        "prompt.diplomatic_approach",
+        "prompt.congress_vote",
+        "prompt.city_state_quest",
+    ],
+)
+def test_the_documented_unmappable_screen_ids_stay_unmapped(screen_id: str) -> None:
+    """None of these has a UI state of its own in the shipped Civ VI UI -- see
+    `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md`. `civsim store coverage`
+    flagging them is correct, and a future mapping here would be a fabrication, so the gap is
+    pinned rather than papered over."""
+    surface = load_screen_surface(REPO_ROOT / "lua" / "ingame" / "screens.lua")
+    assert screen_id in surface.screen_ids, "still a claimed id, so the coverage flag is honest"
+    assert screen_id not in surface.state_by_screen_id
+    assert screen_id not in surface.direct_screen_ids
 
 
 def test_a_missing_screens_lua_yields_an_empty_surface_not_an_error(tmp_path: Path) -> None:
