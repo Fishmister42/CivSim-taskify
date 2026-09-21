@@ -17,10 +17,6 @@ prerequisites:
   - player.cities.count >= 1
   - player.cities.available_productions != []
 
-blocked_by: >
-  cities.state body -- `city.available_productions` is [] on every record in the store today, so
-  cities.set_production can never become available and no production can be chosen. A separate
-  agent is fixing that body; this goal needs no change when the fix lands.
 
 notes: >
   Proves city building capability end to end: select a city, choose from what the city actually
