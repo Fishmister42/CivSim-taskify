@@ -47,6 +47,7 @@ from live.goal_run import (  # noqa: E402
     assess_feasibility,
     build_bindings,
     check_predicate,
+    check_prerequisites,
     derive_facts,
     drive_goal,
     format_feasibility,
@@ -93,8 +94,12 @@ def unit(
     charges: int | None = None,
     promotions: list[str] | None = None,
     movement: float = 2.0,
+    builds: list[str] | None = None,
+    builds_reason: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    """One `units.state` unit. `available_builds` / `build_options` / `available_builds_reason`
+    are 720e30d's unit-panel build row, which the Lua reports for the SELECTED unit only."""
+    record: dict[str, Any] = {
         "unit_id": unit_id,
         "unit_type": unit_type,
         "owner_player_id": 0,
@@ -108,6 +113,20 @@ def unit(
         "available_promotions": promotions or [],
         "charges_remaining": charges,
     }
+    if builds is not None:
+        record["available_builds"] = list(builds)
+        record["build_options"] = [
+            {
+                "improvement_type": improvement,
+                "name": improvement.replace("IMPROVEMENT_", "").title(),
+                "disabled": False,
+                "is_recommended": index == 0,
+            }
+            for index, improvement in enumerate(builds)
+        ]
+    if builds_reason is not None:
+        record["available_builds_reason"] = builds_reason
+    return record
 
 
 def observation(
@@ -239,20 +258,22 @@ def test_every_shipped_goal_loads_and_validates() -> None:
         assert goal.turn_cap >= 1
 
 
-def test_shipped_blocked_goals_name_their_blocker() -> None:
-    """A `blocked_by` must name something concrete, and it is removed when the block lifts.
+def test_no_shipped_goal_is_blocked_any_more() -> None:
+    """Every block the library shipped with has since been closed by real harness work.
 
-    Deliberately not pinned to a fixed set of ids: the two production goals were blocked on the
-    empty `city.available_productions` list and were unblocked in cfc6cee when the body landed,
-    and any future unblocking should be a one-line YAML deletion, not a test edit. What is pinned
-    is that `use_a_builder` stays blocked -- no action in `catalogs/actions/` spends a builder
-    charge -- because unblocking that one requires a new catalog declaration, not a body fix.
+    `set_capital_production` and `build_a_builder` were blocked on `city.available_productions`
+    always being `[]` (unblocked in cfc6cee, once the production list landed in 1d0b372), and
+    `use_a_builder` on there being no action in `catalogs/actions/` that spends a builder charge
+    at all (unblocked by 720e30d's `units.build_improvement`). Each unblocking was a `blocked_by`
+    deletion, which is the shape the field is for.
+
+    A goal that *is* blocked must still say something concrete -- the loop below keeps that rule
+    alive for the next one rather than deleting it with the last block.
     """
     goals = load_goals()
     blocked = {g.goal_id: (g.blocked_by or "") for g in goals.values() if g.is_blocked}
-    assert "use_a_builder" in blocked
-    assert "catalog gap" in blocked["use_a_builder"]
-    for goal_id, reason in blocked.items():
+    assert blocked == {}
+    for goal_id, reason in blocked.items():  # pragma: no cover - nothing is blocked today
         assert len(reason.split()) >= 5, f"{goal_id}'s blocked_by does not say what is blocking it"
 
 
@@ -263,6 +284,125 @@ def test_depends_on_resolves_to_a_chain() -> None:
     assert [g.goal_id for g in resolve_chain(goals["change_research"], goals)] == [
         "change_research"
     ]
+
+
+def test_the_builder_chain_loads_unblocked_and_validates_end_to_end() -> None:
+    """build -> use, both parts unblocked, both predicates evaluable, both flipping on the
+    observations the catalog declares (720e30d).
+
+    The chain is the one place a goal's end state is another goal's starting state, so it is
+    walked here as the driver walks it: part one's baseline and success, then part two's
+    prerequisites, baseline and success, each against the units.state / map.state shapes
+    `catalogs/observations/units.yaml` actually declares.
+    """
+    goals = load_goals()
+    chain = resolve_chain(goals["use_a_builder"], goals)
+    assert [g.goal_id for g in chain] == ["build_a_builder", "use_a_builder"]
+    assert all(not g.is_blocked for g in chain)
+
+    # The charge-spending action really is in the catalog now, so its applied-count symbol binds.
+    assert "units.build_improvement" in goal_run.action_declaration_ids()
+    assert (
+        goal_run.applied_action_symbol("units.build_improvement")
+        in goal_run.known_fact_names()
+    )
+    for goal in chain:
+        goal_run.validate_predicate(goal.success, label=f"{goal.goal_id}:success")
+        for predicate in goal.prerequisites:
+            goal_run.validate_predicate(predicate, label=f"{goal.goal_id}:prereq")
+
+    build, use = chain
+
+    # -- part one: a city, no builder yet -> the builder appears ------------------------------
+    part_one_start = derive_facts(
+        observation(cities=[city(65536, productions=["UNIT_BUILDER"])], units=[])
+    )
+    assert all(
+        check.met
+        for check in check_prerequisites(build, build_bindings(part_one_start))[1]
+    )
+    assert (
+        check_predicate(
+            build.success, build_bindings(part_one_start, start_facts=part_one_start)
+        ).met
+        is False
+    )
+    built = derive_facts(
+        observation(
+            cities=[city(65536, productions=["UNIT_BUILDER"])],
+            units=[unit(131075, "UNIT_BUILDER", charges=3)],
+        )
+    )
+    assert check_predicate(build.success, build_bindings(built, start_facts=part_one_start)).met
+
+    # -- part two starts from part one's end state --------------------------------------------
+    assert all(check.met for check in check_prerequisites(use, build_bindings(built))[1])
+    assert check_predicate(use.success, build_bindings(built, start_facts=built)).met is False
+
+    spent = derive_facts(
+        observation(
+            cities=[city(65536)],
+            units=[
+                unit(
+                    131075,
+                    "UNIT_BUILDER",
+                    selected=True,
+                    charges=2,
+                    builds=["IMPROVEMENT_FARM"],
+                )
+            ],
+            plots=[{"x": 43, "y": 31, "owner_player_id": 0, "improvement": "IMPROVEMENT_FARM"}],
+        )
+    )
+    assert check_predicate(use.success, build_bindings(spent, start_facts=built)).met
+
+
+def test_the_last_charge_case_the_action_s_own_verification_cannot_confirm() -> None:
+    """A Builder spending its LAST charge is consumed and leaves the map.
+
+    `units.build_improvement`'s verification predicate reads that as rejected on purpose
+    (720e30d's DOCUMENTED LIMIT, FR-011: never read an unconfirmable effect as success). The
+    goal's success predicate is an aggregate over the player's Builders plus the plot's own
+    improvement, so it still reports the item as done -- which is exactly why the goal keeps its
+    own reading rather than deferring to the action's.
+    """
+    use = load_goals()["use_a_builder"]
+    start = derive_facts(observation(units=[unit(1, "UNIT_BUILDER", charges=1)]))
+    gone = derive_facts(
+        observation(
+            units=[unit(2, "UNIT_WARRIOR", selected=True)],
+            plots=[{"x": 43, "y": 31, "owner_player_id": 0, "improvement": "IMPROVEMENT_MINE"}],
+        )
+    )
+    assert check_predicate(use.success, build_bindings(gone, start_facts=start)).met
+
+
+def test_the_selected_units_build_buttons_are_derived_for_the_selected_unit_only() -> None:
+    """units.state reports `available_builds` only for the unit whose panel is open (720e30d)."""
+    facts = derive_facts(
+        observation(
+            units=[
+                unit(1, "UNIT_BUILDER", selected=True, charges=2, builds=["IMPROVEMENT_FARM"]),
+                unit(2, "UNIT_BUILDER", charges=2, builds=["IMPROVEMENT_MINE"]),
+            ]
+        )
+    )
+    assert facts["player"]["units"]["selected_available_builds"] == ["IMPROVEMENT_FARM"]
+    assert facts["player"]["units"]["selected_build_options_count"] == 1
+
+    nothing_selected = derive_facts(observation(units=[unit(2, "UNIT_BUILDER", charges=2)]))
+    assert nothing_selected["player"]["units"]["selected_available_builds"] == []
+    assert nothing_selected["player"]["units"]["selected_available_builds_reason"] is None
+
+    unasked = derive_facts(
+        observation(
+            units=[unit(1, "UNIT_BUILDER", selected=True, charges=2, builds_reason="no panel")]
+        )
+    )
+    # An empty list with a reason is distinct from an empty list without one -- the distinction
+    # 720e30d added precisely so an unasked query cannot read as "this tile offers nothing".
+    assert unasked["player"]["units"]["selected_available_builds"] == []
+    assert unasked["player"]["units"]["selected_available_builds_reason"] == "no panel"
 
 
 def _raw(**overrides: Any) -> dict[str, Any]:

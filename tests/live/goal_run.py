@@ -384,6 +384,27 @@ def derive_facts(entries: Iterable[Any]) -> dict[str, Any]:
                     if selected_unit is not None
                     else []
                 ),
+                # 720e30d: the unit panel's build buttons, which units.state reports for the
+                # SELECTED unit only -- those buttons exist only on the panel a human has open.
+                # `available_builds` is the live-button subset (what units.build_improvement's
+                # own availability predicate reads); `available_builds_reason` is why the list is
+                # empty when the panel's query could not be asked at all, which is deliberately
+                # distinct from "asked, and this tile offers nothing".
+                "selected_available_builds": (
+                    [str(b) for b in _sequence(selected_unit.get("available_builds"))]
+                    if selected_unit is not None
+                    else []
+                ),
+                "selected_build_options_count": (
+                    len(_sequence(selected_unit.get("build_options")))
+                    if selected_unit is not None
+                    else 0
+                ),
+                "selected_available_builds_reason": (
+                    selected_unit.get("available_builds_reason")
+                    if selected_unit is not None
+                    else None
+                ),
             },
             "current_research": research_state.get("current_research"),
             "current_civic": research_state.get("current_civic"),
