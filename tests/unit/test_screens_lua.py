@@ -50,6 +50,7 @@ local CLOSE_CONTROLS = {
     BoostUnlockedPopup = "ContinueButton",
     GreatWorkShowcase = "ModalScreenClose",
     NaturalDisasterPopup = "Close",
+    EraReviewPopup = "Continue",
 }
 
 local function make_control(name, hidden)
@@ -229,11 +230,12 @@ def test_an_acknowledge_only_popup_is_a_recognised_blocking_prompt_offering_cont
 def test_a_recognised_prompt_outranks_an_open_panel_but_offers_no_options_yet(
     lua: tuple[Any, Any],
 ) -> None:
-    """Every other prompt family still reports an empty option list (per-prompt enumeration is
-    not implemented), so those actions stay unavailable rather than guessed at."""
+    """Every prompt family that is not acknowledge-only still reports an empty option list
+    (per-prompt enumeration is not implemented), so those actions stay unavailable rather than
+    guessed at. The era card left this group on 2026-09-21 (block 18): acknowledge-only now."""
     runtime, stubs = lua
-    state = _state(runtime, stubs, open=["CityPanel", "EraCompletePopup"])
-    assert state["screen"] == "prompt.era_transition"
+    state = _state(runtime, stubs, open=["CityPanel", "UnitPromotionPopup"])
+    assert state["screen"] == "prompt.unit_promotion"
     assert state["has_blocking_prompt"] is True
     assert state["prompt_options"] == []
 
@@ -499,6 +501,9 @@ def test_acknowledging_drives_the_popups_own_close_control_first(
         # NaturalDisasterPopup's own Close() is a SetHide plus a LuaEvent (naturaldisasterpopup.lua
         # :87-122), not a UIManager popup, so its fallback is SetHide too.
         ("prompt.natural_disaster", "NaturalDisasterPopup", "ContextPtr:SetHide"),
+        # EraReviewPopup's Continue and Close both run UIManager:DequeuePopup (erareviewpopup.lua
+        # :241-246), so its fallback is the dequeue.
+        ("prompt.era_transition", "EraReviewPopup", "UIManager:DequeuePopup"),
     ],
 )
 def test_a_build_whose_controls_report_no_rect_falls_back_to_that_popups_own_primitive(

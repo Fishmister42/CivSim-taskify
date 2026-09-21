@@ -202,6 +202,19 @@ local CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS = {
         close_control = "Close",
         fallback = "set_hide",
     },
+    -- MEASURED 2026-09-21 (gameplay block 18, game turns 43-47): Gathering Storm's "The World Has
+    -- Entered the Classical Era" card was up for five turns; the probe answered `world` because
+    -- the id mapped only the base game's `EraCompletePopup`, while this build shows
+    -- `EraReviewPopup` (dlc/expansion2/ui/additions/erareviewpopup.xml; `/InGame/EraReviewPopup`
+    -- reported hidden=false live). Sonnet 5 described the card from the delivered frame and asked to
+    -- acknowledge it at 40 of 41 steps -- refused each time because the text probe had this hole.
+    -- Its `Continue` button (xml:69) and `Close` (xml:67) both run `UIManager:DequeuePopup`
+    -- (lua:241-246), so the fallback is dequeue_popup.
+    ["prompt.era_transition"] = {
+        state = "EraReviewPopup",
+        close_control = "Continue",
+        fallback = "dequeue_popup",
+    },
 }
 local CIVSIM_ACKNOWLEDGE_OPTION = "continue"
 
@@ -241,7 +254,7 @@ local CIVSIM_SCREEN_WATCHLIST = {
     "WorldCongressBetweenTurns", "WorldCongressIntro", "EventPopup", "EraCompletePopup",
     "NaturalWonderPopup", "LeaderScene", "TechCivicCompletedPopup", "BoostUnlockedPopup",
     "Civilopedia", "InGamePopup", "TopOptionsMenu", "PausePanel", "Options", "SaveGameMenu",
-    "LoadGameMenu", "NaturalDisasterPopup",
+    "LoadGameMenu", "NaturalDisasterPopup", "EraReviewPopup",
 }
 
 -- VERIFIED (P2, screen_identity.md) that each named state exists; UNVERIFIED that
@@ -284,7 +297,9 @@ local CIVSIM_SCREEN_ID_BY_STATE = {
     ["prompt.pantheon_selection"] = "PantheonChooser",
     ["prompt.great_person_selection"] = "GreatPeoplePopup",
     ["prompt.declare_war_response"] = "DeclareWarPopup",
-    ["prompt.era_transition"] = "EraCompletePopup",
+    -- MEASURED 2026-09-21 (block 18): this Gathering Storm build shows `EraReviewPopup` for the
+    -- era card; the base game's `EraCompletePopup` (still on the watchlist) was never seen open.
+    ["prompt.era_transition"] = "EraReviewPopup",
     -- T253: the two acknowledge-only popups (see CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS above). The state
     -- names are the ones on the watchlist, confirmed to exist at turn 1 (P2); that IsHidden()==false
     -- on `TechCivicCompletedPopup` coincides with the popup being up was observed live (attempt 5).
