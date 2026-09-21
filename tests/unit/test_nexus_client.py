@@ -531,6 +531,11 @@ async def test_a_non_handshake_frame_is_never_parsed_as_the_state_list() -> None
         while True:
             chunk = await reader.read(4096)
             if not chunk:
+                # Close the server side too: from Python 3.12.1 `Server.wait_closed()`
+                # waits for every accepted connection to close, and a handler that returns
+                # on EOF without closing its writer leaves this one in CLOSE-WAIT forever
+                # (measured: the suite hung here indefinitely on 3.12.3, Linux).
+                writer.close()
                 return
             for frame in decoder.feed(chunk):
                 if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
@@ -586,6 +591,11 @@ async def test_live_defect_1_handshake_consumes_the_app_reply_before_the_state_l
         while True:
             chunk = await reader.read(4096)
             if not chunk:
+                # Close the server side too: from Python 3.12.1 `Server.wait_closed()`
+                # waits for every accepted connection to close, and a handler that returns
+                # on EOF without closing its writer leaves this one in CLOSE-WAIT forever
+                # (measured: the suite hung here indefinitely on 3.12.3, Linux).
+                writer.close()
                 return
             for frame in decoder.feed(chunk):
                 if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
@@ -660,6 +670,11 @@ async def test_live_defect_3_result_arrives_on_tag_minus_1_prints_with_an_empty_
         while True:
             chunk = await reader.read(4096)
             if not chunk:
+                # Close the server side too: from Python 3.12.1 `Server.wait_closed()`
+                # waits for every accepted connection to close, and a handler that returns
+                # on EOF without closing its writer leaves this one in CLOSE-WAIT forever
+                # (measured: the suite hung here indefinitely on 3.12.3, Linux).
+                writer.close()
                 return
             for frame in decoder.feed(chunk):
                 if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
@@ -714,6 +729,11 @@ async def test_a_non_empty_tag_3_payload_is_telemetry_not_a_result() -> None:
         while True:
             chunk = await reader.read(4096)
             if not chunk:
+                # Close the server side too: from Python 3.12.1 `Server.wait_closed()`
+                # waits for every accepted connection to close, and a handler that returns
+                # on EOF without closing its writer leaves this one in CLOSE-WAIT forever
+                # (measured: the suite hung here indefinitely on 3.12.3, Linux).
+                writer.close()
                 return
             for frame in decoder.feed(chunk):
                 if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
@@ -899,6 +919,11 @@ async def test_a_handshake_failure_on_reconnect_is_not_retried() -> None:
         while True:
             chunk = await reader.read(4096)
             if not chunk:
+                # Close the server side too: from Python 3.12.1 `Server.wait_closed()`
+                # waits for every accepted connection to close, and a handler that returns
+                # on EOF without closing its writer leaves this one in CLOSE-WAIT forever
+                # (measured: the suite hung here indefinitely on 3.12.3, Linux).
+                writer.close()
                 return
             for frame in decoder.feed(chunk):
                 if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):

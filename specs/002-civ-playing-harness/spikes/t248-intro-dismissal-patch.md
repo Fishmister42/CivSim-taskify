@@ -129,3 +129,70 @@ isolation and targets nothing in production.
 as-shipped vs patched. Once T248 lands I re-run it against the production version, unmodified, and
 post the transcript. Expected: the ATTEMPT-1 path that currently fails becomes the passing one, in
 roughly 40 s.
+
+## Re-verified against the landed code — 2026-09-20 22:45 EDT, `2f1a16d`, Linux
+
+**T248 landed and is live-proven.** `tests/live/test_production_save_loader.py` was re-run
+**unmodified** against the production `LuaSaveLoader` on the same host and client (Aspyr 1.0.12.9,
+BBG active) that measured the original failure. The client's BBG mod-load Lua stack traces and the
+tuner's `discarding unmatched output` lines are omitted below; nothing else is.
+
+```
+save='civsim__spike__t0001'  short timeout=150s (default is 300s)
+  [recover] tuner is up
+
+=== ATTEMPT 1 - production loader, exactly as shipped ===
+  RESULT: load() SUCCEEDED in 38.4s
+
+(the client is now sitting on whatever screen attempt 1 left it on)
+  [recover] sent Escape
+  [recover] tuner is up
+
+=== ATTEMPT 2 - same loader + one send_input(Escape) ===
+    [dismisser] Escape #1 -> ok
+    ... #2 .. #5 ...
+    [dismisser] Escape #6 -> ok
+  RESULT: load() SUCCEEDED in 34.6s
+
+====================================================================
+  as shipped              : PASS
+  with one Escape         : PASS
+```
+
+Before the patch the ATTEMPT-1 line read `load() FAILED after 160.4s`. It now passes in 38.4 s —
+the prediction above ("the ATTEMPT-1 path that currently fails becomes the passing one, in roughly
+40 s") held.
+
+Two honest notes on the transcript:
+
+- The `[recover] sent Escape` between the attempts is the **test script's** recovery loop, not the
+  loader: right after attempt 1 closed its connection the tuner was in its ~2 s post-close refusal
+  tail (T246), `ss -ltn` did not show the port, and the script pressed Escape once at an in-game
+  client before the port reappeared. Harmless (Escape in-game toggles the pause menu, and the next
+  load exits to the menu anyway), and a property of the probe, not of production code.
+- ATTEMPT 2's six external presses are the test's own dismisser running *alongside* the loader's;
+  they say nothing about how many the loader needed.
+
+### The loader's own counters (third run, same session)
+
+The test only prints the T248 counters on a timeout, so a third load — production loader alone, no
+external dismisser, read back through the instance after `load()` returned — puts them on record:
+
+```
+RESULT: load() SUCCEEDED in 42.5s
+loader intro_dismiss_presses = 1
+loader intro_dismiss_skipped = None
+```
+
+One press, no skips: `focus_window` (EWMH `_NET_ACTIVE_WINDOW`, never before exercised from
+production code) returned `ok` on a live X11/Cinnamon session, the single `Escape` landed in the
+game, and the retry loop stopped the moment the port answered. The `Escape` was sent with a
+browser and a terminal both open on the same desktop — the case the Option-1 ruling exists for.
+
+### What this does and does not close
+
+- **Closes:** T248 on Linux/X11; the loader is no longer written-but-unproven; the demo may record
+  against it (hypervisor ruling 3, night handoff).
+- **Does not close:** the Windows and macOS `focus_window` halves still report `unavailable`, so
+  `LuaSaveLoader` refuses to press on those hosts (loudly, with the reason in the timeout detail)
+  until they are implemented for real — the Windows side's morning item, per its own instruction.

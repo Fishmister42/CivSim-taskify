@@ -101,6 +101,8 @@ class FakeHostPlatform:
         self.capture_calls: list[GameWindow] = []
         self.capture_precondition_calls = 0
         self.input_calls: list[list[InputEvent]] = []
+        self.focus_calls: list[GameWindow] = []
+        self._focus_override: InputResult | None = None
         self.locate_process_calls = 0
         self.find_window_calls: list[GameProcess] = []
         self.resolve_directories_calls: list[Path | None] = []
@@ -279,6 +281,18 @@ class FakeHostPlatform:
         self.input_calls.append(list(events))
         if self._input_override is not None:
             return self._input_override
+        return InputResult(status=InputStatus.ok)
+
+    def set_focus_result(self, result: InputResult | None) -> None:
+        """Script `focus_window()`'s return value directly (T248). `None` restores the
+        default (`ok`). A non-`ok` result is how a scenario proves the loader refuses to
+        press a key at a window it could not bring to the front."""
+        self._focus_override = result
+
+    def focus_window(self, window: GameWindow) -> InputResult:
+        self.focus_calls.append(window)
+        if self._focus_override is not None:
+            return self._focus_override
         return InputResult(status=InputStatus.ok)
 
     def free_disk_space(self, path: Path) -> DiskSpace:

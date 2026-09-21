@@ -675,6 +675,26 @@ tuner connection at a time and can refuse a rapid reconnect while the prior sock
 
 ---
 
+### ✅ T248 — the production `LuaSaveLoader` loads a real save end-to-end (2026-09-20 night)
+
+The production loader (`saves/load_game.py`, landed at `2f1a16d` with `focus_window` on the
+`HostPlatform` port) was re-verified live with `tests/live/test_production_save_loader.py`
+**unmodified**, on the same Aspyr 1.0.12.9 client that measured the original failure:
+
+| run | shape | result |
+|---|---|---|
+| ATTEMPT 1 | production loader exactly as shipped, no external help | **PASS, 38.4 s** (was FAIL after 160.4 s) |
+| ATTEMPT 2 | same loader + the test's own external Escape loop | PASS, 34.6 s |
+| solo | production loader alone, counters read back | PASS, 42.5 s — `intro_dismiss_presses = 1`, `intro_dismiss_skipped = None` |
+
+The one press means `focus_window` (EWMH `_NET_ACTIVE_WINDOW`, first production use) returned
+`ok` on X11/Cinnamon with a browser and a terminal open on the same desktop, the single `Escape`
+landed in the game, and the retry loop stopped the instant the tuner port answered. Full transcript
+and the two honest caveats (the test's own recovery Escape during the T246 post-close tail; the
+external presses being the test's, not the loader's) are in `spikes/t248-intro-dismissal-patch.md`,
+"Re-verified". Windows/macOS `focus_window` halves still report `unavailable` — the loader refuses
+to press there, loudly, until they are implemented.
+
 ## Defects found and fixed
 
 Real defects, found by live-client evidence or by the integration test tier, fixed before this

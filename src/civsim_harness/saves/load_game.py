@@ -58,7 +58,6 @@ from typing import Any, TypeGuard
 
 from civsim_harness.errors import HarnessError, NexusError, PreflightError
 from civsim_harness.host.port import (
-    GameProcess,
     HostPlatform,
     InputEvent,
     InputEventKind,
