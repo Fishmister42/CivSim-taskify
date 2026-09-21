@@ -712,6 +712,17 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             # provider that omits the optional echo still gets recorded as answering the prompt
             # the harness determined was open.
             raw_decision = replace(raw_decision, prompt_type=prompt_type)
+        elif trigger is DecisionTrigger.PROACTIVE and raw_decision.prompt_type is not None:
+            # The same authority, the other way round. MEASURED (2026-09-21, gameplay block 8,
+            # run-4c0b8fb4, first step): Australia's first-meeting leader scene was up -- a
+            # two-option greeting, blocking -- but `prompt.diplomatic_approach` maps to no Lua
+            # state, so the probe reported the non-blocking `diplomacy` screen and this step's
+            # trigger was proactive; the model, reading the same state, answered with a
+            # prompt_type, and `Decision`'s validator ("prompt_type must be unset when trigger ==
+            # proactive") raised out of the loop as an unhandled run failure. The provider's echo
+            # is advisory (its reasoning keeps what it thought); the harness's routing is what the
+            # record carries, and an unmapped prompt is a catalog gap to record, never a crash.
+            raw_decision = replace(raw_decision, prompt_type=None)
 
         if raw_decision.parameters.get("target") is None:
             # catalogs/README.md §4: a unit/city action with no `target` acts on the unit/city
