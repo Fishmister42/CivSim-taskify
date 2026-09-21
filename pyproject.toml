@@ -53,6 +53,7 @@ dev = [
   "syrupy>=4",
   "ruff>=0.6",
   "mypy>=1.11",
+  "pytest-timeout>=2.4.0",
 ]
 
 # Deliverable 1 -- the unified web interface (specs/001-unified-web-interface,
@@ -149,6 +150,18 @@ strict = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--ignore=tests/live"
+# A hung test must name itself. 2026-09-21: the suite stopped at ~40% twice with no output at
+# all, and finding out which test it was took a hand-passed `-o faulthandler_timeout=...`. Both
+# of these are defaults now, so the next one says so by itself:
+#   faulthandler_timeout -- dump every thread's stack after 120 s of one test, then keep going,
+#                           which is what actually named run_turn_cycle's unbounded replay loop.
+#   timeout              -- pytest-timeout turns a test still running after 10 minutes into a
+#                           named FAILURE instead of an endless run. `thread` (not `signal`) is
+#                           required here: the suite is asyncio-heavy and a signal-based timeout
+#                           cannot interrupt a coroutine blocked inside the event loop.
+faulthandler_timeout = 120
+timeout = 600
+timeout_method = "thread"
 markers = [
   "live: exercises a real Civilization VI client; excluded from the default run (see plan.md Testing)",
 ]

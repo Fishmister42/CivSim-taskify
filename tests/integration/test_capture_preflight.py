@@ -91,9 +91,10 @@ async def test_a_failing_precondition_on_a_validated_host_withholds_and_attaches
         assert host.capture_calls == []
 
         # What the store received: every capture written withheld, reason class recorded,
-        # nothing shown, no blob anywhere (the decision step's own capture plus the trailing
-        # end-turn verification read's).
-        assert len(spy.capture_writes) == 2
+        # nothing shown, no blob anywhere -- the pre-save prompt probe's read (c795039: a turn
+        # now probes the screen before its quicksave), the decision step's own capture, and the
+        # trailing end-turn verification read's.
+        assert len(spy.capture_writes) == 3
         for capture, blob in spy.capture_writes:
             assert capture.screening_status is ScreeningStatus.WITHHELD
             assert capture.withheld_reason is WithheldReason.CAPTURE_FAILED

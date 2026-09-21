@@ -149,12 +149,15 @@ class _FakeGame:
 
 
 class _FlakyGame(_FakeGame):
-    """Like ``_FakeGame``, but its 4th-ever read raises ``ObservationAssemblyError`` exactly
-    once. Reads go: #1 step 1's own observation, #2 (after step 1's dispatch) becomes step 2's
-    own observation, #3 (after step 2's dispatch) becomes step 3's own observation, #4 (after
-    step 3's dispatch, while step 3 is still being processed) is where this fails -- so two
-    decision steps (1 and 2) have already executed and verified by the time it does, reproducing
-    "a failure at step n > 1, after earlier steps have already executed and verified" (T096)."""
+    """Like ``_FakeGame``, but its 5th-ever read raises ``ObservationAssemblyError`` exactly
+    once. Reads go: #1 the pre-save prompt probe's (c795039 -- a turn probes the screen before
+    its quicksave, and this catalog declares no blocking prompt, so it answers nothing and costs
+    exactly this one read), #2 step 1's own observation, #3 (after step 1's dispatch) becomes
+    step 2's own observation, #4 (after step 2's dispatch) becomes step 3's own observation, #5
+    (after step 3's dispatch, while step 3 is still being processed) is where this fails -- so
+    two decision steps (1 and 2) have already executed and verified by the time it does,
+    reproducing "a failure at step n > 1, after earlier steps have already executed and
+    verified" (T096)."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -163,7 +166,7 @@ class _FlakyGame(_FakeGame):
 
     async def read(self) -> tuple[Sequence[CapabilityResult], str]:
         self._read_count += 1
-        if self._fail_armed and self._read_count == 4:
+        if self._fail_armed and self._read_count == 5:
             self._fail_armed = False
             raise ObservationAssemblyError(
                 "simulated mid-turn observation failure", detail={"read_count": self._read_count}

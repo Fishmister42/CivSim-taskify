@@ -252,18 +252,25 @@ class _SpyStore:
 
 
 class _MidRunFailingCaptureHost(FakeHostPlatform):
-    """Serves exactly one clean frame, then fails every later capture attempt -- the T240
-    scenario: a run whose captures were fine at the start and degrade mid-run."""
+    """Serves a fixed number of clean frames, then fails every later capture attempt -- the T240
+    scenario: a run whose captures were fine at the start and degrade mid-run.
 
-    def __init__(self, first: CaptureResult) -> None:
+    *clean_frames* is how many reads happen before the loss, counted from the turn's very first
+    read. Since c795039 a turn's first read is the pre-save prompt probe's, one read ahead of
+    the first decision step -- so a scenario that wants the *step* to start clean scripts one
+    frame for the probe and one for the step.
+    """
+
+    def __init__(self, frame: CaptureResult, *, clean_frames: int = 1) -> None:
         super().__init__()
-        self._first: CaptureResult | None = first
+        self._frame = frame
+        self._remaining = clean_frames
 
     def capture_window(self, window: GameWindow) -> CaptureResult:
         self.capture_calls.append(window)
-        if self._first is not None:
-            first, self._first = self._first, None
-            return first
+        if self._remaining > 0:
+            self._remaining -= 1
+            return self._frame
         return CaptureResult(
             status=CaptureStatus.failed, reason="scripted mid-run capture loss"
         )
@@ -410,12 +417,18 @@ async def test_screened_clean_capture_bytes_reach_the_provider_request(tmp_path:
         assert [image.data for image in request.images] == [png]
         assert request.images[0].media_type == "image/png"
 
-        # Exactly two captures were written: the decision step's own (attached, so recorded
-        # shown, blob stored verbatim) and the post-end-turn verification read's (clean, but it
-        # served no request, so recorded not shown).
-        assert len(spy.capture_writes) == 2
-        step_capture, step_blob = spy.capture_writes[0]
-        trailing_capture, trailing_blob = spy.capture_writes[1]
+        # Exactly three captures were written: the pre-save prompt probe's read (c795039: a turn
+        # probes the screen before its quicksave; it served no decision here, so recorded not
+        # shown), the decision step's own (attached, so recorded shown, blob stored verbatim),
+        # and the post-end-turn verification read's (clean, but it served no request, so
+        # recorded not shown).
+        assert len(spy.capture_writes) == 3
+        probe_capture, probe_blob = spy.capture_writes[0]
+        step_capture, step_blob = spy.capture_writes[1]
+        trailing_capture, trailing_blob = spy.capture_writes[2]
+        assert probe_capture.screening_status is ScreeningStatus.SCREENED_CLEAN
+        assert probe_capture.shown_to_agent is False
+        assert probe_blob == png
         assert step_capture.screening_status is ScreeningStatus.SCREENED_CLEAN
         assert step_capture.shown_to_agent is True
         assert step_blob == png
@@ -482,8 +495,9 @@ async def test_no_image_reaches_the_agent_on_a_platform_without_a_passed_r6_spik
         assert provider.calls[0].images == []
 
         # ...and the record says none did, while the clean frames themselves are still stored
-        # as evidence, blob and all.
-        assert len(spy.capture_writes) == 2
+        # as evidence, blob and all -- the pre-save prompt probe's read (c795039), the decision
+        # step's own, and the trailing end-turn verification read's.
+        assert len(spy.capture_writes) == 3
         for capture, blob in spy.capture_writes:
             assert capture.screening_status is ScreeningStatus.SCREENED_CLEAN
             assert capture.shown_to_agent is False
@@ -522,7 +536,10 @@ async def test_mid_run_capture_degradation_downgrades_run_comparability(tmp_path
     spy = _SpyStore(store)
 
     png = _png_bytes()
-    host = _MidRunFailingCaptureHost(_clean_capture_result(png))
+    # Two clean frames: one for the pre-save prompt probe's read (c795039 -- it precedes the
+    # turn's first decision step and would otherwise consume the run's only good frame), one for
+    # decision step 1, and the loss starts at step 2 exactly as this scenario intends.
+    host = _MidRunFailingCaptureHost(_clean_capture_result(png), clean_frames=2)
 
     provider = FakeModelProvider()
     provider.queue_decision(_tick())

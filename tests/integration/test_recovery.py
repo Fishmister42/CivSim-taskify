@@ -18,8 +18,10 @@ code, not merely simulated.
 
 from __future__ import annotations
 
+import sqlite3
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -30,7 +32,7 @@ import pytest
 
 from civsim_harness.capability.loader import Catalog
 from civsim_harness.capability.registry import CapabilityRegistry
-from civsim_harness.errors import NexusError, ObservationAssemblyError
+from civsim_harness.errors import NexusError, ObservationAssemblyError, RecoveryLimitReached
 from civsim_harness.host.detect import HostInfo, LinuxSessionType, OperatingSystem
 from civsim_harness.host.port import HostPlatform
 from civsim_harness.models.catalog import CapabilityPath as CatalogCapabilityPath
@@ -65,11 +67,16 @@ from civsim_harness.nexus.client import NexusClient
 from civsim_harness.observe.assemble import CapabilityResult
 from civsim_harness.parity.screening import load_screening_profiles
 from civsim_harness.provider.port import RawDecision
-from civsim_harness.resilience.detector import check_process_liveness
+from civsim_harness.resilience.detector import DetectionAggregator, check_process_liveness
 from civsim_harness.resilience.liveness import ProcessLivenessMonitor
 from civsim_harness.resilience.recovery import RecoveryEngine
-from civsim_harness.run.decision_loop import DecisionLoopContext
-from civsim_harness.run.turn_cycle import TurnCycleDependencies, run_turn_cycle
+from civsim_harness.run.decision_loop import DecisionLoopContext, MidTurnObservationFailure
+from civsim_harness.run.detection import ClientFaultDetected, DetectionWatch
+from civsim_harness.run.turn_cycle import (
+    MAX_UNPRODUCTIVE_REPLAYS,
+    TurnCycleDependencies,
+    run_turn_cycle,
+)
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
 from fakes.fake_host import FakeHostPlatform
 from fakes.fake_nexus import STATE_INDEX_GAME_CORE_TUNER, STATE_INDEX_IN_GAME, FakeNexusServer
@@ -296,13 +303,20 @@ async def test_crash_mid_turn_is_detected_and_the_turn_recovers_as_the_same_run(
     store.create_run(run, config)
 
     server = FakeNexusServer()
-    # Attempt 0 (conn 1): read(1) -> tick -> read(2) -> tick -> read DROPS on the 5th command.
+    # The pre-save prompt probe (c795039, gameplay blocks 16/17) reads the board once before the
+    # turn-start quicksave, on the same connection, and this test's catalog declares no
+    # game.screen_state -- so the probe sees no blocking prompt, answers nothing, and the turn
+    # proceeds. It still costs one read, which is why every ordinal below is one past where it
+    # used to be.
+    server.queue_response(_turn_state_response(1), match=READ_LUA)  # the pre-save probe's read
+    # Attempt 0 (conn 1): read(1) -> tick -> read(2) -> tick -> read DROPS on the 6th command.
     server.queue_response(_turn_state_response(1), match=READ_LUA)
     server.queue_response(_turn_state_response(2), match=READ_LUA)
-    # Attempt 1 (conn 2, replayed from the turn-start quicksave): read(1) -> tick+end -> read(2).
+    # Attempt 1 (conn 2, replayed from the turn-start quicksave -- taken *after* the probe, so the
+    # replay never re-runs it): read(1) -> tick+end -> read(2).
     server.queue_response(_turn_state_response(1), match=READ_LUA)
     server.queue_response(_turn_state_response(2), match=READ_LUA)
-    server.drop_connection_at(5)
+    server.drop_connection_at(6)
     await server.start()
 
     game = _NexusBackedGame(
@@ -445,5 +459,315 @@ async def test_crash_mid_turn_is_detected_and_the_turn_recovers_as_the_same_run(
         assert a1_authoritative == 1
         assert a1_step_count == 1
         assert sum(row[1] for row in rows) == 1  # exactly one authoritative attempt (invariant I9)
+    finally:
+        store.close()
+
+
+# --------------------------------------------------------------------------
+# The pre-save prompt probe (c795039) is not a place the run may get stuck
+# --------------------------------------------------------------------------
+
+
+def _turn_cycle_rows(db: Path) -> list[tuple[Any, ...]]:
+    conn = sqlite3.connect(str(db))
+    try:
+        return list(
+            conn.execute(
+                "SELECT attempt_index, is_authoritative, step_count FROM turn_cycles"
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+
+
+@dataclass(frozen=True)
+class _LivenessThatDiesWithTheWire(ProcessLivenessMonitor):
+    """A ``ProcessLivenessMonitor`` that reports the client alive until the scripted wire drop.
+
+    A real ``psutil`` monitor cannot be made to report a process dying at a chosen instant, and
+    the instant is the whole point here: *game* is alive until it has seen its drop, so the
+    between-turns liveness check -- which runs *before* the pre-save probe -- passes, and the
+    probe's own read is the first thing detection has anything to say about.
+    """
+
+    game: _NexusBackedGame
+
+    def check(self) -> bool:
+        return not self.game.crash_events
+
+
+async def _run_turn_with_the_probe_read_dropped(
+    tmp_path: Path,
+    *,
+    run_id: RunId,
+    make_detection: Callable[[_NexusBackedGame, SqliteMatchStore], DetectionWatch] | None = None,
+) -> tuple[_NexusBackedGame, BaseException]:
+    """Drive one turn whose very first command -- the pre-save probe's read -- dies on the wire.
+
+    Returns the game (for its scripted dead PID) and whatever ``run_turn_cycle`` raised. A
+    *return* rather than a raise is itself a failure here: a turn whose board cannot be read
+    before any quicksave exists has nothing to save, nothing to replay and nothing to report.
+    """
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    server = FakeNexusServer()
+    server.drop_connection_at(1)  # the turn's very first command is the pre-save probe's read
+    await server.start()
+
+    game = _NexusBackedGame(
+        server=server, store=store, run_id=run_id, turn_number=1, dead_pid=_dead_pid()
+    )
+    provider = FakeModelProvider()
+    registry = _build_registry()
+    host = FakeHostPlatform()
+    host_info = HostInfo(
+        os=OperatingSystem.linux, os_version="test", session_type=LinuxSessionType.x11
+    )
+
+    def build_loop_context(turn_cycle_id: TurnCycleId) -> DecisionLoopContext:
+        return DecisionLoopContext(
+            run_id=run_id,
+            turn_number=1,
+            turn_cycle_id=turn_cycle_id,
+            registry=registry,
+            catalog_version=CatalogVersionRef(version="test", content_hash="test"),
+            model=ModelRef(provider="test", model="test-model"),
+            guidance=None,
+            provider=provider,
+            no_progress_step_limit=5,
+            read_observation_inputs=game.read,
+            execute_action=game.execute,
+            host=host,
+            host_info=host_info,
+            view_declaration_id=DeclarationId("views.test"),
+            screening_profiles=load_screening_profiles(),
+            store=store,
+        )
+
+    deps = TurnCycleDependencies(
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        save_capability=_FakeSaveCapability(host, tmp_path),
+        host=host,
+        min_free_disk_gb=1.0,
+        disk_check_path=tmp_path,
+        build_loop_context=build_loop_context,
+        recovery=RecoveryEngine(
+            run_id=run_id, store=store, loader=_FakeSaveLoader(), recovery_attempt_limit=3
+        ),
+        home=tmp_path,
+        detection=None if make_detection is None else make_detection(game, store),
+    )
+
+    raised: BaseException | None = None
+    try:
+        try:
+            await run_turn_cycle(deps, run=run)
+        except BaseException as exc:  # noqa: BLE001 - the assertion is the caller's to make
+            raised = exc
+    finally:
+        await game.close()
+        await server.stop()
+        store.close()
+
+    assert raised is not None, "run_turn_cycle returned from a turn it could never read"
+    return game, raised
+
+
+async def test_a_client_death_during_the_pre_save_probe_is_recorded_and_does_not_hang(
+    tmp_path: Path,
+) -> None:
+    """REGRESSION (2026-09-21, the suite hanging at ~40% on this head).
+
+    c795039 put a screen-identity probe *before* the turn-start quicksave, and
+    ``run_turn_cycle`` named only a ``ClientFaultDetected`` raised out of it. A client that died
+    on the probe's own read surfaces as a transport failure first -- a
+    ``MidTurnObservationFailure``, the same shape ``tests/fakes``' wire drop produces -- and that
+    arm had no handling at all: it escaped with mid-turn wording claiming a replay from a start
+    save that does not exist yet, and nothing wrote down what the probe had already spent.
+
+    Scripted over the real wire, with no detection wired (the shape every caller driving a
+    scripted game has): the connection dies on the very first command of the turn. The turn must
+    *finish trying* -- promptly, not by waiting on a dead client and not by re-entering the probe
+    -- with the crash recorded, the failure named for where it happened, and no attempt and no
+    save brought into existence.
+    """
+    run_id = RunId("run-probe-death")
+    game, raised = await _run_turn_with_the_probe_read_dropped(tmp_path, run_id=run_id)
+
+    assert isinstance(raised, MidTurnObservationFailure)
+    # Named for where it actually happened, and explicitly *not* as something replayable.
+    assert "pre-save prompt probe" in str(raised)
+    assert "no start save" in str(raised)
+
+    store = SqliteMatchStore(tmp_path / "match.db")
+    try:
+        # The crash reached the record through the ordinary crash-detection path (FR-044), the
+        # same one a death anywhere else in the turn goes through.
+        crashes = store.list_run_events(run_id, event_types=[RunEventType.CRASH_DETECTED])
+        assert len(crashes) == 1
+        assert crashes[0].turn_number == 1
+        assert crashes[0].detail["pid"] == game._dead_pid  # noqa: SLF001
+
+        # And nothing was fabricated on the way out: no quicksave was taken, and the turn never
+        # came into existence as an attempt (there is nothing for a replay to start from).
+        assert store.list_run_events(run_id, event_types=[RunEventType.SAVE_TAKEN]) == []
+        assert _turn_cycle_rows(tmp_path / "match.db") == []
+    finally:
+        store.close()
+
+
+async def test_a_probe_read_that_dies_on_a_dead_client_is_named_a_client_fault(
+    tmp_path: Path,
+) -> None:
+    """The same death, with this run's detection wired: it is named for what it *is*.
+
+    SC-010 asks for a crash detected and recorded, and a transport failure on the probe's read is
+    only the symptom. When a ``DetectionWatch`` is available, the probe's observation failure has
+    the client's liveness checked once through that same watch -- so the run stops with a
+    ``ClientFaultDetected`` carrying the detection path's own durably written event, exactly as a
+    death anywhere else in the turn does, rather than with a generic assembly failure that says
+    nothing about why.
+    """
+    run_id = RunId("run-probe-death-detected")
+
+    def make_detection(game: _NexusBackedGame, store: SqliteMatchStore) -> DetectionWatch:
+        liveness = _LivenessThatDiesWithTheWire(pid=game._dead_pid, game=game)  # noqa: SLF001
+        return DetectionWatch(
+            aggregator=DetectionAggregator(liveness=liveness),
+            store=store,
+            run_id=run_id,
+            clock=lambda: datetime.now(UTC),
+            liveness=liveness,
+        )
+
+    game, raised = await _run_turn_with_the_probe_read_dropped(
+        tmp_path, run_id=run_id, make_detection=make_detection
+    )
+
+    assert isinstance(raised, ClientFaultDetected)
+    assert "pre-save prompt probe" in str(raised)
+    assert raised.primary is RunEventType.CRASH_DETECTED
+    # The detection path produced the event itself and had already written it before reporting.
+    assert [event.event_type for event in raised.events] == [RunEventType.CRASH_DETECTED]
+
+    store = SqliteMatchStore(tmp_path / "match.db")
+    try:
+        crashes = store.list_run_events(run_id, event_types=[RunEventType.CRASH_DETECTED])
+        # At least two: the dropped read's own recorded detection, and detection's answer to
+        # "is the client actually gone?" -- both durably written before anything was raised.
+        assert len(crashes) >= 2
+        assert {event.detail["pid"] for event in crashes} == {game._dead_pid}  # noqa: SLF001
+        assert store.list_run_events(run_id, event_types=[RunEventType.SAVE_TAKEN]) == []
+        assert _turn_cycle_rows(tmp_path / "match.db") == []
+    finally:
+        store.close()
+
+
+async def test_a_turn_that_can_never_be_re_observed_stops_instead_of_replaying_forever(
+    tmp_path: Path,
+) -> None:
+    """REGRESSION (2026-09-21): the hang itself.
+
+    ``run_turn_cycle``'s ``MidTurnObservationFailure`` arm replayed the turn from its start
+    quicksave with no bound of its own, and ``RecoveryEngine`` resets its FR-048
+    consecutive-failure count on every recovery that *succeeds* -- so a reload that works
+    perfectly against a board the harness still cannot read reset the only counter in the system
+    and the loop spun forever, silently, with no event and no output. (The ``ClientFaultDetected``
+    arm has carried its own backstop for exactly this since T233; this arm had none.)
+
+    Scripted: the probe reads once and sees no prompt, the quicksave lands, and every read after
+    that fails. Each replay therefore completes no step at all while every recovery reports
+    success. The run must stop, loudly and by name, rather than replay.
+    """
+    run_id = RunId("run-unreadable-board")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    reads = 0
+
+    async def read_once_then_never_again() -> tuple[Sequence[CapabilityResult], str]:
+        nonlocal reads
+        reads += 1
+        if reads == 1:  # the pre-save probe's read: clean, so the turn takes its quicksave
+            return (
+                [
+                    CapabilityResult(
+                        declaration_id=GAME_TURN_STATE_DECLARATION_ID,
+                        value=_turn_state_response(1),
+                    )
+                ],
+                "world",
+            )
+        raise ObservationAssemblyError(
+            "observation could not be assembled: scripted unreadable board",
+            detail={"reads": reads},
+        )
+
+    async def never_executed(
+        declaration_id: DeclarationId, parameters: Mapping[str, Any], target: Any
+    ) -> None:  # pragma: no cover - no step ever gets far enough to act
+        raise AssertionError("no step can complete on a board that cannot be read")
+
+    registry = _build_registry()
+    host = FakeHostPlatform()
+    host_info = HostInfo(
+        os=OperatingSystem.linux, os_version="test", session_type=LinuxSessionType.x11
+    )
+    provider = FakeModelProvider()
+
+    def build_loop_context(turn_cycle_id: TurnCycleId) -> DecisionLoopContext:
+        return DecisionLoopContext(
+            run_id=run_id,
+            turn_number=1,
+            turn_cycle_id=turn_cycle_id,
+            registry=registry,
+            catalog_version=CatalogVersionRef(version="test", content_hash="test"),
+            model=ModelRef(provider="test", model="test-model"),
+            guidance=None,
+            provider=provider,
+            no_progress_step_limit=5,
+            read_observation_inputs=read_once_then_never_again,
+            execute_action=never_executed,
+            host=host,
+            host_info=host_info,
+            view_declaration_id=DeclarationId("views.test"),
+            screening_profiles=load_screening_profiles(),
+            store=store,
+        )
+
+    recovery = RecoveryEngine(
+        run_id=run_id, store=store, loader=_FakeSaveLoader(), recovery_attempt_limit=3
+    )
+    deps = TurnCycleDependencies(
+        run_id=run_id,
+        turn_number=1,
+        store=store,
+        save_capability=_FakeSaveCapability(host, tmp_path),
+        host=host,
+        min_free_disk_gb=1.0,
+        disk_check_path=tmp_path,
+        build_loop_context=build_loop_context,
+        recovery=recovery,
+        home=tmp_path,
+    )
+
+    try:
+        with pytest.raises(RecoveryLimitReached) as excinfo:
+            await run_turn_cycle(deps, run=run)
+
+        # It stopped on this module's own bound, and says how many replays it took.
+        assert excinfo.value.detail["unproductive_replays"] == MAX_UNPRODUCTIVE_REPLAYS
+        # Proof that `RecoveryEngine`'s own count could never have stopped it: every recovery
+        # this run performed succeeded, so its consecutive-failure count is still zero.
+        assert recovery.consecutive_failures == 0
+        # The quicksave really was taken -- this is the *replay* loop's bound, not the probe's.
+        assert len(store.list_run_events(run_id, event_types=[RunEventType.SAVE_TAKEN])) == 1
+        # No attempt completed a step, so none was retained (T152 retains only what completed).
+        assert _turn_cycle_rows(tmp_path / "match.db") == []
     finally:
         store.close()

@@ -159,11 +159,26 @@ class _FakeGame:
 
 
 class _FailingObservationReader:
-    """Raises ``ObservationAssemblyError`` on every call -- T096/T152's mid-turn observation
-    failure, the trigger ``resilience.recovery.RecoveryEngine.recover_from_observation_assembly_
-    error`` abandons and replays from the turn-start quicksave (FR-046)."""
+    """Serves the turn's first read, then raises ``ObservationAssemblyError`` on every call after
+    it -- T096/T152's mid-turn observation failure, the trigger
+    ``resilience.recovery.RecoveryEngine.recover_from_observation_assembly_error`` abandons and
+    replays from the turn-start quicksave (FR-046).
+
+    That first read is the pre-save prompt probe's (c795039: a turn probes the screen before its
+    quicksave, and this catalog declares no blocking prompt, so the probe answers nothing and
+    costs exactly one read). It is served rather than failed on purpose: a turn whose *probe*
+    cannot read the board stops before its quicksave ever exists, which is a different scenario
+    with a different ending (``tests/integration/test_recovery.py`` covers it). The scenario this
+    reader is for is the one that has a turn-start quicksave on record to replay from.
+    """
+
+    def __init__(self) -> None:
+        self._reads = 0
 
     async def __call__(self) -> tuple[Sequence[CapabilityResult], str]:
+        self._reads += 1
+        if self._reads == 1:
+            return await _FakeGame().read()
         raise ObservationAssemblyError(
             "test-induced observation assembly failure", detail={"reason": "scripted"}
         )
@@ -329,6 +344,12 @@ def _build_recovery_limit_runner(
     run_id = prepared.run.run_id
 
     def build_turn_dependencies(prepared: PreparedRun, turn_number: int) -> TurnCycleDependencies:
+        # One reader for the whole turn, not one per attempt: its "serve the first read, fail
+        # every one after it" script is about *this turn's* reads -- the pre-save probe's, then
+        # every attempt's -- and a fresh instance per `build_loop_context` call would hand each
+        # replay a working read again and never reach the recovery bound this test is about.
+        reader = _FailingObservationReader()
+
         def build_loop_context(turn_cycle_id: TurnCycleId) -> DecisionLoopContext:
             return DecisionLoopContext(
                 run_id=run_id,
@@ -340,7 +361,7 @@ def _build_recovery_limit_runner(
                 guidance=None,
                 provider=FakeModelProvider(),  # never called -- observation fails first
                 no_progress_step_limit=5,
-                read_observation_inputs=_FailingObservationReader(),
+                read_observation_inputs=reader,
                 execute_action=lambda *a, **kw: (_ for _ in ()).throw(  # pragma: no cover
                     AssertionError("no decision should ever be dispatched in this scenario")
                 ),

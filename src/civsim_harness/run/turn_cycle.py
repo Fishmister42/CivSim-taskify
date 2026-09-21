@@ -93,7 +93,12 @@ from typing import Any
 
 from civsim_harness.act.dispatch import DispatchStatus, dispatch_action
 from civsim_harness.act.verify import verify_execution
-from civsim_harness.errors import DiskHeadroomError, HarnessError, NexusError
+from civsim_harness.errors import (
+    DiskHeadroomError,
+    HarnessError,
+    NexusError,
+    RecoveryLimitReached,
+)
 from civsim_harness.host.port import HostPlatform
 from civsim_harness.models.common import (
     DecisionStepId,
@@ -143,6 +148,21 @@ _END_TURN_DECLARATION_ID = DeclarationId("turn.end_turn")
 #: backstop body). Bounded so an unconfirmed turn still fails closed.
 BACKSTOP_CONFIRM_TIMEOUT_S = 45.0
 BACKSTOP_CONFIRM_POLL_S = 2.0
+
+#: How many times in a row this turn may be replayed (T152) after an attempt that completed no
+#: step at all, before the run stops instead.
+#:
+#: MEASURED (2026-09-21, the full suite hanging at ~40% on this head): the
+#: ``MidTurnObservationFailure`` arm of the replay loop below had no bound of its own, and
+#: ``RecoveryEngine`` resets its consecutive-failure count on every recovery that *succeeds* --
+#: so a reload that works perfectly against a board the harness still cannot read never reaches
+#: the FR-048 bound, and :func:`run_turn_cycle` replays the turn forever without ever raising.
+#: The ``ClientFaultDetected`` arm already carries the same backstop in its own shape (one more
+#: liveness check after recovery); this is that guard for the arm that has no client-death signal
+#: to lean on. Counted only over *consecutive* attempts that completed **no** step: an attempt
+#: that got even one step done made real progress and resets it, so an ordinary mid-turn failure
+#: is replayed exactly as freely as it always was.
+MAX_UNPRODUCTIVE_REPLAYS = 3
 
 
 def _utcnow() -> Timestamp:
@@ -616,6 +636,20 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
     the fault is recorded and raised by name rather than surfacing a moment later as a generic
     transport failure from the quicksave. A fault detected *during* the turn is not raised -- it
     is routed into ``deps.recovery`` below, exactly as a mid-turn observation failure is.
+
+    The same two things hold for the **pre-save prompt probe** (2026-09-21, gameplay blocks
+    16/17), which runs in that same before-any-quicksave position: a ``ClientFaultDetected`` from
+    it is re-raised named as pre-save, and a :class:`~civsim_harness.run.decision_loop.
+    MidTurnObservationFailure` from it -- the shape a client death takes when it surfaces as a
+    transport failure on the probe's own read rather than as a watchdog signal -- has the
+    client's liveness checked once through the ordinary detection path, so it becomes a named,
+    recorded ``ClientFaultDetected`` when the client really is gone and is otherwise re-raised
+    named as pre-save too. Neither ever replays: there is no start save for this turn yet.
+
+    Finally, :class:`~civsim_harness.errors.RecoveryLimitReached` is raised from this module's
+    own replay loop when ``MAX_UNPRODUCTIVE_REPLAYS`` consecutive replays each complete no step
+    at all -- the FR-048 bound for the case ``RecoveryEngine``'s own count cannot see, because
+    every one of those recoveries *succeeded*.
     """
     await _detect_between_turns(deps)
 
@@ -638,6 +672,47 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
             primary=exc.primary,
             detail={"run_id": str(deps.run_id), "turn_number": deps.turn_number},
         ) from exc
+    except MidTurnObservationFailure as exc:
+        # The probe could not read the board at all -- which is the shape a client that died
+        # during the probe takes whenever the death surfaces as a transport failure on the read
+        # rather than as a watchdog signal first. There is no quicksave yet, so there is no
+        # attempt to abandon and nothing to replay from; but the run must not lose what the
+        # probe already did or *why* it stopped, and it must not sit here waiting on a dead
+        # client either. So: the clearance's own model calls are written directly (FR-042 -- a
+        # call the agent paid for must never vanish with an attempt that never came into
+        # existence, exactly as `_take_quicksave` does when the save then fails), the events it
+        # carried go on the timeline, and the client's liveness is checked once through the
+        # ordinary detection path so a death here is *named* a death and recorded as one
+        # (FR-044, SC-010) instead of surfacing as a generic assembly failure.
+        for bundle in exc.steps:
+            deps.store.write_model_call(bundle.model_call)
+        for event in exc.events:
+            deps.store.write_run_event(event)
+        liveness_events = (
+            await deps.detection.check_liveness_now(turn_number=deps.turn_number)
+            if deps.detection is not None
+            else ()
+        )
+        fault = primary_fault(liveness_events)
+        if fault is not None:
+            raise ClientFaultDetected(
+                "the game client was detected faulty during the pre-save prompt probe, before "
+                "this turn's quicksave was taken; the turn never came into existence as an "
+                "attempt, and there is no start save for this turn to resume from (FR-044, "
+                "SC-010)",
+                events=liveness_events,
+                primary=fault,
+                detail={"run_id": str(deps.run_id), "turn_number": deps.turn_number},
+            ) from exc
+        raise MidTurnObservationFailure(
+            "a fresh observation could not be assembled for the pre-save prompt probe, before "
+            "this turn's quicksave was taken; the turn never came into existence as an attempt, "
+            "so there is no abandoned attempt to retain and no start save to replay it from",
+            cause=exc.cause,
+            steps=(),
+            events=(),
+            no_progress_streak=exc.no_progress_streak,
+        ) from exc
     clearance_steps = clearance.steps
     clearance_events = clearance.events
 
@@ -650,6 +725,8 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
     attempt_index = deps.attempt_index_base
     result: DecisionLoopResult
     first_attempt = True
+    #: Consecutive replays that completed no step at all -- see MAX_UNPRODUCTIVE_REPLAYS.
+    unproductive_replays = 0
     while True:
         # Replays start from the quicksave, which was taken *after* the prompt was answered, so
         # only the first attempt carries the clearance steps and continues their numbering.
@@ -729,6 +806,29 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
                     started_at=started_at,
                     ended_at=ended_at,
                 )
+            # The bound this arm was missing (MAX_UNPRODUCTIVE_REPLAYS). Measured against the
+            # attempt's *own* steps, not the clearance steps merged into them above: those were
+            # taken before the quicksave and are carried forward unchanged by every replay, so
+            # counting them would make the first attempt look productive forever.
+            if exc.steps:
+                unproductive_replays = 0
+            else:
+                unproductive_replays += 1
+                if unproductive_replays >= MAX_UNPRODUCTIVE_REPLAYS:
+                    raise RecoveryLimitReached(
+                        "this turn was replayed from its start quicksave "
+                        f"{unproductive_replays} times in a row without a single decision step "
+                        "completing -- the board cannot be read after a reload that itself "
+                        "succeeds, so replaying again would spin rather than recover; the run "
+                        "stops visibly instead (FR-048)",
+                        detail={
+                            "run_id": str(deps.run_id),
+                            "turn_number": deps.turn_number,
+                            "unproductive_replays": unproductive_replays,
+                            "max_unproductive_replays": MAX_UNPRODUCTIVE_REPLAYS,
+                            "reason": str(exc.cause),
+                        },
+                    ) from exc
             recovery_result = await deps.recovery.recover_from_observation_assembly_error(
                 current_run,
                 turn_number=deps.turn_number,
