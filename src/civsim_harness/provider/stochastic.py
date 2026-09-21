@@ -21,6 +21,26 @@ the agent does not have, which is precisely the leak Principle I exists to preve
 measurements it would improve would no longer be measurements of an agent playing at human
 parity.
 
+**T262 does not weaken that, it moves the line.** Availability is no longer private to the
+executor: ``agent/context.py`` now evaluates each action's predicate against this step's
+observation and renders the catalog in two groups -- the commands the game is offering, and the
+ones it is showing greyed out with the reason why -- because that is what a human reads off the
+screen. This module therefore *may* know which actions are available, and knows it the only way
+it is allowed to: by reading the request's own rendered groups (:data:`_AVAILABLE_GROUP_HEADER`,
+:data:`_UNAVAILABLE_GROUP_HEADER`), exactly as the model does. The import closure is unchanged,
+and the closure test still fails if that ever stops being true.
+
+**Two policies (:data:`PROVIDER_POLICIES`).** ``uniform`` is the original behaviour and the
+default: draw from everything the request lists. ``coverage`` (T262) draws only from the
+"available now" group, preferring actions this run has not landed yet -- the owner's rule,
+verbatim: *"the stochastic testing should only select from actions of a reachable state."* It
+never falls back to the greyed-out group, not even when the available group is empty; it ends
+the turn instead, and that end-turn decision is recorded like any other. MEASURED (2026-09-21,
+``civsim store coverage``): under ``uniform``, nine of the fourteen catalog actions that had
+been attempted but never applied were draws for a situation that was not on screen -- a
+promotion with no promotable unit, a pantheon with no faith, a peace offer with nobody at war,
+a prompt answer with no prompt up -- every one refused at dispatch without reaching the game.
+
 **How a target is derived, and why it is never invented.** T256 gave every action a rendered
 ``-- target: <one concrete example>; <hint>`` tail (``agent/context.py``), and both halves name
 their own source in plain text -- "a unit_id from units.state", "a destination plot from the
@@ -87,7 +107,7 @@ import json
 import random
 import re
 import time
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -141,6 +161,26 @@ ALREADY_CHOSEN_WEIGHT: Final = 0.6
 #: How many times one ``(action id, target)`` pair may be chosen within a single turn.
 MAX_REPEATS_PER_TURN: Final = 2
 
+#: The sampling policy this provider was built with. ``uniform`` is the original T261 behaviour
+#: and remains the default: draw from every action the request lists, biased only by the two
+#: documented weights. ``coverage`` (T262) draws **only** from the actions the request shows in
+#: its "available now" group -- the owner's rule, verbatim: *"the stochastic testing should only
+#: select from actions of a reachable state."*
+UNIFORM_POLICY: Final = "uniform"
+COVERAGE_POLICY: Final = "coverage"
+
+#: Every value :meth:`StochasticModelProvider.__init__`'s ``policy`` accepts, and therefore every
+#: value a ``--provider-policy`` flag in front of it may take.
+PROVIDER_POLICIES: Final = (UNIFORM_POLICY, COVERAGE_POLICY)
+
+#: The "model" half of what each policy reports as ``model_served``. A recorded run is
+#: reproducible against the policy that produced it, so the two policies must never be
+#: indistinguishable in the store's ``model_calls`` table (P3).
+STOCHASTIC_MODEL_NAME_BY_POLICY: Final[Mapping[str, str]] = {
+    UNIFORM_POLICY: STOCHASTIC_MODEL_NAME,
+    COVERAGE_POLICY: "coverage-v1",
+}
+
 #: What :meth:`StochasticModelProvider.describe` reports. This adapter performs no I/O, so there
 #: is no context window to exceed and no wire format for an image to be dropped from: it accepts
 #: whatever it is handed and reports ``image_count`` faithfully (it simply does not look at the
@@ -155,8 +195,22 @@ _UNBOUNDED_CONTEXT_TOKENS: Final = 1_000_000_000
 
 #: The header ``agent.context.assemble_action_catalog_text`` writes above the action list.
 #: Everything before it in ``request.observation`` is observed state; everything after it that
-#: looks like a bullet is an action the request presents as available right now.
+#: looks like a bullet is an action the request lists.
 _ACTION_SECTION_HEADER: Final = "Actions you may take"
+
+#: T262: the two group headers the request writes above the actions the game is offering and the
+#: actions it is showing greyed out (``agent.context.{AVAILABLE,UNAVAILABLE}_GROUP_HEADER``).
+#: Copied here as text rather than imported, for the same reason
+#: :data:`_ACTION_SECTION_HEADER` is: this module may read the request and nothing else, and
+#: ``agent/context.py`` reaches the catalog loader. ``tests/unit/test_stochastic_provider.py``
+#: pins the two spellings together, so a rename cannot silently stop the grouping being seen.
+_AVAILABLE_GROUP_HEADER: Final = "Available now"
+_UNAVAILABLE_GROUP_HEADER: Final = "Not available now"
+
+#: T262: what the request writes after an action's target tail when it is greyed out, followed by
+#: the reason. Stripped before the target tail is parsed so a reason's own words and quoted
+#: values can never be harvested as a target.
+_UNAVAILABLE_REASON_MARKER: Final = " -- not available: "
 
 #: One observed-state line, exactly as ``agent.context._render_entry`` renders it:
 #: ``- [InGame] units.state: {"units": [...]}``.
@@ -228,6 +282,21 @@ _REFUSAL_MARKERS: Final = (
     "was rejected",
 )
 
+#: The vocabulary the harness uses for an action that really ran
+#: (``models/decision.py``'s ``ExecutionOutcome.APPLIED``). Matched against the request text only,
+#: exactly like :data:`_REFUSAL_MARKERS` and for the same reason: the coverage policy's "prefer
+#: what has not landed yet" may only be informed by what a *later request reports back*, never by
+#: a store read. Nothing renders an outcome into the observation today, so this ordinarily finds
+#: nothing and the policy falls back to its own record of what it has chosen -- but it starts
+#: working the moment such information is rendered, and can never start working by reading a
+#: record the agent cannot see.
+_APPLIED_MARKERS: Final = (
+    '"applied"',
+    "was applied",
+    "execution_outcome",
+    "outcome: applied",
+)
+
 
 @dataclass(frozen=True)
 class _ListedAction:
@@ -244,6 +313,11 @@ class _ListedAction:
     #: The hint half alone (the guidance after the example's JSON), which is where an option's
     #: own offered values and a number's own range are written.
     target_hint: str
+    #: T262: whether the request listed this action under its "available now" group. ``True``
+    #: when the request renders no grouping at all, which is what a pre-T262 rendering meant.
+    available: bool = True
+    #: The reason the request gave for greying it out, verbatim; ``""`` when it did not.
+    unavailable_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -319,22 +393,35 @@ def _split_target_example(guidance: str) -> tuple[Any | None, str]:
 
 
 def _parse_listed_actions(observation: str) -> list[_ListedAction]:
-    """Every action the request lists as available right now, in the order it listed them.
+    """Every action the request lists, in the order it listed them, with its rendered group.
 
     Only bullets *below* the action-catalog header are read, so an observed-state line can never
     be mistaken for an action. An action rendered without a target tail (one authored before
     T256) is treated as taking no target, which is what the pre-T256 rendering meant.
+
+    T262: a line under the request's "not available now" heading is recorded as such, with the
+    reason it gave, and its ``-- not available: ...`` tail is removed before the target tail is
+    read -- so an action's parsed target guidance is exactly what it was before the grouping
+    existed. A request that renders no grouping leaves every action ``available=True``, which is
+    what "the request lists it" meant before T262 and keeps the uniform policy unchanged.
     """
     actions: list[_ListedAction] = []
     in_section = False
+    available = True
     for line in observation.splitlines():
         if not in_section:
             in_section = line.startswith(_ACTION_SECTION_HEADER)
             continue
+        if line.startswith(_UNAVAILABLE_GROUP_HEADER):
+            available = False
+            continue
+        if line.startswith(_AVAILABLE_GROUP_HEADER):
+            available = True
+            continue
         match = _ACTION_LINE_RE.match(line)
         if match is None:
             continue
-        rest = match.group("rest")
+        rest, _, reason = match.group("rest").partition(_UNAVAILABLE_REASON_MARKER)
         summary, separator, guidance = rest.partition(_TARGET_SEPARATOR)
         example, hint = _split_target_example(guidance) if separator else (None, "")
         actions.append(
@@ -344,30 +431,50 @@ def _parse_listed_actions(observation: str) -> list[_ListedAction]:
                 target_example=example,
                 target_guidance=guidance,
                 target_hint=hint,
+                available=available,
+                unavailable_reason=reason.strip(),
             )
         )
     return actions
 
 
-def _refused_action_ids(observation: str, listed_ids: frozenset[str]) -> frozenset[str]:
-    """Action ids this request reports as refused, from the request text alone.
+def _ids_reported_with(
+    observation: str, listed_ids: frozenset[str], markers: Sequence[str]
+) -> frozenset[str]:
+    """Action ids this request reports alongside one of *markers*, from the request text alone.
 
-    Scans for the harness's own rejection vocabulary and, on any line carrying it, collects the
+    Scans for the harness's own outcome vocabulary and, on any line carrying it, collects the
     declaration-id-shaped tokens that are also ids this same request listed as actions. Returns
-    an empty set when the request says nothing about a refusal -- which is the ordinary case
-    today, since nothing renders refusal information into the observation yet. Deliberately
-    intersected with *listed_ids*: an observed-state key is itself a dotted declaration id, and
-    only an action can be down-weighted.
+    an empty set when the request says nothing -- which is the ordinary case today, since nothing
+    renders outcome information into the observation yet. Deliberately intersected with
+    *listed_ids*: an observed-state key is itself a dotted declaration id, and only an action can
+    be weighted.
+
+    Stops at the action-catalog header: the rendered catalog names every action and, since T262,
+    also carries the words the harness uses when it greys one out ("refused", "recorded"). Only
+    the *observed state* above it can report what an earlier decision did.
     """
     if not listed_ids:
         return frozenset()
-    refused: set[str] = set()
+    found: set[str] = set()
     for line in observation.splitlines():
+        if line.startswith(_ACTION_SECTION_HEADER):
+            break
         lowered = line.lower()
-        if not any(marker in lowered for marker in _REFUSAL_MARKERS):
+        if not any(marker in lowered for marker in markers):
             continue
-        refused.update(token for token in _IDENTIFIER_RE.findall(line) if token in listed_ids)
-    return frozenset(refused)
+        found.update(token for token in _IDENTIFIER_RE.findall(line) if token in listed_ids)
+    return frozenset(found)
+
+
+def _refused_action_ids(observation: str, listed_ids: frozenset[str]) -> frozenset[str]:
+    """Action ids this request reports as refused (:data:`_REFUSAL_MARKERS`)."""
+    return _ids_reported_with(observation, listed_ids, _REFUSAL_MARKERS)
+
+
+def _applied_action_ids(observation: str, listed_ids: frozenset[str]) -> frozenset[str]:
+    """Action ids this request reports as having really run (:data:`_APPLIED_MARKERS`)."""
+    return _ids_reported_with(observation, listed_ids, _APPLIED_MARKERS)
 
 
 # --------------------------------------------------------------------------
@@ -705,7 +812,9 @@ class StochasticModelProvider:
 
     *seed* fixes the sampling stream and is kept on :attr:`seed` so the run that used it can be
     reported and repeated; *max_actions_per_turn* is how many non-end-turn decisions it makes
-    before ending the turn.
+    before ending the turn; *policy* is one of :data:`PROVIDER_POLICIES` and is reported in
+    ``model_served`` (``stochastic/uniform-v1`` or ``stochastic/coverage-v1``), so a recorded run
+    always says which sampler produced it.
     """
 
     def __init__(
@@ -713,15 +822,25 @@ class StochasticModelProvider:
         *,
         seed: int = 0,
         max_actions_per_turn: int = DEFAULT_MAX_ACTIONS_PER_TURN,
+        policy: str = UNIFORM_POLICY,
     ) -> None:
         if max_actions_per_turn < 0:
             raise ValueError("max_actions_per_turn cannot be negative")
+        if policy not in PROVIDER_POLICIES:
+            raise ValueError(
+                f"unknown policy {policy!r}; expected one of {', '.join(PROVIDER_POLICIES)}"
+            )
         self.seed = seed
         self.max_actions_per_turn = max_actions_per_turn
+        self.policy = policy
+        self._model_served = ModelRef(
+            provider=STOCHASTIC_PROVIDER_NAME, model=STOCHASTIC_MODEL_NAME_BY_POLICY[policy]
+        )
         self._rng = random.Random(seed)
 
         # Own memory only -- never a record, never the store. See the module docstring.
         self._chosen_ids_run: set[str] = set()
+        self._applied_ids_run: set[str] = set()
         self._last_step_index: int | None = None
         self._actions_this_turn = 0
         self._pair_counts_turn: dict[tuple[str, str], int] = {}
@@ -756,7 +875,7 @@ class StochasticModelProvider:
         latency_ms = int((time.perf_counter() - started) * 1000)
         return DecisionResponse(
             decision=decision,
-            model_served=STOCHASTIC_MODEL_REF,
+            model_served=self._model_served,
             latency_ms=latency_ms,
             cost=ZERO_COST,
             retry_count=0,
@@ -774,10 +893,19 @@ class StochasticModelProvider:
         listed = _parse_listed_actions(observation)
         listed_ids = frozenset(action.declaration_id for action in listed)
         self._refused_ids_turn |= _refused_action_ids(observation, listed_ids)
+        self._applied_ids_run |= _applied_action_ids(observation, listed_ids)
 
         end_turn = self._end_turn_action(listed)
         index = _ObservedIndex(_parse_observed_state(observation))
         pool = [action for action in listed if action is not end_turn]
+        if self.policy == COVERAGE_POLICY:
+            # The owner's rule, verbatim: "the stochastic testing should only select from actions
+            # of a reachable state." An action the request shows greyed out is never drawn --
+            # not as a last resort, not when nothing else is left. When this empties the pool the
+            # turn is ended (below), and the end-turn decision is recorded like any other, so the
+            # board that offered nothing is visible in the record rather than papered over with a
+            # draw that was always going to be refused.
+            pool = [action for action in pool if action.available]
 
         # 1. A prompt blocking play is the game demanding a response, not a move this provider
         #    chose to spend -- so it is answered before the action budget is even consulted, and
@@ -817,11 +945,18 @@ class StochasticModelProvider:
         if decision is not None:
             return decision
 
+        scope = (
+            f"none of the {len(listed_ids)} action(s) this request lists is still usable this turn"
+            if self.policy != COVERAGE_POLICY
+            else (
+                f"none of the action(s) this request shows as available now (of the "
+                f"{len(listed_ids)} it lists) is still usable this turn"
+            )
+        )
         return self._end_turn_decision(
             end_turn,
             reason=(
-                f"none of the {len(listed_ids)} action(s) this request lists is still usable "
-                "this turn -- each either has no target the request shows or has already been "
+                f"{scope} -- each either has no target the request shows or has already been "
                 "repeated to this turn's bound"
             ),
         )
@@ -898,13 +1033,41 @@ class StochasticModelProvider:
         self._last_step_index = step_index
 
     def _weighted_pick(self, pool: Sequence[_ListedAction]) -> _ListedAction:
-        """Uniform over *pool*, modulated by the two documented biases only."""
+        """One action out of *pool*, by whichever policy this provider was built with."""
+        if self.policy == COVERAGE_POLICY:
+            return self._coverage_pick(pool)
         weights = [
             (REFUSED_ACTION_WEIGHT if action.declaration_id in self._refused_ids_turn else 1.0)
             * (ALREADY_CHOSEN_WEIGHT if action.declaration_id in self._chosen_ids_run else 1.0)
             for action in pool
         ]
         return self._rng.choices(list(pool), weights=weights, k=1)[0]
+
+    def _coverage_pick(self, pool: Sequence[_ListedAction]) -> _ListedAction:
+        """Uniform within the least-covered tier of *pool*, which is already available-only.
+
+        The preference the coverage policy exists for is "something this run has not landed yet",
+        and it is a *strict* tier rather than a weight: the uniform policy's mild bias needed
+        hundreds of draws to walk the surface, and a block of live play is a few dozen. Two facts
+        order the tiers, both from this provider's own memory and nothing else:
+
+        1. whether a later request reported this action **applied** (:data:`_APPLIED_MARKERS`) --
+           the outcome half, and the thing the owner's coverage question is actually about;
+        2. whether this provider has **chosen** it at all this run -- its own record of what it
+           returned, which is the honest stand-in while nothing renders outcomes back, and which
+           on its own already walks the available surface rather than re-rolling one corner of it.
+
+        ``(not yet applied, not yet chosen)`` sorts first, then ``(not yet applied, chosen)``,
+        and the actions already known to have landed come last -- "then the rest uniformly".
+        """
+        tiers: dict[tuple[bool, bool], list[_ListedAction]] = {}
+        for action in pool:
+            key = (
+                action.declaration_id in self._applied_ids_run,
+                action.declaration_id in self._chosen_ids_run,
+            )
+            tiers.setdefault(key, []).append(action)
+        return self._rng.choice(tiers[min(tiers)])
 
     @staticmethod
     def _pair_key(declaration_id: str, target: Any | None) -> tuple[str, str]:
@@ -948,17 +1111,26 @@ class StochasticModelProvider:
             if target is None
             else f"target sampled from what the request shows: {json.dumps(target, default=str)}"
         )
-        drawn_from = (
-            "sampled from the action(s) this request shows as answering the prompt currently "
-            f"blocking play, out of the {listed_count} it lists"
-            if answers_prompt
-            else f"sampled uniformly from the {listed_count} action(s) this request lists as "
-            "available right now"
-        )
+        if answers_prompt:
+            drawn_from = (
+                "sampled from the action(s) this request shows as answering the prompt currently "
+                f"blocking play, out of the {listed_count} it lists"
+            )
+        elif self.policy == COVERAGE_POLICY:
+            drawn_from = (
+                "sampled from the action(s) this request shows in its 'available now' group, out "
+                f"of the {listed_count} it lists, preferring what this run has not landed yet"
+            )
+        else:
+            drawn_from = (
+                f"sampled uniformly from the {listed_count} action(s) this request lists as "
+                "available right now"
+            )
         return RawDecision(
             action_declaration_id=DeclarationId(action.declaration_id),
             reasoning=(
-                f"stochastic provider (seed={self.seed}): {action.declaration_id} {drawn_from}; "
+                f"stochastic provider (seed={self.seed}, policy={self.policy}): "
+                f"{action.declaration_id} {drawn_from}; "
                 f"{target_note}. No model was consulted and no information outside this request "
                 "was read."
             ),
@@ -976,7 +1148,8 @@ class StochasticModelProvider:
         return RawDecision(
             action_declaration_id=declaration_id,
             reasoning=(
-                f"stochastic provider (seed={self.seed}): ending the turn because {reason}. "
+                f"stochastic provider (seed={self.seed}, policy={self.policy}): ending the turn "
+                f"because {reason}. "
                 "No model was consulted and no information outside this request was read."
             ),
             parameters={},
@@ -986,13 +1159,17 @@ class StochasticModelProvider:
 
 __all__ = [
     "ALREADY_CHOSEN_WEIGHT",
+    "COVERAGE_POLICY",
     "DEFAULT_MAX_ACTIONS_PER_TURN",
     "END_TURN_DECLARATION_ID",
     "MAX_REPEATS_PER_TURN",
+    "PROVIDER_POLICIES",
     "REFUSED_ACTION_WEIGHT",
     "STOCHASTIC_MODEL_NAME",
+    "STOCHASTIC_MODEL_NAME_BY_POLICY",
     "STOCHASTIC_MODEL_REF",
     "STOCHASTIC_PROVIDER_NAME",
+    "UNIFORM_POLICY",
     "ZERO_COST",
     "StochasticModelProvider",
 ]

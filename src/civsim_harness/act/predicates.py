@@ -133,15 +133,29 @@ def evaluate_predicate(predicate: str, bindings: Mapping[str, Any]) -> bool:
     does not supply. Never returns a truthy result for an unevaluable predicate -- an action's
     ``verification_predicate`` failing to evaluate must never be read as success (FR-011).
     """
-    unknown = unknown_predicate_symbols(predicate)
+    return bool(evaluate_expression(predicate, bindings))
+
+
+def evaluate_expression(expression: str, bindings: Mapping[str, Any]) -> Any:
+    """The *value* of a predicate-grammar *expression*, rather than its truthiness.
+
+    Identical in every restriction to :func:`evaluate_predicate` -- same symbol-table check, same
+    ``_parse`` allow-list walk, same bindings-only name resolution -- and is in fact what that
+    function evaluates before coercing to ``bool``. It exists because an availability *check* only
+    ever needs the boolean, while explaining a check that failed needs the reading itself: "the
+    screen is ``world``, not ``prompt.congress_vote``" and "``player.available_beliefs`` is empty"
+    are both statements about a value. Callers that want a yes/no answer should keep using
+    :func:`evaluate_predicate`, which can never be misread as "a non-empty list means available".
+    """
+    unknown = unknown_predicate_symbols(expression)
     if unknown:
         raise PredicateEvaluationError(
             "predicate references a namespace outside the exposed table",
-            detail={"predicate": predicate, "unknown_symbols": sorted(unknown)},
+            detail={"predicate": expression, "unknown_symbols": sorted(unknown)},
         )
 
-    tree = _parse(predicate)
-    return bool(_eval_node(tree.body, bindings, predicate))
+    tree = _parse(expression)
+    return _eval_node(tree.body, bindings, expression)
 
 
 def _parse(predicate: str) -> ast.Expression:
@@ -493,6 +507,104 @@ def resolve_selected_subject_target(
         ):
             return item.get(id_field)
     return None
+
+
+#: The subject namespaces resolved *only* from the action's own ``target`` -- there is no
+#: "currently selected congress resolution" the way there is a currently selected unit, so a
+#: predicate over one of these cannot be decided until some concrete id is bound to ``target``.
+#: :mod:`civsim_harness.act.availability` uses this to ask the question a human's greyed-out
+#: button answers instead: *is there any entry the game is showing for which this holds?*
+TARGET_RESOLVED_SUBJECTS: frozenset[str] = frozenset(
+    {"other_player", "congress", "great_person", "spy"}
+)
+
+#: The two subject namespaces the game itself carries a selection for (README §4's parenthesis,
+#: realised by :func:`resolve_selected_subject_target`).
+SELECTED_SUBJECTS: frozenset[str] = frozenset(_SELECTED_SUBJECT_BY_ACTION_PREFIX.values())
+
+
+def split_conjuncts(predicate: str) -> tuple[str, ...]:
+    """*predicate*'s top-level ``and`` operands, each a predicate in its own right.
+
+    ``"unit.is_selected and unit.can_found_city"`` -> two strings; anything that is not a
+    top-level ``and`` (an ``or``, a bare comparison, a predicate this grammar will not parse)
+    comes back as the single-element tuple ``(predicate,)``. This exists so a renderer can say
+    *which part* of an availability predicate is not satisfied -- the same thing a human reads off
+    a greyed-out button's tooltip -- without re-implementing the evaluator.
+    """
+    try:
+        tree = _parse(predicate)
+    except PredicateEvaluationError:
+        return (predicate,)
+    body = tree.body
+    if isinstance(body, ast.BoolOp) and isinstance(body.op, ast.And):
+        return tuple(ast.unparse(value) for value in body.values)
+    return (predicate,)
+
+
+def predicate_root_names(predicate: str) -> frozenset[str]:
+    """Every root namespace *predicate* reads (``unit``, ``target``, ``game``, ...).
+
+    Read from the same restricted parse :func:`evaluate_predicate` uses, so it agrees with the
+    evaluator by construction rather than by a second regex. ``true``/``false``/``null`` are
+    grammar, not namespaces, and are never returned. An unparseable predicate reads nothing.
+    """
+    try:
+        tree = _parse(predicate)
+    except PredicateEvaluationError:
+        return frozenset()
+    return frozenset(
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id not in _LITERAL_NAMES
+    )
+
+
+def membership_collection(predicate: str) -> str | None:
+    """For a predicate of the exact form ``target in <expr>``, ``<expr>``'s source; else ``None``.
+
+    ``target in player.researchable_techs`` is the catalog's way of saying "pick one of these",
+    and whether *any* can be picked is decidable before a target is chosen: the collection is
+    either empty or it is not. That is precisely the difference between a greyed-out "Choose a
+    belief" button and a live one.
+    """
+    try:
+        tree = _parse(predicate)
+    except PredicateEvaluationError:
+        return None
+    body = tree.body
+    if (
+        isinstance(body, ast.Compare)
+        and len(body.ops) == 1
+        and isinstance(body.ops[0], ast.In)
+        and isinstance(body.left, ast.Name)
+        and body.left.id == "target"
+    ):
+        return ast.unparse(body.comparators[0])
+    return None
+
+
+def subject_candidate_targets(namespace: str, observation: Observation) -> list[Any]:
+    """Every id *observation* shows for a subject *namespace*, in the order the game listed them.
+
+    These are exactly the values :func:`build_predicate_bindings` would bind that namespace from
+    if they were passed as ``target`` -- the civilizations on the diplomacy screen, the
+    resolutions in session, the recruitable great people, the spies. Empty when the observation
+    carries no such list at all, which is itself the answer to "is there anything to act on".
+    """
+    source_spec = _SUBJECT_SOURCES.get(namespace)
+    if source_spec is None:
+        return []
+    declaration_id, list_field, id_field = source_spec
+    source = observation_index(observation).get(declaration_id)
+    items = source.get(list_field) if isinstance(source, Mapping) else None
+    if not isinstance(items, list):
+        return []
+    return [
+        item[id_field]
+        for item in items
+        if isinstance(item, Mapping) and item.get(id_field) is not None
+    ]
 
 
 def _merge_fields(

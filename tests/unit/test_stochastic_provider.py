@@ -1152,3 +1152,253 @@ def test_principle_i_the_module_reads_no_file_and_opens_no_database() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "open" not in called, f"{_MODULE} calls open(): it may read nothing but the request."
+
+
+# --------------------------------------------------------------------------
+# T262 -- the `coverage` policy: only actions of a reachable state
+# --------------------------------------------------------------------------
+#
+# The owner's rule, verbatim: "the stochastic testing should only select from actions of a
+# reachable state." These requests are built by the same production assembler as every other
+# request here, so the "available now" / "not available now" groups the policy reads are the ones
+# `agent/context.py` really renders, evaluated by `act/availability.py` against a real
+# `Observation` -- not a hand-written heading.
+
+#: Predicates chosen so one board lights some commands and greys out others. Each is a real
+#: catalog shape: a selected-unit order, a "pick one of these" list, a prompt answer.
+COVERAGE_MOVE = _action(
+    "units.move_to",
+    summary="Order the selected unit to move to a target plot.",
+    availability_predicate="unit.is_selected and target in unit.reachable_plots",
+    target_kind="plot",
+    target_hint="a destination plot from the selected unit's reachable_plots",
+)
+COVERAGE_FOUND = _action(
+    "units.found_city",
+    summary="Found a city with a settler unit at its current plot.",
+    availability_predicate="unit.is_selected and unit.can_found_city",
+    target_kind="none",
+    target_hint="acts on the selected settler; send no target",
+)
+COVERAGE_PROMOTE = _action(
+    "units.promote",
+    summary="Apply an available promotion to a unit.",
+    availability_predicate="unit.is_selected and target in unit.available_promotions",
+    target_kind="name",
+    target_hint="a promotion from the selected unit's available_promotions",
+)
+COVERAGE_PANTHEON = _action(
+    "religion.select_pantheon",
+    summary="Choose a pantheon belief.",
+    availability_predicate="target in player.available_beliefs",
+    capability_id="religion.orders",
+    target_kind="name",
+    target_hint="a belief from player.available_beliefs",
+)
+COVERAGE_ACK = _action(
+    "prompts.tech_civic_completed",
+    summary='Acknowledge the "technology / civic completed" popup.',
+    availability_predicate=(
+        'game.has_blocking_prompt and game.current_screen == "prompt.tech_civic_completed"'
+    ),
+    capability_id="prompts.orders",
+    target_kind="option",
+    target_hint="one of the open prompt's offered options (prompt_options)",
+)
+COVERAGE_END_TURN = _action(
+    "turn.end_turn",
+    summary="End the current turn and pass play to the other civilizations.",
+    availability_predicate="game.is_local_player_turn and not game.has_blocking_prompt",
+    capability_id="turn.control",
+    target_kind="none",
+    target_hint="send no target",
+)
+
+COVERAGE_ACTIONS = [
+    COVERAGE_MOVE,
+    COVERAGE_FOUND,
+    COVERAGE_PROMOTE,
+    COVERAGE_PANTHEON,
+    COVERAGE_ACK,
+    COVERAGE_END_TURN,
+]
+
+
+def _coverage_units_state(*, selected: bool = True) -> dict[str, Any]:
+    """`_units_state`, but with nothing to promote -- the measured "promotion with no promotable
+    unit" board, which is the whole point of the filter."""
+    state = _units_state(selected=selected)
+    state["units"][0]["available_promotions"] = []
+    return state
+
+
+def _coverage_board(**screen: Any) -> list[tuple[str, Any]]:
+    """A settler selected with nothing to promote, no beliefs offered, and a quiet screen.
+
+    Available: `units.move_to`, `units.found_city`, `turn.end_turn`. Greyed out: the promotion
+    (nothing to promote), the pantheon (no belief offered), the acknowledge (no prompt) -- three
+    of the four measured wasted-draw shapes, on one board.
+    """
+    return [
+        ("units.state", _coverage_units_state()),
+        ("religion.state", {"available_beliefs": []}),
+        ("game.turn_state", {"turn_number": 53, "is_local_player_turn": True}),
+        (
+            "game.screen_state",
+            {"screen": "world", "has_blocking_prompt": False, "prompt_options": [], **screen},
+        ),
+    ]
+
+
+COVERAGE_AVAILABLE = {"units.move_to", "units.found_city", "turn.end_turn"}
+COVERAGE_GREYED_OUT = {"units.promote", "religion.select_pantheon", "prompts.tech_civic_completed"}
+
+
+def test_the_rendered_groups_this_policy_reads_are_the_ones_the_assembler_writes() -> None:
+    """The provider copies the group headings as text (it may not import `agent/context.py`),
+    so the two spellings are pinned together here -- a rename cannot silently stop the grouping
+    being seen, which would quietly turn `coverage` back into `uniform`."""
+    from civsim_harness.agent import context as production
+    from civsim_harness.provider import stochastic as under_test
+
+    assert production.AVAILABLE_GROUP_HEADER.startswith(under_test._AVAILABLE_GROUP_HEADER)
+    assert production.UNAVAILABLE_GROUP_HEADER.startswith(under_test._UNAVAILABLE_GROUP_HEADER)
+    assert production.UNAVAILABLE_REASON_MARKER == under_test._UNAVAILABLE_REASON_MARKER
+
+    rendered = _request(actions=COVERAGE_ACTIONS, entries=_coverage_board()).observation
+    parsed = {a.declaration_id: a.available for a in under_test._parse_listed_actions(rendered)}
+    assert {key for key, ok in parsed.items() if ok} == COVERAGE_AVAILABLE
+    assert {key for key, ok in parsed.items() if not ok} == COVERAGE_GREYED_OUT
+
+
+def test_the_coverage_policy_draws_only_from_the_available_group() -> None:
+    provider = StochasticModelProvider(seed=5, max_actions_per_turn=3, policy="coverage")
+    for turn in range(60):
+        for step_index in range(1, 5):
+            decision = _decide(
+                provider, _request(actions=COVERAGE_ACTIONS, entries=_coverage_board(),
+                                   step_index=step_index)
+            )
+            chosen = str(decision.action_declaration_id)
+            assert chosen not in COVERAGE_GREYED_OUT, (
+                f"turn {turn} step {step_index} drew {chosen}, which the request shows greyed out"
+            )
+            assert chosen in COVERAGE_AVAILABLE
+
+
+def test_the_coverage_policy_ends_the_turn_rather_than_reaching_for_a_greyed_out_action() -> None:
+    """Never a fallback: with nothing available but the end turn, the turn ends -- and that
+    end-turn decision is recorded, so a board that offered nothing is visible in the record."""
+    board = [
+        ("units.state", _coverage_units_state(selected=False)),
+        ("religion.state", {"available_beliefs": []}),
+        ("game.turn_state", {"turn_number": 53, "is_local_player_turn": True}),
+        ("game.screen_state", {"screen": "world", "has_blocking_prompt": False,
+                               "prompt_options": []}),
+    ]
+    provider = StochasticModelProvider(seed=7, max_actions_per_turn=6, policy="coverage")
+    for step_index in range(1, 6):
+        decision = _decide(
+            provider, _request(actions=COVERAGE_ACTIONS, entries=board, step_index=step_index)
+        )
+        assert decision.is_end_turn is True
+        assert str(decision.action_declaration_id) == "turn.end_turn"
+
+
+def _wrong_prompt_board() -> list[tuple[str, Any]]:
+    """A volcano is erupting, and the request also lists the *tech/civic* acknowledge.
+
+    This is the measured waste in its purest form: a target IS derivable for the wrong answer
+    (the open prompt offers "continue"), so nothing about target harvesting stops it being drawn
+    -- only knowing it is greyed out does. `prompts.tech_civic_completed` is unavailable here
+    because the screen is `prompt.natural_disaster`.
+    """
+    return _coverage_board(
+        screen="prompt.natural_disaster",
+        has_blocking_prompt=True,
+        prompt_options=["continue"],
+    )
+
+
+def test_the_uniform_policy_is_unchanged_and_still_draws_a_greyed_out_action() -> None:
+    """The default is left exactly as T261 wrote it, so the two policies can be compared --
+    including this, the behaviour the coverage policy exists to stop."""
+    provider = StochasticModelProvider(seed=5, max_actions_per_turn=3)
+    assert provider.policy == "uniform"
+    decision = _decide(provider, _request(actions=COVERAGE_ACTIONS, entries=_wrong_prompt_board()))
+    assert str(decision.action_declaration_id) == "prompts.tech_civic_completed"
+
+
+def test_the_coverage_policy_refuses_that_same_draw_and_plays_the_board_instead() -> None:
+    provider = StochasticModelProvider(seed=5, max_actions_per_turn=3, policy="coverage")
+    for step_index in range(1, 8):
+        decision = _decide(
+            provider,
+            _request(
+                actions=COVERAGE_ACTIONS, entries=_wrong_prompt_board(), step_index=step_index
+            ),
+        )
+        assert str(decision.action_declaration_id) != "prompts.tech_civic_completed"
+
+
+def test_the_coverage_policy_prefers_an_action_this_run_has_not_landed_yet() -> None:
+    """Strictly, not by a weight: everything available and unapplied comes out before anything
+    this run has already chosen, and what a later request reports as applied comes out last."""
+    provider = StochasticModelProvider(seed=3, max_actions_per_turn=6, policy="coverage")
+    first = _decide(provider, _request(actions=COVERAGE_ACTIONS, entries=_coverage_board()))
+    second = _decide(
+        provider, _request(actions=COVERAGE_ACTIONS, entries=_coverage_board(), step_index=2)
+    )
+    assert {str(first.action_declaration_id), str(second.action_declaration_id)} == {
+        "units.move_to",
+        "units.found_city",
+    }, "both unchosen actions must come out before either repeats"
+
+
+def test_an_action_a_later_request_reports_applied_is_sampled_last() -> None:
+    applied = (
+        "game.last_decision",
+        {"action": "units.found_city", "execution_outcome": "applied"},
+    )
+    provider = StochasticModelProvider(seed=11, max_actions_per_turn=6, policy="coverage")
+    decision = _decide(
+        provider,
+        _request(actions=COVERAGE_ACTIONS, entries=[*_coverage_board(), applied]),
+    )
+    assert str(decision.action_declaration_id) == "units.move_to", (
+        "the only other available non-end-turn action must be preferred over the applied one"
+    )
+
+
+def test_a_blocking_prompt_is_still_answered_first_under_the_coverage_policy() -> None:
+    """Commit 0fa4407's preference survives the filter -- and is sharpened by it, since the one
+    answer that fits the open prompt is the only prompt action the request shows as available."""
+    for seed in range(12):
+        provider = StochasticModelProvider(seed=seed, max_actions_per_turn=6, policy="coverage")
+        decision = _decide(
+            provider,
+            _request(
+                actions=COVERAGE_ACTIONS,
+                entries=_coverage_board(
+                    screen="prompt.tech_civic_completed",
+                    has_blocking_prompt=True,
+                    prompt_options=["continue"],
+                ),
+            ),
+        )
+        assert str(decision.action_declaration_id) == "prompts.tech_civic_completed"
+        assert decision.parameters["target"] == "continue"
+
+
+def test_each_policy_reports_which_sampler_served_the_call() -> None:
+    uniform = StochasticModelProvider(seed=1).complete(_full_board())
+    coverage = StochasticModelProvider(seed=1, policy="coverage").complete(_full_board())
+    assert uniform.model_served.provider == coverage.model_served.provider == "stochastic"
+    assert uniform.model_served.model == "uniform-v1"
+    assert coverage.model_served.model == "coverage-v1"
+    assert coverage.cost.amount_usd == 0.0
+
+
+def test_an_unknown_policy_is_refused_rather_than_silently_treated_as_uniform() -> None:
+    with pytest.raises(ValueError, match="unknown policy"):
+        StochasticModelProvider(seed=1, policy="greedy")

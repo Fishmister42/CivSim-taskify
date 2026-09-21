@@ -56,6 +56,7 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final
 
+from civsim_harness.act.availability import availability_by_action
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.errors import CatalogError
 from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration, TargetKind
@@ -105,7 +106,34 @@ def _render_entry(entry: ObservationEntry) -> str:
     return f"- [{entry.context.value}] {entry.key}: {rendered_value}"
 
 
-def assemble_action_catalog_text(declarations: Iterable[ParityDeclaration]) -> str:
+#: T262: the header above the commands whose availability predicate holds against *this* step's
+#: observation. What a human sees in-client: a lit, clickable button or command on the panel that
+#: is up right now -- "Found City" on a selected settler, "Next Turn" when nothing is blocking.
+AVAILABLE_GROUP_HEADER: Final[str] = (
+    "Available now -- the commands the game is offering you on this screen at this moment:"
+)
+
+#: T262: the header above the commands whose predicate does not hold. What a human sees
+#: in-client: the same command greyed out, with a tooltip saying why -- "Promote" with no
+#: promotable unit, "Make Peace" with nobody at war, an era-card chooser with no popup up. Left
+#: listed, and choosable, because the refusal path is a real recorded behaviour (FR-017).
+UNAVAILABLE_GROUP_HEADER: Final[str] = (
+    "Not available now -- these are on the board but greyed out, and why. You may still choose "
+    "one: it will be refused before it reaches the game, and the refusal is recorded."
+)
+
+#: T262: separates an action's rendered line from the reason it is greyed out. Rendered *after*
+#: the T256 target tail so a reason can never be mistaken for part of the summary or the hint.
+UNAVAILABLE_REASON_MARKER: Final[str] = " -- not available: "
+
+#: What is rendered in place of a group's bullets when that group is empty. Deliberately not a
+#: ``- `` bullet: nothing downstream that reads action lines may mistake it for one.
+_EMPTY_GROUP: Final[str] = "(none)"
+
+
+def assemble_action_catalog_text(
+    declarations: Iterable[ParityDeclaration], *, observation: Observation | None = None
+) -> str:
     """Render the actions the agent may choose from: every ``kind: action`` declaration's id and
     summary, plus the one convention it must follow to act on a subject.
 
@@ -116,6 +144,23 @@ def assemble_action_catalog_text(declarations: Iterable[ParityDeclaration]) -> s
     ``unavailable_to_human_now`` without ever reaching the game. What is listed here is what a
     human sees as the commands on screen, one line each -- ids and their summaries, no
     provenance, no predicate text (FR-020/FR-024).
+
+    **T262 -- availability, the greyed-out button.** When *observation* is given, every action's
+    own ``availability_predicate`` is evaluated against it (``act/availability.py``, the same
+    predicate machinery ``act/dispatch.py`` uses at dispatch) and the catalog is rendered in the
+    two groups a human's screen already shows: :data:`AVAILABLE_GROUP_HEADER` for the commands
+    the game is offering, and :data:`UNAVAILABLE_GROUP_HEADER` for the ones that are greyed out,
+    each carrying the plain-language reason a tooltip would give. The predicate's own source text
+    is never rendered -- only its consequence, phrased in the same field vocabulary the observed
+    state above already uses.
+
+    MEASURED (2026-09-21, ``civsim store coverage``): of 38 catalog actions, 23 had ever been
+    attempted and 9 ever applied; nine of the fourteen never-applied actions were draws for a
+    situation that was not on screen, refused at dispatch as ``unavailable_to_human_now``. The
+    agent was never told, because this function had no observation to tell it from.
+
+    Without *observation* the rendering is exactly what it was before T262 -- one flat list --
+    so a caller that has no observation in hand loses nothing and claims nothing.
     """
     lines = [
         "Actions you may take (choose exactly one per step by its id):",
@@ -130,12 +175,40 @@ def assemble_action_catalog_text(declarations: Iterable[ParityDeclaration]) -> s
         "To change which unit or city is selected, first issue units.select or cities.select "
         "with that unit_id or city_id as the target (as a click on it would), then its orders.",
     ]
-    for declaration in sorted(declarations, key=lambda d: str(d.declaration_id)):
-        if declaration.kind is not DeclarationKind.ACTION:
-            continue
-        summary = " ".join(str(declaration.summary or "").split())
-        lines.append(f"- {declaration.declaration_id}: {summary}{_render_target(declaration)}")
+    actions = [
+        declaration
+        for declaration in sorted(declarations, key=lambda d: str(d.declaration_id))
+        if declaration.kind is DeclarationKind.ACTION
+    ]
+    if observation is None:
+        lines.extend(_render_action(declaration) for declaration in actions)
+        return "\n".join(lines)
+
+    status = availability_by_action(actions, observation)
+    available = [row for row in actions if status[str(row.declaration_id)].available]
+    unavailable = [row for row in actions if not status[str(row.declaration_id)].available]
+
+    lines.append("")
+    lines.append(AVAILABLE_GROUP_HEADER)
+    lines.extend(_render_action(row) for row in available)
+    if not available:
+        lines.append(_EMPTY_GROUP)
+    lines.append("")
+    lines.append(UNAVAILABLE_GROUP_HEADER)
+    lines.extend(
+        _render_action(row)
+        + UNAVAILABLE_REASON_MARKER
+        + status[str(row.declaration_id)].reason
+        for row in unavailable
+    )
+    if not unavailable:
+        lines.append(_EMPTY_GROUP)
     return "\n".join(lines)
+
+
+def _render_action(declaration: ParityDeclaration) -> str:
+    summary = " ".join(str(declaration.summary or "").split())
+    return f"- {declaration.declaration_id}: {summary}{_render_target(declaration)}"
 
 
 #: T256: one concrete example per `TargetKind`, rendered after each action's summary so the
@@ -174,7 +247,8 @@ def assemble_observation_text(
     """Build ``DecisionRequest.observation``: this step's parity-filtered state (FR-024).
 
     *actions*, when given, appends :func:`assemble_action_catalog_text` -- the commands a human
-    would see available -- after the observed state.
+    would see -- after the observed state, split into the ones the game is offering right now
+    and the ones it is showing greyed out (T262), evaluated against *this* observation.
 
     Only ``Observation.screen_identity`` and ``Observation.entries`` are
     rendered. Deliberately absent: ``observation_id``, ``decision_step_id``,
@@ -192,7 +266,7 @@ def assemble_observation_text(
     else:
         lines.extend(_render_entry(entry) for entry in observation.entries)
     if actions is not None:
-        lines.extend(["", assemble_action_catalog_text(actions)])
+        lines.extend(["", assemble_action_catalog_text(actions, observation=observation)])
     return "\n".join(lines)
 
 
