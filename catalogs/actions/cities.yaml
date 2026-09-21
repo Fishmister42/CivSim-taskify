@@ -29,9 +29,11 @@
 - declaration_id: cities.set_production
   kind: action
   summary: >
-    Set the selected city's current production to an available item. parameters: {"target": "<an item from that city's available_production>"}.
+    Set the selected city's current production to an available item. parameters: {"target": "<an item from that city's available_productions, e.g. UNIT_BUILDER>"}.
   parity_basis: >
-    Open the city's production panel and click an available production item.
+    Open the city's production panel and click an available production item. The click replaces
+    the head of the build queue, which is what this issues
+    (steamassets/base/assets/ui/panels/productionpanel.lua:299-301, :2896-2897).
   context: InGame
   capability_id: cities.orders
   availability_predicate: >
@@ -40,7 +42,8 @@
     target in city.production_queue
   target_kind: name
   target_hint: >
-    an item from the selected city's available_productions
+    an item from the selected city's available_productions (its `type`, e.g. UNIT_BUILDER);
+    production_options carries each item's name, kind, production_required and turns
   introduced_in_version: "2026.09.1"
 
 - declaration_id: cities.purchase_with_gold

@@ -26,10 +26,13 @@
   writes: []
   firetuner_gap: null
 
+# 2026-09-21: the declaration this backs moved GameCore_Tuner -> InGame (see
+# catalogs/observations/cities.yaml); the file keeps its path, exactly as lua/gamecore/units.lua
+# did when units.state made the same move in T213.
 - capability_id: cities.read
   path: firetuner
   implementation_ref: lua/gamecore/cities.lua
-  reads: [city state, production queue, purchasable items]
+  reads: [city state, the production panel's list, production queue, purchasable items]
   writes: []
   firetuner_gap: null
 

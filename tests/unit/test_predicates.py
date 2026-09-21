@@ -596,3 +596,149 @@ def test_the_top_bar_gives_player_gold_and_faith_their_first_producer() -> None:
     assert bindings["player"]["faith"] == 12
     assert bindings["player"]["science_per_turn"] == 6.5
     assert evaluate_predicate("player.gold >= 40 and player.gold_per_turn > 0", bindings) is True
+
+
+# --------------------------------------------------------------------------
+# 2026-09-21 -- `city.available_productions` is filled, so `cities.set_production` is reachable
+# --------------------------------------------------------------------------
+
+#: The real catalog predicate, verbatim from catalogs/actions/cities.yaml.
+_SET_PRODUCTION_AVAILABILITY = (
+    "city.is_selected and city.owner_is_local_player and target in city.available_productions"
+)
+_SET_PRODUCTION_VERIFICATION = "target in city.production_queue"
+
+#: A `cities.state` entry of exactly the shape lua/gamecore/cities.lua now produces for an owned
+#: city: the type names in `available_productions`, the panel's own rows (with their greyed-out
+#: and placement-gated ones) in `production_options`.
+_OWNED_CITY_WITH_PRODUCTIONS = {
+    "city_id": 65538,
+    "name": "Pasargadae",
+    "owner_player_id": 0,
+    "owner_is_local_player": True,
+    "plot": {"x": 10, "y": 12},
+    "population": 3,
+    "available_productions": ["UNIT_BUILDER", "UNIT_WARRIOR", "BUILDING_MONUMENT"],
+    "production_options": [
+        {
+            "type": "UNIT_BUILDER",
+            "name": "Builder",
+            "kind": "unit",
+            "production_required": 50,
+            "turns": 5,
+            "disabled": False,
+            "requires_placement": False,
+        },
+        {
+            "type": "DISTRICT_CAMPUS",
+            "name": "Campus",
+            "kind": "district",
+            "production_required": 54,
+            "turns": 7,
+            "disabled": False,
+            "requires_placement": True,
+        },
+    ],
+    "production_queue": [],
+}
+
+
+def test_a_filled_available_productions_makes_set_production_available() -> None:
+    """MEASURED 2026-09-21 (399 steps, 30 runs): `available_productions` was `[]` in every
+    observation on record, so this predicate's last conjunct could never hold and no city ever
+    produced anything. With the list filled, the whole predicate holds for an item on it."""
+    observation = _city_observation(
+        selection={"has_selection": True, "selected_city_id": 65538},
+        cities=[_OWNED_CITY_WITH_PRODUCTIONS],
+    )
+
+    bindings = build_predicate_bindings(observation=observation, target="UNIT_BUILDER")
+
+    assert bindings["city"]["is_selected"] is True
+    assert bindings["city"]["available_productions"] == [
+        "UNIT_BUILDER",
+        "UNIT_WARRIOR",
+        "BUILDING_MONUMENT",
+    ]
+    assert evaluate_predicate(_SET_PRODUCTION_AVAILABILITY, bindings) is True
+
+
+def test_an_empty_available_productions_is_exactly_the_bug_that_was_measured() -> None:
+    """The regression guard: the predicate is false, and false for the *list*, not for the
+    selection -- which is what made the empty list so hard to see in the ledger."""
+    observation = _city_observation(
+        selection={"has_selection": True, "selected_city_id": 65538},
+        cities=[{**_OWNED_CITY_WITH_PRODUCTIONS, "available_productions": []}],
+    )
+
+    bindings = build_predicate_bindings(observation=observation, target="UNIT_BUILDER")
+
+    assert bindings["city"]["is_selected"] is True
+    assert bindings["city"]["owner_is_local_player"] is True
+    assert evaluate_predicate(_SET_PRODUCTION_AVAILABILITY, bindings) is False
+
+
+def test_an_item_the_panel_only_greys_out_is_not_bindable_as_a_target() -> None:
+    """`production_options` lists the Campus a human can see; `available_productions` withholds it
+    because the click that finishes it is a plot click the harness cannot make."""
+    observation = _city_observation(
+        selection={"has_selection": True, "selected_city_id": 65538},
+        cities=[_OWNED_CITY_WITH_PRODUCTIONS],
+    )
+
+    bindings = build_predicate_bindings(observation=observation, target="DISTRICT_CAMPUS")
+
+    assert evaluate_predicate(_SET_PRODUCTION_AVAILABILITY, bindings) is False
+
+
+def test_set_production_binds_the_selected_city_while_target_names_the_item() -> None:
+    """A city order's `target` is the production item, not a city id, so the subject comes from
+    the selection overlay (catalogs/README.md §4's parenthesis). Both must hold at once for the
+    action to dispatch at all."""
+    from civsim_harness.act.predicates import resolve_selected_subject_target
+    from civsim_harness.models.common import DeclarationId
+
+    observation = _city_observation(
+        selection={"has_selection": True, "selected_city_id": 65538},
+        cities=[
+            {"city_id": 7, "owner_is_local_player": True, "available_productions": []},
+            _OWNED_CITY_WITH_PRODUCTIONS,
+        ],
+    )
+
+    selected = resolve_selected_subject_target(
+        DeclarationId("cities.set_production"), observation
+    )
+    assert selected == 65538
+    bindings = build_predicate_bindings(observation=observation, target="UNIT_BUILDER")
+    assert bindings["city"]["city_id"] == 65538
+    assert evaluate_predicate(_SET_PRODUCTION_AVAILABILITY, bindings) is True
+
+
+def test_the_verification_predicate_reads_the_queue_the_order_replaced() -> None:
+    """`cities.set_production`'s verification is `target in city.production_queue`; the queue's
+    head is what `BuildQueue:GetCurrentProductionTypeHash()` names, which is where an ordinary
+    panel click puts the item (VALUE_REPLACE_AT, slot 0)."""
+    before = _city_observation(
+        selection={"has_selection": True, "selected_city_id": 65538},
+        cities=[_OWNED_CITY_WITH_PRODUCTIONS],
+    )
+    after = _city_observation(
+        selection={"has_selection": True, "selected_city_id": 65538},
+        cities=[{**_OWNED_CITY_WITH_PRODUCTIONS, "production_queue": ["UNIT_BUILDER"]}],
+    )
+
+    assert (
+        evaluate_predicate(
+            _SET_PRODUCTION_VERIFICATION,
+            build_predicate_bindings(observation=before, target="UNIT_BUILDER"),
+        )
+        is False
+    )
+    assert (
+        evaluate_predicate(
+            _SET_PRODUCTION_VERIFICATION,
+            build_predicate_bindings(observation=after, target="UNIT_BUILDER"),
+        )
+        is True
+    )

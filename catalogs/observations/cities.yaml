@@ -9,8 +9,18 @@
     visible on a revealed and visible plot (name, owner, population only).
   parity_basis: >
     Look at city banners on the map and open a city's production/purchase panel for full detail
-    on an owned city.
-  context: GameCore_Tuner
+    on an owned city. `production_options` is that panel's own list, row for row: the item's name,
+    what kind of thing it is, its production cost and its turns-left, and whether its button is
+    greyed out.
+  # MEASURED 2026-09-21 (399 steps, 30 runs): `available_productions` was `[]` in every observation
+  # on record. The body asked the build queue for `GetAvailableProduction()`, a method Civilization
+  # VI does not have; the production panel instead walks `GameInfo.Units()/Buildings()/Districts()/
+  # Projects()` and asks `BuildQueue:CanProduce` about each row. Moved GameCore_Tuner -> InGame by
+  # the same precedent as `units.state` (T213), because the panel's purchase gate
+  # (`CityManager.CanStartCommand`) and the names on its buttons (`Locale.Lookup`) are UI-side:
+  # every shipped caller of CityManager's command API is a UI file, and T213 measured the sibling
+  # `UnitManager.CanStartOperation` as nil in GameCore_Tuner.
+  context: InGame
   capability_id: cities.read
   output_schema:
     type: object
@@ -34,9 +44,33 @@
             production_queue:
               type: array
               items: { type: string }
+            # The items whose panel button a human could click and have take effect now: the
+            # subset of production_options that is neither greyed out nor waiting on a plot
+            # click. This is the list `cities.set_production`'s availability predicate reads
+            # (`target in city.available_productions`), so it stays a list of type names.
             available_productions:
               type: array
               items: { type: string }
+            # The production panel's list as a human reads it, including the greyed-out rows.
+            production_options:
+              type: array
+              items:
+                type: object
+                required: [type, kind]
+                properties:
+                  type: { type: string }
+                  name: { type: string }
+                  kind: { type: string }
+                  # `production_required`, not `cost`: the parity guard bans the token `cost`
+                  # outright as harness telemetry (src/civsim_harness/parity/forbidden.py:142).
+                  # It is the same number the panel prints beside the Production icon.
+                  production_required: { type: number }
+                  turns: { type: number }
+                  disabled: { type: boolean }
+                  requires_placement: { type: boolean }
+            # Present only when the city's build queue could not be read at all, so an empty
+            # available_productions is never silent about why (the failure that hid this bug).
+            available_productions_reason: { type: string }
             gold_available: { type: number }
             can_buy_with_gold: { type: boolean }
             can_buy_with_faith: { type: boolean }
@@ -48,13 +82,15 @@
               items: { type: string }
   introduced_in_version: "2026.09.1"
 
-# T255 (2026-09-21). The InGame half of city selection: cities.state above lists the cities from
-# GameCore_Tuner, where `UI` does not exist, so it cannot say which one the human has selected --
-# and every city order's availability predicate starts `city.is_selected and ...`. This
-# declaration reports the game's head-selected city (`UI.GetHeadSelectedCity()`, the city whose
-# panel is open); act/predicates.py overlays it onto the bound `city` namespace, so the two
-# bodies stay where each is verified to work. Unit selection is reported inside units.state
-# itself because that body already runs InGame.
+# T255 (2026-09-21). The InGame half of city selection: when this was written cities.state above
+# listed the cities from GameCore_Tuner, where `UI` does not exist, so it could not say which one
+# the human had selected -- and every city order's availability predicate starts
+# `city.is_selected and ...`. This declaration reports the game's head-selected city
+# (`UI.GetHeadSelectedCity()`, the city whose panel is open); act/predicates.py overlays it onto
+# the bound `city` namespace. It stays a declaration of its own now that cities.state is also
+# InGame: the overlay is what `city.is_selected` is built from, and one read that answers
+# "selected or not, and why not" is cheaper and more honest than a per-city flag inside a list
+# whose body may itself have failed. Unit selection is reported inside units.state itself.
 - declaration_id: cities.selection
   kind: observation
   summary: >

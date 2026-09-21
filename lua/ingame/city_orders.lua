@@ -20,6 +20,9 @@
 -- Parity note: production and purchase choices are restricted to what CivSim_Cities.state()
 -- already reported as available_productions / purchasable_with_gold / purchasable_with_faith for
 -- that city — exactly the items the standard production/purchase panel would show as choosable.
+-- An item whose panel button would put a human into plot-placement mode is refused with
+-- `requires_plot_placement` rather than issued, because the click that finishes it is one the
+-- harness cannot make.
 
 local function CivSim_JsonEncode(value)
     local t = type(value)
@@ -79,49 +82,121 @@ local function CivSim_FindLocalCity(cityId)
     return nil
 end
 
--- VERIFIED (P4 spot-check): CityManager.RequestOperation confirmed to exist as a function.
--- UNVERIFIED: CityOperationTypes.BUILD and the CityOperationTypes.PARAM_PRODUCTION_ITEM parameter
--- key are not on the spike's confirmed list (only CityCommandTypes.PARAM_X specifically was
--- spot-checked, not this operation's own enum members) — existence of the enum members used below
--- remains an untested guess, unlike the RequestOperation call itself.
+-- --------------------------------------------------------------------------
+-- Resolving a production item the way the panel's own button already holds it.
+--
+-- MEASURED 2026-09-21: `CityOperationTypes.PARAM_PRODUCTION_ITEM`, which this file used to write,
+-- is not a parameter key Civilization VI has. The production panel's click handlers name the item
+-- by **kind**, and the value they pass is the item's **hash**, not its type string:
+--   steamassets/base/assets/ui/panels/productionpanel.lua
+--     :299-301  BuildUnit       -- tParameters[CityOperationTypes.PARAM_UNIT_TYPE]     = unitEntry.Hash;
+--                                  CityManager.RequestOperation(city, CityOperationTypes.BUILD, tParameters)
+--     :368-370  BuildBuilding   -- tParameters[CityOperationTypes.PARAM_BUILDING_TYPE] = buildingEntry.Hash;
+--     :401-403  ZoneDistrict    -- tParameters[CityOperationTypes.PARAM_DISTRICT_TYPE] = districtEntry.Hash;
+--     :416-418  AdvanceProject  -- tParameters[CityOperationTypes.PARAM_PROJECT_TYPE]  = projectEntry.Hash;
+--     :2884-2897 GetBuildInsertMode -- with the queue panel closed (the ordinary click), the item
+--                                  REPLACES the head of the queue:
+--                                    PARAM_INSERT_MODE = VALUE_REPLACE_AT, QUEUE_DESTINATION_LOCATION = 0
+-- `cities.set_production` takes the type name the agent read out of
+-- `cities.state.available_productions` (e.g. "UNIT_BUILDER") and issues exactly that call.
+-- --------------------------------------------------------------------------
+
+local CivSim_CityOrders_PRODUCTION_KINDS = {
+    { table_name = "Units", param = "PARAM_UNIT_TYPE", kind = "unit" },
+    { table_name = "Buildings", param = "PARAM_BUILDING_TYPE", kind = "building" },
+    { table_name = "Districts", param = "PARAM_DISTRICT_TYPE", kind = "district" },
+    { table_name = "Projects", param = "PARAM_PROJECT_TYPE", kind = "project" },
+}
+
+-- The item's definition row, found by the same type string `cities.state` reports. Returns the
+-- kind spec, the hash, and whether the game would open plot placement for it
+-- (productionpanel.lua:341-404: a `RequiresPlacement` row that has not been placed puts the human
+-- into `BUILDING_PLACEMENT`/`DISTRICT_PLACEMENT` and waits for a click on a map plot).
+local function CivSim_CityOrders_ResolveProduction(city, productionType)
+    for _, spec in ipairs(CivSim_CityOrders_PRODUCTION_KINDS) do
+        local ok, definition = pcall(function() return GameInfo[spec.table_name][productionType] end)
+        if ok and definition ~= nil and definition.Hash ~= nil then
+            local needsPlacement = definition.RequiresPlacement == true
+            if needsPlacement then
+                local okPlaced, placed = pcall(function()
+                    return city:GetBuildQueue():HasBeenPlaced(definition.Hash)
+                end)
+                if okPlaced and placed == true then needsPlacement = false end
+            end
+            return spec, definition.Hash, needsPlacement
+        end
+    end
+    return nil, nil, false
+end
+
 local function CivSim_CityOrders_SetProduction(cityId, productionType)
     local city = CivSim_FindLocalCity(cityId)
     if city == nil then
         return { ok = false, reason = "city_not_found" }
     end
+    local spec, hash, needsPlacement = CivSim_CityOrders_ResolveProduction(city, productionType)
+    if spec == nil then
+        return { ok = false, reason = "unknown_production_item", city_id = cityId, production = productionType }
+    end
+    if needsPlacement then
+        -- A human's next act here is a click on a map plot; the harness has no action for that, so
+        -- it refuses rather than issuing an operation the game will not complete. `cities.state`
+        -- keeps such an item out of `available_productions` for the same reason.
+        return {
+            ok = false,
+            reason = "requires_plot_placement",
+            city_id = cityId,
+            production = productionType,
+            kind = spec.kind,
+        }
+    end
     local tParameters = {}
-    tParameters[CityOperationTypes.PARAM_PRODUCTION_ITEM] = productionType -- UNVERIFIED
-    local accepted = CityManager.RequestOperation(city, CityOperationTypes.BUILD, tParameters) -- UNVERIFIED: BUILD
-    return { ok = (accepted ~= false), city_id = cityId, production = productionType }
+    tParameters[CityOperationTypes[spec.param]] = hash
+    tParameters[CityOperationTypes.PARAM_INSERT_MODE] = CityOperationTypes.VALUE_REPLACE_AT
+    tParameters[CityOperationTypes.PARAM_QUEUE_DESTINATION_LOCATION] = 0
+    local accepted = CityManager.RequestOperation(city, CityOperationTypes.BUILD, tParameters)
+    return {
+        ok = (accepted ~= false),
+        city_id = cityId,
+        production = productionType,
+        kind = spec.kind,
+    }
 end
 
--- VERIFIED (P4 spot-check): CityManager.RequestCommand confirmed to exist as a function, and a
--- `CityCommandTypes.PARAM_X`-style member is confirmed to exist on CityCommandTypes generally.
--- UNVERIFIED: CityCommandTypes.PURCHASE, PARAM_PRODUCTION_ITEM, and PARAM_YIELD_TYPE specifically
--- are not on the spike's confirmed list — only that the table has at least one PARAM_X-shaped
--- member was checked, not these particular names.
-local function CivSim_CityOrders_PurchaseWithGold(cityId, itemType)
+-- VERIFIED (P4 spot-check): CityManager.RequestCommand confirmed to exist as a function.
+-- The purchase parameters are the panel's own (productionpanel.lua:1637-1640,
+-- `ComposeUnitForPurchase`): the item named by kind as its **hash** under
+-- `CityCommandTypes.PARAM_UNIT_TYPE` / `PARAM_BUILDING_TYPE` / `PARAM_DISTRICT_TYPE`, plus
+-- `PARAM_YIELD_TYPE = GameInfo.Yields["YIELD_GOLD"].Index`. `PARAM_PRODUCTION_ITEM`, which this
+-- file used to write, does not exist.
+local function CivSim_CityOrders_Purchase(cityId, itemType, yieldType, currency)
     local city = CivSim_FindLocalCity(cityId)
     if city == nil then
         return { ok = false, reason = "city_not_found" }
     end
+    -- Units (productionpanel.lua:425) and buildings (:470) only: a district is "purchased" through
+    -- plot placement (:496-517), not through a PURCHASE command, and a project cannot be bought.
+    local spec, hash = CivSim_CityOrders_ResolveProduction(city, itemType)
+    if spec == nil or (spec.kind ~= "unit" and spec.kind ~= "building") then
+        return { ok = false, reason = "unknown_purchase_item", city_id = cityId, item = itemType }
+    end
+    local okYield, yieldIndex = pcall(function() return GameInfo.Yields[yieldType].Index end)
+    if not okYield or yieldIndex == nil then
+        return { ok = false, reason = "unknown_yield_type", city_id = cityId, item = itemType }
+    end
     local tParameters = {}
-    tParameters[CityCommandTypes.PARAM_PRODUCTION_ITEM] = itemType -- UNVERIFIED
-    tParameters[CityCommandTypes.PARAM_YIELD_TYPE] = GameInfo.Yields["YIELD_GOLD"].Index -- UNVERIFIED
-    local accepted = CityManager.RequestCommand(city, CityCommandTypes.PURCHASE, tParameters) -- UNVERIFIED: PURCHASE
-    return { ok = (accepted ~= false), city_id = cityId, item = itemType, currency = "gold" }
+    tParameters[CityCommandTypes[spec.param]] = hash
+    tParameters[CityCommandTypes.PARAM_YIELD_TYPE] = yieldIndex
+    local accepted = CityManager.RequestCommand(city, CityCommandTypes.PURCHASE, tParameters)
+    return { ok = (accepted ~= false), city_id = cityId, item = itemType, currency = currency }
+end
+
+local function CivSim_CityOrders_PurchaseWithGold(cityId, itemType)
+    return CivSim_CityOrders_Purchase(cityId, itemType, "YIELD_GOLD", "gold")
 end
 
 local function CivSim_CityOrders_PurchaseWithFaith(cityId, itemType)
-    local city = CivSim_FindLocalCity(cityId)
-    if city == nil then
-        return { ok = false, reason = "city_not_found" }
-    end
-    local tParameters = {}
-    tParameters[CityCommandTypes.PARAM_PRODUCTION_ITEM] = itemType -- UNVERIFIED
-    tParameters[CityCommandTypes.PARAM_YIELD_TYPE] = GameInfo.Yields["YIELD_FAITH"].Index -- UNVERIFIED
-    local accepted = CityManager.RequestCommand(city, CityCommandTypes.PURCHASE, tParameters) -- UNVERIFIED
-    return { ok = (accepted ~= false), city_id = cityId, item = itemType, currency = "faith" }
+    return CivSim_CityOrders_Purchase(cityId, itemType, "YIELD_FAITH", "faith")
 end
 
 CivSim_CityOrders = {
