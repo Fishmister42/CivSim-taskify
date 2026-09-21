@@ -14,6 +14,9 @@
     target in player.researchable_techs
   verification_predicate: >
     player.current_research == target
+  target_kind: name
+  target_hint: >
+    a technology from player.researchable_techs, e.g. TECH_POTTERY
   introduced_in_version: "2026.09.1"
 
 - declaration_id: research.set_civic
@@ -28,4 +31,7 @@
     target in player.researchable_civics
   verification_predicate: >
     player.current_civic == target
+  target_kind: name
+  target_hint: >
+    a civic from player.researchable_civics, e.g. CIVIC_CODE_OF_LAWS
   introduced_in_version: "2026.09.1"

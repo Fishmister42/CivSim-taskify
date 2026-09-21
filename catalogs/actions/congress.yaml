@@ -19,4 +19,7 @@
     congress.is_in_session and congress.exists and player.diplomatic_favor > 0
   verification_predicate: >
     player.diplomatic_favor < observed_diplomatic_favor
+  target_kind: resolution_id
+  target_hint: >
+    an active resolution's resolution_id from congress.state
   introduced_in_version: "2026.09.1"

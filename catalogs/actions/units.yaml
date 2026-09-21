@@ -17,6 +17,9 @@
     and target in unit.reachable_plots
   verification_predicate: >
     unit.plot == target or (unit.queued_path != null and unit.queued_path.destination == target)
+  target_kind: plot
+  target_hint: >
+    a destination plot from the selected unit's reachable_plots -- the plot, never the unit's id
   introduced_in_version: "2026.09.1"
 
 - declaration_id: units.found_city
@@ -32,6 +35,9 @@
     unit.is_selected and unit.owner_is_local_player and unit.can_found_city
   verification_predicate: >
     not unit.exists
+  target_kind: none
+  target_hint: >
+    acts on the selected settler; send no target, or that settler's unit_id
   introduced_in_version: "2026.09.1"
 
 - declaration_id: units.promote
@@ -46,4 +52,7 @@
     unit.is_selected and unit.owner_is_local_player and target in unit.available_promotions
   verification_predicate: >
     not (target in unit.available_promotions)
+  target_kind: name
+  target_hint: >
+    a promotion from the selected unit's available_promotions
   introduced_in_version: "2026.09.1"

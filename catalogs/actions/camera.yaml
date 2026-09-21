@@ -14,6 +14,9 @@
     target.is_revealed
   verification_predicate: >
     camera.target_plot == target and camera.target_is_revealed
+  target_kind: plot
+  target_hint: >
+    a revealed plot
   introduced_in_version: "2026.09.1"
 
 - declaration_id: camera.zoom
@@ -27,6 +30,9 @@
     target >= 0.05 and target <= 1.0
   verification_predicate: >
     camera.zoom == target
+  target_kind: number
+  target_hint: >
+    a zoom level from 0.05 (closest) to 1.0 (farthest)
   introduced_in_version: "2026.09.1"
 
 - declaration_id: camera.set_view_mode
@@ -41,4 +47,7 @@
     target == "world" or target == "strategic"
   verification_predicate: >
     camera.mode == target
+  target_kind: option
+  target_hint: >
+    "world" or "strategic"
   introduced_in_version: "2026.09.1"

@@ -31,6 +31,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.unit_promotion"
+  target_kind: option
+  target_hint: >
+    one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
 - declaration_id: prompts.pantheon_selection
@@ -46,6 +49,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.pantheon_selection"
+  target_kind: option
+  target_hint: >
+    one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
 - declaration_id: prompts.religion_selection
@@ -61,6 +67,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.religion_selection"
+  target_kind: option
+  target_hint: >
+    one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
 - declaration_id: prompts.great_person_selection
@@ -76,6 +85,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.great_person_selection"
+  target_kind: option
+  target_hint: >
+    one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
 - declaration_id: prompts.ai_diplomatic_approach
@@ -91,6 +103,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.diplomatic_approach"
+  target_kind: option
+  target_hint: >
+    one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
 - declaration_id: prompts.declare_war_response
@@ -106,6 +121,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.declare_war_response"
+  target_kind: option
+  target_hint: >
+    one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
 - declaration_id: prompts.city_state_quest
@@ -121,6 +139,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.city_state_quest"
+  target_kind: option
+  target_hint: >
+    one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
 - declaration_id: prompts.congress_vote
@@ -136,6 +157,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.congress_vote"
+  target_kind: option
+  target_hint: >
+    one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
 - declaration_id: prompts.era_transition
@@ -151,6 +175,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.era_transition"
+  target_kind: option
+  target_hint: >
+    one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
 # T253 (2026-09-21). The two acknowledge-only popups. MEASURED live (attempt 5 of the first
@@ -178,6 +205,9 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.tech_civic_completed"
+  target_kind: option
+  target_hint: >
+    "continue" -- the popup offers nothing else
   introduced_in_version: "2026.09.3"
 
 - declaration_id: prompts.boost_unlocked
@@ -195,4 +225,7 @@
     and target in prompt.options
   verification_predicate: >
     game.current_screen != "prompt.boost_unlocked"
+  target_kind: option
+  target_hint: >
+    "continue" -- the popup offers nothing else
   introduced_in_version: "2026.09.3"

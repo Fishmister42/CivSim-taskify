@@ -15,4 +15,7 @@
     great_person.is_recruitable
   verification_predicate: >
     not great_person.is_recruitable
+  target_kind: individual_id
+  target_hint: >
+    an individual_id from great_people.state's recruitable_individuals
   introduced_in_version: "2026.09.1"

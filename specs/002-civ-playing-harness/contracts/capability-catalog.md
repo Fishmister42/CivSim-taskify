@@ -50,6 +50,8 @@ introduced_in_version: "2026.09.1"
 | `availability_predicate` | actions | Evaluated before execution; false ⇒ reject with `unavailable_to_human_now` (FR-017) |
 | `verification_predicate` | actions | Evaluated after execution; determines `applied` / `partially_applied` / `rejected` (FR-011) |
 | `output_schema` | observations, views | JSON Schema; the produced value is validated against it |
+| `target_kind` | actions (optional) | T256, 2026-09-21: what the single `parameters.target` names — `none`, `plot`, `unit_id`, `city_id`, `player_id`, `resolution_id`, `individual_id`, `spy_id`, `name`, `option` or `number`. Rendered to the agent as one concrete example per action (`agent/context.py`); additive, an action without it renders as before. Forbidden on observations and views |
+| `target_hint` | actions (optional, requires `target_kind`) | One short human-facing sentence after the example, e.g. "a destination plot from the selected unit's reachable_plots -- the plot, never the unit's id" |
 
 **Predicate grammar** (`availability_predicate`, `verification_predicate`; full namespace/field
 vocabulary in `catalogs/README.md` §4, which this must agree with): literals (numbers, strings,

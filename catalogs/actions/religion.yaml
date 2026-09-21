@@ -14,6 +14,9 @@
     not player.pantheon_selected and target in player.available_beliefs
   verification_predicate: >
     player.pantheon_selected
+  target_kind: name
+  target_hint: >
+    a belief from player.available_beliefs
   introduced_in_version: "2026.09.1"
 
 - declaration_id: religion.found_religion
@@ -29,6 +32,9 @@
     and target in player.available_beliefs
   verification_predicate: >
     player.religion_founded
+  target_kind: name
+  target_hint: >
+    a founder belief from player.available_beliefs
   introduced_in_version: "2026.09.1"
 
 - declaration_id: religion.select_belief
@@ -43,4 +49,7 @@
     player.religion_founded and target in player.available_beliefs
   verification_predicate: >
     not (target in player.available_beliefs)
+  target_kind: name
+  target_hint: >
+    a belief from player.available_beliefs
   introduced_in_version: "2026.09.1"

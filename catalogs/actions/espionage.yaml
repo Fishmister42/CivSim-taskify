@@ -22,4 +22,7 @@
     spy.exists and spy.is_available
   verification_predicate: >
     spy.mission != null
+  target_kind: spy_id
+  target_hint: >
+    the spy's unit_id from espionage.state; the mission and the city are those the espionage panel offers that spy
   introduced_in_version: "2026.09.1"

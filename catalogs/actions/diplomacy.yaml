@@ -16,6 +16,9 @@
     other_player.has_met and other_player.diplomatic_state != "war"
   verification_predicate: >
     other_player.diplomatic_state == "war"
+  target_kind: player_id
+  target_hint: >
+    the other civilization's player_id from diplomacy.state
   introduced_in_version: "2026.09.1"
 
 - declaration_id: diplomacy.make_peace
@@ -30,6 +33,9 @@
     other_player.has_met and other_player.diplomatic_state == "war"
   verification_predicate: >
     other_player.diplomatic_state != "war"
+  target_kind: player_id
+  target_hint: >
+    the other civilization's player_id from diplomacy.state
   introduced_in_version: "2026.09.1"
 
 - declaration_id: diplomacy.send_delegation
@@ -43,4 +49,7 @@
     other_player.has_met and not other_player.has_delegation
   verification_predicate: >
     other_player.has_delegation
+  target_kind: player_id
+  target_hint: >
+    the other civilization's player_id from diplomacy.state
   introduced_in_version: "2026.09.1"

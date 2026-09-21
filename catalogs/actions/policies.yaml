@@ -13,6 +13,9 @@
     target in player.available_policies
   verification_predicate: >
     not (target in player.available_policies)
+  target_kind: name
+  target_hint: >
+    a policy from player.available_policies
   introduced_in_version: "2026.09.1"
 
 - declaration_id: policies.change_government
@@ -27,6 +30,9 @@
     target in player.available_governments
   verification_predicate: >
     player.current_government == target
+  target_kind: name
+  target_hint: >
+    a government from player.available_governments
   introduced_in_version: "2026.09.1"
 
 - declaration_id: policies.assign_governor
@@ -40,4 +46,7 @@
     city.is_selected and city.owner_is_local_player and target in player.available_governors
   verification_predicate: >
     not (target in player.available_governors)
+  target_kind: name
+  target_hint: >
+    a governor from player.available_governors; the selected city receives them
   introduced_in_version: "2026.09.1"

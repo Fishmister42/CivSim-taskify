@@ -14,6 +14,9 @@
     city.is_selected and city.owner_is_local_player and target in city.available_productions
   verification_predicate: >
     target in city.production_queue
+  target_kind: name
+  target_hint: >
+    an item from the selected city's available_productions
   introduced_in_version: "2026.09.1"
 
 - declaration_id: cities.purchase_with_gold
@@ -29,6 +32,9 @@
     and target in city.purchasable_with_gold
   verification_predicate: >
     not (target in city.purchasable_with_gold)
+  target_kind: name
+  target_hint: >
+    an item from the selected city's purchasable_with_gold
   introduced_in_version: "2026.09.1"
 
 - declaration_id: cities.purchase_with_faith
@@ -44,4 +50,7 @@
     and target in city.purchasable_with_faith
   verification_predicate: >
     not (target in city.purchasable_with_faith)
+  target_kind: name
+  target_hint: >
+    an item from the selected city's purchasable_with_faith
   introduced_in_version: "2026.09.1"

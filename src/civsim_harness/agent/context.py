@@ -53,12 +53,12 @@ not a caller error, so most candidates on a long-lived run are supposed to be fi
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final
 
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.errors import CatalogError
-from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration
+from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration, TargetKind
 from civsim_harness.models.common import ModelRef
 from civsim_harness.models.config import GuidanceSet
 from civsim_harness.models.turn import (
@@ -132,8 +132,38 @@ def assemble_action_catalog_text(declarations: Iterable[ParityDeclaration]) -> s
         if declaration.kind is not DeclarationKind.ACTION:
             continue
         summary = " ".join(str(declaration.summary or "").split())
-        lines.append(f"- {declaration.declaration_id}: {summary}")
+        lines.append(f"- {declaration.declaration_id}: {summary}{_render_target(declaration)}")
     return "\n".join(lines)
+
+
+#: T256: one concrete example per `TargetKind`, rendered after each action's summary so the
+#: shape of the command is on the same line as the command -- the measured failure was a model
+#: that read the convention paragraph above and still sent the unit's id where a plot was wanted.
+_TARGET_KIND_EXAMPLES: Mapping[TargetKind, str] = {
+    TargetKind.NONE: "no target (parameters: {})",
+    TargetKind.PLOT: 'a plot, {"target": {"x": 43, "y": 31}}',
+    TargetKind.UNIT_ID: 'a unit_id from units.state, {"target": 65536}',
+    TargetKind.CITY_ID: 'a city_id from cities.state, {"target": 65537}',
+    TargetKind.PLAYER_ID: 'another civilization\'s player_id from diplomacy.state, {"target": 3}',
+    TargetKind.RESOLUTION_ID: 'a resolution_id from congress.state, {"target": 2}',
+    TargetKind.INDIVIDUAL_ID: 'an individual_id from great_people.state, {"target": 12}',
+    TargetKind.SPY_ID: 'a spy\'s unit_id from espionage.state, {"target": 131074}',
+    TargetKind.NAME: 'a name exactly as the observed state lists it, {"target": "TECH_POTTERY"}',
+    TargetKind.OPTION: 'one of the offered options, {"target": "continue"}',
+    TargetKind.NUMBER: 'a number, {"target": 0.5}',
+}
+
+
+def _render_target(declaration: ParityDeclaration) -> str:
+    """`` -- target: <example>; <hint>`` for a declaration that says its target kind; ``""``
+    otherwise (an action authored before T256 renders exactly as it did)."""
+    if declaration.target_kind is None:
+        return ""
+    rendered = f" -- target: {_TARGET_KIND_EXAMPLES[declaration.target_kind]}"
+    hint = " ".join(str(declaration.target_hint or "").split())
+    if hint:
+        rendered += f"; {hint}"
+    return rendered
 
 
 def assemble_observation_text(

@@ -29,4 +29,7 @@
     game.is_local_player_turn
   verification_predicate: >
     game.turn_number == observed_turn_number
+  target_kind: none
+  target_hint: >
+    the harness names the save; send no target
   introduced_in_version: "2026.09.1"

@@ -25,4 +25,7 @@
     game.is_local_player_turn and not game.has_blocking_prompt
   verification_predicate: >
     game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players
+  target_kind: none
+  target_hint: >
+    send no target
   introduced_in_version: "2026.09.1"

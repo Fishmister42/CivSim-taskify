@@ -30,6 +30,33 @@ class DeclarationKind(StrEnum):
     ACTION = "action"
 
 
+class TargetKind(StrEnum):
+    """What an action's single ``parameters.target`` names (T256, FR-020/FR-024).
+
+    MEASURED (2026-09-21, attempts 4-5 of the first model-driven runs): the one ``target`` field
+    carries a unit id, a plot, a technology name or a prompt option depending on the action, and
+    the model sent the warrior's *unit id* as ``units.move_to``'s target sixteen times in a row
+    even after the summary said ``{"target": {"x": .., "y": ..}}``. The declaration now says the
+    kind, and ``agent/context.py`` renders one concrete example per action from it -- what a human
+    sees as the shape of the command, no predicate text (Principle I / FR-024). Additive: an
+    action without it renders as before. The alternative -- separate ``subject`` and ``target``
+    parameters -- changes the predicate binder, the Lua argument convention and every unit/city
+    order, and is recorded in tasks.md T256 for the owner's ruling rather than taken.
+    """
+
+    NONE = "none"
+    PLOT = "plot"
+    UNIT_ID = "unit_id"
+    CITY_ID = "city_id"
+    PLAYER_ID = "player_id"
+    RESOLUTION_ID = "resolution_id"
+    INDIVIDUAL_ID = "individual_id"
+    SPY_ID = "spy_id"
+    NAME = "name"
+    OPTION = "option"
+    NUMBER = "number"
+
+
 class CameraMode(StrEnum):
     """contracts/capability-catalog.md ``view`` entries."""
 
@@ -74,11 +101,22 @@ class ParityDeclaration(HarnessModel):
     camera_requirements: CameraRequirements | None = None
     screening_profile: str | None = None
     introduced_in_version: str
+    # T256: actions only, optional (additive). `target_hint` is one short human-facing sentence
+    # rendered after the kind's example, e.g. "a destination plot from the selected unit's
+    # reachable_plots -- the plot, not the unit".
+    target_kind: TargetKind | None = None
+    target_hint: str | None = None
 
     @model_validator(mode="after")
     def _kind_specific_shape(self) -> ParityDeclaration:
         if not self.parity_basis.strip():
             raise ValueError("parity_basis must be non-empty")
+        if self.kind is not DeclarationKind.ACTION and (
+            self.target_kind is not None or self.target_hint is not None
+        ):
+            raise ValueError("target_kind / target_hint are only meaningful on an action")
+        if self.target_hint is not None and self.target_kind is None:
+            raise ValueError("target_hint requires target_kind")
 
         if self.kind == DeclarationKind.VIEW:
             if self.camera_requirements is None:

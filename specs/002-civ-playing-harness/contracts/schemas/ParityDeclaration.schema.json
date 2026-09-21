@@ -63,6 +63,24 @@
       ],
       "title": "LuaContext",
       "type": "string"
+    },
+    "TargetKind": {
+      "description": "What an action's single ``parameters.target`` names (T256, FR-020/FR-024).\n\nMEASURED (2026-09-21, attempts 4-5 of the first model-driven runs): the one ``target`` field\ncarries a unit id, a plot, a technology name or a prompt option depending on the action, and\nthe model sent the warrior's *unit id* as ``units.move_to``'s target sixteen times in a row\neven after the summary said ``{\"target\": {\"x\": .., \"y\": ..}}``. The declaration now says the\nkind, and ``agent/context.py`` renders one concrete example per action from it -- what a human\nsees as the shape of the command, no predicate text (Principle I / FR-024). Additive: an\naction without it renders as before. The alternative -- separate ``subject`` and ``target``\nparameters -- changes the predicate binder, the Lua argument convention and every unit/city\norder, and is recorded in tasks.md T256 for the owner's ruling rather than taken.",
+      "enum": [
+        "none",
+        "plot",
+        "unit_id",
+        "city_id",
+        "player_id",
+        "resolution_id",
+        "individual_id",
+        "spy_id",
+        "name",
+        "option",
+        "number"
+      ],
+      "title": "TargetKind",
+      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -142,6 +160,29 @@
     "summary": {
       "title": "Summary",
       "type": "string"
+    },
+    "target_hint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Hint"
+    },
+    "target_kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TargetKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "verification_predicate": {
       "anyOf": [
