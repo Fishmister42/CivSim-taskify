@@ -78,6 +78,16 @@ Expected: the catalog is not partial and shows configuration columns, a kept cap
 returns the bytes, `?attempt=0` on a replayed turn returns attempt 0, all over `SqliteMatchStore`
 opened read-only.
 
+To serve the real store the same way, no code in `civsim_web` changes — the store reference is
+configuration (001 quickstart Scenario 6). The web CLI calls a callable reference with no
+arguments, and `open_read_only` resolves `$CIVSIM_STORE_PATH` (then `./civsim-match-store.db`):
+
+```bash
+CIVSIM_STORE_PATH=civsim-match-store.db uv run civsim-web serve --store civsim_harness.store:open_read_only
+```
+
+A 1.0 file is refused here with the `civsim store migrate` instruction — a reader never migrates.
+
 ## Scenario 6 — The pre-feature file opens unchanged (US4; SC-005)
 
 Linux host only; the file is copied first by the migration itself.

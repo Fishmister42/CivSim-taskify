@@ -66,8 +66,9 @@ Indexes: `runs(started_at)`, `runs(seed_set_id)`, `runs(lifecycle_state)`,
   content under the same `model_call_id` raises (D4 extended to calls).
 - I-C: the store re-derives and persists `Run.record_completeness_status` inside the transaction of
   every write that can change it (`write_turn_cycle`, `mark_turn_superseded`, `write_save_point`,
-  `update_run` of `lifecycle_state`, `import_run`) using the **same** rules as
-  `store/completeness.py` (FR-010).
+  `update_run` of `lifecycle_state`) using the **same** rules as `store/completeness.py`
+  (FR-010). `import_run` carries the source store's accounting verbatim — the imported run must
+  read back identically (SC-006), and its records are the same records the source derived from.
 
 ## 3. Read value types (new, `store/contract.py`)
 

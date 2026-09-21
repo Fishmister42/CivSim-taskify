@@ -84,6 +84,7 @@ from civsim_harness.operator import commands
 from civsim_harness.operator.doctor import format_doctor_report, run_doctor
 from civsim_harness.operator.runner_protocol import RunnerProtocol
 from civsim_harness.operator.schemas import RunStatusView
+from civsim_harness.operator.store_cli import store_app
 from civsim_harness.saves.addressing import SaveAddressingError, require_available_save_point
 from civsim_harness.saves.archival import archive_run
 from civsim_harness.saves.branching import abandon_branch_run
@@ -111,6 +112,7 @@ app.add_typer(run_app, name="run")
 app.add_typer(audit_app, name="audit")
 app.add_typer(saves_app, name="saves")
 app.add_typer(seedset_app, name="seedset")
+app.add_typer(store_app, name="store")  # deliverable 3 (003 T037): operator/store_cli.py
 
 
 @app.callback()

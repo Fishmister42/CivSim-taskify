@@ -49,6 +49,21 @@ class StoreWriteError(HarnessError):
     """A write to the match-tracking store failed and must halt the run (FR-013, D2)."""
 
 
+class StoreReadError(HarnessError):
+    """A match-tracking store read could not be answered -- an unknown run asked for by an
+    operation that has no honest empty answer (003 contracts/match-tracking-store.md)."""
+
+
+class StoreSchemaError(HarnessError):
+    """The store file's schema version cannot be handled by this reader: a newer major version
+    (003 FR-026) or a migration that a read-only opener may not perform (003 FR-024)."""
+
+
+class BundleError(HarnessError):
+    """A run bundle could not be written, read or imported: a run-id collision, a hash mismatch,
+    a missing image, or a newer bundle format (003 FR-027)."""
+
+
 class ParityViolation(HarnessError):
     """Something reached, or would have reached, the agent outside the parity boundary (FR-016)."""
 

@@ -220,3 +220,61 @@ def test_removed_save_point_is_also_refused_by_addressing(store: SqliteMatchStor
 
     with pytest.raises(SaveAddressingError):
         require_available_save_point(store, "run-removed", 5)
+
+
+# --------------------------------------------------------------------------
+# 003 FR-023 / US5 AC3 (T041): a setup preset beside quicksaves is never eligible
+# --------------------------------------------------------------------------
+
+
+def test_a_preset_beside_quicksaves_is_never_eligible_and_never_reaped(tmp_path: Path) -> None:
+    """The saves directory shares space with `.Civ6Cfg` setup presets (live finding,
+    `spikes/civsim-default-preset-linux.md`). Eligibility is a property of *records*, and a
+    preset can never be one: `SavePoint.save_name` must match `civsim__<run>__t<turn>`, and
+    `list_eligible_save_points` reads records, never the directory. The reaper's plan names
+    only paths derived from eligible records -- so the preset, and the unarchived run's
+    quicksaves, are structurally out of reach.
+    """
+    from pydantic import ValidationError
+
+    from civsim_harness.saves.reaper import plan_reap
+    from civsim_harness.saves.verify import SAVE_FILE_SUFFIX, resolve_saves_dir
+    from fakes.fake_host import FakeHostPlatform
+
+    store = SqliteMatchStore(tmp_path / "match.db")
+    try:
+        host = FakeHostPlatform()
+        saves_dir = resolve_saves_dir(host, home=tmp_path)
+        saves_dir.mkdir(parents=True)
+        preset = saves_dir / "CivSim DEFAULT.Civ6Cfg"
+        preset.write_bytes(b"preset")
+
+        for run_id in ("run-archived", "run-open"):
+            store.create_run(
+                _make_run(run_id, lifecycle_state="finished", stop_resolution="turn_reached"),
+                _make_config("cfg1"),
+            )
+            for turn in (1, 2):
+                save = _make_save_point(f"{run_id}-sp{turn}", run_id, turn, taken_at=NOW)
+                store.write_save_point(save)
+                (saves_dir / f"{save.save_name}{SAVE_FILE_SUFFIX}").write_bytes(b"save")
+        store.archive_run("run-archived", by="t", at=NOW)
+
+        eligible = store.list_eligible_save_points()
+        assert {s.run_id for s in eligible} == {"run-archived"}
+        assert all(s.save_name.startswith("civsim__run-archived__t") for s in eligible)
+
+        planned = {item.path.name for item in plan_reap(store, host, home=tmp_path)}
+        assert planned == {f"civsim__run-archived__t000{t}{SAVE_FILE_SUFFIX}" for t in (1, 2)}
+        assert preset.name not in planned
+        assert not any("run-open" in name for name in planned)
+
+        with pytest.raises(ValidationError):
+            SavePoint.model_validate(
+                {
+                    **_make_save_point("x", "run-open", 1, taken_at=NOW).model_dump(),
+                    "save_name": "CivSim DEFAULT.Civ6Cfg",
+                }
+            )
+    finally:
+        store.close()

@@ -170,8 +170,8 @@ the repository by hand. A bundle is what lets the record, not a narrative about 
 **Independent Test**: Export a real run, verify the bundle's manifest, import it into an empty store
 on another platform, and compare: identical record counts per kind, identical ordering, byte-identical
 images, identical completeness and comparability statuses. Open the pre-feature store file with the
-new store: all nine runs recorded on 2026-09-21 read back unchanged and their model calls are
-queryable as rows.
+new store: all ten runs recorded on 2026-09-21 (nine that started, plus one that never left
+`preparing`) read back unchanged and their model calls are queryable as rows.
 
 **Acceptance Scenarios**:
 
@@ -180,7 +180,7 @@ queryable as rows.
    and the withheld captures import as withheld.
 2. **Given** a bundle whose run id already exists in the importing store, **When** import is
    attempted, **Then** it is refused with the collision named — never merged, never silently renamed.
-3. **Given** the 2026-09-21 store file (nine runs; model calls only inside step bundles),
+3. **Given** the 2026-09-21 store file (ten runs; model calls only inside step bundles),
    **When** the new store opens it, **Then** every run reads back identically and each run's model
    calls are available as rows with totals equal to the bundle-embedded values.
 4. **Given** a store written by a newer schema version than the reader understands, **When** it is
@@ -371,8 +371,8 @@ run the reaper's listing and confirm no preset and no non-archived run's save ap
   attempt, no unavailable configuration column).
 - **SC-004**: A run's total model spend is available in one read and matches the provider's billing
   for that run to the cent; the first five model-driven runs of 2026-09-21 reconcile to $1.42.
-- **SC-005**: The nine runs recorded on 2026-09-21 open unchanged in the new store, and each shows
-  its model calls as rows.
+- **SC-005**: The ten runs recorded on 2026-09-21 open unchanged in the new store, and each run
+  that made model calls shows them as rows.
 - **SC-006**: A run exported on one host and imported on the other reproduces identical record
   counts, ordering, statuses and byte-identical images, and the web interface on the second host
   renders it identically.

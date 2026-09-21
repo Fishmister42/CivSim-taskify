@@ -1128,3 +1128,89 @@ def test_advance_turn_requires_a_token_from_persist_turn_before_advance(
 
     assert isinstance(token, TurnPersistedToken)
     assert advance_turn(token, lambda t: t.turn_cycle_id) == record.turn_cycle.turn_cycle_id
+
+
+# --------------------------------------------------------------------------
+# Capability extensions E1-E5 -- asserted against the real store now that
+# deliverable 3 lands them (003 T023; contracts/match-store-port.md said
+# "this is where E1-E5 get asserted against the real store").
+# --------------------------------------------------------------------------
+
+
+def _make_capture_record(
+    capture_id: str, run_id: str, *, blob: bytes | None
+) -> ScreenCapture:
+    kept = blob is not None
+    return ScreenCapture.model_validate(
+        {
+            "capture_id": capture_id,
+            "run_id": run_id,
+            "turn_number": 1,
+            "decision_step_id": f"{run_id}-t1-a0-step1",
+            "captured_at": NOW,
+            "view_declaration_id": "views.world",
+            "screening_status": "screened_clean" if kept else "withheld",
+            "withheld_reason": None if kept else "non_player_ui",
+            "shown_to_agent": kept,
+            "retained_as_evidence": kept,
+            "blob_ref": hashlib.sha256(blob).hexdigest() if blob is not None else None,
+            "capture_path": "windows_graphics_capture",
+        }
+    )
+
+
+def test_e1_list_runs_enumerates_every_lifecycle_state_archived_included(
+    store: SqliteMatchStore,
+) -> None:
+    for run_id, state, resolution in (
+        ("run-playing", "playing", None),
+        ("run-paused", "paused", None),
+        ("run-finished", "finished", "turn_reached"),
+        ("run-failed", "failed", "unrecoverable_failure"),
+        ("run-archived", "finished", "turn_reached"),
+    ):
+        store.create_run(
+            _make_run(run_id, "cfg1", lifecycle_state=state, stop_resolution=resolution),
+            _make_config("cfg1"),
+        )
+    store.archive_run("run-archived", by="t", at=NOW)
+    listed = {run.run_id for run in store.list_runs()}
+    assert listed == {"run-playing", "run-paused", "run-finished", "run-failed", "run-archived"}
+    assert {run.run_id for run in store.list_active_runs()} == {"run-playing", "run-paused"}
+
+
+def test_e4_get_capture_blob_returns_bytes_for_a_kept_capture_and_none_for_a_withheld_one(
+    store: SqliteMatchStore,
+) -> None:
+    store.create_run(_make_run("run-cap"), _make_config("cfg1"))
+    kept = _make_capture_record("cap-kept", "run-cap", blob=b"frame")
+    store.write_capture(kept, b"frame")
+    withheld = _make_capture_record("cap-withheld", "run-cap", blob=None)
+    store.write_capture(withheld, None)
+    assert store.get_capture_blob("cap-kept") == b"frame"
+    assert store.get_capture_blob("cap-withheld") is None
+    assert store.get_capture_blob("cap-unknown") is None
+
+
+def test_e1_get_turn_cycle_attempt_returns_the_abandoned_attempt_that_was_asked_for(
+    store: SqliteMatchStore,
+) -> None:
+    store.create_run(_make_run("run-att"), _make_config("cfg1"))
+    store.write_save_point(_make_save_point("run-att-sp1-0", "run-att", 1))
+    store.write_turn_cycle(_make_turn_cycle_record("run-att", 1, 0, num_steps=2))
+    store.mark_turn_superseded("run-att", 1, 0)
+    store.write_turn_cycle(_make_turn_cycle_record("run-att", 1, 1, num_steps=3))
+    attempt0 = store.get_turn_cycle_attempt("run-att", 1, 0)
+    assert attempt0 is not None
+    assert attempt0.turn_cycle.attempt_index == 0
+    assert attempt0.turn_cycle.is_authoritative is False
+    assert len(attempt0.steps) == 2
+    attempt1 = store.get_turn_cycle_attempt("run-att", 1, 1)
+    assert attempt1 is not None and attempt1.turn_cycle.is_authoritative is True
+    assert store.get_turn_cycle_attempt("run-att", 1, 2) is None
+
+
+def test_e5_get_run_configuration_answers_none_for_a_config_id(store: SqliteMatchStore) -> None:
+    store.create_run(_make_run("run-key", "cfg-key"), _make_config("cfg-key"))
+    assert store.get_run_configuration("run-key") is not None
+    assert store.get_run_configuration("cfg-key") is None
