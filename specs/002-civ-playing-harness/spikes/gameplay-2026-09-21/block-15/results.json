@@ -1,0 +1,150 @@
+{
+  "provider": "stochastic",
+  "provider_seed": 33,
+  "turns_requested": 1,
+  "bring_up": false,
+  "started_at": "2026-09-21T17:23:15.407534+00:00",
+  "live_setup": {
+    "values": {
+      "civilization": "CIVILIZATION_PERSIA",
+      "leader": "LEADER_CYRUS",
+      "ruleset": "RULESET_EXPANSION_2",
+      "difficulty": "DIFFICULTY_EMPEROR",
+      "game_settings.game_speed": "GAMESPEED_ONLINE",
+      "game_settings.starting_era": "ERA_ANCIENT",
+      "map_settings.map_size": "MAPSIZE_SMALL",
+      "map_seed": "1745156737",
+      "opponents.major_count": 5,
+      "mod_set": [
+        {
+          "version": "179",
+          "id": "619ac86e-d99d-4bf3-b8f0-8c5b8c402567"
+        },
+        {
+          "version": "1.39.5",
+          "id": "c88cba8b-8311-4d35-90c3-51a4a5d66542"
+        },
+        {
+          "version": "70500",
+          "id": "cb84075d-5007-4207-b662-c35a5f7be260"
+        },
+        {
+          "id": "9e881f4f-017f-29f5-d849-04537424be3f"
+        },
+        {
+          "id": "382a187f-c8ba-4094-a6a7-0d5315661f33"
+        },
+        {
+          "id": "e3f53c61-371c-440b-96ce-077d318b36c0"
+        },
+        {
+          "id": "02a8bdde-67ea-4d38-9540-26e685e3156e"
+        },
+        {
+          "id": "8424840c-92ef-4426-a9b4-b4e0cb818049"
+        },
+        {
+          "id": "a1100fc4-70f2-4129-ac27-2a65a685ed08"
+        },
+        {
+          "id": "ce5876cd-6900-46d1-9c9c-8dba1f28872e"
+        },
+        {
+          "id": "1b394fe9-23dc-4868-8f0a-5220cb8fb427"
+        },
+        {
+          "id": "1b28771a-c749-434b-9053-d1380c553de9"
+        },
+        {
+          "id": "4873eb62-8ccc-4574-b784-dda455e74e68"
+        },
+        {
+          "id": "9de86512-de1a-400d-8c0a-ab46ebbf76b9"
+        },
+        {
+          "id": "1f367231-a040-4793-bdbb-088816853683"
+        },
+        {
+          "id": "a3f42cd4-6c3e-4f5a-bc81-be29e0c0b87c"
+        },
+        {
+          "id": "e2749e9a-8056-45cd-901b-c368c8e83deb"
+        },
+        {
+          "id": "643ea320-8e1a-4cf1-a01c-00d88ddd131a"
+        },
+        {
+          "id": "3809975f-263f-40a2-a747-8bfb171d821a"
+        },
+        {
+          "id": "ffdf4e79-dee2-47bb-919b-f5739106627a"
+        },
+        {
+          "id": "113d9459-0a3b-4fcb-a49c-483f40303575"
+        },
+        {
+          "id": "2f6e858a-28ef-46b3-beac-b985e52e9bc1"
+        }
+      ]
+    },
+    "unread": {},
+    "turn_timer_hash": -1525060181,
+    "turn_timer_type": "TURNTIMER_NONE",
+    "turn": 42
+  },
+  "start_turn": 42,
+  "config": "run-config.yaml",
+  "run": {
+    "started": true,
+    "run_id": "run-4fdd0ca104a14337abf9f05133106a93",
+    "final_state": "paused",
+    "elapsed_s": 40.8,
+    "last_error": {
+      "type": "BackstopEndTurnNotConfirmed",
+      "at": "2026-09-21 17:23:55.683756+00:00"
+    },
+    "store": {
+      "run": {
+        "lifecycle_state": "paused",
+        "stop_resolution": null,
+        "host_support_tier": "validated",
+        "record_completeness_status": "complete",
+        "comparability_status": "comparable",
+        "game_build": "linux/1.0.12.9",
+        "capture_path": "xcomposite"
+      },
+      "turn_cycles": 1,
+      "decision_steps": 16,
+      "save_points": 1,
+      "captures": 17,
+      "run_events": 4,
+      "model_calls": 16,
+      "turns_recorded": [
+        1
+      ],
+      "captures_shown_to_agent": 16,
+      "capture_screening": [
+        "screened_clean"
+      ],
+      "model_calls_served": [
+        "stochastic/uniform-v1"
+      ],
+      "model_cost_usd": 0,
+      "model_input_tokens": 0,
+      "model_output_tokens": 0
+    }
+  },
+  "recording": {
+    "frames": 41,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 112,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t014s.png",
+      "keyframe_2_t029s.png",
+      "keyframe_3_t043s.png"
+    ],
+    "capture_failures": 0
+  },
+  "finished_at": "2026-09-21T17:24:02.575123+00:00"
+}
