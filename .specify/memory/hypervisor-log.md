@@ -865,3 +865,14 @@ T201 soak shape ($0 fake vs ≈ $40–45 model-driven); T237 wiring.
 Next live items, in order: T253 popup acknowledge on the exact popup the client sat on; 003
 quickstart Scenario 8 (three model turns ≈ $0.30); T177/T191–T194/T198/T200 (5–15 min each,
 T200 ≈ 2 h); T201 last (5–12 h exclusive client).
+
+### Owner rulings, 2026-09-21 ~10:30 EDT — launch OK; spend cap self-managed for the week
+
+Owner: "Launch ok." The client may be launched on this host this session. And: "the entire spend
+limit is tied to this week and entirely yours to self manage. You don't have to ask me about
+spending any amount of money — if you use past my limit OpenRouter will refuse you, is all." So:
+no per-spend approval; the provider's hard limit is the only stop; spend is planned by the
+hypervisor (cheap models for soaks and batches, Sonnet-class where play is the evidence) and
+recorded per run in the store. Live queue starts now in stages, one client owner at a time:
+S1 bring-up + T253 live + Phase 13 live claims + 003 Scenario 8 + T260 look-at probe;
+S2 T177/T191–T194/T198; S3 T200; S4 T201 soak (driver prepared headless in parallel).
