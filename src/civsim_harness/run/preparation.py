@@ -111,7 +111,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from civsim_harness.capability.loader import Catalog
 from civsim_harness.errors import BuildMismatchError, NexusError, PreflightError
@@ -1396,12 +1396,45 @@ _SETTING_GETTERS: Mapping[str, SettingGetter] = {
 #: The turn-timer read :func:`turn_timer_preflight` consumes. Kept out of :data:`_SETTING_GETTERS`
 #: because it is not a configured field: it is a *precondition* on the host, reported through its
 #: own :class:`TurnTimerReading` rather than compared against anything in the run configuration.
-#: VERIFIED: ``TURNTIMER_NONE`` was read back from the ``CivSim DEFAULT`` preset through exactly
-#: this call (spikes/turn-timer-blocker-linux.md's resolution).
+#: The reverse scan (``GameInfo.TurnTimerTypes`` rows for ``row.Hash == value``) was read back as
+#: ``TURNTIMER_NONE`` once, from the ``CivSim DEFAULT`` preset (spikes/turn-timer-blocker-linux.md)
+#: -- but MEASURED 2026-09-21 (T251's live V2 snapshot, Aspyr 1.0.12.9): the same scan returned
+#: ``nil`` for hash ``-1525060181``, which *is* ``TURNTIMER_NONE`` per the seed set, so every
+#: preflight on that build recorded ``UNVERIFIED`` where ``VERIFIED_NONE`` was the truth. The
+#: forward resolution below (T254) is the fallback: compare the read hash against
+#: ``DB.MakeHash(<name>)`` for each known type name -- the memory-recorded rule that ``MakeHash``
+#: resolves forward reliably where the table scan does not. Reverse still wins when it answers;
+#: which one answered is recorded on the reading, never silently merged.
 _TURN_TIMER_HASH_LUA = "GameConfiguration.GetTurnTimerType()"
 _TURN_TIMER_NAME_LUA = (
     f'civsim_resolve({_TURN_TIMER_HASH_LUA}, "TurnTimerTypes", "TurnTimerType")'
 )
+#: Every turn-timer type name the forward resolution tries, the two no-timer spellings first.
+#: A name a given build does not define simply never matches (``DB.MakeHash`` of an unknown
+#: string is just another hash), so listing one that does not exist costs nothing and hides
+#: nothing; a build that uses a name absent from this list still resolves to nothing, which the
+#: preflight records as ``UNVERIFIED`` -- never as "no timer".
+_TURN_TIMER_CANDIDATE_NAMES: Final[tuple[str, ...]] = (
+    "TURNTIMER_NONE",
+    "NO_TURNTIMER",
+    "TURNTIMER_STANDARD",
+    "TURNTIMER_DYNAMIC",
+    "TURNTIMER_FIXED",
+)
+_TURN_TIMER_FORWARD_LUA = (
+    "(function() "
+    f"local civsim_h = {_TURN_TIMER_HASH_LUA}; "
+    "if civsim_h == nil then return nil end; "
+    "for _, civsim_n in ipairs({"
+    + ", ".join(f'"{name}"' for name in _TURN_TIMER_CANDIDATE_NAMES)
+    + "}) do "
+    "local civsim_okh, civsim_hh = pcall(function() return DB.MakeHash(civsim_n) end); "
+    "if civsim_okh and civsim_hh == civsim_h then return civsim_n end "
+    "end; return nil end)()"
+)
+#: How a snapshot's ``turn_timer_type`` was resolved, recorded on the reading (T254).
+TURN_TIMER_RESOLVED_BY_REVERSE_LOOKUP: Final[str] = "reverse_lookup"
+TURN_TIMER_RESOLVED_BY_FORWARD_HASH: Final[str] = "forward_hash"
 
 #: The spike's own hash -> name reverse lookup, spliced ahead of every field getter.
 _RESOLVE_HELPER_LUA = (
@@ -1463,6 +1496,10 @@ class GameSetupSnapshot:
     turn_timer_reason: str | None = None
     phase_deferred: Mapping[str, str] = field(default_factory=dict)
     unobservable: Mapping[str, str] = field(default_factory=dict)
+    #: T254: which resolution produced ``turn_timer_type`` --
+    #: :data:`TURN_TIMER_RESOLVED_BY_REVERSE_LOOKUP` or :data:`TURN_TIMER_RESOLVED_BY_FORWARD_HASH`
+    #: -- so a record can say the name came from a hash comparison rather than the table scan.
+    turn_timer_resolution: str | None = None
 
     def read_setting(self, name: str) -> Any:
         """The synchronous ``read_setting`` seam :func:`verify_configuration` takes.
@@ -1499,6 +1536,11 @@ class GameSetupSnapshot:
             status=TurnTimerReadStatus.DETERMINED,
             turn_timer_type=self.turn_timer_type,
             turn_timer_hash=self.turn_timer_hash,
+            reason=(
+                f"resolved by {self.turn_timer_resolution}"
+                if self.turn_timer_resolution is not None
+                else None
+            ),
         )
 
 
@@ -1608,17 +1650,31 @@ class LuaGameSetupReader:
 
         timer_name = result.get("turn_timer_type")
         timer_hash = result.get("turn_timer_hash")
+        timer_forward = result.get("turn_timer_type_forward")
+        resolved_name: str | None
+        resolution: str | None
+        if isinstance(timer_name, str):
+            resolved_name, resolution = timer_name, TURN_TIMER_RESOLVED_BY_REVERSE_LOOKUP
+        elif isinstance(timer_forward, str):
+            # T254: the reverse scan answered nil (measured on 1.0.12.9 for TURNTIMER_NONE's own
+            # hash) but a forward DB.MakeHash comparison matched one of the known names.
+            resolved_name, resolution = timer_forward, TURN_TIMER_RESOLVED_BY_FORWARD_HASH
+        else:
+            resolved_name, resolution = None, None
         return GameSetupSnapshot(
             values=values,
             unread=unread,
-            turn_timer_type=timer_name if isinstance(timer_name, str) else None,
+            turn_timer_type=resolved_name,
             turn_timer_hash=timer_hash if isinstance(timer_hash, int) else None,
             turn_timer_reason=(
                 None
-                if isinstance(timer_name, str)
-                else "GameConfiguration.GetTurnTimerType() did not resolve to a named type on "
-                "this build"
+                if resolved_name is not None
+                else "GameConfiguration.GetTurnTimerType() resolved to no named type on this "
+                "build: the GameInfo.TurnTimerTypes reverse scan answered nil and no known "
+                "type name's DB.MakeHash matched the hash"
+                + (f" ({timer_hash})" if isinstance(timer_hash, int) else "")
             ),
+            turn_timer_resolution=resolution,
             phase_deferred=phase_deferred,
             unobservable=unobservable,
         )
@@ -1644,8 +1700,15 @@ class LuaGameSetupReader:
             "local ok_tth, civsim_tth = pcall(function() return "
             f"{_TURN_TIMER_HASH_LUA} end); if not ok_tth then civsim_tth = nil end; "
         )
+        # T254: the forward resolution is dispatched in the same body, unconditionally -- one
+        # round trip, and the record can show both answers side by side when they disagree.
+        statements.append(
+            "local ok_ttf, civsim_ttf = pcall(function() return "
+            f"{_TURN_TIMER_FORWARD_LUA} end); if not ok_ttf then civsim_ttf = nil end; "
+        )
         fields["turn_timer_type"] = "civsim_tt"
         fields["turn_timer_hash"] = "civsim_tth"
+        fields["turn_timer_type_forward"] = "civsim_ttf"
 
         return (
             LUA_JSON_PRELUDE + _RESOLVE_HELPER_LUA + "".join(statements) + lua_print_json(fields)

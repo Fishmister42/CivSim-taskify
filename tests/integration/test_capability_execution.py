@@ -27,7 +27,6 @@ from civsim_harness.nexus.client import NexusClient
 from civsim_harness.observe.reader import ObservationReader
 from civsim_harness.observe.screen_identity import UNKNOWN_SCREEN
 from fakes.fake_nexus import (
-    STATE_INDEX_GAME_CORE_TUNER,
     STATE_INDEX_IN_GAME,
     FakeNexusServer,
 )

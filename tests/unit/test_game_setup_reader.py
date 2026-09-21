@@ -190,3 +190,92 @@ def test_the_unobservable_registry_names_exactly_the_live_confirmed_field() -> N
     the same standard of evidence -- this assertion is the reminder."""
     assert set(UNOBSERVABLE_SETTING_FIELDS) == {"map_settings.resources"}
     assert "T218" in UNOBSERVABLE_SETTING_FIELDS["map_settings.resources"]
+
+
+# --------------------------------------------------------------------------
+# T254 -- the turn-timer name resolves by forward hash when the reverse scan answers nil
+# --------------------------------------------------------------------------
+
+
+def test_the_dispatched_body_resolves_the_turn_timer_both_ways_in_one_round_trip() -> None:
+    """MEASURED 2026-09-21 (Aspyr 1.0.12.9): `civsim_resolve(GetTurnTimerType(), "TurnTimerTypes",
+    "TurnTimerType")` returned nil for hash -1525060181 -- TURNTIMER_NONE's own hash per the seed
+    set -- so every preflight on that build recorded UNVERIFIED. The same body now also compares
+    the hash against DB.MakeHash of each known type name, still in one dispatch."""
+    _snapshot, lua_body = _read(
+        state_name="HostGame",
+        result={"turn_timer_type": "TURNTIMER_NONE"},
+        fields=("civilization",),
+    )
+    assert lua_body.count("GameConfiguration.GetTurnTimerType()") >= 2
+    assert "DB.MakeHash(civsim_n)" in lua_body
+    for name in ("TURNTIMER_NONE", "NO_TURNTIMER", "TURNTIMER_STANDARD"):
+        assert f'"{name}"' in lua_body
+
+
+def test_a_forward_hash_match_determines_the_timer_when_the_reverse_scan_answered_nil() -> None:
+    from civsim_harness.run.preparation import (
+        TURN_TIMER_RESOLVED_BY_FORWARD_HASH,
+        TurnTimerPreconditionState,
+        TurnTimerReadStatus,
+        turn_timer_preflight,
+    )
+
+    snapshot, _lua = _read(
+        state_name="HostGame",
+        result={
+            "turn_timer_type": None,
+            "turn_timer_hash": -1525060181,
+            "turn_timer_type_forward": "TURNTIMER_NONE",
+        },
+        fields=("civilization",),
+    )
+    assert snapshot.turn_timer_type == "TURNTIMER_NONE"
+    assert snapshot.turn_timer_hash == -1525060181
+    assert snapshot.turn_timer_resolution == TURN_TIMER_RESOLVED_BY_FORWARD_HASH
+
+    reading = snapshot.read_turn_timer()
+    assert reading.status is TurnTimerReadStatus.DETERMINED
+    assert reading.reason == "resolved by forward_hash"
+
+    verdict = turn_timer_preflight(read_turn_timer=snapshot.read_turn_timer)
+    assert verdict.state is TurnTimerPreconditionState.VERIFIED_NONE
+    assert verdict.turn_timer_hash == -1525060181
+    assert verdict.reason == "resolved by forward_hash"
+
+
+def test_the_reverse_scan_still_wins_when_both_resolutions_answer() -> None:
+    from civsim_harness.run.preparation import TURN_TIMER_RESOLVED_BY_REVERSE_LOOKUP
+
+    snapshot, _lua = _read(
+        state_name="HostGame",
+        result={
+            "turn_timer_type": "TURNTIMER_STANDARD",
+            "turn_timer_hash": 12345,
+            "turn_timer_type_forward": "TURNTIMER_NONE",
+        },
+        fields=("civilization",),
+    )
+    assert snapshot.turn_timer_type == "TURNTIMER_STANDARD"
+    assert snapshot.turn_timer_resolution == TURN_TIMER_RESOLVED_BY_REVERSE_LOOKUP
+
+
+def test_neither_resolution_answering_is_still_undeterminable_never_no_timer() -> None:
+    from civsim_harness.run.preparation import (
+        TurnTimerPreconditionState,
+        TurnTimerReadStatus,
+        turn_timer_preflight,
+    )
+
+    snapshot, _lua = _read(
+        state_name="HostGame",
+        result={"turn_timer_type": None, "turn_timer_hash": 999, "turn_timer_type_forward": None},
+        fields=("civilization",),
+    )
+    assert snapshot.turn_timer_type is None
+    assert snapshot.turn_timer_resolution is None
+    reading = snapshot.read_turn_timer()
+    assert reading.status is TurnTimerReadStatus.UNDETERMINABLE
+    assert reading.reason is not None and "999" in reading.reason and "MakeHash" in reading.reason
+    verdict = turn_timer_preflight(read_turn_timer=snapshot.read_turn_timer)
+    assert verdict.state is TurnTimerPreconditionState.UNVERIFIED
