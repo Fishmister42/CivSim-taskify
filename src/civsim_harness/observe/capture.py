@@ -397,6 +397,10 @@ def capture_for_step(
                     "withheld_reason": capture.withheld_reason.value
                     if capture.withheld_reason is not None
                     else None,
+                    # Gameplay 2026-09-21, block 10: this event carried no reason, so the ledger
+                    # read "withheld non_player_ui, no detail" while the sibling capture_failed
+                    # event named the matched categories. Both now say what the gate matched.
+                    "reason": outcome.detail or "image screening withheld every attempt",
                 },
             )
         )

@@ -597,10 +597,24 @@ def run_it(
             last = key
         if status.lifecycle_state in TERMINAL:
             break
+        if status.lifecycle_state is LifecycleState.PAUSED:
+            # A paused run is a visible stall (unknown screen, catalog gap, unconfirmed end turn).
+            # The runner keeps it resumable, but this driver has no operator loop: treat it as
+            # this block's terminal state so a stall costs seconds, not the whole block
+            # (gameplay 2026-09-21: blocks 1, 7, 11 and 12 each hung here until killed).
+            rec.note("run paused: the driver treats a paused run as this block's terminal state")
+            break
         time.sleep(2.0)
     elapsed = time.perf_counter() - t0
     rec.note(f"run {status.lifecycle_state.value} after {elapsed:.0f}s")
     time.sleep(3.0)
+    if status.lifecycle_state is LifecycleState.PAUSED:
+        # This process is the run's only holder; once it exits the run-identity lock is stale and
+        # would refuse the next block on the same client (T235 tripwire, operator action).
+        lock = Path("/tmp/civsim_harness/run_locks") / f"{run_id}.lock.json"
+        if lock.exists():
+            lock.unlink()
+            rec.note(f"paused run: stale run-identity lock cleared by the driver ({lock.name})")
     return {
         "started": True,
         "run_id": str(run_id),

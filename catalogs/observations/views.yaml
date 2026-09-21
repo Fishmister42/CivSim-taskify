@@ -21,7 +21,7 @@
     mode: world
     zoom_range: [0.2, 1.0]
     target_must_be_revealed: true
-  screening_profile: default
+  screening_profile: platform
   output_schema:
     type: object
     required: [view_declaration_id, camera_state]
@@ -48,7 +48,7 @@
     mode: strategic
     zoom_range: [0.05, 0.3]
     target_must_be_revealed: true
-  screening_profile: default
+  screening_profile: platform
   output_schema:
     type: object
     required: [view_declaration_id, camera_state]
@@ -75,7 +75,7 @@
     mode: city_screen
     zoom_range: [0.3, 0.6]
     target_must_be_revealed: true
-  screening_profile: default
+  screening_profile: platform
   output_schema:
     type: object
     required: [view_declaration_id, camera_state, city_id]
@@ -103,7 +103,7 @@
     mode: diplomacy
     zoom_range: [1.0, 1.0]
     target_must_be_revealed: true
-  screening_profile: default
+  screening_profile: platform
   output_schema:
     type: object
     required: [view_declaration_id, camera_state, other_player_id]
@@ -127,7 +127,7 @@
     mode: congress
     zoom_range: [1.0, 1.0]
     target_must_be_revealed: true
-  screening_profile: default
+  screening_profile: platform
   output_schema:
     type: object
     required: [view_declaration_id, camera_state]
