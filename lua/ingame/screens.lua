@@ -104,7 +104,24 @@ local CIVSIM_KNOWN_SCREENS = {
     "prompt.unit_promotion", "prompt.pantheon_selection", "prompt.religion_selection",
     "prompt.great_person_selection", "prompt.diplomatic_approach", "prompt.declare_war_response",
     "prompt.city_state_quest", "prompt.congress_vote", "prompt.era_transition",
+    "prompt.tech_civic_completed", "prompt.boost_unlocked",
 }
+
+-- T253 (MEASURED 2026-09-21, attempt 5 of the first model-driven runs): the civic "Code of Laws"
+-- completed, the game queued `TechCivicCompletedPopup`, and because that state was on the
+-- watchlist but mapped to no catalog id the run stalled `UnknownScreenEncountered` -- correctly,
+-- per FR-049, and play stopped there. These two popups are pure acknowledgements: Firaxis's own
+-- `techciviccompletedpopup.lua` / `boostunlockedpopup.lua` close through
+-- `UIManager:DequeuePopup(ContextPtr)` from their Continue/close button and from their
+-- Escape (and Return) key handler, and offer nothing else the harness exposes. The one extra
+-- control on the civic popup ("Change Government") is deliberately NOT offered -- a strict
+-- subset of what the human sees, never a superset (Principle I); governments and policies are
+-- reachable through the policies.* actions instead. The single offered option is "continue".
+local CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS = {
+    ["prompt.tech_civic_completed"] = "TechCivicCompletedPopup",
+    ["prompt.boost_unlocked"] = "BoostUnlockedPopup",
+}
+local CIVSIM_ACKNOWLEDGE_OPTION = "continue"
 
 local function CivSim_ScreenIsKnown(screenId)
     for _, known in ipairs(CIVSIM_KNOWN_SCREENS) do
@@ -140,6 +157,11 @@ local CIVSIM_SCREEN_ID_BY_STATE = {
     ["prompt.great_person_selection"] = "GreatPeoplePopup",
     ["prompt.declare_war_response"] = "DeclareWarPopup",
     ["prompt.era_transition"] = "EraCompletePopup",
+    -- T253: the two acknowledge-only popups (see CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS above). The state
+    -- names are the ones on the watchlist, confirmed to exist at turn 1 (P2); that IsHidden()==false
+    -- on `TechCivicCompletedPopup` coincides with the popup being up was observed live (attempt 5).
+    ["prompt.tech_civic_completed"] = "TechCivicCompletedPopup",
+    ["prompt.boost_unlocked"] = "BoostUnlockedPopup",
 }
 
 -- VERIFIED (P2): the confirmed screen-identity mechanism. This is written to be dispatched once
@@ -201,9 +223,17 @@ local function CivSim_Screens_State()
             has_blocking_prompt = false, prompt_options = {},
         }
     end
+    -- T253: an acknowledge-only popup offers exactly one option. Every other prompt family still
+    -- reports an empty list (per-prompt option enumeration is not yet implemented -- the header
+    -- of catalogs/actions/prompts.yaml says so), which keeps those actions unavailable rather than
+    -- guessed at.
+    local options = {}
+    if CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS[screen] ~= nil then
+        options = { CIVSIM_ACKNOWLEDGE_OPTION }
+    end
     return {
         screen = screen, raw_screen_id = raw, recognized = true,
-        has_blocking_prompt = (string.sub(screen, 1, 7) == "prompt."), prompt_options = {},
+        has_blocking_prompt = (string.sub(screen, 1, 7) == "prompt."), prompt_options = options,
     }
 end
 
@@ -226,9 +256,45 @@ end
 -- global `UI.*` function reachable from InGame. Not fixed here — untested, and reported above as
 -- part of the same architectural gap. This generic entry point exists only for prompt types with
 -- no dedicated orders file (e.g. era transition acknowledgement, city-state quest acceptance).
+-- T253: dismiss an acknowledge-only popup the way its own Continue button does. From the InGame
+-- state the popup's context is reachable as a Control (`ContextPtr:LookUpControl`, the same
+-- resolution CivSim_Screens_State uses to see it), and `UIManager:DequeuePopup(<that context>)`
+-- is the exact call the popup's own `Close()` makes (Firaxis `techciviccompletedpopup.lua` line
+-- 307, `boostunlockedpopup.lua` line 315). UNVERIFIED LIVE that DequeuePopup accepts another
+-- state's context from InGame and that `UIManager` is reachable here (its screen-query methods
+-- are confirmed nil in InGame; the object itself was not probed) -- every step is pcall'd and
+-- every outcome is returned, so a failure is recorded as itself, and the action's own
+-- verification predicate (the popup is no longer the current screen) is what decides `applied`.
+-- Never presses a key and never hides the control directly: SetHide would leave the popup
+-- queued in UIManager, which is not what a human's click does.
+local function CivSim_Screens_AcknowledgePopup(promptType, stateName, optionId)
+    if optionId ~= CIVSIM_ACKNOWLEDGE_OPTION then
+        return { ok = false, reason = "unknown_option", prompt = promptType, option = optionId }
+    end
+    local okC, ctx = pcall(function() return ContextPtr:LookUpControl("/InGame/" .. stateName) end)
+    if not okC or ctx == nil then
+        return { ok = false, reason = "popup_state_absent", prompt = promptType, option = optionId }
+    end
+    local okH, hidden = pcall(function() return ctx:IsHidden() end)
+    if okH and hidden == true then
+        return { ok = false, reason = "popup_not_open", prompt = promptType, option = optionId }
+    end
+    local okD, err = pcall(function() UIManager:DequeuePopup(ctx) end)
+    local okA, hiddenAfter = pcall(function() return ctx:IsHidden() end)
+    return {
+        ok = okD, prompt = promptType, option = optionId, mechanism = "UIManager:DequeuePopup",
+        hidden_after = (okA and hiddenAfter == true),
+        error = (not okD) and tostring(err) or nil,
+    }
+end
+
 local function CivSim_Screens_RespondToPrompt(promptType, optionId)
     if not CivSim_ScreenIsKnown(promptType) then
         return { ok = false, reason = "unknown_prompt" }
+    end
+    local acknowledgeState = CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS[promptType]
+    if acknowledgeState ~= nil then
+        return CivSim_Screens_AcknowledgePopup(promptType, acknowledgeState, optionId)
     end
     local ok, result = pcall(function()
         return UI.RespondToPrompt(promptType, optionId) -- UNVERIFIED

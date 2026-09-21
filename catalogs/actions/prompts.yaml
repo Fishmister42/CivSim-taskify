@@ -152,3 +152,47 @@
   verification_predicate: >
     game.current_screen != "prompt.era_transition"
   introduced_in_version: "2026.09.1"
+
+# T253 (2026-09-21). The two acknowledge-only popups. MEASURED live (attempt 5 of the first
+# model-driven runs): the civic "Code of Laws" completed, `TechCivicCompletedPopup` came up, and
+# the run stalled `UnknownScreenEncountered` because the state was on lua/ingame/screens.lua's
+# watchlist but mapped to no catalog id -- play stopped there. Both popups offer exactly one
+# option here, `continue`, which is what the popup's own Continue button (and its Escape handler)
+# does: `UIManager:DequeuePopup`. The civic popup's extra "Change Government" button is deliberately
+# not offered (a subset of the human's options, never a superset -- Principle I); governments and
+# policies are changed through catalogs/actions/policies.yaml.
+
+- declaration_id: prompts.tech_civic_completed
+  kind: action
+  summary: >
+    Acknowledge the "technology / civic completed" popup ({"target": "continue"}); it appears
+    when research or a civic finishes and blocks play until dismissed.
+  parity_basis: >
+    The completed-research popup shows the technology or civic with its quote and a Continue
+    button; a human clicks Continue (or presses Escape) to close it and carry on. The civic
+    version's "Change Government" button is not offered by this action.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.tech_civic_completed"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.tech_civic_completed"
+  introduced_in_version: "2026.09.3"
+
+- declaration_id: prompts.boost_unlocked
+  kind: action
+  summary: >
+    Acknowledge the Eureka / Inspiration ("boost unlocked") popup ({"target": "continue"}); it
+    appears when a technology or civic boost triggers and blocks play until dismissed.
+  parity_basis: >
+    The boost popup shows which technology or civic was boosted and by what; a human clicks
+    its close button (or presses Escape or Return) to dismiss it and carry on.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.boost_unlocked"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.boost_unlocked"
+  introduced_in_version: "2026.09.3"
