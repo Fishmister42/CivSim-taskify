@@ -152,19 +152,54 @@ def test_a_screened_clean_capture_is_never_born_shown() -> None:
     assert result.events == ()
 
 
-def test_a_raw_framebuffer_frame_stores_its_blob_but_has_no_wire_media_type() -> None:
-    """A clean BGRA8 frame is evidence worth storing, but it has no wire form -- so the loop can
-    never attach it as-is, and ``blob_media_type`` says so."""
-    raw = bytes(_WINDOW.rect.width * _WINDOW.rect.height * 4)
+def test_a_raw_framebuffer_frame_is_transcoded_to_png_before_screening_and_gains_a_wire_form(
+) -> None:
+    """T252: a clean BGRA8 frame used to be stored and never shown (no wire media type -- measured
+    on all twelve frames of the 2026-09-21 landed-code demo). It is now re-encoded losslessly to
+    PNG *before* screening, so the screened bytes, the stored blob and what the provider would be
+    handed are one byte string, and ``blob_media_type`` names it."""
+    width, height = _WINDOW.rect.width, _WINDOW.rect.height
+    # One distinctive pixel so the round trip proves channel order, not just "some PNG came out":
+    # BGRA (10, 20, 30, 0) at (0, 0) must read back as RGB (30, 20, 10), alpha dropped.
+    raw = bytearray(width * height * 4)
+    raw[0:4] = bytes((10, 20, 30, 0))
     host = FakeHostPlatform()
-    host.set_capture_result(CaptureResult(status=CaptureStatus.ok, frame=_frame(raw, "BGRA8")))
+    host.set_capture_result(
+        CaptureResult(status=CaptureStatus.ok, frame=_frame(bytes(raw), "BGRA8"))
+    )
 
     result = _capture(host)
 
     assert result.capture.screening_status is ScreeningStatus.SCREENED_CLEAN
     assert result.capture.shown_to_agent is False
-    assert result.blob == raw
+    assert result.blob_media_type == "image/png"
+    assert result.blob is not None and result.blob != bytes(raw)
+    assert result.capture.blob_ref == hashlib.sha256(result.blob).hexdigest()
+    decoded = PILImage.open(io.BytesIO(result.blob))
+    assert decoded.size == (width, height)
+    assert decoded.mode == "RGB"
+    assert decoded.getpixel((0, 0)) == (30, 20, 10)
+
+
+def test_a_raw_frame_that_cannot_be_decoded_is_withheld_with_its_reason_not_screened_blind(
+) -> None:
+    """T252: a raw frame whose byte length does not match its declared geometry cannot be decoded,
+    so it cannot be re-encoded, so it cannot be screened -- the attempt is a host failure with the
+    frame's own numbers in the reason, retried like any other and then recorded degraded."""
+    host = FakeHostPlatform()
+    host.set_capture_result(
+        CaptureResult(status=CaptureStatus.ok, frame=_frame(b"\x00" * 16, "BGRA8"))
+    )
+
+    result = _capture(host)
+
+    assert result.capture.screening_status is ScreeningStatus.WITHHELD
+    assert result.visually_degraded is True
+    assert result.blob is None
     assert result.blob_media_type is None
+    reasons = " ".join(str(event.detail) for event in result.events)
+    assert "could not be decoded for PNG encoding" in reasons
+    assert "BGRA8" in reasons
 
 
 def test_a_failing_capture_precondition_withholds_the_step_without_taking_a_frame() -> None:

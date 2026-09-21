@@ -282,14 +282,15 @@ def _capture_hygiene_evidence(
     not `VALIDATED`. This is a concrete requirement for `host/linux` (T052) and is **not**
     currently implemented."
 
-    It is still not implemented, so *compositing_verified* defaults to ``None`` ("nobody checked")
-    and this function reports the X11 pass as **not** established in that case. That costs nothing
-    a run needs: `capture_hygiene_spike_passed` only separates `VALIDATED` from `SUPPORTED`, and
+    That check now exists: `LinuxHostPlatform.check_capture_preconditions()` (T249) verifies the
+    Composite extension and `_NET_WM_CM_Sn` selection ownership -- the two conditions the spike
+    names -- and :func:`probe_host_support` consults it (T252) whenever its caller passes no
+    verdict of its own. *compositing_verified* is therefore ``None`` here only when nobody could
+    check (a host without the seam, or one whose check raised), and this function still reports
+    the X11 pass as **not** established in that case rather than assuming it. That costs nothing a
+    run needs: `capture_hygiene_spike_passed` only separates `VALIDATED` from `SUPPORTED`, and
     `evaluate_host_gate` refuses neither -- a `SUPPORTED` host starts and is recorded
-    `visually_degraded` under FR-050, which is the truthful state today anyway, since pixel
-    extraction is stubbed in all three host adapters (`observe/capture_paths.py`'s own docstring).
-    Once T052 lands a real compositor check, pass its result in and the recorded X11 pass is
-    honoured.
+    `visually_degraded` under FR-050.
     """
     if host_info.os is not OperatingSystem.linux:
         return SpikeEvidence(
@@ -331,9 +332,14 @@ def _capture_hygiene_evidence(
                 "of a compositing window manager redirecting windows offscreen -- without one "
                 "the same window-scoped capture returns the occluding window's pixels. The spike "
                 "requires that compositing be verified at preflight rather than inferred from "
-                "XDG_SESSION_TYPE=x11 (a concrete requirement for host/linux, T052, still "
-                "unimplemented), so the pass is recorded as not-yet-established on this host "
-                "rather than assumed. This downgrades the tier to SUPPORTED; it refuses nothing"
+                "XDG_SESSION_TYPE=x11, and this host's capture-precondition check "
+                + (
+                    "did not pass"
+                    if compositing_verified is False
+                    else "could not be consulted"
+                )
+                + ", so the pass is recorded as not-yet-established on this host rather than "
+                "assumed. This downgrades the tier to SUPPORTED; it refuses nothing"
             ),
         )
 
@@ -346,6 +352,26 @@ def _capture_hygiene_evidence(
             "compositing window manager was verified by its caller"
         ),
     )
+
+
+def _consult_compositing_precondition(host: HostPlatform, host_info: HostInfo) -> bool | None:
+    """T252: the host's own T249 capture-precondition verdict, as the R6 compositor check.
+
+    Returns ``True``/``False`` from ``host.check_capture_preconditions().passed`` on Linux/X11
+    only -- the one platform-and-session whose recorded R6 pass is conditional on a compositor
+    -- and ``None`` everywhere else, for a host that lacks the seam, or when the check itself
+    raises. Never raises: the probe must report, not crash, and "could not be checked" is a
+    distinct, honest answer from "checked and failed".
+    """
+    if host_info.os is not OperatingSystem.linux or host_info.session_type is not LinuxSessionType.x11:
+        return None
+    check = getattr(host, "check_capture_preconditions", None)
+    if not callable(check):
+        return None
+    try:
+        return bool(check().passed)
+    except Exception:  # noqa: BLE001 - a raising preflight is "could not be checked", not a verdict
+        return None
 
 
 def probe_host_support(
@@ -399,6 +425,15 @@ def probe_host_support(
             note="no quicksave-path evidence is recorded for this operating system at all",
         ),
     )
+    if compositing_verified is None:
+        # T252: an explicit verdict from the caller wins; otherwise ask the host itself. The T249
+        # port seam (`check_capture_preconditions`) *is* the compositor verification the R6 spike
+        # demands on Linux/X11 -- `observe/capture.py` already consults it per capture, but until
+        # this line the preflight probe never did, so the one host whose spike passed reported
+        # `SUPPORTED` / `capture path: none` (measured 2026-09-21). Only asked where the answer
+        # means something (Linux/X11); a host without the seam, or one whose check raises, stays
+        # `None` ("nobody could check"), which `_capture_hygiene_evidence` reads as not verified.
+        compositing_verified = _consult_compositing_precondition(host, resolved_host_info)
     capture_evidence = _capture_hygiene_evidence(
         resolved_host_info, compositing_verified=compositing_verified
     )

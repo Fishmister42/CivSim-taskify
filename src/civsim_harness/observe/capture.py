@@ -81,6 +81,7 @@ from civsim_harness.parity.screening import (
     ScreeningProfiles,
     build_screen_capture,
     screen_capture,
+    transcode_raw_frame_to_png,
 )
 
 #: T157's retry bound: after this many attempts (each a fresh host capture plus a fresh run
@@ -89,10 +90,11 @@ from civsim_harness.parity.screening import (
 DEFAULT_MAX_CAPTURE_ATTEMPTS: Final[int] = 3
 
 #: Wire-ready media types by ``CaptureFrame.image_format`` (upper-cased). Only encoded formats a
-#: provider call can actually carry appear here: a raw framebuffer format (``"BGRA8"`` and kin)
-#: has no wire form, so its clean blob is still stored for the record but
-#: :attr:`StepCapture.blob_media_type` stays ``None`` and the run loop can never attach it to a
-#: decision request as-is -- recorded not shown, which is the truth (T238).
+#: provider call can actually carry appear here. A raw framebuffer format (``"BGRA8"`` and kin)
+#: has no wire form of its own, which is why :func:`_attempt_once` re-encodes it to PNG before
+#: screening (T252); a frame that still reaches this table in a format absent from it is stored
+#: for the record with :attr:`StepCapture.blob_media_type` ``None``, and the run loop can never
+#: attach it to a decision request -- recorded not shown, which is the truth (T238).
 _WIRE_MEDIA_TYPES: Final[Mapping[str, str]] = {
     "PNG": "image/png",
     "JPEG": "image/jpeg",
@@ -183,8 +185,23 @@ def _attempt_once(
         return selection.capture_path, None, _host_failure_outcome(reason)
 
     assert selection.capture_result.frame is not None  # guaranteed by CaptureResult for status=ok
+    # T252: a raw framebuffer frame is re-encoded losslessly to PNG *before* screening, so the
+    # screened bytes, the stored blob and what the provider is handed are one and the same. A raw
+    # frame that cannot even be decoded is a host failure for this attempt (retried like any
+    # other), never screened blind.
+    wire_frame = transcode_raw_frame_to_png(selection.capture_result.frame)
+    if wire_frame is None:
+        raw = selection.capture_result.frame
+        return (
+            selection.capture_path,
+            None,
+            _host_failure_outcome(
+                f"the host's {raw.image_format} frame ({raw.width}x{raw.height}, "
+                f"{len(raw.image_bytes)} bytes) could not be decoded for PNG encoding"
+            ),
+        )
     attempt = CaptureAttempt(
-        frame=selection.capture_result.frame,
+        frame=wire_frame,
         capture_path=selection.capture_path,
         window=window,
         view_declaration_id=view_declaration_id,

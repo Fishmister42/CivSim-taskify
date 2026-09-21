@@ -56,8 +56,13 @@ from civsim_harness.run.composition import (
     _resolve_capture_path,
     _RunContext,
     _to_camera_state,
+    build_runner_dependencies,
 )
+from civsim_harness.run.identity_lock import RunIdentityLock
 from civsim_harness.run.stop import GameOutcome
+from civsim_harness.store.sqlite_adapter import SqliteMatchStore
+from fakes.fake_host import FakeHostPlatform
+from fakes.fake_provider import FakeModelProvider
 
 # --------------------------------------------------------------------------
 # Minimal host stubs -- only the two methods these four resolvers actually call.
@@ -185,17 +190,83 @@ def test_x11_capture_hygiene_is_not_credited_until_compositing_is_actually_verif
     """The R6 spike's pass is a property of a compositing WM, and it says so in as many words:
     "treat 'X11 without a compositor' as a distinct capability case -- not VALIDATED".
 
-    Nothing in `host/linux` verifies compositing yet (T052), so the pass must not be assumed. The
-    cost is a `SUPPORTED` tier rather than `VALIDATED` -- the run still starts, recorded visually
-    degraded (FR-050), which is the truthful state anyway while pixel extraction is stubbed.
+    A host that cannot answer the compositor question at all (`_DirectoryOnlyHost` has no T249
+    seam) must not have the pass assumed. The cost is a `SUPPORTED` tier rather than `VALIDATED`
+    -- the run still starts, recorded visually degraded (FR-050).
     """
     unverified = probe_host_support(_DirectoryOnlyHost(), _LINUX_X11)
     verified = probe_host_support(_DirectoryOnlyHost(), _LINUX_X11, compositing_verified=True)
 
     assert unverified.capture_hygiene_spike_passed is False
     assert resolve_support_tier(unverified) is SupportTier.supported
+    assert "could not be consulted" in unverified.reason
     assert verified.capture_hygiene_spike_passed is True
     assert resolve_support_tier(verified) is SupportTier.validated
+
+
+def test_the_probe_consults_the_hosts_own_precondition_seam_when_nobody_passed_a_verdict() -> None:
+    """T252. MEASURED 2026-09-21: `doctor` and `run start` on the Linux node -- the one host whose
+    R6 spike PASSED -- reported `SUPPORTED` / `capture path: none`, because both called this probe
+    without `compositing_verified` while the T249 seam that *is* that verification
+    (`check_capture_preconditions`, Composite extension + `_NET_WM_CM_Sn`) was consulted only per
+    capture. The probe now asks the host itself when its caller has no verdict."""
+    passing = FakeHostPlatform()  # its preconditions pass by default (T055)
+    probe = probe_host_support(passing, _LINUX_X11)
+    assert probe.capture_hygiene_spike_passed is True
+    assert resolve_support_tier(probe) is SupportTier.validated
+    assert passing.capture_precondition_calls == 1
+
+    failing = FakeHostPlatform()
+    failing.set_capture_preconditions_failed("no compositing manager owns _NET_WM_CM_S0")
+    probe = probe_host_support(failing, _LINUX_X11)
+    assert probe.capture_hygiene_spike_passed is False
+    assert resolve_support_tier(probe) is SupportTier.supported
+    assert "did not pass" in probe.reason
+
+
+def test_an_explicit_verdict_beats_the_consulted_one_and_other_sessions_are_never_asked() -> None:
+    """The caller's explicit `compositing_verified` still wins (a test, or a host whose spike has
+    since been re-run, may say so), and the seam is consulted only on Linux/X11 -- the one
+    platform-and-session whose recorded pass is conditional on a compositor. Asking a Windows or
+    Wayland host would attach a meaningless answer to a pass that does not exist there."""
+    host = FakeHostPlatform()
+    explicit = probe_host_support(host, _LINUX_X11, compositing_verified=False)
+    assert explicit.capture_hygiene_spike_passed is False
+    assert host.capture_precondition_calls == 0
+
+    wayland_host = FakeHostPlatform()
+    wayland = probe_host_support(wayland_host, _LINUX_WAYLAND)
+    assert wayland.capture_hygiene_spike_passed is False
+    assert wayland_host.capture_precondition_calls == 0
+
+
+def test_the_composition_root_credits_the_x11_pass_through_the_hosts_seam(tmp_path: Path) -> None:
+    """T252 at the real call site: `build_runner_dependencies` with no `support_probe` of its own
+    resolves the tier through the probe at composition time, and the probe through the host's
+    seam -- so a Linux/X11 host is asked about its compositor exactly once, at build, without any
+    caller hand-feeding the verdict (this is exactly what `run start` and `doctor` do). The probe
+    itself is closed over by the returned callables, so the seam call is the observable fact
+    here; what the probe does with the answer is pinned by the two tests above."""
+    host = FakeHostPlatform()
+    store = SqliteMatchStore(tmp_path / "match-store.db")
+    try:
+        deps = build_runner_dependencies(
+            store=store,
+            host=host,
+            host_info=_LINUX_X11,
+            provider=FakeModelProvider(),
+            seedset_root=tmp_path / "seedsets",
+            run_lock=RunIdentityLock(tmp_path / "run-locks"),
+            disk_check_path=tmp_path,
+            home=tmp_path,
+        )
+    finally:
+        close = getattr(store, "close", None)
+        if callable(close):
+            close()
+
+    assert deps.store is store
+    assert host.capture_precondition_calls == 1
 
 
 def test_wayland_is_never_credited_with_the_x11_capture_result() -> None:

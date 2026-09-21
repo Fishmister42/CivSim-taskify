@@ -420,6 +420,38 @@ _RAW_MODE_MAP: Final[dict[str, tuple[str, str]]] = {
 }
 
 
+def transcode_raw_frame_to_png(frame: CaptureFrame) -> CaptureFrame | None:
+    """T252: give a raw framebuffer frame a wire form, losslessly, before it is screened.
+
+    A host adapter's `BGRA8` (Linux XComposite, Windows `PrintWindow`) is the truth of the pixels
+    but nothing a provider call can carry (`observe/capture.py`'s ``_WIRE_MEDIA_TYPES``), so
+    until this existed every clean Linux frame was stored and never shown (measured 2026-09-21:
+    twelve frames in the landed-code demo, `blob_media_type=None` on all of them). The re-encoding
+    is PNG (lossless) of the same decoded RGB pixels :func:`_decode_frame` screens -- alpha is
+    dropped, since on both raw paths it is padding, not transparency (`host/windows/adapter.py`'s
+    `extract_bgra8` docstring) -- and the result keeps the frame's width, height and rect. An
+    already-encoded frame is returned unchanged; a raw frame that cannot be decoded (wrong length,
+    zero size) returns ``None`` so the caller can withhold the step with a reason rather than
+    screen a frame it cannot even read. Done *before* screening on purpose: one byte string is
+    then screened, hashed, stored and sent, so the record's ``blob_ref`` names exactly what the
+    agent received.
+    """
+    if frame.image_format.upper() not in _RAW_MODE_MAP:
+        return frame
+    decoded = _decode_frame(frame)
+    if decoded is None:
+        return None
+    buffer = io.BytesIO()
+    decoded.save(buffer, format="PNG")
+    return CaptureFrame(
+        width=frame.width,
+        height=frame.height,
+        rect=frame.rect,
+        image_bytes=buffer.getvalue(),
+        image_format="PNG",
+    )
+
+
 def _decode_frame(frame: CaptureFrame) -> Image.Image | None:
     """Decode a raw or encoded :class:`CaptureFrame` into an RGB Pillow image, or ``None``."""
     image_format = frame.image_format.upper()
