@@ -138,19 +138,76 @@ local function CivSim_UnitOrders_FoundCity(unitId)
     return { ok = (accepted ~= false), unit_id = unit:GetID() }
 end
 
--- Apply a promotion to a unit that has one available. UNVERIFIED: the exact operation/command for
--- applying a promotion (as opposed to querying availability) is not confirmed; some Civ VI builds
--- may expose this as a direct Unit method rather than an operation request. Not covered by the
--- sweep's P4 spot-check list.
+-- Apply a promotion the unit has earned -- clicking a slot in its promotion tree.
+--
+-- MEASURED (2026-09-21, reading the dispatch path rather than the game): this function could never
+-- work. `act/executor.py`'s `_build_arguments` passes a decision's `target` as the LAST positional
+-- argument and units.promote's target is the promotion *name*, so every call arrived as
+-- `promote("PROMOTION_BATTLECRY")` -- the name landed in `unitId`, `CivSim_FindLocalUnit` looped
+-- over the player's units comparing ids to a string, found nothing, and answered `unit_not_found`
+-- for a unit that was selected and standing right there. `move_to` already carried the
+-- normalisation guard for exactly this (a lone table is the plot); it is applied here too.
+--
+-- The body was also a guess: `unit:SetPromotion(...)` appears nowhere in Firaxis' shipped UI.
+-- SOURCE (this machine, 2026-09-21) -- what the game's own promote path actually is:
+--   steamassets/base/assets/ui/panels/unitpanel.lua
+--     :435-446    the Promote button is listed from
+--                 UnitManager.CanStartCommand(pUnit, UnitCommandTypes.PROMOTE, true, true) and
+--                 tResults[UnitCommandResults.PROMOTIONS] -- the promotions this unit is offered
+--     :2708-2717  OnPromoteUnit, the click itself:
+--                   tParameters[UnitCommandTypes.PARAM_PROMOTION_TYPE] = ePromotion
+--                   UnitManager.RequestCommand(pSelectedUnit, UnitCommandTypes.PROMOTE, tParameters)
+--   steamassets/base/assets/ui/popups/unitpromotionpopup.lua
+--     :285-291    `if (item == row.Index)` over GameInfo.UnitPromotions() -- so the value carried
+--                 by the clicked slot, and therefore PARAM_PROMOTION_TYPE, is the promotion row's
+--                 own Index, not its hash and not its name
+--     :61-72      the popup's own click, the same two lines as the panel's
+-- Both of those are reproduced below. UNVERIFIED LIVE: read out of Firaxis' callers, not yet
+-- exercised against a running client.
 local function CivSim_UnitOrders_Promote(unitId, promotionType)
+    -- A lone string argument is the promotion; the unit is the selected one (see the note above).
+    if type(unitId) == "string" and promotionType == nil then
+        unitId, promotionType = nil, unitId
+    end
     local unit = CivSim_FindLocalUnit(unitId)
     if unit == nil then
         return { ok = false, reason = "unit_not_found" }
     end
-    local ok, result = pcall(function()
-        return unit:SetPromotion(GameInfo.UnitPromotions[promotionType].Index) -- UNVERIFIED
+    if type(promotionType) ~= "string" then
+        return { ok = false, reason = "no_promotion_named", unit_id = unit:GetID() }
+    end
+    local okRow, row = pcall(function() return GameInfo.UnitPromotions[promotionType] end)
+    if not okRow or type(row) ~= "table" or row.Index == nil then
+        return { ok = false, reason = "unknown_promotion", unit_id = unit:GetID(),
+                 promotion = promotionType }
+    end
+    -- The panel's own gate (unitpanel.lua:437-439): a slot is clickable only for a promotion in
+    -- this unit's offered list. A command that cannot be asked at all is not treated as a refusal.
+    local okCan, canStart, results = pcall(function()
+        return UnitManager.CanStartCommand(unit, UnitCommandTypes.PROMOTE, true, true)
     end)
-    return { ok = (ok and result ~= false), unit_id = unitId, promotion = promotionType }
+    if okCan and canStart == false then
+        return { ok = false, reason = "promotion_not_available", unit_id = unit:GetID(),
+                 promotion = promotionType }
+    end
+    if okCan and type(results) == "table" then
+        local offered = nil
+        pcall(function() offered = results[UnitCommandResults.PROMOTIONS] end)
+        if type(offered) == "table" then
+            local isOffered = false
+            for _, ePromotion in ipairs(offered) do
+                if ePromotion == row.Index then isOffered = true end
+            end
+            if not isOffered then
+                return { ok = false, reason = "promotion_not_available", unit_id = unit:GetID(),
+                         promotion = promotionType }
+            end
+        end
+    end
+    local tParameters = {}
+    tParameters[UnitCommandTypes.PARAM_PROMOTION_TYPE] = row.Index
+    local accepted = UnitManager.RequestCommand(unit, UnitCommandTypes.PROMOTE, tParameters)
+    return { ok = (accepted ~= false), unit_id = unit:GetID(), promotion = promotionType }
 end
 
 -- Spend a build charge: put an improvement on the plot the selected unit is standing on. This is

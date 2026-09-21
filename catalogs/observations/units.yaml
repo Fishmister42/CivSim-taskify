@@ -41,9 +41,17 @@
                 type: object
                 properties: { x: { type: integer }, y: { type: integer } }
             can_found_city: { type: boolean }
+            # The promotions this unit's own promotion tree is offering, as UnitPromotionType
+            # names. Sourced from the panel's own query
+            # (steamassets/base/assets/ui/panels/unitpanel.lua:435-446,
+            # popups/unitpromotionpopup.lua:285-291); the previous body asked a method Civ VI does
+            # not have, so this was `[]` on every record in the store.
             available_promotions:
               type: array
               items: { type: string }
+            # Why the promotion list is empty, when the panel's own query could not be asked at
+            # all -- never a silent `[]`.
+            available_promotions_reason: { type: string }
             charges_remaining: { type: [number, "null"] }
             # The unit panel's build buttons, reported for the SELECTED unit only -- those buttons
             # exist only on the panel of the unit a human has selected

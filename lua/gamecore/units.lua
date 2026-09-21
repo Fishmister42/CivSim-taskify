@@ -175,6 +175,52 @@ local function CivSim_GetAvailableBuilds(unit)
     return options, nil
 end
 
+-- --------------------------------------------------------------------------
+-- The promotions the unit's own promotion tree is offering it.
+--
+-- MEASURED (2026-09-21): this list was `[]` for every unit on every record in the store, and the
+-- promote goal (tests/live/goals/promote_unit.yaml) wrote that off as "a game-state fact, not a
+-- body gap". It was a body gap. The body asked `unit:GetAvailablePromotions()`, a method that
+-- appears nowhere in Firaxis' shipped UI, under a `if unit.GetAvailablePromotions then` guard that
+-- swallowed its absence silently -- so `units.promote`'s availability predicate
+-- (`target in unit.available_promotions`) could never hold, whatever the unit had earned.
+--
+-- SOURCE (this machine, 2026-09-21) -- what the game's own promotion list is:
+--   steamassets/base/assets/ui/panels/unitpanel.lua:435-446 -- the Promote button is listed from
+--     UnitManager.CanStartCommand(pUnit, UnitCommandTypes.PROMOTE, true, true) and
+--     tResults[UnitCommandResults.PROMOTIONS]
+--   steamassets/base/assets/ui/popups/unitpromotionpopup.lua:285-291 -- `item == row.Index` over
+--     GameInfo.UnitPromotions(): the entries are promotion row Indices, resolved to the name a
+--     human reads through GameInfo.UnitPromotions[...].UnitPromotionType
+--
+-- Asked per own unit, as `can_found_city` already is: a human sees the same list by selecting that
+-- unit, and the promotion-available banner on a unit's flag is what sends them to look.
+-- UNVERIFIED LIVE: read out of Firaxis' callers, not yet exercised against a running client.
+-- --------------------------------------------------------------------------
+local function CivSim_GetAvailablePromotions(unit)
+    local promotions = {}
+    local ok, canStart, results = pcall(function()
+        return UnitManager.CanStartCommand(unit, UnitCommandTypes.PROMOTE, true, true)
+    end)
+    if not ok then
+        return promotions, "can_start_command_unanswerable"
+    end
+    if canStart ~= true or type(results) ~= "table" then
+        return promotions, nil -- the panel is offering this unit no promotion
+    end
+    local offered = CivSim_Units_Try(function() return results[UnitCommandResults.PROMOTIONS] end)
+    if type(offered) ~= "table" then
+        return promotions, nil
+    end
+    for _, ePromotion in ipairs(offered) do
+        local row = CivSim_Units_Try(function() return GameInfo.UnitPromotions[ePromotion] end)
+        if type(row) == "table" and row.UnitPromotionType ~= nil then
+            promotions[#promotions + 1] = row.UnitPromotionType
+        end
+    end
+    return promotions, nil
+end
+
 local function CivSim_DescribeUnit(unit, localPlayer)
     -- MEASURED (2026-09-21, live, T213): `unit:GetUnitType()` exists in InGame only (nil in
     -- GameCore_Tuner), `GetMovesRemaining`/`GetMaxMoves` answer in both ("2/2" for a Settler),
@@ -216,13 +262,11 @@ local function CivSim_DescribeUnit(unit, localPlayer)
             return UnitManager.CanStartOperation(unit, UnitOperationTypes.FOUND_CITY)
         end)
         entry.can_found_city = (okFound and canFound == true)
-        local promotions = {}
-        if unit.GetAvailablePromotions then -- UNVERIFIED: no confirmed accessor for eligible promotions
-            for _, promo in ipairs(unit:GetAvailablePromotions()) do
-                promotions[#promotions + 1] = promo
-            end
-        end
+        local promotions, promotionsReason = CivSim_GetAvailablePromotions(unit)
         entry.available_promotions = promotions
+        if promotionsReason ~= nil then
+            entry.available_promotions_reason = promotionsReason
+        end
         entry.charges_remaining = unit.GetBuildCharges and unit:GetBuildCharges() or nil -- UNVERIFIED
         -- The build buttons a human sees, and only on the panel they are looking at (see the
         -- source note above CivSim_GetAvailableBuilds). `build_options` is that list row for row,
