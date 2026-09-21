@@ -127,6 +127,8 @@ from civsim_harness.provider.port import (
 from civsim_harness.provider.preflight import preflight_chain
 from civsim_harness.provider.stochastic import (
     DEFAULT_MAX_ACTIONS_PER_TURN,
+    PROVIDER_POLICIES,
+    UNIFORM_POLICY,
     StochasticModelProvider,
 )
 from civsim_harness.resilience.detector import DetectionAggregator
@@ -1187,29 +1189,41 @@ async def _fail_preparation(
 #: `tests/`, and production code must not be able to reach for it.
 PROVIDER_NAMES: tuple[str, ...] = ("openrouter", "stochastic")
 
+#: Every sampling policy :func:`build_provider`'s ``policy`` accepts, re-exported from
+#: ``provider/stochastic.py`` so a `--provider-policy` flag in front of this composition root
+#: enumerates exactly what the adapter implements rather than a hand-kept copy of it (T262).
+PROVIDER_POLICY_NAMES: tuple[str, ...] = tuple(PROVIDER_POLICIES)
+
 
 def build_provider(
     name: str,
     *,
     seed: int = 0,
     max_actions_per_turn: int = DEFAULT_MAX_ACTIONS_PER_TURN,
+    policy: str = UNIFORM_POLICY,
 ) -> ModelProvider:
     """Resolve a provider *name* to the adapter :func:`build_runner_dependencies` should be handed.
 
     ``"openrouter"`` is the production adapter and the default everything had before this
-    function existed; ``"stochastic"`` is ``provider/stochastic.py``'s seeded uniform sampler,
-    which serves every decision locally at zero cost and records itself as ``provider=stochastic``
-    in the store (T261). *seed* fixes that sampler's stream so a run is reproducible, and
-    *max_actions_per_turn* is how many non-end-turn actions it takes before ending a turn; both
-    are ignored by every other provider, which has no such knobs.
+    function existed; ``"stochastic"`` is ``provider/stochastic.py``'s seeded sampler, which
+    serves every decision locally at zero cost and records itself as ``provider=stochastic`` in
+    the store (T261). *seed* fixes that sampler's stream so a run is reproducible,
+    *max_actions_per_turn* is how many non-end-turn actions it takes before ending a turn, and
+    *policy* is one of :data:`~civsim_harness.provider.stochastic.PROVIDER_POLICIES`:
+    ``uniform`` (the default, unchanged) draws from everything the request lists, ``coverage``
+    (T262) draws only from the actions the request shows as available right now. All three are
+    ignored by every other provider, which has no such knobs.
 
     Raises ``ValueError`` naming :data:`PROVIDER_NAMES` for anything else -- a misspelt provider
-    must refuse before a run is prepared, not fall back to spending money on OpenRouter.
+    must refuse before a run is prepared, not fall back to spending money on OpenRouter -- and
+    the same for a policy no sampler implements.
     """
     if name == "openrouter":
         return OpenRouterProvider()
     if name == "stochastic":
-        return StochasticModelProvider(seed=seed, max_actions_per_turn=max_actions_per_turn)
+        return StochasticModelProvider(
+            seed=seed, max_actions_per_turn=max_actions_per_turn, policy=policy
+        )
     raise ValueError(f"unknown provider {name!r}; expected one of {', '.join(PROVIDER_NAMES)}")
 
 

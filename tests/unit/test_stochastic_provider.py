@@ -1402,3 +1402,30 @@ def test_each_policy_reports_which_sampler_served_the_call() -> None:
 def test_an_unknown_policy_is_refused_rather_than_silently_treated_as_uniform() -> None:
     with pytest.raises(ValueError, match="unknown policy"):
         StochasticModelProvider(seed=1, policy="greedy")
+
+
+def test_the_composition_root_resolves_the_policy_by_name() -> None:
+    from civsim_harness.run.composition import PROVIDER_POLICY_NAMES, build_provider
+
+    assert PROVIDER_POLICY_NAMES == ("uniform", "coverage")
+    coverage = build_provider("stochastic", seed=77, policy="coverage")
+    assert isinstance(coverage, StochasticModelProvider)
+    assert (coverage.policy, coverage.seed) == ("coverage", 77)
+    default = build_provider("stochastic", seed=1)
+    assert isinstance(default, StochasticModelProvider)
+    assert default.policy == "uniform", "the composition root's default policy is unchanged"
+    with pytest.raises(ValueError, match="unknown policy"):
+        build_provider("stochastic", seed=1, policy="greedy")
+
+
+def test_the_demo_driver_exposes_the_policy_and_recommends_coverage() -> None:
+    """`tests/live/demo_landed_run.py` is excluded from the default run (it needs a client), so
+    its wiring is checked as text rather than by importing a module that talks to a game."""
+    driver = (
+        Path(__file__).resolve().parents[1] / "live" / "demo_landed_run.py"
+    ).read_text(encoding="utf-8")
+    assert '"--provider-policy",' in driver
+    assert "choices=PROVIDER_POLICY_NAMES," in driver
+    assert 'default="uniform",' in driver
+    assert "RECOMMENDED" in driver
+    assert "policy=provider_policy" in driver
