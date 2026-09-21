@@ -30,6 +30,9 @@ driver's *python* child (not just the shell wrapper) and remove the lock before 
 | 04 | run-fd5fa128 | 30 → 30 (3 harness turns; the game never advanced) | stochastic, seed 7 | 2 / 21: `cities.select` ×2 applied (first city-level action ever); 12 distinct actions attempted at $0 | the whole block sat under a civic popup the sampler never acknowledged; every `turn.end_turn` refused, yet each turn record reads `ended_by_agent` | 4 keyframes | $0 |
 | 05 | run-41ef0b94 | 30 → 34 (5 turns, all ended by the agent) | Sonnet 5 | 13 / 1: tech_civic_completed ×2 (the replayed Code of Laws card, then Craftsmanship), `research.set_tech` Writing **applied and verified** (PlayerOperations.RESEARCH), `cities.select` ×4 (probe then reports `city_screen`), move_to 1 applied / 1 refused, end_turn ×5 | none | 4 keyframes | $0.330 |
 | 06 | run-26bf638a | 35 → 35 (3 harness turns under an unacknowledged popup; ran before dc67529) | stochastic, seed 11 | 2 / 19: `saves.save_game` applied (first named save by an agent), `units.select` applied; 11 distinct prompt/camera/diplomacy actions refused correctly | popup never drawn by the sampler; end_turn refused ×3 | 4 keyframes | $0 |
+| 07 | run-480aa573 | 35 → 35 (5 harness turns under an unmapped first-meeting leader scene) | Sonnet 5 | 5 / 15: `research.set_tech` Currency applied+verified, `cities.select` ×2, `units.select` ×1; `diplomacy.send_delegation` ×9 and `units.move_to` ×1 refused; 4 end turns dispatched, unconfirmed | Australia's greeting (`prompt.diplomatic_approach`, unmapped → probe says `diplomacy`); backstop paused; driver hung, killed (SIGTERM: no recorder output, one snap frame) | 1 (snap) | $0.464 |
+| 08 | run-4c0b8fb4 | 35 (died at step 1) | Sonnet 5 | 0 / 0 | the model's `prompt_type` under a proactive trigger crashed the run (validator raised out of the loop) — fixed 2139479 | — | $0.02 |
+| 09 | run-221d541d | 35 → 35 (1 harness turn, under the same greeting) | stochastic, seed 13 | 1 / 6: `saves.save_game` applied; 5 refused correctly | **T260 live: 7 of 7 steps had an image delivered** (`screened_clean`, `shown_to_agent`, blob, `image_count=1`; tier `validated`, `xcomposite`) — no model saw it (stochastic) | 4 keyframes | $0 |
 
 ## Blocks 2 and 3 — the model plays; two orders never take
 
@@ -87,3 +90,16 @@ screen (`unavailable_to_human_now`), `diplomacy.make_peace` (no war). `camera.zo
 Block 3's frame 3 shows a third popup kind, "Your civilization has produced a Great Work"
 (relic from a tribal village, turn 27), which the probe reported as `world_view`: unmapped, and
 the likely reason every `units.move_to` in block 3 turns 3–5 failed verification.
+
+## Operator intervention — 12:34–12:37 EDT — NOT a demonstrated capability
+
+Owner's ruling: clear the first-meeting greeting as operator scripting so play can continue while
+`prompt.diplomatic_approach` is unmapped. `operator_answer_greeting.py 1 run-221d541d…` issued the
+decline button's own call, `DiplomacyManager.AddResponse(session 1, player 0, "NEGATIVE")` — the
+call returned ok, the leader answered, and the session stayed open with the scene up (a human's
+second click, Exit, was still owed). `operator_answer_greeting.py 1 close` then issued that click,
+`DiplomacyManager.CloseSession(1)`: at +1 s `DiplomacyActionView` hidden, `LeaderScene` hidden,
+session closed, `UI.CanEndTurn()` true, game turn 35. One `operator_intervention` run event is
+written against run-221d541d (the last run before the intervention) with the before/after
+read-backs; the exit click is recorded here. The next first-meeting greeting is the live test of
+the screens lane's mapping; if it arrives first, clear it the same way and say so.

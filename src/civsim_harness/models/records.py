@@ -153,6 +153,11 @@ class RunEventType(StrEnum):
     MODEL_CHAIN_EXHAUSTED = "model_chain_exhausted"
     IMAGE_WITHHELD = "image_withheld"
     CAPTURE_FAILED = "capture_failed"
+    # Gameplay day (2026-09-21, owner's ruling): a human operator acted on the client outside
+    # the harness's own action path -- e.g. answered a prompt the catalog could not yet map so
+    # play could continue. Recorded so the run's record says what was not the agent's doing;
+    # never counted as a demonstrated capability. `detail` names what, why and the mechanism.
+    OPERATOR_INTERVENTION = "operator_intervention"
     BRANCH_CREATED = "branch_created"
     BRANCH_ABANDONED = "branch_abandoned"
     RUN_ARCHIVED = "run_archived"
