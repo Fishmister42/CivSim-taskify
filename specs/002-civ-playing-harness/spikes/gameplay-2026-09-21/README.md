@@ -16,6 +16,26 @@ Resume a block: `uv run python -m tests.live.demo_landed_run specs/002-civ-playi
 | block | run_id | game turns | provider | actions (applied / refused) | stalls | frames | cost |
 |---|---|---|---|---|---|---|---|
 | 01 | run-809988bb | 17 → 20 (4 harness turns, all ended by the no-progress backstop) | Sonnet 5 | 0 / 32 (set_tech ×8, move_to ×16, tech_civic_completed ×8 — every one `parameters: {}`) | paused at turn 4: popup blocked the backstop end turn | 1 (popup, via snap.py; the driver was killed before it wrote its GIF) | $0.684 |
+| 02 | run-d2184c44 | 20 → 24 (5 turns, 4 ended by the agent) | Sonnet 5 | 9 / 12: tech_civic_completed ×2 applied, move_to 3 applied / 4 refused, end_turn ×4 applied, set_tech ×8 refused | turn 2 no-progress on set_tech (the setter never took) | 4 keyframes | $0.454 |
+| 03 | run-de13afc6 | 25 → 29 (5 turns, 4 ended by the agent) | Sonnet 5 | 5 / 13: tech_civic_completed ×1, end_turn ×4; set_tech ×8 and move_to ×5 refused (same two causes, fixed in 47dcfba after this block) | turn 1 no-progress on set_tech | 4 keyframes | $0.458 |
+
+## Blocks 2 and 3 — the model plays; two orders never take
+
+**Block 2 (run-d2184c44, 11:35–11:41, game 20 → 24)** opened on the Code of Laws popup:
+`prompts.tech_civic_completed {"target": "continue"}` → **applied**, the next step's screen was
+`world_view` — `UIManager:DequeuePopup` from the InGame tuner state works (T253 live, twice: a
+second popup at turn 21 was acknowledged the same way). `units.move_to` to a plot from
+`reachable_plots` was applied 3 times and refused 4 times with `verification_failed`; probed
+live at turn 25, a MOVE_TO order lands at +1 s while the verifier read at +0 s — timing, not the
+order. `research.set_tech {"target": "TECH_MINING"}` (and Writing) was dispatched 8 times in one
+turn and never took: the body called `Player:GetTechs():SetResearchingTech`, an unconfirmed
+name; the Research chooser's click is `UI.RequestPlayerOperation(PlayerOperations.RESEARCH, …)`.
+The model ended 4 of 5 turns itself. Yields grew 3.0 → 3.5 science.
+**Block 3 (run-de13afc6, 11:44–11:50, game 25 → 29)**: one more popup acknowledged; the same
+two orders refused 13 times between them; faith 4.0 per turn appeared at turn 26 (a pantheon
+or holy-site source; not investigated). Both causes fixed in `47dcfba`, together with
+`units.select` / `cities.select` — nothing in the catalog could select a city, so every city
+order was structurally unavailable (the model said so in its own reasoning at block 2 turn 1).
 
 ## Block 1 — run-809988bb — 11:21–11:29 EDT — the schema was the stall
 
@@ -36,3 +56,23 @@ end turn was then blocked by the popup and the run paused honestly (`BackstopEnd
 Not observed: any applied action; any image reaching the model (36 captures withheld,
 `provenance_failure`: no revealed target plot — T260). Research shows Animal Husbandry with one
 turn left at turn 20; no harness action set it (all refused); who set it was not determined.
+| 04 | run-fd5fa128 | 30 → 30 (3 harness turns; the game never advanced) | stochastic, seed 7 | 2 / 21: `cities.select` ×2 applied (first city-level action ever); 12 distinct actions attempted at $0 | the whole block sat under a civic popup the sampler never acknowledged; every `turn.end_turn` refused, yet each turn record reads `ended_by_agent` | 4 keyframes | $0 |
+
+## Block 4 — stochastic seed 7 — 11:51–11:53 — coverage at $0, and two integrity findings
+
+21 decisions in 89 s, 12 distinct actions, none chosen by a model. The client had raised a
+"Civic Completed" popup at game turn 30 (Craftsmanship completed at the end of block 3) and the
+sampler never drew `prompts.tech_civic_completed`, so the popup stayed up for all three turns:
+`turn.end_turn` refused ×3 and game turn 30 → 30. Findings: (1) the turn-cycle outcome reads
+`ended_by_agent` for a turn whose end-turn decision was refused and whose game turn did not
+advance — the record should say the turn did not end; (2) the popup's card shows **Code of
+Laws** again (frame 4) while the world tracker says Craftsmanship "just completed": T253's
+`UIManager:DequeuePopup` closes the popup without running its own Continue handler, so the
+popup's internal queue still held the turn-20 civic and replays it. Demonstrated: `cities.select
+{"target": 65536}` → applied twice (the `UI.SelectCity` click, verified through `cities.selection`),
+even under the popup. Refused correctly: eight prompt responses for prompts that were not on
+screen (`unavailable_to_human_now`), `diplomacy.make_peace` (no war). `camera.zoom` ×3 and
+`camera.set_view_mode` ×2 refused `verification_failed` — the camera lane's agent owns that.
+Block 3's frame 3 shows a third popup kind, "Your civilization has produced a Great Work"
+(relic from a tribal village, turn 27), which the probe reported as `world_view`: unmapped, and
+the likely reason every `units.move_to` in block 3 turns 3–5 failed verification.
