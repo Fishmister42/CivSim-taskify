@@ -315,7 +315,11 @@ _PLAYER_SOURCES: tuple[DeclarationId, ...] = (
     DeclarationId("research.state"),
     DeclarationId("government.state"),
     DeclarationId("religion.state"),
+    # T258: the top bar. Gives `player.*_per_turn` and, through the renames below, the README's
+    # long-listed `player.gold` / `player.faith` balances their first producer.
+    DeclarationId("player.yields"),
 )
+_PLAYER_FIELD_RENAMES: Mapping[str, str] = {"gold_balance": "gold", "faith_balance": "faith"}
 _CONGRESS_DECLARATION_ID = DeclarationId("congress.state")
 
 # namespace -> (backing declaration_id, list field, id field matched against `target`)
@@ -418,7 +422,7 @@ def build_predicate_bindings(
             screen if isinstance(screen, str) and screen.startswith("prompt.") else None,
         )
 
-    player = _merge_fields(index, _PLAYER_SOURCES)
+    player = _merge_fields(index, _PLAYER_SOURCES, renames=_PLAYER_FIELD_RENAMES)
     congress_source = index.get(_CONGRESS_DECLARATION_ID)
     if isinstance(congress_source, Mapping) and "local_player_favor" in congress_source:
         player["diplomatic_favor"] = congress_source["local_player_favor"]

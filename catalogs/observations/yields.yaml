@@ -1,0 +1,33 @@
+# catalogs/observations/yields.yaml
+# T258 (2026-09-21), Constitution III. Backed by lua/ingame/yields.lua (capability_id: yields.read).
+# The local player's top bar, read once per decision step like every other observation; the
+# turn's LAST observation is what run/yields.py records as `TurnCycle.yields`, and those keys are
+# the store's trend metrics (store/trends.py `turn_metrics_from`). Every field is optional on
+# purpose: a value the client does not answer is absent, and the record then carries a gap for
+# that metric rather than a fabricated zero.
+
+- declaration_id: player.yields
+  kind: observation
+  summary: >
+    The local player's top-bar yields this turn: science, culture, faith and gold per turn,
+    the faith and gold balances, and tourism.
+  parity_basis: >
+    Read the top bar at the top of the screen — science, culture, faith (balance and per turn),
+    gold (balance and per turn, net of maintenance, as the bar shows it) and tourism are
+    displayed there for the local player every turn. No tooltip breakdowns, no other player's
+    numbers.
+  context: InGame
+  capability_id: yields.read
+  output_schema:
+    type: object
+    properties:
+      turn_number: { type: integer }
+      science_per_turn: { type: number }
+      culture_per_turn: { type: number }
+      faith_per_turn: { type: number }
+      faith_balance: { type: number }
+      gold_per_turn: { type: number }
+      gold_balance: { type: number }
+      tourism_per_turn: { type: number }
+      reason: { type: string }
+  introduced_in_version: "2026.09.3"

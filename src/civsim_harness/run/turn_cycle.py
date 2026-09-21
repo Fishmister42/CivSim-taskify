@@ -141,9 +141,10 @@ def _utcnow() -> Timestamp:
 
 
 def _no_yields(_: DecisionLoopResult) -> dict[str, Any]:
-    """The default ``compute_yields``: no per-turn yield derivation exists in this wave -- turning
-    game state into "science/gold/culture this turn" is domain logic no catalog entry or task in
-    T110-T117's scope names yet. A caller with a real source passes its own callable."""
+    """The default ``compute_yields`` for callers that wire no yield source of their own: an
+    honest empty record. Production does not use it -- ``run/composition.py`` passes
+    ``run/yields.py``'s ``compute_yields_from_result`` (T258, Constitution III), which reads the
+    turn's last ``player.yields`` observation (the human's top bar)."""
     return {}
 
 

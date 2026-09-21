@@ -563,3 +563,33 @@ def test_an_entry_that_reports_its_own_selection_is_never_overridden_by_the_over
     assert bindings["city"] == {"exists": False}  # nothing selected -> nothing bound, no guess
     by_id = build_predicate_bindings(observation=observation, target=3)
     assert by_id["city"]["is_selected"] is False
+
+
+# --------------------------------------------------------------------------
+# T258 -- player.gold / player.faith and the per-turn rates come from player.yields
+# --------------------------------------------------------------------------
+
+
+def test_the_top_bar_gives_player_gold_and_faith_their_first_producer() -> None:
+    """catalogs/README.md §4 has listed `player.gold` and `player.faith` since T106 with no
+    observation producing them; `player.yields` (the top bar) now does, and the per-turn rates
+    ride along under their own names."""
+    observation = _observation(
+        [
+            _entry(
+                "player.yields",
+                {
+                    "science_per_turn": 6.5,
+                    "gold_per_turn": 2.4,
+                    "gold_balance": 41,
+                    "faith_balance": 12,
+                },
+                LuaContext.IN_GAME,
+            )
+        ]
+    )
+    bindings = build_predicate_bindings(observation=observation)
+    assert bindings["player"]["gold"] == 41
+    assert bindings["player"]["faith"] == 12
+    assert bindings["player"]["science_per_turn"] == 6.5
+    assert evaluate_predicate("player.gold >= 40 and player.gold_per_turn > 0", bindings) is True

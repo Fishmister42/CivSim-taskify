@@ -115,8 +115,11 @@ spy.is_available` rather than needing a separate existence check bolted on.
 - `game.is_waiting_for_other_players` (boolean)
 
 `player.*` (the local human player only — never an opponent's)
-- `player.gold` (number)
-- `player.faith` (number)
+- `player.gold` (number) — the top-bar gold balance (`player.yields.gold_balance`, T258)
+- `player.faith` (number) — the top-bar faith balance (`player.yields.faith_balance`, T258)
+- `player.science_per_turn`, `player.culture_per_turn`, `player.gold_per_turn` (net of
+  maintenance, as the bar shows it), `player.faith_per_turn`, `player.tourism_per_turn`
+  (numbers) — the top bar's per-turn rates (`player.yields`, T258)
 - `player.current_research` (string or null)
 - `player.current_civic` (string or null)
 - `player.researchable_techs` (list<string>)

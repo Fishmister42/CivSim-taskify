@@ -1,8 +1,12 @@
 # Contract: MatchStore Port
 
 **Feature**: `002-civ-playing-harness` | **Schema version**: 1
-**Implemented by**: deliverable 3 (match-tracking store). A local SQLite + blob reference adapter
-implements it in the interim (plan Complexity Tracking C2).
+**Implemented by**: deliverable 3 (match-tracking store), landed 2026-09-21 in `93a9b7e`:
+`MatchTrackingStore(MatchStore)` in `src/civsim_harness/store/contract.py` extends this port
+without changing it, and `src/civsim_harness/store/sqlite_adapter.py` (with `sqlite_reads.py`)
+is the adapter the harness writes through. The local SQLite + blob reference adapter that
+implemented it in the interim (plan Complexity Tracking C2) is that same adapter, now under
+003's contract and schema.
 **Amended**: 2026-09-20, owner-authorised — the [Capability extensions](#capability-extensions--the-reads-deliverable-1-proved-missing)
 section was added and two read-table rows sharpened. Schema version unchanged: the amendment adds
 read obligations, no record shape changed.

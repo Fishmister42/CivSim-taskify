@@ -151,6 +151,7 @@ from civsim_harness.run.preparation import (
 from civsim_harness.run.runner import PreparedRun, RunnerDependencies
 from civsim_harness.run.stop import GameOutcome, StopEvaluation, evaluate_stop
 from civsim_harness.run.turn_cycle import TurnCycleDependencies
+from civsim_harness.run.yields import compute_yields_from_result
 from civsim_harness.saves.branching import BranchFrom as SaveBranchFrom
 from civsim_harness.saves.branching import (
     BranchSource,
@@ -1400,6 +1401,9 @@ def build_runner_dependencies(
             min_free_disk_gb=config.min_free_disk_gb,
             disk_check_path=resolved_disk_check_path,
             build_loop_context=build_loop_context,
+            # T258, Constitution III: the turn's yields from the human's top bar (the turn's last
+            # `player.yields` observation), so `TurnCycle.yields` is a record rather than `{}`.
+            compute_yields=compute_yields_from_result,
             recovery=RecoveryEngine(
                 run_id=run_id,
                 store=store,
