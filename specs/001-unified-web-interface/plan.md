@@ -9,7 +9,10 @@
 resolves "the current feature" through `.specify/feature.json`, which a parallel effort has pinned to
 `specs/002-civ-playing-harness` while it is actively implemented; running the script would either
 target the wrong feature or repoint that file out from under it. `.specify/feature.json` was not
-modified to produce this plan and still reads `specs/002-civ-playing-harness`.
+modified to produce this plan: it read `specs/002-civ-playing-harness` at planning time and, as of
+2026-09-21, points at `specs/003-match-tracking-store`. Neither value was ever set by this feature,
+and every speckit run against 001 since — including the 2026-09-21 analyze/converge pass — has
+addressed `specs/001-unified-web-interface/` explicitly rather than through that file.
 
 ## Summary
 
@@ -161,9 +164,10 @@ step (R2). `Structure Decision` below places it as a sibling package to `002`'s,
   VI, 002 plan Complexity Tracking C3).
 
 **Scale/Scope**: Catalog of 50+ runs; individual runs of 300+ turns with, per 002's data model,
-potentially hundreds of decision steps per turn. 36 functional requirements across 6 requirement
+potentially hundreds of decision steps per turn. 37 functional requirements across 6 requirement
 groups (live observation, shared visibility, human-parity boundary, history/replay, catalog/
-comparison, access) plus 10 UI Principles that apply across all of them.
+comparison, access) plus 10 UI Principles that apply across all of them. *(36 when this plan was
+written; FR-037 was added by spec.md's Amendment A–C pass on 2026-09-20.)*
 
 ## Constitution Check
 

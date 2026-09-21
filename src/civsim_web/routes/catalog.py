@@ -41,7 +41,7 @@ from civsim_web.routes.common import (
     registry_version,
     require_store,
 )
-from civsim_web.store_client.catalog import CatalogListing, list_catalog_rows
+from civsim_web.store_client.catalog import CatalogListing, MetricsScope, list_catalog_rows
 from civsim_web.viewmodels.catalog import (
     DEFAULT_CATALOG_PAGE_SIZE,
     MAX_CATALOG_PAGE_SIZE,
@@ -82,7 +82,12 @@ def list_runs(
     """Every run the port can reach, filtered, sorted and paginated."""
     store = require_store(request)
     registry = registry_of(request)
-    listing = list_catalog_rows(store, registry=registry, with_metrics=True)
+    # `MetricsScope.OUTCOME`, not `SERIES` (T075): a catalog row shows the final
+    # turn's numbers and nothing else, and the port makes a full series cost one
+    # read per turn. Asking for the series here meant 55 runs x 320 turns of
+    # reads to render 55 numbers, which put `/runs` ten seconds past SC-008's
+    # two-second budget at the scale that criterion actually names.
+    listing = list_catalog_rows(store, registry=registry, metrics=MetricsScope.OUTCOME)
     view = build_catalog_view(
         listing,
         registry=registry,

@@ -6,7 +6,12 @@
 
 **Amended**: 2026-09-20 — see [Amendments](#amendments) for what changed and why.
 
-**Status**: Draft
+**Status**: Implemented (2026-09-21)
+
+*The spec template (`.specify/templates/spec-template.md`) offers only `Draft` and has no status for
+a shipped feature, so `Implemented` is this project's own value. It records that all 75 tasks in
+[tasks.md](./tasks.md) are closed and that the 2026-09-21 analyze/converge pass found no remaining
+gap between this document and the code — not that the feature is frozen.*
 
 **Input**: User description: "feature 1 web interface / UI principles"
 
@@ -485,6 +490,14 @@ It is numbered FR-037 rather than inserted at FR-023 because the existing number
 plan.md, both contracts, data-model.md, tasks.md and the test suite. Renumbering would have made every
 one of those references silently wrong, which is a far worse outcome than a section whose numbers are
 not contiguous.
+
+**Coverage**: FR-037 is discharged by `ComparisonBasis` / `build_comparison_basis` in
+`src/civsim_web/viewmodels/comparison.py`, rendered by `templates/catalog/compare.html`, and pinned by
+three tests in `tests/contract/test_web_read_api.py` (the divergent, uniform and unverifiable cases).
+Its task is **T071**. *That task exists because this amendment, on the day it was written, did not
+finish the job it describes: it added the requirement and stopped, so the identifier `FR-037` appeared
+nowhere in the feature's code or tests and the chain above ran from constitution to requirement and
+then went cold. The 2026-09-21 convergence pass found that and closed it.*
 
 ### Amendment C — FR-003's health vocabulary was two values short
 

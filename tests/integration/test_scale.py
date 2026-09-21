@@ -96,9 +96,31 @@ def scale_client() -> Iterator[Any]:
         yield client
 
 
+#: SC-008's catalog scale is "50+ recorded runs" *and* "a run of 300+ turns" in
+#: one sentence, and `catalog_client` only ever had the first half: 55 runs of
+#: 30 turns. That mattered because the two expensive catalog compositions scale
+#: with *turns*, not with runs, so a 30-turn fixture could not see them (T075).
+CATALOG_TURNS = TURNS
+
+
 @pytest.fixture(scope="module")
 def catalog_client() -> Iterator[Any]:
     client = make_client(make_catalog_store(count=CATALOG_RUNS, turns=30))
+    with client:
+        yield client
+
+
+@pytest.fixture(scope="module")
+def long_catalog_client() -> Iterator[Any]:
+    """SC-008's two halves at once: 55 runs, every one of them 320 turns.
+
+    Captures are omitted for the same reason `_scale_store` omits them -- FR-035
+    makes the comparison view capture-free by construction, and seeding one blob
+    per step across 55 long runs would measure the fixture rather than the route.
+    """
+    client = make_client(
+        make_catalog_store(count=CATALOG_RUNS, turns=CATALOG_TURNS, with_captures=False)
+    )
     with client:
         yield client
 
@@ -249,6 +271,105 @@ def test_comparing_five_runs_stays_within_budget(catalog_client):
     ).json()
     assert len(body["runs"]) == 5
     assert body["series"]
+
+
+# --------------------------------------------------------------------------
+# SC-008's actual sentence: 50+ runs AND 300+ turns, in one catalog (T075)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/runs",
+        "/runs?sort=turn_count&order=desc",
+        "/runs?sort=outcome_metrics.science_output&order=desc",
+        "/runs?civilization=GREECE",
+        "/runs?page=2&page_size=25",
+    ],
+    ids=["listing", "sort", "sort_by_outcome", "filter", "page_2"],
+)
+def test_the_catalog_stays_within_budget_when_its_runs_are_long(long_catalog_client, path):
+    """The half of SC-008 the 30-turn fixture could not see.
+
+    `/runs` projects a row per run, and two of the three compositions in this
+    module's docstring scale with *turn count*: `highest_recorded_turn` probes,
+    and the metric read. At 55 runs x 30 turns the second was cheap enough to
+    hide; at 55 x 320 -- the scale SC-008 names in one sentence, "a run of 300+
+    turns and 50+ recorded runs in the catalog" -- it was **ten seconds**,
+    five times the budget, because the row asked for the whole series to keep
+    only its last turn.
+
+    `MetricsScope.OUTCOME` is the fix; this is the test that would have caught
+    it, and that stops the series read reappearing here by default.
+    """
+    _assert_within_budget(long_catalog_client, path)
+
+
+def test_comparing_five_long_runs_stays_within_budget(long_catalog_client):
+    """`/compare` pays `yields_by_turn` per compared run -- here, 320 turns each.
+
+    This one is genuinely unavoidable: a trajectory *is* the per-turn series, so
+    the read cannot be narrowed the way the catalog's could. US4 note 3 called
+    this composition the point of the scale test and it had only ever been
+    measured against 30-turn runs.
+    """
+    runs = ",".join(f"run-{n:02d}" for n in range(1, 6))
+    body = _assert_within_budget(
+        long_catalog_client, f"/compare?runs={runs}&metrics=science_output,culture_output"
+    ).json()
+    assert len(body["runs"]) == 5
+    assert all(
+        len(series["points"]) > 300
+        for series_list in body["series"].values()
+        for series in series_list
+    ), "the fixture is not actually exercising 300+ turn trajectories"
+
+
+@pytest.mark.parametrize("path", ["/runs", "/compare?runs=run-01,run-02,run-03,run-04,run-05"])
+def test_the_html_catalog_pages_stay_within_budget_at_full_scale(long_catalog_client, path):
+    """SC-008 is about a *usable response*, and the user's is the HTML one.
+
+    The module argues HTML is where an unbounded loop shows up, and then timed
+    HTML for three single-run routes only. These are the two catalog pages.
+    """
+    started = time.perf_counter()
+    response = long_catalog_client.get(path, headers={"Accept": "text/html"})
+    elapsed = time.perf_counter() - started
+
+    assert response.status_code == 200
+    assert elapsed < BUDGET_SECONDS, f"{path} rendered in {elapsed:.2f}s"
+
+
+def test_the_catalog_row_reads_only_the_turns_it_shows(long_catalog_client):
+    """The mechanism behind the fix, not just its wall-clock symptom (T075).
+
+    A timing assertion against an in-memory fake is a blunt instrument: it would
+    go green again on a faster machine even if the series read came back. This
+    counts the reads instead, so the regression is caught by its cause.
+
+    `outcome_metrics` must still come from the same per-turn yields the chart is
+    drawn from (data-model.md SS1) -- `latest_yields` selects the identical turn
+    `max(yields_by_turn)` would have, it just stops there.
+    """
+    from civsim_web.store_client.catalog import MetricsScope, latest_yields, yields_by_turn
+
+    app_store = long_catalog_client.app.state.store
+    registry = long_catalog_client.app.state.registry
+
+    full = yields_by_turn(
+        app_store, "run-01", registry=registry, highest_turn=CATALOG_TURNS, gapped_turns=()
+    )
+    latest = latest_yields(
+        app_store, "run-01", registry=registry, highest_turn=CATALOG_TURNS, gapped_turns=()
+    )
+
+    assert len(full) > 300, "the fixture must really carry a long series"
+    assert latest == {max(full): full[max(full)]}, (
+        "latest_yields picked a different turn than the full walk's last -- the "
+        "catalog column and the chart would disagree about the same run"
+    )
+    assert MetricsScope.OUTCOME is not MetricsScope.SERIES
 
 
 def test_a_capture_image_stays_within_budget(catalog_client):

@@ -1320,14 +1320,45 @@ third time by looking at what each audit actually iterates rather than at what i
   both as "findings against the spec" — Amendment C folded both into FR-003, so the enum is correct
   and only the prose is stale.
 
+- [X] T075 **HIGH** Time `/runs` and `/compare` at the scale SC-008 actually names, and fix what that
+  exposes, per SC-008 (contradicts). **The finding**: Phase 9 recorded as a note that
+  `tests/integration/test_scale.py` times the catalog routes only against 30-turn runs. Read against
+  SC-008 — *"With a run of 300+ turns **and** 50+ recorded runs in the catalog, **every view** reaches
+  a usable state within 2 seconds"* — that is not a note, it is an untested success criterion: the
+  sentence names both halves at once and the fixture only ever had one of them (55 runs × 30 turns).
+  **What it exposed**: `/runs` took **10.7 s** at 55 × 320, five times the budget, and its HTML
+  rendering 9.5 s. `routes/catalog.py` asked `list_catalog_rows` for `with_metrics=True`, which read
+  the *entire* per-turn series for every run — 17,600 `get_turn_cycle` calls — so that
+  `CatalogRow.outcome_metrics` could keep `yields_by_turn[max(...)]` and discard the rest. The port
+  publishes no metric-series read (plan.md C1), so each of those turns is its own store call.
+  **The fix**: `MetricsScope` (`series` / `outcome` / `none`) replaces the boolean, and
+  `latest_yields` walks *down* from the same upper bound to the first turn with recorded yields —
+  provably the same turn `max(yields_by_turn)` selects, so the catalog column and the chart still
+  come from one source as data-model.md §1 requires. `/runs` is now **0.13 s**, its HTML 0.31 s.
+  `/compare` was already within budget (it reads only the runs being compared) and is unchanged.
+  **Guards**: five timed catalog paths plus both HTML pages against a new 55 × 320 fixture, a
+  `/compare` case asserting the trajectories really carry 300+ points, and
+  `test_the_catalog_row_reads_only_the_turns_it_shows`, which asserts `latest_yields` picks the
+  identical turn the full walk would — a wall-clock assertion alone would go green again on a faster
+  machine with the defect restored. **Revert confirmation**: with `MetricsScope.SERIES` put back at
+  the call site, `/runs` fails at `8.56s` and `?sort=turn_count` at `8.91s`; with the fix, both pass.
+
 ### Phase 9 notes — what closed, and the one shape all nine had
 
-Written when T066–T074 landed. **All 74 tasks are now `[X]`.**
+Written when T066–T075 landed. **All 75 tasks are now `[X]`.**
 
-**The shape.** Not one of these was unbuilt work. Every requirement was
-implemented and behaving correctly before this phase started; what nine
-findings had in common is that the *checks* were narrower than the sentences
-describing them. Four audits iterated less than their own docstrings claimed
+**The shape.** *(Written at T074 and corrected at T075 — the original wording is
+kept because being wrong about this is the point.)* It first read: "Not one of
+these was unbuilt work. Every requirement was implemented and behaving correctly
+before this phase started." That was true of T066–T074 and **false of T075**,
+which found `/runs` five times over SC-008's budget. The correction matters
+because the original sentence is exactly the assumption that let the gap sit
+there: a feature whose tasks are all `[X]` invites the reading that only the
+checks can be wrong, and T075 is the counter-example — a *note* deferring a
+measurement turned out to be deferring a defect.
+
+What the nine findings before it had in common is that the *checks* were
+narrower than the sentences describing them. Four audits iterated less than their own docstrings claimed
 (`/healthz` outside both FR-030 scans; `ParityDeclaration` outside the SC-005
 coverage scan; `detect_private_addresses` asserted against its own predicate;
 the `ROUTES` matrix hand-maintained with nothing checking it covered the app),
@@ -1385,15 +1416,47 @@ means bumping `panels/VERSION` and adding a version block — a schema history
 entry for a citation. T071's citations live in `viewmodels/comparison.py` and
 the three pinning tests instead. The freeze working as designed is the point.
 
-**Deliberately still open**, unchanged from Phase 7: the three probed store
-capabilities against deliverable 3 (`CaptureBlobReader`, `RunCatalogReader`,
-`TurnAttemptReader`), `SEPARATION_RATIO = 0.25` as a labelled default,
+**The three probed capabilities stay, now that 003 has landed** (considered
+2026-09-21 and declined, so the question is not re-opened by the next reader).
+`civsim_harness.store.contract.MatchTrackingStore` does publish `list_runs`,
+`get_capture_image` and the attempt read under the names the probes look for, so
+retiring `CaptureBlobReader` / `RunCatalogReader` / `TurnAttemptReader` looks
+free. It is not, for two independent reasons:
+
+1. **It would not be behaviour-preserving.** The probes *are* the graceful
+   degradation: a store without the capability gets a catalog explicitly marked
+   partial, a `503` naming the port gap instead of a placeholder image, and the
+   published-port attempt fallback. Making the three reads mandatory deletes
+   those paths and the tests that hold them (`published_port_only`,
+   `make_store(attempt_reader=False)`). The amended port contract says the same
+   thing from its own side: E1 makes these obligations on *deliverable 3*, and
+   **E2 keeps structural probing as the discovery mechanism** — `civsim_web` can
+   be pointed at the fake or at 002's interim adapter, neither of which is 003.
+2. **Importing 003's contract is forbidden here.**
+   `test_web_parity_boundary.py::test_no_module_imports_the_harness` fails on any
+   `civsim_harness` import from `src/civsim_web/**`, and that guard exists for
+   plan.md's Constitution Check under Principle I.
+
+The conformance question that *is* worth asking — do the probes still bind
+against the real store? — is already answered from 003's side by
+`tests/integration/test_web_against_tracking_store.py`, which asserts the three
+degraded answers are gone when the app runs on a real `SqliteMatchStore`, and
+which states in its own docstring that `civsim_web` is not modified by
+deliverable 3. Nothing to add here.
+
+**Also deliberately still open**, unchanged from Phase 7:
+`SEPARATION_RATIO = 0.25` as a labelled default,
 `ViewReference` carrying no attempt component, and `static/trajectory.js` being
 guarded rather than tested — `static/poll.js` now joins it on the same terms
 (T068), for the same reason research R2 gives.
 
-**Recorded, not tasked**: `/compare` and `/runs` are timed by `test_scale.py`
-only against 30-turn runs, so the five-run × 300-turn composition US4 note 3
-calls the point of the test is not actually measured; and HTML rendering is
-timed for 3 of 13 routes while the module argues HTML is where unbounded loops
-show. Both are SC-008 questions worth a Phase 10 if anyone opens one.
+**~~Recorded, not tasked~~ — escalated to T075 and closed.** This note originally
+read that `/compare` and `/runs` were timed only against 30-turn runs and that
+this was "worth a Phase 10 if anyone opens one". That was the wrong call, and
+re-reading SC-008 is what showed it: the criterion names both halves in one
+sentence — *"a run of 300+ turns **and** 50+ recorded runs"* — so an untimed
+combination is not a coverage preference, it is a success criterion with no test
+behind it. Writing the test found `/runs` five times over budget. **The lesson is
+the phase's own, one layer up**: the nine findings were checks narrower than the
+sentences describing them, and this note was a *note* narrower than the sentence
+describing it. See T075.

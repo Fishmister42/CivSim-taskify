@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from civsim_web.store_client import reads
@@ -51,10 +52,36 @@ __all__ = [
     "CatalogListing",
     "CatalogRow",
     "METRIC_TURN_LIMIT",
+    "MetricsScope",
+    "latest_yields",
     "list_catalog_rows",
     "project_run",
     "yields_by_turn",
 ]
+
+
+class MetricsScope(StrEnum):
+    """How much of a run's metric history a caller actually needs (T075).
+
+    The port publishes no metric-series read, so a run's per-turn numbers cost
+    one ``get_turn_cycle`` *per turn* (plan.md C1). That is unavoidable for a
+    chart and was pure waste for a catalog row, which keeps only the final
+    turn's values -- ``/runs`` was reading 320 turns per run across 55 runs to
+    display 55 numbers, and SC-008 gives every view two seconds.
+
+    Naming the scope rather than passing a bare boolean is deliberate: the
+    difference between these two is a factor of the run length, and a call site
+    should have to say which one it means.
+    """
+
+    SERIES = "series"
+    """Every recorded turn -- what a trajectory is drawn from (``/compare``)."""
+
+    OUTCOME = "outcome"
+    """The last recorded turn only -- what a catalog row shows (``/runs``)."""
+
+    NONE = "none"
+    """No metric reads at all."""
 
 #: Said in the words the page shows (Principle VI -- both readers get the same
 #: sentence about the same limitation).
@@ -157,12 +184,50 @@ def yields_by_turn(
     return collected
 
 
+def latest_yields(
+    store: Any,
+    run_id: str,
+    *,
+    registry: Any,
+    highest_turn: int,
+    gapped_turns: Sequence[int] = (),
+) -> dict[int, dict[str, float]]:
+    """``{turn: values}`` for the last turn of a run that recorded any (T075).
+
+    **The same value ``yields_by_turn`` would have produced, reached without
+    reading every turn to throw all but one away.** ``CatalogRow.outcome_metrics``
+    is ``yields_by_turn[max(yields_by_turn)]``: the highest turn that has a
+    record and non-empty numeric yields. Walking *down* from the same upper
+    bound and stopping at the first turn satisfying that same predicate selects
+    the same turn by construction -- so the catalog column and the chart still
+    come from one source, which is what data-model.md SS1 requires and what the
+    ``outcome_metrics`` docstring exists to protect.
+
+    The gap rule is carried over unchanged: a turn in ``turn_gaps()`` is not
+    read at all, never read and then discarded (data-model.md V4).
+    """
+    from civsim_web.viewmodels.metrics import numeric_yields
+
+    gaps = set(int(turn) for turn in gapped_turns)
+    for turn in range(min(highest_turn, METRIC_TURN_LIMIT), 0, -1):
+        if turn in gaps:
+            continue
+        record = reads.turn_record(store, run_id, turn)
+        if record is None:
+            continue
+        cycle = getattr(record, "turn_cycle", record)
+        values = numeric_yields(cycle, registry=registry)
+        if values:
+            return {turn: values}
+    return {}
+
+
 def project_run(
     store: Any,
     run: Any,
     *,
     registry: Any,
-    with_metrics: bool = True,
+    metrics: MetricsScope = MetricsScope.SERIES,
     with_events: bool = False,
 ) -> CatalogRow:
     """Assemble one catalog row from the port's published reads.
@@ -170,10 +235,19 @@ def project_run(
     ``turn_gaps`` is always read, never optionally: it is one of the two facts
     ``TrendEligibility`` needs, and a row assembled without it can only ever be
     *ineligible, not assessed* (Principle III, ``viewmodels/base.py``).
+
+    ``metrics`` says how much of the run's metric history this caller needs; see
+    ``MetricsScope``. It replaced a ``with_metrics: bool`` whose ``True`` meant
+    "the whole series" for every caller including the one that wanted a single
+    number (T075).
     """
     run_id = str(getattr(run, "run_id", "") or "")
     gaps = reads.turn_gaps(store, run_id)
     turn_count = reads.highest_recorded_turn(store, run_id)
+    read_metrics = {
+        MetricsScope.SERIES: yields_by_turn,
+        MetricsScope.OUTCOME: latest_yields,
+    }.get(MetricsScope(metrics))
     return CatalogRow(
         run=run,
         run_id=run_id,
@@ -181,14 +255,14 @@ def project_run(
         turn_count=turn_count,
         gapped_turns=gaps,
         yields_by_turn=(
-            yields_by_turn(
+            read_metrics(
                 store,
                 run_id,
                 registry=registry,
                 highest_turn=turn_count,
                 gapped_turns=gaps,
             )
-            if with_metrics
+            if read_metrics is not None
             else {}
         ),
         events=reads.list_run_events(store, run_id) if with_events else (),
@@ -200,7 +274,7 @@ def list_catalog_rows(
     *,
     registry: Any,
     run_ids: Sequence[str] | None = None,
-    with_metrics: bool = True,
+    metrics: MetricsScope = MetricsScope.SERIES,
     with_events: bool = False,
 ) -> CatalogListing:
     """The FR-018 projection for every run the port can reach.
@@ -223,7 +297,7 @@ def list_catalog_rows(
             store,
             run,
             registry=registry,
-            with_metrics=with_metrics,
+            metrics=metrics,
             with_events=with_events,
         )
         for run in runs
