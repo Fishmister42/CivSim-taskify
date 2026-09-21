@@ -131,3 +131,16 @@ def test_exclusion_rule_matrix() -> None:
         )
         assert never is not None and never.reason is ExclusionReason.NOT_COMPARABLE
     assert degraded.comparability_status is ComparabilityStatus.VISUALLY_DEGRADED
+
+    # R14 (2026-09-21): a gap-free, comparable record whose game turns never advanced is still
+    # excluded, under its own reason -- the report must not call a stall a gap.
+    stalled = exclusion_for(
+        comparable,
+        RecordCompletenessStatus.COMPLETE,
+        [],
+        include_visually_degraded=False,
+        stalled_turns=[2, 3],
+    )
+    assert stalled is not None
+    assert stalled.reason is ExclusionReason.GAME_TURN_DID_NOT_ADVANCE
+    assert stalled.gaps == (2, 3)

@@ -241,7 +241,8 @@ preparing ──> playing <──> waiting_on_model
 | `is_authoritative` | bool | Exactly one authoritative attempt per `(run, turn)` (FR-047) |
 | `save_point_id` | id | The turn-start quicksave; required (FR-007) |
 | `step_count` | int | Number of decision steps in this attempt; ≥ 1, unbounded above |
-| `outcome` | enum | `ended_by_agent` \| `ended_on_no_progress` \| `abandoned` |
+| `outcome` | enum | `ended_by_agent` \| `end_turn_unconfirmed` \| `ended_on_no_progress` \| `abandoned` |
+| `game_turn_advanced` | bool \| null | Did the *game's* turn counter advance? `false` with `end_turn_unconfirmed`; `null` = not recorded (pre-2026-09-21 records, `abandoned`, and `ended_on_no_progress`, whose end turn is issued after this record is durable) |
 | `final_no_progress_streak` | int | The counter's value when the turn ended; equals the limit iff `ended_on_no_progress` |
 | `visually_degraded` | bool | Derived: true if any step ran without its images (FR-050) |
 | `yields` | object | Per-turn yields and outcomes recorded after execution |
@@ -264,6 +265,12 @@ The turn no longer carries an `observation_id`: observations are per decision st
    tripped. The harness has no third exit — it may not end a turn on its own initiative while the
    agent is making progress, and may not truncate a turn for length or cost (FR-008, FR-014,
    SC-022). `abandoned` is not an ending; it is an attempt that was interrupted and replaced.
+   *(Amended 2026-09-21, research R14, gameplay block 7 `run-480aa573`: the agent's own ending
+   carries two truthful names, not one. `ended_by_agent` means the end turn was dispatched **and**
+   the game confirmed it within the bound; `end_turn_unconfirmed` — with `game_turn_advanced =
+   false` — means it was dispatched and never confirmed. Same exit, same liveness: the harness's
+   turn still advances. This is not a third way to end a turn, and the backstop exit stays exactly
+   as distinguishable as before.)*
 5. **No time or step cap.** `step_count` has no upper bound and `ended_at - started_at` has no
    maximum. A late-game turn of hundreds of steps and hours of wall clock is a valid turn. Any rule
    that ended a turn because it had grown long or expensive would violate FR-014 directly.

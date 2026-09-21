@@ -100,6 +100,7 @@ def make_turn_cycle(
     save_point_id: str,
     outcome: str = "ended_by_agent",
     yields: dict[str, Any] | None = None,
+    game_turn_advanced: bool | None = None,
 ) -> TurnCycle:
     return TurnCycle.model_validate(
         {
@@ -113,6 +114,7 @@ def make_turn_cycle(
             "outcome": outcome,
             "final_no_progress_streak": 0,
             "visually_degraded": False,
+            "game_turn_advanced": game_turn_advanced,
             "yields": yields or {},
             "started_at": at(turn_number),
             "ended_at": at(turn_number),
@@ -122,9 +124,24 @@ def make_turn_cycle(
 
 
 def observation_entries(
-    *, cities: int | None = None, units: int | None = None
+    *, cities: int | None = None, units: int | None = None, game_turn: int | None = None
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
+    if game_turn is not None:
+        # The game's own turn counter, exactly as `catalogs/observations/game.yaml` declares it
+        # -- what `store/completeness.py`'s game-turn rule reads back (research R14).
+        entries.append(
+            {
+                "declaration_id": "game.turn_state",
+                "key": "turn_state",
+                "value": {
+                    "turn_number": game_turn,
+                    "is_local_player_turn": True,
+                    "is_waiting_for_other_players": False,
+                },
+                "context": "InGame",
+            }
+        )
     if cities is not None:
         entries.append(
             {
@@ -248,6 +265,8 @@ def make_turn_cycle_record(
     actions: Sequence[tuple[str, dict[str, Any]]] | None = None,
     cost_usd: float | None = None,
     captures_by_step: dict[int, Sequence[str]] | None = None,
+    game_turn_advanced: bool | None = None,
+    game_turn: int | None = None,
 ) -> TurnCycleRecord:
     turn_cycle_id = f"{run_id}-t{turn_number}-a{attempt_index}"
     indices = step_indices if step_indices is not None else list(range(1, num_steps + 1))
@@ -263,7 +282,7 @@ def make_turn_cycle_record(
                 index,
                 action=action,
                 parameters=parameters,
-                entries=observation_entries(cities=cities, units=units),
+                entries=observation_entries(cities=cities, units=units, game_turn=game_turn),
                 captures=(captures_by_step or {}).get(index, ()),
                 cost_usd=cost_usd,
             )
@@ -278,6 +297,7 @@ def make_turn_cycle_record(
         save_point_id=f"{run_id}-sp{turn_number}-{attempt_index}",
         outcome=outcome,
         yields=yields,
+        game_turn_advanced=game_turn_advanced,
     )
     return TurnCycleRecord(turn_cycle=tc, steps=bundles)
 
@@ -390,6 +410,7 @@ def record_run(
     comparability_status: str = "comparable",
     skip_turns: Sequence[int] = (),
     save_point_only_turns: Sequence[int] = (),
+    game_turn_for: Any = None,
 ) -> Run:
     """Create a run and write ``turns`` turns (each with its quicksave first, per FR-007).
 
@@ -420,6 +441,7 @@ def record_run(
                 units=units,
                 actions=actions_for(turn) if actions_for else None,
                 cost_usd=cost_usd,
+                game_turn=game_turn_for(turn) if game_turn_for else None,
             )
         )
     if lifecycle_state != "playing":

@@ -70,7 +70,7 @@ store's file layout (FR-017, FR-027).
 
 | # | Requirement |
 |---|---|
-| **T1** | `metric_series` excludes, by the store's rule, any run whose completeness is `has_gaps`/`unknown`, whose comparability is `not_comparable`, or which is `visually_degraded` unless the query opted in; every excluded run is named with its reason and its gaps (FR-019, SC-007) |
+| **T1** | `metric_series` excludes, by the store's rule, any run whose record carries game turns that did not advance (`game_turn_did_not_advance`, added 2026-09-21 per research R14 — see data-model.md §3.5), whose completeness is `has_gaps`/`unknown`, whose comparability is `not_comparable`, or which is `visually_degraded` unless the query opted in; every excluded run is named with its reason and its gaps. `trend_exclusion(run_id)` publishes that same verdict for one run (FR-019, SC-007) |
 | **T2** | Metrics are the numeric keys of each turn's recorded `yields` plus derived `city_count` and `unit_count`; a metric the record does not carry yields an empty series with `unavailable_reason` set — never a fabricated zero (FR-018, R4) |
 | **T3** | A non-terminal run's series carries `in_progress=True` (FR-021) |
 | **T4** | `divergence` compares fingerprints over turns both runs hold authoritatively and reports the first unequal turn with every unequal dimension; a run excluded for gaps, unknown completeness or `not_comparable` produces no comparison and is named. Visual degradation concerns images, not the actions compared, so `visually_degraded` runs are admitted to divergence (the report carries no series and needs no opt-in) (FR-020) |

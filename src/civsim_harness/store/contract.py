@@ -276,6 +276,10 @@ class MetricSeries:
 
 class ExclusionReason(StrEnum):
     HAS_GAPS = "has_gaps"
+    #: The record contains turn cycles whose *game* turn never advanced -- an end turn dispatched
+    #: and never confirmed (``end_turn_unconfirmed``), or two consecutive authoritative cycles
+    #: recorded at the same game turn (research R14, revised 2026-09-21; gameplay block 7).
+    GAME_TURN_DID_NOT_ADVANCE = "game_turn_did_not_advance"
     COMPLETENESS_UNKNOWN = "completeness_unknown"
     NOT_COMPARABLE = "not_comparable"
     VISUALLY_DEGRADED = "visually_degraded"
@@ -508,6 +512,18 @@ class MatchTrackingStore(MatchStore, Protocol):
 
     def record_completeness(self, run_id: RunId) -> RecordCompletenessStatus:
         """The store's own gap accounting for this run, as persisted on the ``Run`` (FR-010)."""
+        ...
+
+    def trend_exclusion(
+        self, run_id: RunId, *, include_visually_degraded: bool = False
+    ) -> ExcludedRun | None:
+        """Why this run may not feed trending, or ``None`` if it may (FR-019, Principle III).
+
+        The same verdict :meth:`metric_series` applies internally, published so a listing can
+        show eligibility without requesting a series. Covers a gapped record, an unjudgeable
+        one, comparability, and -- since 2026-09-21 (research R14) -- a record carrying game
+        turns that never advanced.
+        """
         ...
 
     # --- cross-run reads for trending (US3) ---

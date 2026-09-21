@@ -40,6 +40,17 @@ that floor; :func:`record_completeness_status` and ``operator/audit.py``'s ``aud
 both apply it, so the rolled-up status and the audit's own gap enumeration cannot disagree about
 what a branch owes.
 
+**A turn the game never took is a gap in the record too (R14, revised 2026-09-21).**
+``record_completeness_status`` answers "is every turn and every step *present*"; it deliberately
+still does, unchanged. But Principle III's other half -- a run whose turn-by-turn record has gaps
+must not feed trending -- also covers a run whose record contains game turns that did not advance:
+gameplay block 7 (``run-480aa573``) has five consecutive cycles all at game turn 35, each
+recorded ``ended_by_agent``, because each end turn was dispatched and then ``verification_failed``
+after the bound. :func:`turns_whose_game_turn_did_not_advance` is that rule, and
+``store/trends.py``'s ``exclusion_for`` applies it beside ``has_gaps``. It reads both the new
+``TurnCycle.game_turn_advanced`` flag *and* the game turn numbers already recorded in consecutive
+cycles' observations, so historical records are covered without a migration.
+
 **T239 -- the served and persisted value must be this derivation.** ``Run.record_completeness_
 status`` was a constructor constant (fresh runs ``complete``, branches ``unknown``) that nothing
 in production ever re-derived. :func:`refresh_run_completeness` is the derive-and-persist half:
@@ -53,9 +64,19 @@ left behind (Principle III).
 
 from __future__ import annotations
 
-from civsim_harness.models.common import RunId
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+
+from civsim_harness.models.common import DeclarationId, RunId
 from civsim_harness.models.run import RecordCompletenessStatus, Run
+from civsim_harness.models.turn import Observation
 from civsim_harness.store.port import MatchStore
+
+#: The catalog declaration that carries the *game's* own turn counter
+#: (``catalogs/observations/game.yaml``: ``turn_number`` is ``Game.GetCurrentGameTurn()``). It is
+#: the only place a recorded attempt says which game turn it was played on -- ``TurnCycle.
+#: turn_number`` is the *harness's* turn, and the two came apart in gameplay block 7.
+GAME_TURN_STATE_DECLARATION_ID = DeclarationId("game.turn_state")
 
 
 def first_owed_turn(run: Run | None) -> int:
@@ -70,6 +91,82 @@ def first_owed_turn(run: Run | None) -> int:
     if run is not None and run.parent_run_id is not None and run.parent_turn is not None:
         return run.parent_turn
     return 1
+
+
+def game_turn_of(observation: Observation | None) -> int | None:
+    """The *game* turn number *observation* recorded, or ``None`` if it recorded none.
+
+    Read from the ``game.turn_state`` entry and nowhere else -- the same declaration
+    ``turn.end_turn``'s own verification predicate reads back, so "the record's game turn" and
+    "what the harness verified an end turn against" can never be two different numbers.
+    """
+    if observation is None:
+        return None
+    for entry in observation.entries:
+        if entry.declaration_id != GAME_TURN_STATE_DECLARATION_ID:
+            continue
+        value = entry.value
+        if isinstance(value, Mapping):
+            number = value.get("turn_number")
+            if isinstance(number, int) and not isinstance(number, bool):
+                return number
+        return None
+    return None
+
+
+@dataclass(frozen=True)
+class CycleGameTurn:
+    """One authoritative turn attempt, as the game-turn rule below needs to see it.
+
+    ``turn_number`` is the harness's turn; ``game_turn`` is the game's own counter as that
+    attempt's **last recorded observation** saw it (the board the agent was looking at when it
+    decided to end the turn -- the post-end-turn read is never recorded as a step's observation);
+    ``game_turn_advanced`` is the attempt's own flag, ``None`` on a record written before that
+    field existed.
+    """
+
+    turn_number: int
+    game_turn_advanced: bool | None
+    game_turn: int | None
+
+
+def turns_whose_game_turn_did_not_advance(
+    cycles: Sequence[CycleGameTurn],
+) -> tuple[int, ...]:
+    """The harness turns whose attempt did not move the game's own turn counter (R14, 2026-09-21).
+
+    Two independent signals, deliberately, because neither alone covers the record:
+
+    - **The flag.** ``game_turn_advanced is False`` is the writer's own statement that this
+      attempt's end turn was dispatched and never confirmed (``outcome =
+      end_turn_unconfirmed``). It is authoritative where present.
+    - **The recorded game turn numbers.** A cycle whose game turn equals the previous
+      authoritative cycle's played the same game turn twice over. This is what covers records
+      written *before* the flag existed, with no migration and no rewrite: gameplay block 7
+      (``run-480aa573``) recorded five cycles all at game turn 35, every one of them
+      ``ended_by_agent``, and this rule finds them from what is already on disk.
+
+    ``None`` is never read as "yes": an attempt with no flag and no recorded game turn
+    contributes nothing here, and the last *known* game turn stays the baseline for the next
+    comparison rather than being reset -- a run's authoritative game turns are monotonic, so
+    seeing a number twice is a stall however many unrecorded attempts sat between.
+
+    *cycles* must be this run's authoritative attempts in ascending ``turn_number``.
+    """
+    stalled: list[int] = []
+    previous_game_turn: int | None = None
+    for cycle in cycles:
+        if cycle.game_turn_advanced is False:
+            stalled.append(cycle.turn_number)
+        elif (
+            cycle.game_turn is not None
+            and previous_game_turn is not None
+            and cycle.game_turn == previous_game_turn
+        ):
+            stalled.append(cycle.turn_number)
+        if cycle.game_turn is not None:
+            previous_game_turn = cycle.game_turn
+    return tuple(stalled)
 
 
 def record_completeness_status(store: MatchStore, run_id: RunId) -> RecordCompletenessStatus:

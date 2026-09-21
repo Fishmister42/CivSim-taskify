@@ -545,6 +545,81 @@ def test_t1_the_exclusion_rule_is_the_stores_and_the_override_is_recorded(
     assert [e.run_id for e in admitted.excluded] == ["no"]
 
 
+def test_t1_a_run_whose_game_turn_never_advanced_is_not_eligible_for_trending(
+    store: SqliteMatchStore,
+) -> None:
+    """R14, revised 2026-09-21 (gameplay block 7): a gap-free record is not automatically a
+    trendable one.
+
+    ``run-480aa573`` recorded five turn cycles all at game turn 35 -- every turn present, every
+    step present, ``record_completeness`` ``complete`` -- because each end turn was dispatched
+    and never confirmed. Trending that run would average a stall in with real play, which is
+    what Constitution Principle III excludes a gapped record for. So the store excludes it too,
+    under its own reason rather than dressed up as ``has_gaps``.
+
+    Asserted on **the flag** here: the cycle that recorded ``game_turn_advanced=False`` is
+    named, and nothing else about the run is wrong.
+    """
+    record_run(store, "ok", turns=3, seed_set_id="ss", lifecycle_state="finished")
+    record_run(store, "stalled", turns=3, seed_set_id="ss", lifecycle_state="finished")
+    store.mark_turn_superseded("stalled", 2, 0)
+    store.write_turn_cycle(
+        make_turn_cycle_record(
+            "stalled", 2, 1, outcome="end_turn_unconfirmed", game_turn_advanced=False
+        )
+    )
+
+    # The record itself has no gaps -- the two questions are genuinely independent.
+    assert store.record_completeness("stalled") is RecordCompletenessStatus.COMPLETE
+
+    assert store.trend_exclusion("ok") is None
+    exclusion = store.trend_exclusion("stalled")
+    assert exclusion is not None
+    assert exclusion.reason is ExclusionReason.GAME_TURN_DID_NOT_ADVANCE
+    assert exclusion.gaps == (2,)
+
+    response = store.metric_series(TrendQuery(seed_set_id="ss"))
+    assert [s.run_id for s in response.series] == ["ok"] or not response.series
+    assert [e.reason for e in response.excluded] == [ExclusionReason.GAME_TURN_DID_NOT_ADVANCE]
+
+
+def test_t1_the_same_game_turn_twice_is_caught_without_the_flag_or_a_migration(
+    store: SqliteMatchStore,
+) -> None:
+    """The derived half of the rule, which is what covers the records already on disk.
+
+    Block 7's five cycles predate ``TurnCycle.game_turn_advanced`` entirely: their JSON has no
+    such key and the store answers ``None`` for it. What they *do* carry is the game's own turn
+    number in each step's ``game.turn_state`` observation -- 35, five times over -- so the rule
+    reads consecutive authoritative cycles' recorded game turns and finds the stall there. No
+    column, no backfill, no rewrite of a historical record.
+
+    The control matters as much as the finding: a run whose game turn advances every turn,
+    written exactly the same way and equally without the flag, stays eligible.
+    """
+    record_run(store, "moving", turns=4, game_turn_for=lambda turn: 30 + turn)
+    record_run(store, "block7", turns=5, game_turn_for=lambda _turn: 35)
+
+    # Neither run recorded the flag at all -- this is the 002-era shape, unmigrated.
+    for run_id in ("moving", "block7"):
+        record = store.get_turn_cycle(run_id, 1)
+        assert record is not None and record.turn_cycle.game_turn_advanced is None
+
+    assert store.trend_exclusion("moving") is None
+    exclusion = store.trend_exclusion("block7")
+    assert exclusion is not None
+    assert exclusion.reason is ExclusionReason.GAME_TURN_DID_NOT_ADVANCE
+    # Turn 1 set the baseline; turns 2-5 each replayed game turn 35.
+    assert exclusion.gaps == (2, 3, 4, 5)
+
+
+def test_t1_trend_exclusion_names_a_run_the_store_does_not_hold(
+    store: SqliteMatchStore,
+) -> None:
+    exclusion = store.trend_exclusion("never-recorded")
+    assert exclusion is not None and exclusion.reason is ExclusionReason.NO_SUCH_RUN
+
+
 def test_t2_a_metric_the_record_never_carries_is_unavailable_not_zero(
     store: SqliteMatchStore,
 ) -> None:

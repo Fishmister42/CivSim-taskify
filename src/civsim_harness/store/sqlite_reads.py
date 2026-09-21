@@ -40,7 +40,12 @@ from civsim_harness.models.records import (
 from civsim_harness.models.run import LifecycleState, RecordCompletenessStatus, Run
 from civsim_harness.models.turn import Observation, ScreenCapture, ScreeningStatus, TurnCycle
 from civsim_harness.store import schema as store_schema
-from civsim_harness.store.completeness import first_owed_turn
+from civsim_harness.store.completeness import (
+    CycleGameTurn,
+    first_owed_turn,
+    game_turn_of,
+    turns_whose_game_turn_did_not_advance,
+)
 from civsim_harness.store.contract import (
     CaptureImage,
     CaptureImageStatus,
@@ -704,14 +709,67 @@ class SqliteReadBase:
         ).fetchall()
         return [Run.model_validate_json(row[0]) for row in rows], excluded
 
+    def _stalled_turns_body(self, conn: sqlite3.Connection, run: Run) -> tuple[int, ...]:
+        """``store/completeness.py``'s game-turn rule, on this connection (R14, 2026-09-21).
+
+        One row per authoritative attempt from the run's owed floor, carrying the recorded flag
+        (read out of the stored ``TurnCycle`` JSON -- no column, so a 002-era file answers
+        ``NULL`` rather than failing) and that attempt's **last** step's observation, which is
+        where the game's own turn number lives. Same shape and cost as ``_metrics_by_turn``.
+        """
+        rows = conn.execute(
+            "SELECT turn_number, turn_cycle_id, "
+            "json_extract(turn_json, '$.game_turn_advanced') "
+            "FROM turn_cycles WHERE run_id = ? AND is_authoritative = 1 AND turn_number >= ? "
+            "ORDER BY turn_number ASC",
+            (run.run_id, first_owed_turn(run)),
+        ).fetchall()
+        cycles = [
+            CycleGameTurn(
+                turn_number=int(turn_number),
+                # SQLite has no boolean: json_extract gives 1/0 for a stored true/false and
+                # None both for a stored null and for a record that never carried the key.
+                game_turn_advanced=None if advanced is None else bool(advanced),
+                game_turn=game_turn_of(self._last_observation(conn, str(turn_cycle_id))),
+            )
+            for turn_number, turn_cycle_id, advanced in rows
+        ]
+        return turns_whose_game_turn_did_not_advance(cycles)
+
     def _admit(
         self, conn: sqlite3.Connection, run: Run, *, include_visually_degraded: bool
     ) -> ExcludedRun | None:
         completeness = self._derive_completeness_body(conn, run.run_id)
         gaps = self._turn_gaps_body(conn, run.run_id)
         return exclusion_for(
-            run, completeness, gaps, include_visually_degraded=include_visually_degraded
+            run,
+            completeness,
+            gaps,
+            include_visually_degraded=include_visually_degraded,
+            stalled_turns=self._stalled_turns_body(conn, run),
         )
+
+    def trend_exclusion(
+        self, run_id: RunId, *, include_visually_degraded: bool = False
+    ) -> ExcludedRun | None:
+        """Why this run may not feed trending, or ``None`` if it may (FR-019, Principle III).
+
+        The same verdict ``metric_series`` applies when it decides what to include, published as
+        its own read so an operator listing can show a run's eligibility without asking for a
+        metric series first. A run the store does not know is excluded as ``no_such_run``.
+        """
+
+        def body(conn: sqlite3.Connection) -> ExcludedRun | None:
+            run = self._get_run_body(conn, run_id)
+            if run is None:
+                return ExcludedRun(
+                    run_id=run_id,
+                    reason=ExclusionReason.NO_SUCH_RUN,
+                    detail="no run with this id is recorded",
+                )
+            return self._admit(conn, run, include_visually_degraded=include_visually_degraded)
+
+        return self._with_lock(body)
 
     def _metrics_by_turn(self, conn: sqlite3.Connection, run: Run) -> dict[int, dict[str, float]]:
         """``{turn: metrics}`` over the run's authoritative turns from its owed floor (T2)."""

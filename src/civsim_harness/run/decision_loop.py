@@ -7,8 +7,10 @@ asked to commit to a later decision before it has seen the result of the earlier
 invariants I13, I14).
 
 **The loop exits on exactly two conditions and no others** (T112): the agent's own decision names
-the declared end-turn action (``outcome = ended_by_agent``), or the no-progress backstop
-(``run/no_progress.py``) trips (``outcome = ended_on_no_progress``). :func:`run_decision_loop`'s
+the declared end-turn action (``outcome = ended_by_agent`` when the game confirmed it within the
+bound, ``end_turn_unconfirmed`` when it did not -- one exit, two truthful names; see the exit
+itself), or the no-progress backstop (``run/no_progress.py``) trips
+(``outcome = ended_on_no_progress``). :func:`run_decision_loop`'s
 body is a single ``while True:`` with exactly two ``return`` statements, both guarded by one of
 those two conditions -- there is no wall-clock check, no step-count check, and no cost check
 anywhere in this module, and there must never be one added. ``tests/unit/test_no_truncation.py``
@@ -285,12 +287,26 @@ def _run_forbidden_literals(ctx: DecisionLoopContext) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class DecisionLoopResult:
     """The finished loop's output, ready for ``run/turn_cycle.py`` to persist as one
-    ``TurnCycleRecord`` (T117). ``outcome`` is exactly one of the two T112 permits."""
+    ``TurnCycleRecord`` (T117).
+
+    ``outcome`` is one of the three this loop can reach. Two are T112's own exits -- the agent's
+    end-turn decision and the no-progress backstop -- and the third,
+    :attr:`~civsim_harness.models.turn.TurnOutcome.END_TURN_UNCONFIRMED`, is the *same* exit as
+    the first with a different, truthful name: the agent decided to end the turn and the order
+    was dispatched, but the game never confirmed it within the bound. T112's rule that the loop
+    exits on exactly two conditions is untouched; what the record says about one of them is not.
+    """
 
     outcome: TurnOutcome
     steps: tuple[DecisionStepBundle, ...]
     final_no_progress_streak: int
     events: tuple[RunEvent, ...]
+    game_turn_advanced: bool | None = None
+    """What :attr:`~civsim_harness.models.turn.TurnCycle.game_turn_advanced` this attempt records.
+
+    Known here and nowhere else: this is the only place that saw the end turn's own verification.
+    ``None`` on the backstop exit, where the end turn has not even been issued yet (it is
+    ``run/turn_cycle.py``'s to issue, strictly after the record is durable)."""
 
 
 @dataclass(frozen=True)
@@ -915,15 +931,36 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             execution.rejection_reason is not RejectionReason.UNAVAILABLE_TO_HUMAN_NOW
         )
         if end_turn_reached_the_game:
+            # MEASURED (2026-09-21, gameplay block 7, run-480aa573): five turn cycles, all at
+            # game turn 35, each recorded `ended_by_agent` -- every one of them an end turn that
+            # was dispatched and then `verification_failed` after the 45 s bound above. The
+            # harness's turn had ended; the game's had not; and the record said the agent ended
+            # it. R14's old rule ("decision was end_turn => ended_by_agent, whatever verification
+            # said") was written to stop a slow AI round being split across two records, and the
+            # bounded re-read above already solves that case honestly -- so past the bound the
+            # right answer is not to assume, it is to say so.
+            #
+            # Owner's ruling (2026-09-21): record the truth and keep the liveness. An end turn
+            # dispatched but unconfirmed is `end_turn_unconfirmed` with `game_turn_advanced=False`
+            # -- never `ended_by_agent` -- and the harness's own turn still advances (this return)
+            # so the loop cannot spin. The store's trending-eligibility rule then excludes a run
+            # carrying such a cycle, exactly as it excludes one whose record has gaps
+            # (`store/completeness.py`, Constitution Principle III).
+            end_turn_confirmed = execution.outcome is ExecutionOutcome.APPLIED
             # The turn's final fresh read (taken to verify the end-turn effect, I14) never
             # serves another decision, so its capture reached no request -- persisted un-shown,
             # which is the truth of what happened (T238).
             ctx.store.write_capture(next_fresh.step_capture.capture, next_fresh.step_capture.blob)
             return DecisionLoopResult(
-                outcome=TurnOutcome.ENDED_BY_AGENT,
+                outcome=(
+                    TurnOutcome.ENDED_BY_AGENT
+                    if end_turn_confirmed
+                    else TurnOutcome.END_TURN_UNCONFIRMED
+                ),
                 steps=tuple(steps),
                 final_no_progress_streak=tracker.streak,
                 events=tuple(events),
+                game_turn_advanced=end_turn_confirmed,
             )
 
         if tracker.tripped:

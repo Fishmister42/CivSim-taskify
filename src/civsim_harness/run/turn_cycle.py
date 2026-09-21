@@ -29,17 +29,22 @@ turn.yaml``'s ``turn.end_turn``), when the agent's own decision names it, alread
 the T110 loop -- dispatched and verified through the exact same ``act.dispatch``/``act.verify``
 pipeline as every other decision (FR-008: "recorded like any other decision"), which is also why
 the loop can end on that decision regardless of whether its own verification reported ``applied``
-or ``rejected`` (the loop watches the agent's *decision*, per research R14's pseudocode "decision
-was end_turn => ended_by_agent", not the outcome of dispatching it -- see
-``run/decision_loop.py``) -- with one measured exception: an end-turn decision the dispatcher
+or ``rejected`` (the loop watches the agent's *decision*, not the outcome of dispatching it -- see
+``run/decision_loop.py``) -- with two measured exceptions. An end-turn decision the dispatcher
 refused *before* it reached the game (``unavailable_to_human_now``, e.g. a blocking prompt is up)
 ended nothing, so the loop treats it as any other refused step and continues (gameplay block 4,
 2026-09-21: three "ended_by_agent" turns at the same game turn under an unacknowledged popup).
+And an end turn that *was* dispatched but that the game never confirmed within its bound ends this
+module's turn all the same -- the liveness half of R14 -- but is recorded ``end_turn_unconfirmed``
+with ``game_turn_advanced=False`` rather than ``ended_by_agent`` (gameplay block 7, 2026-09-21:
+five cycles all at game turn 35, every one of them recorded as the agent's own ending).
 What this module's own "end turn" phase performs, strictly after the
 acknowledged store commit, is the *harness's own* seal on the attempt: advancing through
 ``store.guard`` is what turns "the record is durable" into "the run may now be told this turn is
-over." No further Nexus dispatch happens here for the ``ended_by_agent`` case, because none is
-needed.
+over." No further Nexus dispatch happens here for the ``ended_by_agent`` or
+``end_turn_unconfirmed`` cases, because in both the order already left the harness -- re-issuing
+it for the unconfirmed one would be a second end turn against a client that may simply have been
+slow.
 
 **``ended_on_no_progress`` does need one, and this module is where it happens.** T113 forbids
 synthesising an ``end_turn`` *decision* to represent the backstop -- no step in that attempt ever
@@ -640,6 +645,10 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
         outcome=result.outcome,
         final_no_progress_streak=result.final_no_progress_streak,
         visually_degraded=any(bundle.step.visually_degraded for bundle in result.steps),
+        # R14 (revised 2026-09-21, gameplay block 7): whether the *game's* turn advanced is the
+        # loop's own finding -- it is the only thing that saw the end turn's verification. None
+        # on the backstop exit, where the end turn has not been issued yet (see _end_turn below).
+        game_turn_advanced=result.game_turn_advanced,
         yields=deps.compute_yields(result),
         started_at=started_at,
         ended_at=ended_at,
@@ -655,15 +664,18 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
         deps.store.write_run_event(event)
 
     async def _end_turn(token: TurnPersistedToken) -> TurnCycleId:
-        # The actual Game.EndTurn()-equivalent Lua dispatch, when this attempt ended_by_agent,
-        # already happened inside the loop as the agent's own decision (see module docstring) --
-        # this branch is the harness's own write-before-advance seal, nothing more.
-        if result.outcome is TurnOutcome.ENDED_BY_AGENT:
-            return token.turn_cycle_id
         # ended_on_no_progress (T113/T114): nothing inside the loop ever told the game the turn
         # is over -- this module, and only this module, now does, as the harness itself rather
         # than a fabricated agent decision. See _dispatch_backstop_end_turn.
-        return await _dispatch_backstop_end_turn(deps, turn_cycle_id=token.turn_cycle_id)
+        if result.outcome is TurnOutcome.ENDED_ON_NO_PROGRESS:
+            return await _dispatch_backstop_end_turn(deps, turn_cycle_id=token.turn_cycle_id)
+        # ended_by_agent *and* end_turn_unconfirmed: the actual Game.EndTurn()-equivalent Lua
+        # dispatch already happened inside the loop as the agent's own decision (see module
+        # docstring), so this branch is the harness's own write-before-advance seal, nothing
+        # more. Re-issuing it for the unconfirmed case would be a second end turn against a
+        # client that may simply have been slow -- the record says it was not confirmed, which
+        # is the honest answer, and the run keeps its liveness either way (R14, 2026-09-21).
+        return token.turn_cycle_id
 
     # write_then_advance itself stays the plain, synchronous guard defined in store/guard.py --
     # persist_turn_before_advance's write already runs to completion, synchronously, before

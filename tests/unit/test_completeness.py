@@ -20,8 +20,11 @@ from civsim_harness.models.records import ModelCall, SavePoint
 from civsim_harness.models.run import RecordCompletenessStatus, Run
 from civsim_harness.models.turn import DecisionStep, Observation, TurnCycle
 from civsim_harness.store.completeness import (
+    CycleGameTurn,
+    game_turn_of,
     record_completeness_status,
     refresh_run_completeness,
+    turns_whose_game_turn_did_not_advance,
 )
 from civsim_harness.store.port import DecisionStepBundle, TurnCycleRecord
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
@@ -476,3 +479,104 @@ def test_refresh_run_completeness_is_a_no_op_for_a_run_the_store_does_not_know(
         is RecordCompletenessStatus.UNKNOWN
     )
     assert store.get_run("never-persisted") is None  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------
+# The game-turn rule (R14, revised 2026-09-21 after gameplay block 7): pure,
+# and asserted on its own so the two signals it reads cannot silently merge.
+# --------------------------------------------------------------------------
+
+
+def _cycle(
+    turn: int, *, advanced: bool | None = None, game_turn: int | None = None
+) -> CycleGameTurn:
+    return CycleGameTurn(turn_number=turn, game_turn_advanced=advanced, game_turn=game_turn)
+
+
+def _observation(*, entries: list[dict[str, object]]) -> Observation:
+    return Observation.model_validate(
+        {
+            "observation_id": "obs-gt",
+            "decision_step_id": "step-gt",
+            "assembled_at": NOW,
+            "catalog_version": _catalog_ref(),
+            "entries": entries,
+            "captures": [],
+            "screen_identity": "world",
+        }
+    )
+
+
+def test_the_flag_alone_names_the_turn_whose_game_turn_did_not_advance() -> None:
+    cycles = [
+        _cycle(1, advanced=True, game_turn=35),
+        _cycle(2, advanced=False, game_turn=35),
+        _cycle(3, advanced=True, game_turn=36),
+    ]
+    assert turns_whose_game_turn_did_not_advance(cycles) == (2,)
+
+
+def test_consecutive_cycles_at_the_same_game_turn_are_caught_without_any_flag() -> None:
+    """Block 7's own shape, and the reason the rule reads the recorded numbers as well: those
+    five cycles predate the flag entirely, so ``game_turn_advanced`` is ``None`` on every one of
+    them and only the repeated game turn 35 gives them away. No migration is involved."""
+    block7 = [_cycle(turn, game_turn=35) for turn in range(1, 6)]
+    assert turns_whose_game_turn_did_not_advance(block7) == (2, 3, 4, 5)
+
+
+def test_a_run_whose_game_turn_advances_every_turn_is_never_flagged() -> None:
+    """The false-positive floor: a rule that fires on ordinary play would disqualify every run."""
+    healthy = [_cycle(turn, game_turn=30 + turn) for turn in range(1, 8)]
+    assert turns_whose_game_turn_did_not_advance(healthy) == ()
+    with_flags = [_cycle(turn, advanced=True, game_turn=30 + turn) for turn in range(1, 8)]
+    assert turns_whose_game_turn_did_not_advance(with_flags) == ()
+
+
+def test_an_unrecorded_game_turn_is_never_read_as_agreement() -> None:
+    """``None`` means *not recorded*, in both signals. A cycle carrying neither contributes
+    nothing -- and the last *known* game turn stays the baseline across it, because a run's
+    authoritative game turns are monotonic: seeing 35 again after an unrecorded attempt still
+    means the game did not move."""
+    assert turns_whose_game_turn_did_not_advance([_cycle(1), _cycle(2), _cycle(3)]) == ()
+    across_a_hole = [_cycle(1, game_turn=35), _cycle(2), _cycle(3, game_turn=35)]
+    assert turns_whose_game_turn_did_not_advance(across_a_hole) == (3,)
+
+
+def test_game_turn_of_reads_the_declared_entry_and_nothing_else() -> None:
+    assert game_turn_of(None) is None
+    assert game_turn_of(_observation(entries=[])) is None
+    # A different declaration carrying a turn_number is not the game's turn counter.
+    assert (
+        game_turn_of(
+            _observation(
+                entries=[
+                    {
+                        "declaration_id": "units.state",
+                        "key": "units",
+                        "value": {"turn_number": 35},
+                        "context": "InGame",
+                    }
+                ]
+            )
+        )
+        is None
+    )
+    assert (
+        game_turn_of(
+            _observation(
+                entries=[
+                    {
+                        "declaration_id": "game.turn_state",
+                        "key": "turn_state",
+                        "value": {
+                            "turn_number": 35,
+                            "is_local_player_turn": True,
+                            "is_waiting_for_other_players": False,
+                        },
+                        "context": "InGame",
+                    }
+                ]
+            )
+        )
+        == 35
+    )

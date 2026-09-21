@@ -12,7 +12,10 @@ attempt's final observation, ``city_count`` and ``unit_count`` (the lengths of `
 an absent count is ``None``, never zero.
 
 **The exclusion rule is the store's** (FR-019). :func:`exclusion_for` is the one definition both
-reads apply.
+reads apply. Since 2026-09-21 it excludes one more thing beside a gapped record: a run whose
+authoritative cycles contain game turns that never advanced (research R14, gameplay block 7) --
+the rule itself lives in ``store/completeness.py`` and its verdict arrives here as
+*stalled_turns*.
 """
 
 from __future__ import annotations
@@ -181,8 +184,29 @@ def exclusion_for(
     gaps: Sequence[int],
     *,
     include_visually_degraded: bool,
+    stalled_turns: Sequence[int] = (),
 ) -> ExcludedRun | None:
-    """The store's exclusion rule (T1, FR-019): ``None`` when the run may contribute."""
+    """The store's exclusion rule (T1, FR-019): ``None`` when the run may contribute.
+
+    *stalled_turns* is ``store/completeness.py``'s
+    :func:`~civsim_harness.store.completeness.turns_whose_game_turn_did_not_advance` over this
+    run's authoritative attempts -- harness turns whose *game* turn never moved. Such a run is
+    excluded for the same reason a ``has_gaps`` one is (Constitution Principle III): its
+    turn-by-turn record does not describe turns the game actually played, so trending it would
+    average a stall in with real play. Checked first and separately from ``has_gaps``, because
+    the two say different things and the report must name which one happened.
+    """
+    if stalled_turns:
+        return ExcludedRun(
+            run_id=run.run_id,
+            reason=ExclusionReason.GAME_TURN_DID_NOT_ADVANCE,
+            detail=(
+                "the game's own turn did not advance on harness turns "
+                f"{list(stalled_turns)} (an end turn dispatched but never confirmed, or "
+                "consecutive attempts recorded at the same game turn)"
+            ),
+            gaps=tuple(stalled_turns),
+        )
     if completeness is RecordCompletenessStatus.HAS_GAPS:
         return ExcludedRun(
             run_id=run.run_id,

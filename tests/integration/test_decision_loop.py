@@ -447,7 +447,11 @@ async def test_self_cancellation_both_steps_recorded_and_yields_reflect_resultin
     finally:
         store.close()
 
-    assert outcome.outcome is TurnOutcome.ENDED_BY_AGENT
+    # The end turn here is `test.stuck`: dispatched, and its own readback never confirms it.
+    # R14 (revised 2026-09-21, gameplay block 7): that is `end_turn_unconfirmed`, never
+    # `ended_by_agent` -- see the dedicated pair of tests below. This test's subject is the
+    # self-cancellation either side of it.
+    assert outcome.outcome is TurnOutcome.END_TURN_UNCONFIRMED
     # The tick and the untick cancelled out; the game ends this turn exactly where it started.
     assert game.turn_number == 1
 
@@ -472,6 +476,123 @@ async def test_self_cancellation_both_steps_recorded_and_yields_reflect_resultin
         assert record.turn_cycle.yields == {"final_turn_number": 1}
     finally:
         store2.close()
+
+
+async def test_a_dispatched_but_unconfirmed_end_turn_is_recorded_as_such_and_the_turn_advances(
+    tmp_path: Path,
+) -> None:
+    """R14, revised 2026-09-21 -- the owner's ruling after gameplay block 7.
+
+    MEASURED: ``run-480aa573`` recorded five turn cycles **all at game turn 35**, each one
+    ``ended_by_agent``, because each end turn was dispatched and then ``verification_failed``
+    after the 45 s bound. The harness's turn had ended; the game's had not; and the record said
+    the agent ended it -- which is the one thing Principle III forbids it to say.
+
+    Both halves of the ruling are asserted here, because dropping either one is a regression:
+
+    1. **Record the truth.** The cycle is ``end_turn_unconfirmed`` with
+       ``game_turn_advanced=False``, not ``ended_by_agent``.
+    2. **Keep the liveness.** The *harness's* turn still advances, so the loop cannot spin: the
+       attempt is authoritative, the provider is not asked again, and the next harness turn runs
+       and records normally against the very same stuck client.
+
+    ``test.stuck`` is the stuck end turn: it dispatches (``availability_predicate: true``) and
+    its verification predicate (``turn_number + 1``) never holds, which is exactly the live
+    shape -- an order the game accepted and never confirmed.
+    """
+    run_id = RunId("run-end-turn-unconfirmed")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    game = _FakeGame()
+    provider = FakeModelProvider()
+    provider.queue_decision(_plain_decision(STUCK_DECLARATION_ID, is_end_turn=True))
+    provider.queue_decision(_plain_decision(STUCK_DECLARATION_ID, is_end_turn=True))
+
+    try:
+        first = await run_turn_cycle(
+            _make_deps(
+                tmp_path=tmp_path,
+                run_id=run_id,
+                turn_number=1,
+                store=store,
+                game=game,
+                provider=provider,
+                no_progress_step_limit=5,
+            ),
+            run=run,
+        )
+
+        assert first.outcome is TurnOutcome.END_TURN_UNCONFIRMED
+        record = store.get_turn_cycle(run_id, 1)
+        assert record is not None
+        assert record.turn_cycle.outcome is TurnOutcome.END_TURN_UNCONFIRMED
+        assert record.turn_cycle.game_turn_advanced is False
+        # The attempt is a real, authoritative turn record -- the harness's turn ended.
+        assert record.turn_cycle.is_authoritative is True
+        assert record.turn_cycle.step_count == 1
+        # ...and the loop exited on that decision rather than spinning for more of them.
+        assert len(provider.calls) == 1
+
+        # Liveness, concretely: the next harness turn runs against the same stuck game.
+        second = await run_turn_cycle(
+            _make_deps(
+                tmp_path=tmp_path,
+                run_id=run_id,
+                turn_number=2,
+                store=store,
+                game=game,
+                provider=provider,
+                no_progress_step_limit=5,
+            ),
+            run=run,
+        )
+        assert second.outcome is TurnOutcome.END_TURN_UNCONFIRMED
+        assert store.get_turn_cycle(run_id, 2) is not None
+        # The game never moved: both cycles were played on the same game turn, which is the
+        # fact the store's trending-eligibility rule reads back (store/completeness.py).
+        assert game.turn_number == 1
+    finally:
+        store.close()
+
+
+async def test_an_end_turn_the_game_confirms_still_records_ended_by_agent(
+    tmp_path: Path,
+) -> None:
+    """The complement, and the reason ``end_turn_unconfirmed`` is worth having: a confirmed end
+    turn is unchanged. ``test.tick`` advances the counter, so the declared readback holds on the
+    first re-read and the attempt records ``ended_by_agent`` with ``game_turn_advanced=True`` --
+    no new value, no flag, nothing for the eligibility rule to exclude."""
+    run_id = RunId("run-end-turn-confirmed")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    provider = FakeModelProvider()
+    provider.queue_decision(_plain_decision(TICK_DECLARATION_ID, is_end_turn=True))
+
+    try:
+        outcome = await run_turn_cycle(
+            _make_deps(
+                tmp_path=tmp_path,
+                run_id=run_id,
+                turn_number=1,
+                store=store,
+                game=_FakeGame(),
+                provider=provider,
+                no_progress_step_limit=5,
+            ),
+            run=run,
+        )
+
+        assert outcome.outcome is TurnOutcome.ENDED_BY_AGENT
+        record = store.get_turn_cycle(run_id, 1)
+        assert record is not None
+        assert record.turn_cycle.outcome is TurnOutcome.ENDED_BY_AGENT
+        assert record.turn_cycle.game_turn_advanced is True
+    finally:
+        store.close()
 
 
 class _LeakingGame(_FakeGame):

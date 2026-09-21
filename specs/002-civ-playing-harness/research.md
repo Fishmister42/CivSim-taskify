@@ -526,8 +526,9 @@ turn start
           execute   — dispatch through the action catalog
           verify    — read back game state against the action's verification predicate
           account   — changed state? reset no-progress counter. rejected or no change? increment
-          exit?     — decision was end_turn  ⇒ ended_by_agent
-                      counter == limit       ⇒ ended_on_no_progress
+          exit?     — decision was end_turn, game confirmed it  ⇒ ended_by_agent
+                      decision was end_turn, never confirmed    ⇒ end_turn_unconfirmed
+                      counter == limit                         ⇒ ended_on_no_progress
      └─ persist the whole turn (fails ⇒ run halts)
         └─ issue the end-turn action
 ```
@@ -548,6 +549,28 @@ turn start
 3. **End-turn is a declared catalog action, not harness control flow.** It is dispatched, recorded,
    and distinguishable from a backstop exit (FR-008, SC-022). A turn in which the agent ends
    immediately without acting is a valid one-step turn, not a failure.
+
+   **Amended 2026-09-21 (owner's ruling; gameplay block 7, `run-480aa573`).** This note used to say
+   the loop ends `ended_by_agent` on the agent's end-turn *decision*, whatever its verification
+   reported — written so a slow AI round could not be split across two records. Block 7 showed what
+   that costs: five turn cycles, all at game turn 35, every one recorded `ended_by_agent`, each one
+   an end turn that was dispatched and then `verification_failed` after the 45 s confirmation
+   bound. The harness's turn had ended; the game's had not; and the record claimed the agent ended
+   it. The bounded re-read already covers the slow-round case honestly, so past the bound the rule
+   is now **record the truth and keep the liveness**:
+
+   - An end turn dispatched but not confirmed within the bound is **`end_turn_unconfirmed`**, with
+     `game_turn_advanced = false` on the turn cycle — never `ended_by_agent`.
+   - The *harness's* own turn still advances on that outcome, so the loop cannot spin. That is the
+     liveness half of this note and it is unchanged. `run/turn_cycle.py` issues no second end turn
+     for it: the order already left the harness.
+   - An end turn the dispatcher refused *before* it reached the game ended nothing and is a refused
+     step like any other (amended earlier the same day, gameplay block 4).
+   - The store's trending-eligibility rule excludes a run carrying such a cycle, exactly as it
+     excludes one whose record has gaps (Constitution Principle III). It reads both the new flag and
+     the game turn numbers already recorded in consecutive cycles' observations, so block 7's own
+     five cycles are covered without a migration — see
+     `specs/003-match-tracking-store/data-model.md` §3.5.
 
 4. **No-progress is counted, not timed.** The counter increments on a step whose decision was
    rejected *or* whose verification showed no game-state change, and resets to zero on any step

@@ -41,10 +41,21 @@ from civsim_harness.models.common import (
 
 
 class TurnOutcome(StrEnum):
-    """How a turn attempt ended. ``abandoned`` is not an ending; see class docs."""
+    """How a turn attempt ended. ``abandoned`` is not an ending; see class docs.
+
+    ``end_turn_unconfirmed`` is the agent's own end turn **dispatched but never confirmed**
+    (research R14, revised 2026-09-21 after gameplay block 7): the harness's turn ended, the
+    game's did not, and the record must not claim the agent ended it. It is a distinct value
+    rather than a flag on ``ended_by_agent`` precisely so no reader can mistake the two -- block
+    7 (``run-480aa573``) recorded five consecutive ``ended_by_agent`` cycles at game turn 35,
+    each one an end turn that was dispatched and then ``verification_failed`` after the 45 s
+    bound. The harness's own turn still advances on this outcome, so the loop cannot spin; what
+    changes is what the record says happened.
+    """
 
     ENDED_BY_AGENT = "ended_by_agent"
     ENDED_ON_NO_PROGRESS = "ended_on_no_progress"
+    END_TURN_UNCONFIRMED = "end_turn_unconfirmed"
     ABANDONED = "abandoned"
 
 
@@ -75,6 +86,25 @@ class TurnCycle(HarnessModel):
     final_no_progress_streak: int = Field(ge=0)
     # Derived: true if any step in this attempt ran without its images (FR-050).
     visually_degraded: bool
+    game_turn_advanced: bool | None = None
+    """Did the *game's* own turn counter advance as a result of this attempt (research R14,
+    revised 2026-09-21)?
+
+    ``True`` only when the agent's end turn was dispatched **and** confirmed by the declared
+    readback within its bound; ``False`` when it was dispatched and never confirmed
+    (``outcome = end_turn_unconfirmed``). ``None`` means *not recorded*, and is the honest answer
+    in three cases, never a stand-in for ``True``: a record written before this field existed
+    (block 7's own five cycles at game turn 35), an ``abandoned`` attempt that never reached an
+    ending at all, and ``ended_on_no_progress`` -- whose harness-issued end turn is dispatched by
+    ``run/turn_cycle.py`` strictly *after* this record is already durable (invariant I3), so the
+    answer is genuinely unknown at write time and its failure surfaces as
+    ``BackstopEndTurnNotConfirmed`` instead.
+
+    Optional with a ``None`` default so a 002-era record still validates unchanged: the store
+    file keeps the whole ``TurnCycle`` as JSON, so no column and no migration are involved, and
+    the trending-eligibility rule (``store/completeness.py``) covers the historical ``None`` case
+    by comparing consecutive cycles' recorded game turn numbers instead.
+    """
     yields: dict[str, Any] = Field(default_factory=dict)
     started_at: Timestamp
     ended_at: Timestamp

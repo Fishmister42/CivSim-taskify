@@ -1,10 +1,11 @@
 {
   "$defs": {
     "TurnOutcome": {
-      "description": "How a turn attempt ended. ``abandoned`` is not an ending; see class docs.",
+      "description": "How a turn attempt ended. ``abandoned`` is not an ending; see class docs.\n\n``end_turn_unconfirmed`` is the agent's own end turn **dispatched but never confirmed**\n(research R14, revised 2026-09-21 after gameplay block 7): the harness's turn ended, the\ngame's did not, and the record must not claim the agent ended it. It is a distinct value\nrather than a flag on ``ended_by_agent`` precisely so no reader can mistake the two -- block\n7 (``run-480aa573``) recorded five consecutive ``ended_by_agent`` cycles at game turn 35,\neach one an end turn that was dispatched and then ``verification_failed`` after the 45 s\nbound. The harness's own turn still advances on this outcome, so the loop cannot spin; what\nchanges is what the record says happened.",
       "enum": [
         "ended_by_agent",
         "ended_on_no_progress",
+        "end_turn_unconfirmed",
         "abandoned"
       ],
       "title": "TurnOutcome",
@@ -28,6 +29,18 @@
       "minimum": 0,
       "title": "Final No Progress Streak",
       "type": "integer"
+    },
+    "game_turn_advanced": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Game Turn Advanced"
     },
     "is_authoritative": {
       "title": "Is Authoritative",

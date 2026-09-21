@@ -114,7 +114,7 @@ the same sum over the step bundles is equal by I-B (spec US2 scenario 3).
 |---|---|
 | `MetricPoint` | `turn: int`, `value: float` |
 | `MetricSeries` | `run_id`, `metric`, `points: tuple[MetricPoint, ...]` (ascending turns, gapped turns absent), `in_progress: bool` (FR-021), `comparability_status`, `unavailable_reason: str \| None` (set, with empty points, when the record carries no such metric — R4) |
-| `ExclusionReason` (enum) | `has_gaps`, `completeness_unknown`, `not_comparable`, `visually_degraded`, `no_such_run`, `not_in_seed_set` |
+| `ExclusionReason` (enum) | `has_gaps`, `game_turn_did_not_advance`, `completeness_unknown`, `not_comparable`, `visually_degraded`, `no_such_run`, `not_in_seed_set` |
 | `ExcludedRun` | `run_id`, `reason`, `detail: str`, `gaps: tuple[int, ...]` |
 | `TrendQuery` | exactly one of `run_ids: Sequence[RunId]` / `seed_set_id`; `metrics: Sequence[str] \| None` (None = every metric the records carry); `include_visually_degraded: bool = False` |
 | `TrendResponse` | `series: tuple[MetricSeries, ...]`, `excluded: tuple[ExcludedRun, ...]`, `metric_names: tuple[str, ...]`, `included_visually_degraded: bool` |
@@ -123,9 +123,26 @@ the same sum over the step bundles is equal by I-B (spec US2 scenario 3).
 `unit_count` from the authoritative attempt's last step observation (`cities.state.cities`,
 `units.state.units`). Nothing else is ever synthesised (R4).
 
-**Exclusion rule (store-owned, FR-019)**: a run is excluded when its store-derived completeness is
-`has_gaps` or `unknown`, or its `comparability_status` is `not_comparable`, or it is
-`visually_degraded` and the query did not opt in. Excluded runs never contribute a point.
+**Exclusion rule (store-owned, FR-019)**: a run is excluded when its record carries game turns
+that did not advance (below), or its store-derived completeness is `has_gaps` or `unknown`, or its
+`comparability_status` is `not_comparable`, or it is `visually_degraded` and the query did not opt
+in. Excluded runs never contribute a point. `MatchTrackingStore.trend_exclusion(run_id)` publishes
+the same verdict as its own read, so a listing can show eligibility without requesting a series.
+
+**Game turns that did not advance (added 2026-09-21, research R14; Constitution Principle III)**: a
+gap-free record is not automatically a trendable one. Gameplay block 7 (`run-480aa573`) recorded
+five turn cycles *all at game turn 35* — every turn and every step present — because each end turn
+was dispatched and then `verification_failed` after the bound, so the harness's turn ended and the
+game's did not. Such a run is excluded as `game_turn_did_not_advance`, for the same reason a gapped
+one is: its turn-by-turn record does not describe turns the game actually played. The rule
+(`store/completeness.py::turns_whose_game_turn_did_not_advance`) reads **two** signals over the
+run's authoritative attempts in turn order, and either alone is sufficient:
+
+- `TurnCycle.game_turn_advanced is False` — the writer's own statement, set when the attempt ends
+  `end_turn_unconfirmed`.
+- consecutive attempts whose recorded game turn (`game.turn_state.turn_number` in the attempt's
+  last step observation) is unchanged — which covers records written before that field existed,
+  block 7's own among them, with no column and no migration.
 
 ### 3.6 Divergence
 

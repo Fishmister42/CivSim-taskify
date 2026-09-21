@@ -258,20 +258,29 @@ def store_runs(
     store = _open(_resolve(store_path), read_only=True)
     try:
         result = store.query_runs(query)
+        # Principle III: a listing that shows completeness but not trend eligibility invites the
+        # reader to assume the two are the same question. They are not -- a run can have a
+        # gap-free record and still be ineligible because its game turns never advanced
+        # (research R14, 2026-09-21). Computed per listed run, over the published read.
+        exclusions = {
+            run.run_id: store.trend_exclusion(RunId(str(run.run_id))) for run in result.runs
+        }
     finally:
         store.close()
     pages = max(1, -(-result.total // result.page_size))
     typer.echo(f"page {result.page} of {pages} (total {result.total}, sort {result.sort.value})")
     typer.echo(
         f"{'run_id':<24} {'state':<16} {'completeness':<12} {'comparability':<18} "
-        f"{'started_at':<27} archived"
+        f"{'started_at':<27} {'archived':<9} trend"
     )
     for run in result.runs:
+        exclusion = exclusions[run.run_id]
         typer.echo(
             f"{run.run_id:<24} {run.lifecycle_state.value:<16} "
             f"{run.record_completeness_status.value:<12} {run.comparability_status.value:<18} "
             f"{(run.started_at.isoformat() if run.started_at else '-'):<27} "
-            f"{'yes' if run.archived_at else 'no'}"
+            f"{('yes' if run.archived_at else 'no'):<9} "
+            f"{'eligible' if exclusion is None else f'not eligible ({exclusion.reason.value})'}"
         )
 
 
