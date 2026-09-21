@@ -119,10 +119,14 @@ def assemble_action_catalog_text(declarations: Iterable[ParityDeclaration]) -> s
     """
     lines = [
         "Actions you may take (choose exactly one per step by its id):",
-        "For an action on a unit, city, other player, congress resolution, great person or spy, "
-        'put that subject\'s id from the observed state in parameters.target (e.g. {"target": '
-        "65536}); a plot action takes {\"target\": {\"x\": .., \"y\": ..}}; the game acts only "
-        "on the unit or city it currently shows as selected.",
+        "Every action that acts on something names that thing in parameters.target, and nothing "
+        "else: a technology, civic, policy, belief, government or production item by its name "
+        'exactly as the observed state lists it (e.g. {"target": "TECH_MINING"}); a destination '
+        'plot as {"target": {"x": 43, "y": 31}}; another civilization, a congress resolution, a '
+        "great person or a spy by its id. Unit and city orders act on the unit or city the game "
+        "currently shows as selected (is_selected: true), so a unit order's target is the plot "
+        "or promotion, not the unit; to act on a different unit, name its unit_id as the target "
+        "of units.found_city or units.promote only when no target of another kind is needed.",
     ]
     for declaration in sorted(declarations, key=lambda d: str(d.declaration_id)):
         if declaration.kind is not DeclarationKind.ACTION:

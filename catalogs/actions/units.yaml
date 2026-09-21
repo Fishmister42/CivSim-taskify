@@ -5,7 +5,8 @@
 
 - declaration_id: units.move_to
   kind: action
-  summary: Order a selected unit to move to a target plot.
+  summary: >
+    Order the selected unit to move to a target plot. parameters: {"target": {"x": .., "y": ..}} -- a plot from that unit's reachable_plots.
   parity_basis: >
     Select the unit, then left-click a reachable plot within its movement range (or its
     multi-turn path indicator).
@@ -21,8 +22,8 @@
 - declaration_id: units.found_city
   kind: action
   summary: >
-    Found a city with a settler unit at its current plot. parameters: {"unit_id": <the settler's
-    unit_id from units.state>}; if unit_id is omitted, the currently selected unit is used.
+    Found a city with a settler unit at its current plot. parameters: {"target": <the settler's
+    unit_id>}; with no target, the currently selected unit is used.
   parity_basis: >
     Select a settler unit and click the "Found City" command in its unit action panel.
   context: InGame

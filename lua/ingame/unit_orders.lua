@@ -100,6 +100,13 @@ end
 -- exercised by the spike (no function beyond UI.RequestAction/UI.CanEndTurn/GetCurrentGameTurn/
 -- ContextPtr:IsHidden/the GameConfiguration getters was actually called).
 local function CivSim_UnitOrders_MoveTo(unitId, x, y)
+    -- The dispatcher passes the decision's `target` as the LAST positional argument, and for
+    -- a move the target is the destination plot `{x, y}` (the unit is the selected one --
+    -- catalogs/README.md §4). So a lone table argument is the plot, and the unit is nil ->
+    -- selected. The (unitId, x, y) form is kept for a caller that names the unit explicitly.
+    if type(unitId) == "table" and x == nil then
+        x, y, unitId = unitId.x, unitId.y, nil
+    end
     local unit = CivSim_FindLocalUnit(unitId)
     if unit == nil then
         return { ok = false, reason = "unit_not_found" }

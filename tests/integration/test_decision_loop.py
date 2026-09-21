@@ -695,3 +695,16 @@ async def test_a_call_whose_image_count_disagrees_with_its_request_is_never_reco
         assert store.get_turn_cycle(run_id, 1, authoritative_only=False) is None
     finally:
         store.close()
+
+
+@pytest.fixture(autouse=True)
+def _no_end_turn_confirmation_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live client confirms an end turn only after the AI players' turns, so the production
+    loop re-reads the game for a bounded time before recording the agent's (or the backstop's)
+    end turn as unconfirmed (measured 2026-09-21). A fake game answers at once, so the bound is
+    zeroed here: these tests keep their original single-read semantics and their speed."""
+    import civsim_harness.run.decision_loop as decision_loop_module
+    import civsim_harness.run.turn_cycle as turn_cycle_module
+
+    monkeypatch.setattr(decision_loop_module, "END_TURN_CONFIRM_TIMEOUT_S", 0.0)
+    monkeypatch.setattr(turn_cycle_module, "BACKSTOP_CONFIRM_TIMEOUT_S", 0.0)

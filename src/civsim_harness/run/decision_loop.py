@@ -50,7 +50,9 @@ default or heuristic move for the missing decision.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -63,6 +65,7 @@ from civsim_harness.act.dispatch import (
     dispatch_action,
     rejection_to_execution,
 )
+from civsim_harness.act.predicates import resolve_selected_subject_target
 from civsim_harness.act.prompts import PromptRouteStatus, route_prompt
 from civsim_harness.act.verify import verify_execution
 from civsim_harness.agent.context import assemble_context, select_screened_images
@@ -90,7 +93,7 @@ from civsim_harness.models.common import (
     TurnCycleId,
 )
 from civsim_harness.models.config import GuidanceSet
-from civsim_harness.models.decision import DecisionTrigger, RejectionReason
+from civsim_harness.models.decision import DecisionTrigger, ExecutionOutcome, RejectionReason
 from civsim_harness.models.records import CallOutcome, RunEvent
 from civsim_harness.models.run import ComparabilityStatus, HostSupportTier
 from civsim_harness.models.turn import (
@@ -192,6 +195,12 @@ class ActionExecutor(Protocol):
     async def __call__(
         self, declaration_id: DeclarationId, parameters: Mapping[str, Any], target: Any
     ) -> Any: ...
+
+
+#: How long the agent's own end turn is re-read for its confirmation, and how often -- the
+#: client confirms after the AI turns (measured 2026-09-21; see the decision loop body).
+END_TURN_CONFIRM_TIMEOUT_S = 45.0
+END_TURN_CONFIRM_POLL_S = 2.0
 
 
 @dataclass(frozen=True)
@@ -700,6 +709,18 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             # the harness determined was open.
             raw_decision = replace(raw_decision, prompt_type=prompt_type)
 
+        if raw_decision.parameters.get("target") is None:
+            # catalogs/README.md §4: a unit/city action with no `target` acts on the unit/city
+            # the human selected. Resolved ONCE here so dispatch, execution and verification all
+            # see the same subject (measured 2026-09-21: 56 found-city decisions refused before
+            # dispatch while the game showed the settler selected the whole time).
+            selected = resolve_selected_subject_target(
+                raw_decision.action_declaration_id, observation
+            )
+            if selected is not None:
+                raw_decision = replace(
+                    raw_decision, parameters={**raw_decision.parameters, "target": selected}
+                )
         target = raw_decision.parameters.get("target")
         dispatch_outcome = dispatch_action(
             registry=ctx.registry,
@@ -772,6 +793,35 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
                 target=raw_decision.parameters.get("target"),
                 verified_at=ctx.clock(),
             )
+            if raw_decision.is_end_turn and verification.execution.outcome is not (
+                ExecutionOutcome.APPLIED
+            ):
+                # MEASURED (2026-09-21, model-driven attempt 4): the client confirms an end turn
+                # only after the AI players' turns, so the fresh read taken the instant the
+                # dispatch returned recorded the agent's own end turn as `verification_failed`
+                # while the turn had in fact ended (game 14 -> 15 on read-back). Same bounded
+                # re-read the backstop uses (turn_cycle.py); an unconfirmed end turn within the
+                # bound is still recorded as such, never assumed.
+                deadline = time.monotonic() + END_TURN_CONFIRM_TIMEOUT_S
+                while time.monotonic() < deadline:
+                    await asyncio.sleep(END_TURN_CONFIRM_POLL_S)
+                    next_fresh = await _observe_or_wrap(
+                        ctx,
+                        step_id=next_step_id,
+                        step_index=next_step_index,
+                        completed_steps=tuple(steps),
+                        completed_events=tuple(events),
+                        no_progress_streak=tracker.streak,
+                    )
+                    verification = verify_execution(
+                        declaration=declaration,
+                        pre_observation=observation,
+                        post_observation=next_fresh.observation,
+                        target=raw_decision.parameters.get("target"),
+                        verified_at=ctx.clock(),
+                    )
+                    if verification.execution.outcome is ExecutionOutcome.APPLIED:
+                        break
             execution = verification.execution
             progress = verification.progress
 

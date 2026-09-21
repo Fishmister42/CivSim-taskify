@@ -4,7 +4,8 @@
 
 - declaration_id: research.set_tech
   kind: action
-  summary: Set the local player's current research to an available technology.
+  summary: >
+    Set the local player's current research to an available technology. parameters: {"target": "<a name from researchable_techs, e.g. TECH_MINING>"}.
   parity_basis: >
     Open the Research tree screen and click a currently researchable technology.
   context: InGame
@@ -17,7 +18,8 @@
 
 - declaration_id: research.set_civic
   kind: action
-  summary: Set the local player's current civic to an available civic.
+  summary: >
+    Set the local player's current civic to an available civic. parameters: {"target": "<a name from researchable_civics>"}.
   parity_basis: >
     Open the Civics tree screen and click a currently researchable civic.
   context: InGame

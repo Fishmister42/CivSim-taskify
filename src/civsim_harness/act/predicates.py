@@ -424,6 +424,41 @@ def build_predicate_bindings(
     return bindings
 
 
+#: Action-id domain prefix -> the subject namespace whose SELECTED entry stands in for a missing
+#: `target` (catalogs/README.md §4: "the action's own `target` (or, for a unit/city action, the
+#: unit/city the human selected before issuing it)"). Only these two subjects carry a selection.
+_SELECTED_SUBJECT_BY_ACTION_PREFIX: Mapping[str, str] = {"units": "unit", "cities": "city"}
+
+
+def resolve_selected_subject_target(
+    action_declaration_id: DeclarationId, observation: Observation
+) -> Any | None:
+    """The README §4 fallback the binding above never implemented: for a unit or city action
+    issued with no ``target``, the subject is the entry the game shows as selected
+    (``is_selected: true`` in ``units.state`` / ``cities.state``) -- exactly what a human's click
+    acts on. Returns that entry's id, or ``None`` when the action is not a unit/city action, the
+    observation carries no such list, or nothing is selected (then the predicate binds the absent
+    namespace as before and the action is refused, never guessed).
+
+    MEASURED (2026-09-21, the first three model-driven runs on Linux): the model chose
+    ``units.found_city`` 56 times, wrote the settler's id into its reasoning, and never put it in
+    ``parameters.target``; every decision was refused before dispatch on ``unit.is_selected``.
+    """
+    prefix = str(action_declaration_id).split(".", 1)[0]
+    namespace = _SELECTED_SUBJECT_BY_ACTION_PREFIX.get(prefix)
+    if namespace is None:
+        return None
+    declaration_id, list_field, id_field = _SUBJECT_SOURCES[namespace]
+    source = observation_index(observation).get(declaration_id)
+    items = source.get(list_field) if isinstance(source, Mapping) else None
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if isinstance(item, Mapping) and item.get("is_selected") is True:
+            return item.get(id_field)
+    return None
+
+
 def _merge_fields(
     index: Mapping[DeclarationId, Any],
     sources: Sequence[DeclarationId],
@@ -469,10 +504,23 @@ def _bind_subject_namespace(
             namespace[field] = source[field]
 
     items = source.get(list_field)
-    if isinstance(items, list) and target is not None:
+    if not isinstance(items, list):
+        return namespace
+    if target is not None:
         for item in items:
             if isinstance(item, Mapping) and item.get(id_field) == target:
                 namespace.update(item)
                 namespace["exists"] = True
-                break
+                return namespace
+    # README §4's parenthesis: "(or, for a unit/city action, the unit/city the human selected
+    # before issuing it)". When `target` names no entry -- it is a plot for units.move_to, a
+    # promotion for units.promote, a production item for a city order, or absent -- the subject
+    # is the entry the game shows as selected. MEASURED 2026-09-21 (attempt 4): the model ordered
+    # its warrior to move by passing the unit's id as `target`; nothing here selects a subject
+    # the game has not already selected.
+    for item in items:
+        if isinstance(item, Mapping) and item.get("is_selected") is True:
+            namespace.update(item)
+            namespace["exists"] = True
+            return namespace
     return namespace

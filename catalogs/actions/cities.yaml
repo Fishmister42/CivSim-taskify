@@ -4,7 +4,8 @@
 
 - declaration_id: cities.set_production
   kind: action
-  summary: Set a city's current production to an available item.
+  summary: >
+    Set the selected city's current production to an available item. parameters: {"target": "<an item from that city's available_production>"}.
   parity_basis: >
     Open the city's production panel and click an available production item.
   context: InGame

@@ -399,3 +399,78 @@ def test_real_turn_end_turn_availability_predicate_evaluates_cleanly() -> None:
 
     blocked_bindings = {"game": {"is_local_player_turn": True, "has_blocking_prompt": True}}
     assert evaluate_predicate(declaration.availability_predicate, blocked_bindings) is False
+
+
+def test_selected_subject_stands_in_for_a_missing_target_on_unit_and_city_actions() -> None:
+    """catalogs/README.md §4: a unit/city action issued without a `target` acts on the unit/city
+    the human selected. MEASURED 2026-09-21: 56 model decisions on units.found_city carried no
+    target and were refused before dispatch; the game had the settler selected the whole time."""
+    from civsim_harness.act.predicates import resolve_selected_subject_target
+    from civsim_harness.models.common import DeclarationId
+
+    observation = _observation(
+        [
+            _entry(
+                "units.state",
+                {
+                    "units": [
+                        {"unit_id": 7, "owner_is_local_player": True, "is_selected": False},
+                        {"unit_id": 65536, "owner_is_local_player": True, "is_selected": True},
+                    ]
+                },
+            ),
+            _entry("cities.state", {"cities": [{"city_id": 3, "is_selected": False}]}),
+        ]
+    )
+
+    assert resolve_selected_subject_target(DeclarationId("units.found_city"), observation) == 65536
+    # Nothing selected -> None, never a guess.
+    assert (
+        resolve_selected_subject_target(DeclarationId("cities.set_production"), observation) is None
+    )
+    # Not a unit/city action -> None.
+    assert resolve_selected_subject_target(DeclarationId("turn.end_turn"), observation) is None
+    assert resolve_selected_subject_target(DeclarationId("research.set_tech"), observation) is None
+
+    bindings = build_predicate_bindings(observation=observation, target=65536)
+    assert evaluate_predicate("unit.is_selected and unit.owner_is_local_player", bindings) is True
+
+
+def test_a_target_that_names_no_entry_binds_the_selected_subject() -> None:
+    """README §4's parenthesis, in the binder itself: for units.move_to the `target` is the
+    destination plot, for units.promote it is a promotion -- neither is a unit id -- and the
+    subject is the unit the game shows as selected. MEASURED 2026-09-21 (attempt 4): a move order
+    was refused because the plot target matched no unit id and `unit` bound to nothing."""
+    observation = _observation(
+        [
+            _entry(
+                "units.state",
+                {
+                    "units": [
+                        {"unit_id": 7, "owner_is_local_player": True, "is_selected": False,
+                         "movement_remaining": 0, "reachable_plots": []},
+                        {"unit_id": 131073, "owner_is_local_player": True, "is_selected": True,
+                         "movement_remaining": 2, "reachable_plots": [{"x": 43, "y": 31}]},
+                    ]
+                },
+            ),
+        ]
+    )
+    bindings = build_predicate_bindings(observation=observation, target={"x": 43, "y": 31})
+
+    assert bindings["unit"]["unit_id"] == 131073
+    assert evaluate_predicate(
+        "unit.is_selected and unit.owner_is_local_player and unit.movement_remaining > 0 "
+        "and target in unit.reachable_plots",
+        bindings,
+    ) is True
+
+    # An explicit id still wins over the selection.
+    assert build_predicate_bindings(observation=observation, target=7)["unit"]["unit_id"] == 7
+    # Nothing selected and no matching id -> absent, as before.
+    none_selected = _observation(
+        [_entry("units.state", {"units": [{"unit_id": 7, "is_selected": False}]})]
+    )
+    assert build_predicate_bindings(observation=none_selected, target={"x": 1, "y": 1})["unit"] == {
+        "exists": False
+    }
