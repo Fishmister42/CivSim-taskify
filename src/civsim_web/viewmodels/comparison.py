@@ -34,7 +34,7 @@ acquired a series, a divergence-point reference, or a leadership claim fails
 construction. Removing the filter in ``build_comparison_view`` does not produce
 a quietly-averaged trend line; it produces a ``ValidationError``.
 
-**3. The comparison basis is stated, not assumed (Principle IV).** The
+**3. The comparison basis is stated, not assumed (FR-037, Principle IV).** The
 constitution requires comparison work to run "against a fixed set of initial
 seeds under a consistent civilization and ruleset". Nothing stops a user from
 selecting five runs that share none of those, and a chart that draws them on one
@@ -44,6 +44,17 @@ model actually agree across the selected set, which diverge, and which cannot be
 checked at all because the published port cannot reach ``RunConfiguration``
 (plan.md C1). An unverifiable basis is reported as unverifiable, never as
 uniform.
+
+*On the FR number*: this behaviour was built before any requirement asked for
+it -- it satisfied the constitution while discharging no FR, which spec.md's
+Amendment B records as the reason FR-037 was added, "so the behaviour is now
+traceable from constitution to requirement to implementation to test". The
+amendment wrote the requirement and stopped there: nothing in this feature's
+code or tests named FR-037, so the chain it describes ran from constitution to
+requirement and then went cold. The citations here and in
+``tests/contract/test_web_read_api.py`` are the missing links (T071). They are
+not decoration -- a later contributor deleting ``ComparisonBasis`` should find a
+requirement id when they search for what depends on it.
 """
 
 from __future__ import annotations
@@ -129,11 +140,15 @@ class DivergencePoint(ViewModel):
 
 
 class ComparisonBasis(ViewModel):
-    """Whether the selected runs are actually comparable (Principle IV).
+    """Whether the selected runs are actually comparable (FR-037, Principle IV).
 
     ``is_uniform`` is true only when every checkable dimension holds exactly one
     distinct value across the selection **and** no dimension is unverifiable.
-    A selection whose seeds cannot be read is not "uniform by default".
+    A selection whose seeds cannot be read is not "uniform by default" --
+    FR-037's "MUST report any of those dimensions it cannot establish as
+    *unverifiable* rather than as uniform", which exists because silence read as
+    sameness is how an incomparable comparison looks exactly like a comparable
+    one.
     """
 
     values: dict[str, list[str]] = {}
@@ -226,13 +241,16 @@ class ComparisonView(ViewModel):
 
 
 def build_comparison_basis(runs: Sequence[RunSummaryView]) -> ComparisonBasis:
-    """Report whether the selected runs share a comparison basis (Principle IV).
+    """Report whether the selected runs share a comparison basis (FR-037).
 
     "Optimization, branching, backtracking, and ablation work MUST run against a
     fixed set of initial seeds under a consistent civilization and ruleset."
-    This does not *refuse* a mixed selection -- the user may well be asking a
-    deliberate question about two rulesets -- it refuses to let a mixed
-    selection look like a clean one.
+    This does not *refuse* a mixed selection -- FR-037 is explicit that a
+    comparison across a differing dimension "MUST say so alongside the
+    comparison rather than presenting the trajectories as like-for-like",
+    because comparing across a difference is sometimes exactly the question
+    being asked. What must never happen is a mixed selection looking like a
+    clean one.
     """
     if not runs:
         return ComparisonBasis(note=NOTHING_SELECTED)

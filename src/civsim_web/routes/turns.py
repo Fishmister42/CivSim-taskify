@@ -70,7 +70,12 @@ from civsim_web.refs.reference import ViewReference
 from civsim_web.routes.common import ErrorView, RunContext, WebError, load_run_context
 from civsim_web.store_client import reads
 from civsim_web.viewmodels.step import DecisionStepView
-from civsim_web.viewmodels.turn import TurnCycleView, TurnIsGap, build_turn_cycle_view
+from civsim_web.viewmodels.turn import (
+    TurnCycleView,
+    TurnIsGap,
+    build_turn_cycle_view,
+    select_step_window,
+)
 
 __all__ = ["build_step_view", "build_turn_view", "router"]
 
@@ -198,6 +203,16 @@ def build_turn_view(
     else:
         record, gaps, computed_superseded_by = _load_attempt(context, turn_number, attempt)
 
+    # FR-036: read capture records for the steps this response will actually
+    # carry, not for the whole turn. `select_step_window` is the same pure
+    # function `build_turn_cycle_view` applies below, so the steps whose
+    # captures are read and the steps that render are provably one set -- a
+    # hand-rolled slice here would be a second definition of "the window" and
+    # the two would eventually disagree.
+    windowed, _ = select_step_window(
+        tuple(getattr(record, "steps", ()) or ()), step_offset, step_limit
+    )
+
     try:
         view = build_turn_cycle_view(
             record,
@@ -205,7 +220,7 @@ def build_turn_view(
             provenance=context.provenance,
             turn_gaps=gaps,
             step_gaps=tuple(context.store.step_gaps(context.run_id, turn_number) or ()),
-            captures=reads.capture_records_for_turn(context.store, record),
+            captures=reads.capture_records_for_turn(context.store, windowed),
             superseded_by=(
                 superseded_by if superseded_by is not None else computed_superseded_by
             ),

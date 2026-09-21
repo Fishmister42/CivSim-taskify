@@ -81,7 +81,23 @@ ENTITY_SCOPES: dict[str, str] = {
 #: information and must therefore be registered or provably unrendered.
 _OUT_OF_GAME_ENTITY = re.compile(r"^\*Out-of-game\.\*")
 
-_NUMBERED_ENTITY = re.compile(r"^##\s+\d+\.\s+(\w+)\s*$")
+#: ``## 4. Run``, and ``## 10. ParityDeclaration (catalog entry)``.
+#:
+#: The trailing group is deliberately **only** a parenthesised aside, not "any
+#: trailing prose" (T069). Requiring the name to end the line was the original
+#: rule, and it silently dropped one of 002's fourteen numbered entities: its
+#: heading carries a parenthetical, so the entity never matched, ``_OTHER_H2``
+#: closed the block, and ``ParityDeclaration``'s twelve fields sat outside the
+#: SC-005 coverage scan -- an audit ``contracts/panel-registry.md`` calls
+#: release-blocking, reporting a total that was short by a whole entity while
+#: ``civsim-web doctor`` printed it as fact.
+#:
+#: Widening all the way to ``(.*)$`` would have been the easy fix and the wrong
+#: one: it would also match a prose heading like ``## 15. How runs are
+#: archived``, inventing an entity out of a section title and filling it with
+#: whatever table followed. A parenthetical is a *qualifier on a name*, which is
+#: what this document actually uses it for.
+_NUMBERED_ENTITY = re.compile(r"^##\s+\d+\.\s+(\w+)(?:\s+\([^)]*\))?\s*$")
 _OTHER_H2 = re.compile(r"^##\s+")
 _SUB_ENTITY = re.compile(r"^###\s+(\w+)\s*$")
 _INLINE_ENTITY = re.compile(r"^\*\*(\w+)\*\*\s*[-—]")

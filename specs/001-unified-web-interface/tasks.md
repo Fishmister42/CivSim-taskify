@@ -1225,7 +1225,7 @@ them with all 1650 tests still passing. That is the failure mode this project ha
 before (002's `_read_setting` comparing a value to itself; `doctor`'s hard-coded `0`), found here a
 third time by looking at what each audit actually iterates rather than at what its docstring claims.
 
-- [ ] T066 **HIGH** Bring `GET /healthz` inside the FR-030 credential audits per FR-030 (partial).
+- [X] T066 **HIGH** Bring `GET /healthz` inside the FR-030 credential audits per FR-030 (partial).
   **The defect**: `test_no_view_model_declares_a_credential_shaped_field` walks
   `pkgutil.iter_modules(civsim_web.viewmodels.__path__)` plus `ErrorView`, and
   `test_no_secrets_in_any_response` is parametrised over the hand-written `ROUTES` list.
@@ -1239,7 +1239,7 @@ third time by looking at what each audit actually iterates rather than at what i
   (FR-030 is a *second* pass, not a rerun of the store's own), add `/healthz` to `ROUTES`, and make
   the schema scan cover every `ViewModel` subclass in the whole `civsim_web` package rather than one
   sub-package — with a negative control proving the widened scan can fail.
-- [ ] T067 **HIGH** Read captures only for the steps the step window returns, in
+- [X] T067 **HIGH** Read captures only for the steps the step window returns, in
   `src/civsim_web/routes/turns.py`, per FR-036 (contradicts). `reads.capture_records_for_turn(store,
   record)` iterates `record.steps` — the **full** list — and issues one `store.get_capture` per
   declared id, and the route calls it *before* `build_turn_cycle_view` applies `step_offset`/
@@ -1253,7 +1253,7 @@ third time by looking at what each audit actually iterates rather than at what i
   there would make FR-001's "most recent agent decision" show step 50 of 200. Add a test that counts
   `get_capture` calls on a run carrying a capture on every step — the current 300+-turn fixture is
   built with `captures=[]` and says so, which is why nothing caught this.
-- [ ] T068 **HIGH** Guard the live page's four couplings to `static/poll.js` per FR-002 and spec Edge
+- [X] T068 **HIGH** Guard the live page's four couplings to `static/poll.js` per FR-002 and spec Edge
   Cases ("the connection drops — the view marks itself as possibly stale and recovers to live without
   a manual reload") (partial). The behaviour is implemented and correct:
   `templates/live/run_detail.html` carries `data-live="true"`, `data-run-id`, `<script
@@ -1267,7 +1267,7 @@ third time by looking at what each audit actually iterates rather than at what i
   research R2 declines a JS runner — and it was never applied to the poll script. Add the equivalent
   guards there, plus a rendered-markup assertion that the live page wires the script and ships the
   stale marker.
-- [ ] T069 **HIGH** Widen the entity-heading pattern in `src/civsim_web/registry/harness_schema.py`
+- [X] T069 **HIGH** Widen the entity-heading pattern in `src/civsim_web/registry/harness_schema.py`
   so `ParityDeclaration` is scanned, per SC-005 and `contracts/panel-registry.md` Conformance
   (partial). `_NUMBERED_ENTITY = r"^##\s+\d+\.\s+(\w+)\s*$"` requires the entity name to end the
   line; 002 heads that section `## 10. ParityDeclaration (catalog entry)`, so the entity never
@@ -1278,7 +1278,7 @@ third time by looking at what each audit actually iterates rather than at what i
   has no `ENTITY_PATHS` placement, so its twelve fields classify as `invisible` and no panel declares
   one. Assert `ParityDeclaration` is in the scanned set and that the count rises, so the widening
   cannot silently regress.
-- [ ] T070 **MEDIUM** Document `GET /`'s real behaviour and `LandingView` in
+- [X] T070 **MEDIUM** Document `GET /`'s real behaviour and `LandingView` in
   `contracts/web-read-api.md` and `data-model.md`, per `contracts/web-read-api.md` (contradicts).
   `LandingView` (`viewmodels/run_detail.py`) is a top-level response served at `GET /` and it appears
   in **no** artifact. The contract disagrees with itself and with the code three ways: its route
@@ -1289,14 +1289,14 @@ third time by looking at what each audit actually iterates rather than at what i
   empty state the spec's Edge Cases require. The code is right and all three cases are tested; the
   artifacts are wrong. Also add `LandingView` to §13's V10 enumeration, which was amended to be
   exhaustive-with-a-stated-exception (`DecisionStepView`) and now has an unstated second omission.
-- [ ] T071 **MEDIUM** Cite FR-037 where `ComparisonBasis` is implemented and tested, per spec
+- [X] T071 **MEDIUM** Cite FR-037 where `ComparisonBasis` is implemented and tested, per spec
   Amendment B (partial). Amendment B added FR-037 so the behaviour would be "traceable from
   constitution to requirement to implementation to test" — and the identifier **FR-037 appears
   nowhere in this feature's code, tests, or task list**. `viewmodels/comparison.py` and its three
   pinning tests cite "Principle IV" only; the repo's sole `FR-037` hit is 002's unrelated
   requirement. The behaviour is fully correct; the traceability the amendment claims to have
   established does not yet exist, which is the precise failure Amendment B said it was preventing.
-- [ ] T072 **MEDIUM** Test that the auto-detect bind path *drops* a non-private address, per FR-029
+- [X] T072 **MEDIUM** Test that the auto-detect bind path *drops* a non-private address, per FR-029
   (partial). The explicit-config path is well pinned (`test_a_wildcard_bind_is_refused` over
   `0.0.0.0`/`::`/`*`/`""`; `test_non_private_and_link_local_addresses_are_refused` over `8.8.8.8`,
   `203.0.113.5`, `169.254.10.1`). But `detect_private_addresses` — the default whenever `--bind` is
@@ -1304,7 +1304,7 @@ third time by looking at what each audit actually iterates rather than at what i
   `all(is_bindable_address(a))` over output that the function already filtered with that same
   predicate. It is self-referential: deleting the filter still passes on any RFC1918-only host. Stub
   the interface enumeration with a public and a link-local address and assert neither is returned.
-- [ ] T073 **MEDIUM** Pin three implemented-but-unasserted requirement clauses (partial): (a)
+- [X] T073 **MEDIUM** Pin three implemented-but-unasserted requirement clauses (partial): (a)
   FR-021's "a signal it could not read at all counts as absent" — `derive_trend_eligibility` with
   `gapped_turns=None` yields `not_assessed`, and neither that reason nor
   `record_completeness_status_unrecognized` is asserted anywhere under `tests/`; (b) FR-033's
@@ -1312,10 +1312,88 @@ third time by looking at what each audit actually iterates rather than at what i
   `capture["turn_number"]` is never asserted, so nothing would catch turn N showing turn N−1's
   capture; (c) FR-019's `unknown_sort_field` 400 branch in `routes/catalog.py::_unknown_field_error`,
   whose sibling filter-field branch is tested and whose sort-field branch is not.
-- [ ] T074 **LOW** Correct two in-code claims the 2026-09-20 amendments made false (partial):
+- [X] T074 **LOW** Correct two in-code claims the 2026-09-20 amendments made false (partial):
   `cli.py`'s `CONTRACT_ROUTES` comment says the step-scoped panel shape "is in `data-model.md` SS12
   and in neither table", but `contracts/web-read-api.md`'s view-reference table gained that row in
   the amendment; and `viewmodels/base.py::HealthState`'s docstring still says "the first seven are
   FR-003's verbatim vocabulary", calls `paused`/`unknown` states "the vocabulary lacks", and reports
   both as "findings against the spec" — Amendment C folded both into FR-003, so the enum is correct
   and only the prose is stale.
+
+### Phase 9 notes — what closed, and the one shape all nine had
+
+Written when T066–T074 landed. **All 74 tasks are now `[X]`.**
+
+**The shape.** Not one of these was unbuilt work. Every requirement was
+implemented and behaving correctly before this phase started; what nine
+findings had in common is that the *checks* were narrower than the sentences
+describing them. Four audits iterated less than their own docstrings claimed
+(`/healthz` outside both FR-030 scans; `ParityDeclaration` outside the SC-005
+coverage scan; `detect_private_addresses` asserted against its own predicate;
+the `ROUTES` matrix hand-maintained with nothing checking it covered the app),
+and two correct behaviours had no guard at all (`poll.js`'s four couplings to
+the live page; the capture/window relationship). This is the third time this
+project has found a check that compared something to itself — after 002's
+`_read_setting` and `doctor`'s hard-coded `0` — and it is worth naming as a
+class rather than a coincidence: **a check written from the same mental model
+as the code inherits that model's blind spot.** Every fix below was therefore
+paired with a revert confirmation, run and recorded, because a guard nobody has
+watched fail is the same defect again.
+
+**Two were real behavioural defects, not just coverage.**
+
+- **T067 (FR-036).** `routes/turns.py` read a capture record for every step of a
+  turn before the window trimmed it: 200 `get_capture` calls to render 50 steps.
+  Revert-confirmed — with the old call restored the new test reports `200
+  capture records read to render 5 steps`, and 5 with the fix. `select_step_window`
+  is now public and both the route and `build_turn_cycle_view` call it, so the
+  steps whose captures are read and the steps that render are one set by
+  construction. **`routes/live.py` was deliberately left alone**, and now has its
+  own test saying why: the glance renders the whole turn because
+  `latest_decision_of` reads the *last* step, and a window there would make
+  FR-001's "most recent agent decision" show step 50 of 200. That test exists to
+  stop someone "fixing" the glance to match.
+- **T066 (FR-030).** `StoreHealthView.detail` rendered a store's `ping()` failure
+  verbatim -- `f"ping raised: {exc}"` -- on a page FR-028 requires to be
+  unauthenticated on the LAN, and a connection error naming its own DSN is the
+  likeliest way a credential reaches this interface. Both health models were
+  declared in `app.py`, outside the `viewmodels` package the schema audit walks,
+  and `/healthz` was outside the response audit too, so *neither* FR-030 check
+  had ever looked at the one route that renders a real store's state. The models
+  moved into `viewmodels/service_health.py` (inside the audit by construction,
+  not by someone remembering to widen it), `redact.py` is the second redaction
+  pass plan.md's Constraints already called for, and
+  `test_the_secret_scan_covers_every_registered_route` resolves every registered
+  path against the paths the scan fetches — verified to name `/healthz` when run
+  against the pre-fix list.
+
+**T069 was bigger than the Phase 7 note that recorded it.** That note said a
+panel declaring a `ParityDeclaration` field would be *rejected* by rule P3 — true,
+and the fail-closed direction. What it missed is that `registry/coverage.py`
+iterates the same parse, so the SC-005 audit and the line `civsim-web doctor`
+prints had one of 002's fourteen numbered entities outside them entirely. The
+scan went 167 → 179 fields, and `test_every_scanned_field_lands_in_exactly_one_bucket`
+had passed throughout — a partition check cannot catch a missing *input*, which
+is why the new test reads 002's headings directly. The widening is narrow on
+purpose: a parenthesised aside after the name, not `(.*)$`, which would invent
+an entity out of any prose heading.
+
+**One thing stayed a note.** `panels/catalog.yaml`'s `catalog.comparison_basis`
+declaration is the natural place to cite FR-037 and it was **not** edited: the
+declaration's hash is frozen in `panels/VERSION.lock`, so adding a comment there
+means bumping `panels/VERSION` and adding a version block — a schema history
+entry for a citation. T071's citations live in `viewmodels/comparison.py` and
+the three pinning tests instead. The freeze working as designed is the point.
+
+**Deliberately still open**, unchanged from Phase 7: the three probed store
+capabilities against deliverable 3 (`CaptureBlobReader`, `RunCatalogReader`,
+`TurnAttemptReader`), `SEPARATION_RATIO = 0.25` as a labelled default,
+`ViewReference` carrying no attempt component, and `static/trajectory.js` being
+guarded rather than tested — `static/poll.js` now joins it on the same terms
+(T068), for the same reason research R2 gives.
+
+**Recorded, not tasked**: `/compare` and `/runs` are timed by `test_scale.py`
+only against 30-turn runs, so the five-run × 300-turn composition US4 note 3
+calls the point of the test is not actually measured; and HTML rendering is
+timed for 3 of 13 routes while the module argues HTML is where unbounded loops
+show. Both are SC-008 questions worth a Phase 10 if anyone opens one.

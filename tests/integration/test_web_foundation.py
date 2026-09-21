@@ -55,10 +55,58 @@ def test_private_and_loopback_addresses_are_accepted(address):
 
 
 def test_detected_addresses_always_include_loopback_last():
-    """Loopback last so the first entry is the address FR-028 hands to a device."""
+    """Loopback last so the first entry is the address FR-028 hands to a device.
+
+    Note what this does *not* prove: `all(is_bindable_address(a))` checks the
+    output of a function that already filtered with `is_bindable_address`, so it
+    holds whether or not the filter is there. The test below is the one that
+    bites (T072).
+    """
     detected = resolve_bind_addresses()
     assert detected[-1] == "127.0.0.1"
     assert all(is_bindable_address(a) for a in detected)
+
+
+def test_auto_detection_drops_a_public_or_link_local_host_address(monkeypatch):
+    """FR-029 on the path that actually runs by default (T072).
+
+    The explicit-config path is well covered above -- a wildcard is refused, and
+    so is `8.8.8.8`. But `--bind` is usually unset, and then the addresses come
+    from `detect_private_addresses` reading this host's own interfaces. Nothing
+    tested that path with anything to reject: on an ordinary RFC1918-only
+    machine the filter has nothing to do, so deleting it would leave every
+    assertion in this file passing while a host that *does* hold a routable
+    address -- a cloud VM, a machine on a public /24, a container with a
+    link-local -- started binding it. FR-029 is one line ("MUST NOT be reachable
+    from outside the local network") and that is the shape of its failure.
+
+    So the host is stubbed to hold exactly the addresses that must be dropped,
+    plus one that must survive.
+    """
+    from civsim_web.net import bind
+
+    monkeypatch.setattr(bind, "_primary_outbound_address", lambda: "203.0.113.5")
+    monkeypatch.setattr(bind.socket, "gethostname", lambda: "stubbed-host")
+    monkeypatch.setattr(
+        bind.socket,
+        "gethostbyname_ex",
+        lambda _name: ("stubbed-host", [], ["8.8.8.8", "169.254.10.1", "10.2.0.2"]),
+    )
+    monkeypatch.setattr(
+        bind.socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(None, None, None, "", ("100.64.0.1", 0))],
+    )
+
+    detected = bind.detect_private_addresses()
+
+    assert "10.2.0.2" in detected, "a genuine RFC1918 address must still be detected"
+    for routable in ("203.0.113.5", "8.8.8.8", "169.254.10.1", "100.64.0.1"):
+        assert routable not in detected, (
+            f"{routable} reached the bind list; FR-029 forbids this interface "
+            f"being reachable from outside the local network"
+        )
+    assert detected[-1] == "127.0.0.1"
 
 
 # --------------------------------------------------------------------------

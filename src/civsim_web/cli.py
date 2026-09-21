@@ -62,10 +62,16 @@ _STORE_ENV = "CIVSIM_WEB_STORE"
 #: this project keeps finding. Transcribing it means ``doctor`` fails when a
 #: router stops registering, or when someone renames a path the contract names.
 #:
-#: The last two shapes are the ones the contract's own table omits and that this
-#: feature nonetheless serves: the run-scoped panel shape is in the
-#: view-reference table but not the route table, and the step-scoped panel shape
-#: is in ``data-model.md`` SS12 and in neither table (see ``routes/panels.py``).
+#: The last two shapes are served by this feature and appear in the contract's
+#: **view-reference** table rather than its route table: the run-scoped panel
+#: shape, and the step-scoped one (see ``routes/panels.py``).
+#:
+#: *Corrected 2026-09-21 (T074).* This comment used to say the step-scoped shape
+#: was "in ``data-model.md`` SS12 and in neither table", which was true when it
+#: was written and stopped being true the same day: the 2026-09-20 amendment
+#: added that row to the view-reference table, precisely because twenty-two of
+#: the thirty-seven shipped panels are ``scope: step`` and would otherwise have
+#: had no documented URL.
 CONTRACT_ROUTES: tuple[str, ...] = (
     "/",
     "/runs",

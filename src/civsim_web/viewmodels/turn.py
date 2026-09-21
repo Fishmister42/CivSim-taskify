@@ -47,6 +47,7 @@ __all__ = [
     "TurnCycleView",
     "TurnIsGap",
     "build_turn_cycle_view",
+    "select_step_window",
 ]
 
 
@@ -183,7 +184,7 @@ def build_turn_cycle_view(
         raise TurnIsGap(run_id, turn_number, turn_gaps)
 
     all_steps = tuple(getattr(record, "steps", ()) or ())
-    selected, window = _window(all_steps, step_offset, step_limit)
+    selected, window = select_step_window(all_steps, step_offset, step_limit)
 
     lookup = captures or {}
     steps = tuple(
@@ -236,13 +237,22 @@ def _capture_id_for(bundle: Any) -> str:
     return str(declared[0]) if declared else ""
 
 
-def _window(
+def select_step_window(
     steps: Sequence[Any], offset: int, limit: int | None
 ) -> tuple[tuple[Any, ...], StepWindow]:
     """Select the requested step window and describe it honestly.
 
     Ordering is by ``step_index``, always -- the guarantee data-model.md SS5
     says is "preserved regardless of pagination".
+
+    **Public because the turn route needs the same answer before this module
+    runs** (T067). FR-036 requires that viewing a turn not load captures beyond
+    the ones being viewed, and the route reads capture records *before* calling
+    ``build_turn_cycle_view``. Having the route call this same pure function --
+    rather than reimplementing "first N by step index" -- is what makes the
+    steps whose captures were read and the steps that render provably the same
+    set. A second, hand-rolled slice in the route is exactly how the two would
+    drift into disagreeing.
     """
     ordered = tuple(sorted(steps, key=lambda b: getattr(getattr(b, "step", b), "step_index", 0)))
     total = len(ordered)

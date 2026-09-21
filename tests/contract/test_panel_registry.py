@@ -383,6 +383,43 @@ def _shipped_coverage():
     )
 
 
+def test_the_scan_reaches_every_numbered_entity_002_publishes():
+    """What the coverage rule's own count was quietly missing (T069).
+
+    `test_every_scanned_field_lands_in_exactly_one_bucket` checks the buckets
+    *partition* the scan, and it passed throughout -- a field the parser never
+    saw is in no bucket and in no total, so the partition stayed perfect while
+    one of 002's fourteen numbered entities was outside the audit entirely.
+    `ParityDeclaration` was that entity: its heading reads
+    `## 10. ParityDeclaration (catalog entry)`, the pattern required the name to
+    end the line, and `civsim-web doctor` printed the short total as fact.
+
+    A partition check cannot catch a missing *input*. This reads 002's headings
+    directly and requires each to have been parsed, so the next entity whose
+    heading takes a shape the parser does not know fails here rather than
+    shrinking an audit nobody is watching the size of.
+    """
+    import re
+
+    document = default_harness_data_model_path().read_text(encoding="utf-8")
+    declared = {
+        match.group(1)
+        for match in re.finditer(r"^##\s+\d+\.\s+(\w+)", document, flags=re.MULTILINE)
+    }
+    schema = load_harness_schema(default_harness_data_model_path())
+
+    assert len(declared) >= 14, f"only {len(declared)} numbered entities found in 002"
+    missing = sorted(declared - set(schema.fields_by_entity))
+    assert not missing, (
+        f"002 publishes these numbered entities and the parser never saw them, "
+        f"so none of their fields is in the SC-005 coverage scan: {missing}"
+    )
+    assert schema.fields_by_entity["ParityDeclaration"], (
+        "ParityDeclaration parsed but carries no fields -- the heading matched "
+        "and the field table did not"
+    )
+
+
 def test_no_unregistered_store_field_is_reachable_from_any_view_model():
     """The coverage rule (contracts/panel-registry.md, Conformance).
 

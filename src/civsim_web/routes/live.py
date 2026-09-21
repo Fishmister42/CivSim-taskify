@@ -153,7 +153,16 @@ def _current_turn(context: RunContext) -> TurnCycleView | None:
             provenance=context.provenance,
             turn_gaps=reads.turn_gaps(context.store, context.run_id),
             step_gaps=tuple(context.store.step_gaps(context.run_id, turn_number) or ()),
-            captures=reads.capture_records_for_turn(context.store, record),
+            # The whole turn, deliberately (T067). The turn route reads captures
+            # for its step window only, because it *has* a window; the glance
+            # renders every step of the current turn on purpose, since
+            # `latest_decision_of` reads the **last** step and a bounded window
+            # here would make FR-001's "most recent agent decision" show step 50
+            # of 200. Every capture read here is a capture being viewed, which
+            # is what FR-036 actually asks.
+            captures=reads.capture_records_for_turn(
+                context.store, getattr(record, "steps", ()) or ()
+            ),
         )
     except TurnIsGap:
         # `latest_authoritative_turn` already skips gaps; reaching here means the

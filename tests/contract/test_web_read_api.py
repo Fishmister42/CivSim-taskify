@@ -343,6 +343,89 @@ def test_a_withheld_capture_still_renders_its_structured_panels(web_store_factor
     assert "no capture shown" in markup
 
 
+# -- FR-036: a turn loads the captures it shows, and no others (T067) --------
+
+
+class _CountingStore:
+    """A store that records every `get_capture` the routes ask it for.
+
+    Wrapping rather than subclassing keeps the optional-capability probes in
+    `store_client/reads.py` working unchanged: they ask with `getattr`, and a
+    forwarding `__getattr__` answers exactly as the wrapped fake would.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.capture_reads: list[str] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def get_capture(self, capture_id: str) -> Any:
+        self.capture_reads.append(capture_id)
+        return self._inner.get_capture(capture_id)
+
+
+def test_a_turn_reads_only_the_captures_of_the_steps_it_returns():
+    """FR-036, measured rather than asserted about (T067).
+
+    "Viewing a turn MUST NOT require loading captures beyond those being
+    viewed." The route reads capture *records* before the step window is
+    applied, so before this test existed a 200-step turn issued ~200
+    `get_capture` reads to render a page of fifty -- invisible, because the only
+    300-turn fixture in the suite is built with `captures=[]` and image bytes
+    (which are genuinely lazy, on their own route) were what everyone checked.
+
+    Counting the reads is the only way to see it: every other observable --
+    status code, body, markup, timing against an in-memory fake -- is identical
+    either way.
+    """
+    from civsim_web.routes.turns import DEFAULT_STEP_PAGE_SIZE
+    from web_support.fixtures import make_client, make_store
+
+    store = _CountingStore(make_store(turns=1, step_count=200))
+    with make_client(store) as client:
+        store.capture_reads.clear()
+        body = client.get(
+            "/runs/run-1/turns/1?step_limit=5", headers={"Accept": "application/json"}
+        ).json()
+        windowed = list(store.capture_reads)
+
+        store.capture_reads.clear()
+        client.get("/runs/run-1/turns/1", headers={"Accept": "application/json"})
+        default = list(store.capture_reads)
+
+    assert body["step_window"]["total"] == 200, "the fixture must really have 200 steps"
+    assert len(body["steps"]) == 5
+    assert len(windowed) == 5, (
+        f"{len(windowed)} capture records read to render 5 steps -- the read is "
+        f"still running over the whole turn rather than the window"
+    )
+    assert len(default) == DEFAULT_STEP_PAGE_SIZE, len(default)
+
+
+def test_the_glance_reads_every_capture_because_it_shows_every_step():
+    """The deliberate other half of T067, so its absence is not read as a miss.
+
+    `routes/live.py` renders the whole current turn on purpose:
+    `latest_decision_of` reads the **last** step, so a bounded window there
+    would make FR-001's "most recent agent decision" show step 50 of 200. Every
+    capture it reads is therefore a capture being viewed, which is what FR-036
+    asks -- and this test is what stops someone "fixing" the glance to match the
+    turn route and silently breaking FR-001 instead.
+    """
+    from web_support.fixtures import make_client, make_store
+
+    store = _CountingStore(make_store(turns=1, step_count=8))
+    with make_client(store) as client:
+        store.capture_reads.clear()
+        body = client.get("/runs/run-1", headers={"Accept": "application/json"}).json()
+
+    assert len(body["current_turn"]["steps"]) == 8
+    assert len(store.capture_reads) == 8
+    assert body["latest_decision"] is not None
+
+
 # -- the remaining contract obligations US1's routes can already be held to --
 
 
@@ -943,7 +1026,96 @@ def _credential_named_keys(body: Any, prefix: str = "") -> list[str]:
     return found
 
 
-@pytest.mark.parametrize("route", ROUTES, ids=lambda r: r.id)
+#: **FR-030's response scan runs wider than the parity matrix** (T066).
+#:
+#: `ROUTES` is the set of routes that render HTML *and* JSON, so a route with no
+#: HTML rendering cannot be listed there -- `test_json_html_parity` would parse a
+#: JSON body as markup and find no `data-field` leaves. That is a good reason to
+#: keep `/healthz` out of `ROUTES` and was not a reason to leave it out of the
+#: secret scan, which is where it had quietly fallen: `/healthz` is the one route
+#: that renders a *real store's* connection state, and FR-028 makes this page
+#: readable by any device on the LAN with no login.
+#:
+#: Error bodies are here for the same reason. A 404 naming a run, a turn range,
+#: or a capture's `unavailable_reason` is a response like any other, and the
+#: audit had never looked at one.
+SECRET_SCAN_EXTRA: list[Route] = [
+    Route("/healthz", "ops", "liveness plus the store's own ping detail (JSON only)"),
+    Route("/runs/no-such-run", "ops", "a run-not-found error body"),
+    Route("/runs/run-1/turns/9999", "ops", "a turn-not-found error body"),
+    Route("/captures/no-such-capture/image", "ops", "a capture-unavailable error body"),
+]
+
+
+def _registered_paths(app: Any) -> list[str]:
+    """Every path template the application actually serves.
+
+    Walks the app rather than reading `ROUTER_MODULES`, and descends through
+    FastAPI's `_IncludedRouter` wrappers via `original_router` -- an included
+    router is one object on `app.routes` with no `path` of its own, so a naive
+    scan of `app.routes` sees `/healthz` and nothing else, which would make this
+    check pass while auditing one route out of thirteen.
+    """
+    found: list[str] = []
+    pending = list(app.routes)
+    while pending:
+        route = pending.pop()
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            pending.extend(inner.routes)
+            continue
+        path = getattr(route, "path", None)
+        if isinstance(path, str) and getattr(route, "methods", None):
+            found.append(path)
+    return found
+
+
+def _route_matches(path_template: str, path: str) -> bool:
+    """Whether a registered path template would serve the concrete `path`."""
+    from starlette.routing import compile_path
+
+    regex, _, _ = compile_path(path_template)
+    return regex.fullmatch(path.split("?", 1)[0]) is not None
+
+
+def test_the_secret_scan_covers_every_registered_route(web_store_factory):
+    """What stops the hand-maintained scan list from going stale (T066).
+
+    `ROUTES` asks contributors to append the routes their story adds, and for
+    the parity matrix that has held. For FR-030 it had not: `/healthz` was
+    registered from the foundation phase and was never in either audit -- not in
+    the response scan, because it is not in `ROUTES`, and not in the schema scan,
+    because its view models were declared in `app.py` rather than in the
+    `viewmodels` package that scan walks.
+
+    A list that must be remembered is a list that eventually is not. This
+    resolves each registered route against the paths the scan actually fetches,
+    so a new route is either covered or names itself here as a failure.
+    """
+    from web_support.fixtures import make_app
+
+    app = make_app(web_store_factory())
+    generated = ("/openapi", "/docs", "/redoc")
+    registered = [p for p in _registered_paths(app) if not p.startswith(generated)]
+    assert len(registered) >= 13, (
+        f"only {len(registered)} paths found -- the walk is not reaching the "
+        f"included routers, so this check would pass vacuously"
+    )
+
+    scanned = [route.path for route in ROUTES + SECRET_SCAN_EXTRA]
+    uncovered = [
+        template
+        for template in registered
+        if not any(_route_matches(template, path) for path in scanned)
+    ]
+    assert not uncovered, (
+        f"registered routes no FR-030 scan ever fetches: {uncovered}. Add a path "
+        f"that resolves to each, to ROUTES if it renders HTML or to "
+        f"SECRET_SCAN_EXTRA if it does not"
+    )
+
+
+@pytest.mark.parametrize("route", ROUTES + SECRET_SCAN_EXTRA, ids=lambda r: r.id)
 def test_no_secrets_in_any_response(web_store_factory, route):
     """FR-030: no credential reaches a LAN-visible, unauthenticated page.
 
@@ -962,38 +1134,146 @@ def test_no_secrets_in_any_response(web_store_factory, route):
     assert not _credential_named_keys(body), route.path
 
 
-def test_no_view_model_declares_a_credential_shaped_field():
-    """The same scan against the *schemas*, not only the sampled bodies.
+def _every_view_model() -> list[type]:
+    """Every `ViewModel` subclass declared anywhere in `civsim_web` (T066).
 
-    A fixture that happens not to populate a field proves nothing about the
-    field. This walks every view model reachable from a registered route's
-    response and fails on a credential-shaped name whether or not any fixture
-    fills it.
+    This used to walk `civsim_web.viewmodels` alone, which is the package the
+    models are *supposed* to live in -- and `StoreHealthView`/`ServiceHealthView`
+    were declared in `app.py`, beside the route that serves them, so they were
+    outside a scan whose own docstring claimed to cover "every view model
+    reachable from a registered route's response". They have since moved into
+    the package, and this walks the whole of `civsim_web` anyway: the lesson of
+    that miss is that a scan scoped to where models *ought* to be cannot catch
+    one declared where they ought not.
     """
     import importlib
     import pkgutil
 
     from pydantic import BaseModel
 
-    import civsim_web.viewmodels as viewmodels
+    import civsim_web
     from civsim_web.routes.common import ErrorView
     from civsim_web.viewmodels.base import ViewModel
 
-    offenders: list[str] = []
     seen: set[type] = {ErrorView}
-    for module in pkgutil.iter_modules(viewmodels.__path__):
-        loaded = importlib.import_module(f"civsim_web.viewmodels.{module.name}")
+    for module in pkgutil.walk_packages(civsim_web.__path__, prefix="civsim_web."):
+        loaded = importlib.import_module(module.name)
         for attribute in vars(loaded).values():
             if isinstance(attribute, type) and issubclass(attribute, BaseModel):
                 seen.add(attribute)
+    return [model for model in seen if issubclass(model, ViewModel | ErrorView)]
 
-    checked = [model for model in seen if issubclass(model, ViewModel | ErrorView)]
+
+def test_no_view_model_declares_a_credential_shaped_field():
+    """The same scan against the *schemas*, not only the sampled bodies.
+
+    A fixture that happens not to populate a field proves nothing about the
+    field. This walks every view model declared anywhere in the package and
+    fails on a credential-shaped name whether or not any fixture fills it.
+    """
+    offenders: list[str] = []
+    checked = _every_view_model()
     assert len(checked) >= 10, "the scan found almost no view models -- it is not scanning"
     for model in checked:
         for name in model.model_fields:
             if _CREDENTIAL_NAMES.search(name):
                 offenders.append(f"{model.__name__}.{name}")
     assert not offenders, offenders
+
+
+def test_the_widened_schema_scan_reaches_the_health_route_models():
+    """The negative control for the widening itself (T066).
+
+    Without this, narrowing `_every_view_model()` back to one sub-package would
+    still pass every other assertion in this file -- which is precisely how the
+    gap existed in the first place. Naming the two models that were outside the
+    old scan is what makes the widening provable rather than merely claimed.
+    """
+    names = {model.__name__ for model in _every_view_model()}
+    assert {"ServiceHealthView", "StoreHealthView"} <= names, sorted(names)
+
+
+#: The shapes `redact_secrets` must remove from free-form store text, paired
+#: with what must survive. A connection failure names *which* store could not be
+#: reached, and that is the diagnostic an operator needs; only the credential
+#: run is replaced.
+_REDACTION_CASES = [
+    (
+        "could not connect to postgresql://civsim:hunter2@10.2.0.5:5432/match",
+        ["hunter2", "civsim:"],
+        ["postgresql://", "10.2.0.5:5432/match"],
+    ),
+    ("auth failed (api_key=sk-abcdefghijklmnop)", ["sk-abcdefghijklmnop"], ["api_key"]),
+    ("rejected: Bearer abcdefghijkl", ["abcdefghijkl"], ["rejected"]),
+    ('store said {"password": "hunter2"}', ["hunter2"], ["store said"]),
+    ("connection refused to 10.2.0.5:5432", [], ["10.2.0.5:5432", "connection refused"]),
+]
+
+
+@pytest.mark.parametrize(("text", "gone", "kept"), _REDACTION_CASES)
+def test_the_store_detail_redactor_removes_secrets_and_keeps_the_diagnosis(text, gone, kept):
+    """FR-030 on the one value this feature renders that nobody declared.
+
+    Every other rendered value is a Panel Registry-gated field, so FR-030 is
+    structural there. A store's `ping()` detail -- or the string form of what it
+    raised -- is free-form text from another process, and a connection error
+    naming its own DSN is the likeliest way a credential reaches this
+    unauthenticated LAN page.
+
+    The last case is the one that keeps the redactor honest in the other
+    direction: a plain `host:port` is not a credential and must survive, or an
+    operator loses the only thing the message was for.
+    """
+    from civsim_web.redact import redact_secrets
+
+    result = redact_secrets(text)
+    assert result is not None
+    for secret in gone:
+        assert secret not in result, result
+    for survivor in kept:
+        assert survivor in result, result
+    assert not _credential_named_keys({"detail": result}), result
+
+
+def test_the_health_view_redacts_at_construction_not_at_the_call_site():
+    """A redaction a second call site can forget is not a gate (T066).
+
+    Enforcing it in the validator means every construction is redacted --
+    including one a future route, test, or fixture writes -- which is the same
+    reason `CaptureView` computes `available` in the model rather than trusting
+    each caller to check `screening_status`.
+    """
+    from civsim_web.viewmodels.service_health import StoreHealthView
+
+    view = StoreHealthView(ok=False, detail="ping raised: bad dsn postgres://u:pw@h/db")
+    assert view.detail is not None
+    assert "pw@" not in view.detail
+    assert "postgres://" in view.detail
+
+
+def test_the_unreachable_store_route_publishes_no_credential(web_store_factory):
+    """End to end, through the route that actually renders it.
+
+    `/healthz` is specified to answer 200 even when the store is unreachable
+    (contracts/web-read-api.md error table), so the failure path is a normal
+    response body -- and it is the body that carries the exception text.
+    """
+    from web_support.fixtures import make_client
+
+    class _ExplodingStore:
+        def __getattr__(self, name):
+            def _raise(*_args, **_kwargs):
+                raise RuntimeError("connect postgresql://civsim:hunter2@10.2.0.5:5432/match failed")
+
+            return _raise
+
+    with make_client(_ExplodingStore()) as client:
+        body = client.get("/healthz", headers={"Accept": "application/json"}).json()
+
+    assert body["store"]["ok"] is False
+    assert "hunter2" not in repr(body)
+    assert "postgresql://" in body["store"]["detail"], body["store"]["detail"]
+    assert not _credential_named_keys(body)
 
 
 # ==========================================================================
@@ -1268,6 +1548,62 @@ def test_quarantine_keeps_an_incomplete_run_visible_and_out_of_the_trend():
         assert "run-02" not in axis["run_ids"], metric
 
 
+def test_the_two_fail_closed_branches_nobody_had_asserted():
+    """FR-021's last sentence, at the unit the sentence is about (T073).
+
+    *"The interface MUST read both signals verbatim and MUST NOT re-derive
+    either, and a signal it could not read at all counts as absent, not as
+    clean."* Two branches carry that and neither had a test: `assessed=False`
+    (nobody performed the read) and a `record_completeness_status` this code has
+    never heard of.
+
+    Both currently reach the right answer *via* `RECORD_NOT_COMPLETE`, which is
+    why the end-to-end tests pass either way -- and which is exactly why the
+    reason codes need pinning. A future edit that treated an unknown status as
+    "not one of the known-bad ones, so probably fine" would be a one-line change
+    with no failing test, and it is the change Principle III exists to forbid.
+    """
+    from civsim_web.viewmodels.base import (
+        TrendIneligibleReason,
+        derive_trend_eligibility,
+    )
+
+    not_assessed = derive_trend_eligibility(
+        record_completeness_status="complete", gapped_turns=[], assessed=False
+    )
+    assert not_assessed.eligible is False
+    assert not_assessed.assessed is False
+    assert TrendIneligibleReason.NOT_ASSESSED in not_assessed.reasons
+
+    # The gap read never happened. "Complete" alone must not carry a run onto a
+    # trend line -- there is no "probably fine" branch.
+    unread_gaps = derive_trend_eligibility(
+        record_completeness_status="complete", gapped_turns=None
+    )
+    assert unread_gaps.eligible is False
+    assert TrendIneligibleReason.TURN_GAPS_RECORDED in unread_gaps.reasons
+
+    # A status from a later 002 schema version: disqualifying *and* named as
+    # unrecognised, so the reason says "we do not know what this means" rather
+    # than asserting the record is known to be incomplete.
+    future = derive_trend_eligibility(
+        record_completeness_status="partially_reconstructed_v2", gapped_turns=[]
+    )
+    assert future.eligible is False
+    assert TrendIneligibleReason.COMPLETENESS_UNRECOGNIZED in future.reasons
+    assert TrendIneligibleReason.RECORD_NOT_COMPLETE in future.reasons
+
+    # And the control: a known-incomplete status is *not* reported as
+    # unrecognised, or the distinction would be worthless.
+    known_bad = derive_trend_eligibility(
+        record_completeness_status="has_gaps", gapped_turns=[]
+    )
+    assert TrendIneligibleReason.COMPLETENESS_UNRECOGNIZED not in known_bad.reasons
+    assert derive_trend_eligibility(
+        record_completeness_status="complete", gapped_turns=[]
+    ).eligible is True
+
+
 def test_a_run_the_store_calls_complete_while_listing_gaps_is_still_quarantined():
     """Principle III's own words, where they are stronger than FR-021's.
 
@@ -1455,13 +1791,66 @@ def test_an_unrecognised_filter_field_is_refused_rather_than_ignored():
     assert "civilization" in body["detail"]["known_fields"]
 
 
+def test_an_unrecognised_sort_field_is_refused_the_same_way(web_store_factory):
+    """FR-019's other branch, which had no test at all (T073).
+
+    `_unknown_field_error` serves two `kind`s and only `unknown_filter_field`
+    was ever asserted. The failure it guards is worse than the filter's: a sort
+    the server silently ignored returns the catalog in *some* order, and an
+    order nobody asked for is indistinguishable from the order they did ask for
+    until someone reads the rows.
+    """
+    from web_support.fixtures import make_catalog_store, make_client
+
+    with make_client(make_catalog_store(count=3, turns=3)) as client:
+        response = client.get(
+            "/runs?sort=science_at_turn_50", headers={"Accept": "application/json"}
+        )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["kind"] == "unknown_sort_field"
+    assert "turn_count" in body["detail"]["known_fields"]
+
+
+def test_a_capture_renders_at_its_own_turn_and_never_a_neighbours(web_store_factory):
+    """FR-033: "each capture MUST be bound to the run and turn it belongs to".
+
+    The suite had the withheld case covered from three directions and the
+    *clean* case from none, and `capture["turn_number"]` was asserted nowhere
+    (T073) -- so an off-by-one in `capture_records_for_turn`, which keys off each
+    step's declared ids, would have shown turn N−1's screenshot beside turn N's
+    numbers with every test still green. A capture is the evidence half of
+    UP-009; evidence attached to the wrong turn is worse than no evidence.
+    """
+    from web_support.fixtures import make_client
+
+    with make_client(web_store_factory(turns=3)) as client:
+        seen = {}
+        for turn in (1, 2, 3):
+            body = client.get(
+                f"/runs/run-1/turns/{turn}", headers={"Accept": "application/json"}
+            ).json()
+            capture = body["steps"][0]["capture"]
+            assert capture["available"] is True, capture
+            assert capture["turn_number"] == turn, capture
+            seen[turn] = capture["capture_id"]
+
+    assert len(set(seen.values())) == 3, f"turns are sharing a capture id: {seen}"
+
+
 def test_a_comparison_of_runs_with_different_starting_conditions_says_so():
-    """Principle IV, on the page rather than in a reviewer's head.
+    """FR-037 and Principle IV, on the page rather than in a reviewer's head.
 
     *"Optimization, branching, backtracking, and ablation work MUST run against
     a fixed set of initial seeds under a consistent civilization and ruleset."*
     Nothing stops a user selecting runs that share none of those; what this
-    interface must not do is draw them on one axis without saying so.
+    interface must not do is draw them on one axis without saying so -- FR-037's
+    "MUST say so alongside the comparison rather than presenting the
+    trajectories as like-for-like".
+
+    The markup assertion below is what makes "alongside the comparison" true for
+    both readers rather than only for the JSON one.
     """
     from web_support.fixtures import make_catalog_store, make_client
 
@@ -1492,7 +1881,15 @@ def test_a_comparison_of_runs_with_different_starting_conditions_says_so():
 
 
 def test_a_comparison_basis_the_port_cannot_verify_is_not_reported_as_uniform():
-    """plan.md C1 again: unverifiable is not uniform-by-default."""
+    """FR-037's sharper half: unverifiable is not uniform-by-default.
+
+    plan.md C1 again -- the published port cannot reach `RunConfiguration` for
+    every store, so the dimensions FR-037 names are sometimes simply unreadable.
+    Reporting that as agreement is the failure the requirement was written
+    against: "a basis the interface cannot establish must not be reported as
+    agreement. Silence read as sameness is how an incomparable comparison looks
+    exactly like a comparable one" (spec.md, Amendment B).
+    """
     from web_support.fixtures import make_catalog_store, make_client
 
     store = make_catalog_store(count=2, turns=3, with_configuration=False)

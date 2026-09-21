@@ -28,7 +28,7 @@ field the JSON body lacks.
 
 | Route | Returns | Serves |
 |---|---|---|
-| `GET /` | Landing view: the single active run (or a chooser, if several are active — spec edge case "several runs are recorded concurrently") | US1 |
+| `GET /` | **One active run**: `307` to `/runs/{run_id}`, preserving the query string. **Any other number**: a `LandingView` — `active_runs: list[RunSummaryView]`, `empty_state_reason`, `last_confirmed_current_at`, and the Panel Registry version — rendered as HTML or JSON like every other route (see the amendment below) | US1 |
 | `GET /runs` | `CatalogListingView` — `runs: list[RunSummaryView]` plus the page state (`page`, `page_size`, `total`, `has_more`), the applied `sort`/`order`/`filters`, `sortable_fields`, `quarantined_run_ids`, `listing_is_partial`/`partial_reason`, and provenance. Filterable and sortable by any `RunSummaryView` field via query params (`?civilization=`, `?model=`, `?sort=turn_count`, `?page=`) | US4, FR-018, FR-019 |
 | `GET /runs/{run_id}` | `RunDetailView` — the live/glance view for one run (UP-003) | US1, US2 |
 | `GET /runs/{run_id}/turns/{turn_number}` | `TurnCycleView` for the authoritative attempt; `?attempt={n}` selects a specific (including abandoned) attempt; `?step_offset=`/`?step_limit=` page the step window (`data-model.md` §5 — the default response carries a **bounded** window, with `step_window` stating `total`, `has_more` and every `skipped_step_indices`); `?focus={panel_id}` carries panel focus across navigation | US2, US3 |
@@ -69,10 +69,36 @@ Only these three routes changed shape. Every single-object route still returns i
 directly, and this amendment does not introduce an envelope convention: a wrapper exists where a
 collection genuinely needs one, and nowhere else.
 
-**`GET /` is the one route with no `Accept: application/json` equivalent of its own** — it is a
-redirect to whichever `/runs/{run_id}` is currently active (or to `/runs` if none is), and machine
-callers are expected to hit `/runs` directly rather than depend on "whichever run happens to be live
-right now" as a stable machine-consumable target.
+### Amendment 2026-09-21 — `GET /` and `LandingView`
+
+This section previously read: *"`GET /` is the one route with no `Accept: application/json`
+equivalent of its own — it is a redirect to whichever `/runs/{run_id}` is currently active (or to
+`/runs` if none is)."* That was never what shipped, and the route table above disagreed with it in a
+second way by promising a chooser the prose denied.
+
+What the route actually does, and what both statements were reaching for:
+
+- **Exactly one active run** → `307` to `/runs/{run_id}`, carrying the query string through so an
+  explicit `?format=json` survives the hop. This much the old prose had right, and the reasoning
+  stands: "whichever run happens to be live right now" is not a stable machine-consumable target, so
+  a machine caller wanting the catalog should ask `/runs` for it.
+- **Several active runs** → a `LandingView` listing them. Redirecting would pick one silently, and
+  the spec's Edge Cases require that "the user can tell which run they are looking at at all times"
+  and that "the live view never mixes turns from different runs".
+- **No active run** → the same `LandingView`, carrying `empty_state_reason`. Redirecting to `/runs`
+  was the old prose's answer and is the wrong one: the spec's Edge Cases ask for "an explanatory
+  empty state, not an error or a blank screen", and an empty catalog table explains nothing about
+  *why* there is nothing to watch.
+
+So `GET /` is **not** an exception to content negotiation. In the two cases that render, it is
+negotiated like every other route, which is why it sits in the JSON/HTML parity matrix alongside
+them. The one thing it does not have is a stable response *shape* across all three cases — a caller
+that must not follow a redirect should ask `/runs`.
+
+`LandingView` is the response model for the two rendering cases. It carries `active_runs`,
+`empty_state_reason`, `last_confirmed_current_at` (FR-002) and the Panel Registry version; each
+`RunSummaryView` in `active_runs` carries its own run's catalog versions, which is how invariant V10
+is satisfied without a second provenance stamp.
 
 ## View-reference resolution
 

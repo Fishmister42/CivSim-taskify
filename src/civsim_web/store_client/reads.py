@@ -118,16 +118,24 @@ def last_known_good(store: Any, run_id: str) -> Any | None:
     return store.get_last_known_good(run_id)
 
 
-def capture_records_for_turn(store: Any, record: Any) -> dict[str, Any]:
-    """``{capture_id: ScreenCapture}`` for every capture a turn's steps declared.
+def capture_records_for_turn(store: Any, steps: Any) -> dict[str, Any]:
+    """``{capture_id: ScreenCapture}`` for every capture the given steps declared.
 
     A declared capture id whose record the store cannot produce is simply absent
     from the mapping, and ``CaptureView`` renders that as ``missing_record``
     rather than as a step with no capture at all -- a distinction FR-034 wants
     sayable.
+
+    **Takes the steps, not the turn record** (T067). It used to take the record
+    and walk ``record.steps``, which meant the turn route -- which calls this
+    *before* the step window is applied -- issued one ``get_capture`` per step of
+    the whole turn to render a page of fifty. FR-036 is explicit: "viewing a
+    turn MUST NOT require loading captures beyond those being viewed". The
+    caller now passes exactly the steps it is about to render, so the bound is
+    the caller's window rather than the turn's length.
     """
     captures: dict[str, Any] = {}
-    for bundle in getattr(record, "steps", ()) or ():
+    for bundle in steps or ():
         observation = getattr(bundle, "observation", None)
         for capture_id in getattr(observation, "captures", ()) or ():
             key = str(capture_id)

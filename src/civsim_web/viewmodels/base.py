@@ -59,12 +59,20 @@ class UnavailableField(ViewModel):
 
 
 class HealthState(StrEnum):
-    """Run health, as FR-003 words it, plus two states the vocabulary lacks.
+    """Run health, as FR-003 words it -- all nine values.
 
-    The first seven are FR-003's verbatim vocabulary. The last two exist
-    because 002's published lifecycle state machine has states FR-003's list
-    does not cover, and the honest-state rule (UP-005) forbids resolving them
-    into a neighbour that would read as confirmed fact:
+    *Corrected 2026-09-21 (T074).* This docstring used to say "the first seven
+    are FR-003's verbatim vocabulary" and describe the last two as states "the
+    vocabulary lacks", recorded "as findings against the spec". That was the
+    honest state when it was written; spec.md's **Amendment C** then folded
+    ``paused`` and ``unknown`` into FR-003 itself, so the requirement now
+    enumerates all nine and neither is a finding any more. The enum was already
+    right -- only the prose was still describing the world before the amendment,
+    which is the more insidious kind of stale comment: it reads as a live
+    caveat.
+
+    Why the two additions were correct, which is still worth knowing because
+    FR-003 states them without stating why:
 
     - ``paused`` -- 002's ``Run.lifecycle_state`` includes ``paused`` (a run
       that stopped advancing, e.g. on model-chain exhaustion per its FR-042).
@@ -78,8 +86,8 @@ class HealthState(StrEnum):
       explicit "unknown" is the same discipline ``CaptureView`` applies to an
       unrecognised ``screening_status``.
 
-    Both are recorded as findings against the spec rather than quiet
-    inventions; see the run report for this feature's implementation.
+    Both were recorded as findings against the spec rather than shipped as
+    quiet inventions, and Amendment C is what closed them.
     """
 
     RUNNING = "running"

@@ -382,6 +382,14 @@ traced to *both* the game-side catalog version that produced the underlying data
 version that decided how to display it (plan Constitution Check, Principle I — "boundary is auditable
 after the fact").
 
+*(Amended 2026-09-21.)* **`LandingView` belongs in that enumeration and was missing from it.** It is
+`GET /`'s response model whenever that route cannot resolve to a single run — several runs active, or
+none — and it had no entry anywhere in this document. It carries the Panel Registry version
+directly; the game-side catalog versions arrive on each `RunSummaryView` inside `active_runs`, which
+is the same arrangement `RunDetailView` uses and is why neither needs a second `Provenance` stamp.
+The zero-run case names no catalog version at all, correctly: there is no run whose catalog version
+could be stated, and inventing one would be the opposite of invariant V10's purpose.
+
 *(Amended 2026-09-20.)* **`DecisionStepView` is the deliberate exception.** It is addressable at
 `/runs/{id}/turns/{n}/steps/{i}`, so it is a top-level response in the routing sense and this
 enumeration omitted it. It stays omitted: a step is always a slice of a turn that carries the stamp,

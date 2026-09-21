@@ -11,6 +11,11 @@ the operator surface commands, and the two never meet (plan.md Constraints).
 liveness and the configured store's ``ping()``, and it is the one route that
 still answers when the store is unreachable (contracts/web-read-api.md error
 table).
+
+Its two view models live in ``viewmodels/service_health.py`` rather than here
+(T066). Declaring them beside their route read naturally and put them outside
+the FR-030 credential audit, which walks the ``viewmodels`` package -- and
+``/healthz`` is the one route that renders a real store's connection state.
 """
 
 from __future__ import annotations
@@ -33,7 +38,8 @@ from civsim_web.registry.loader import PanelRegistry, load_panel_registry
 from civsim_web.routes import include_routers
 from civsim_web.routes.common import ERROR_TEMPLATE, WebError
 from civsim_web.store_client.port import MatchStore
-from civsim_web.viewmodels.base import PanelRegistryVersion, ViewModel
+from civsim_web.viewmodels.base import PanelRegistryVersion
+from civsim_web.viewmodels.service_health import ServiceHealthView, StoreHealthView
 
 __all__ = [
     "ServiceHealthView",
@@ -54,32 +60,6 @@ def templates_dir() -> Path:
 
 def static_dir() -> Path:
     return Path(__file__).resolve().parent / "static"
-
-
-class StoreHealthView(ViewModel):
-    """The configured store's ``ping()`` result, verbatim."""
-
-    ok: bool
-    detail: str | None = None
-    checked_at: datetime | None = None
-
-
-class ServiceHealthView(ViewModel):
-    """``GET /healthz`` -- operational, not a run-state route.
-
-    Carries the Panel Registry version for the same reason every run-state
-    response does (invariant V10): an operator diagnosing a parity question
-    needs to know which registry version the running process actually loaded,
-    and asking the process is more reliable than reading the file on disk next
-    to it.
-    """
-
-    service: str = "civsim_web"
-    ok: bool
-    store: StoreHealthView
-    panel_registry: PanelRegistryVersion
-    bind_addresses: tuple[str, ...] = ()
-    checked_at: datetime
 
 
 def get_store(request: Request) -> MatchStore:

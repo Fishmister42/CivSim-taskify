@@ -443,3 +443,101 @@ def test_the_trajectory_script_draws_from_series_never_from_runs():
     assert "drawSeries(svg, byMetric[chosen][i]" in source, (
         "the drawn series come from `series`, not from `runs`"
     )
+
+
+# ==========================================================================
+# T068 -- FR-002's live update, and the four lines nothing was holding
+# ==========================================================================
+
+#: `static/poll.js` is the second place this feature implements a rule that
+#: only a browser executes, and it had no guard at all -- unlike
+#: `trajectory.js` above, which got two when US3 recorded that "the JS is
+#: guarded, not tested" (US3 note 4). The same reasoning applies and the same
+#: remedy was simply never applied here: research R2 declines a bundler and an
+#: npm dependency tree, so a JS runner to assert one function would introduce
+#: the second ecosystem R2 rejected, and the guard therefore lives in source.
+#:
+#: What makes this worth guarding is not the script's internals. It is the
+#: **coupling**: FR-002's auto-update needs four separate lines to agree across
+#: two files -- `data-live`, `data-run-id`, the `<script>` tag and the stale
+#: marker's id -- and the suite could not see any of them. A `<script>` tag is
+#: not a `data-field`, so `test_json_html_parity` cannot notice its absence;
+#: `test_static_is_mounted` asserts only that `/static` exists. Delete any one
+#: of the four and all 1650 tests still pass while the live view stops updating.
+POLL_JS = PACKAGE_ROOT / "static" / "poll.js"
+
+
+def test_the_live_page_wires_the_polling_script(web_client):
+    """FR-002's first clause, checked on the rendered page.
+
+    Asserted against the markup the route actually serves rather than against
+    the template source, so a change to how `base.html` composes `root_attrs`
+    is caught too.
+    """
+    markup = web_client.get("/runs/run-1", headers={"Accept": "text/html"}).text
+
+    assert 'src="/static/poll.js"' in markup, (
+        "the live page no longer loads the polling script; FR-002's 'without "
+        "the user reloading' is gone and nothing else in the suite can see it"
+    )
+    assert 'data-live="true"' in markup, (
+        "poll.js returns immediately unless the document carries "
+        'data-live="true" -- without it the script loads and does nothing'
+    )
+    assert "data-run-id=" in markup, "poll.js polls `/runs/{data-run-id}`"
+    assert 'id="stale-marker"' in markup, (
+        "poll.js resolves the marker by this id and `setStale` is a no-op "
+        "without it, so the connection-drop edge case would fail silently"
+    )
+
+
+def test_the_polling_script_marks_a_dropped_connection_stale_and_recovers():
+    """The spec Edge Case this feature had implemented and never guarded.
+
+    "The connection between the browser and the interface drops -- the view
+    marks itself as possibly stale and recovers to live without a manual
+    reload." Three properties carry that sentence, and each can be removed
+    independently:
+
+    * the failure path sets stale (without it, a dead connection looks live --
+      the honest-state rule UP-005 exists to prevent exactly that);
+    * the success path clears it (without it, "recovers to live" is false and
+      the user is told to reload);
+    * recovery is automatic (a fixed interval, not a one-shot fetch).
+    """
+    source = POLL_JS.read_text(encoding="utf-8")
+
+    assert re.search(r"\.catch\(function \(\) \{[^}]*setStale\(", source, re.S), (
+        "the failed-poll path no longer marks the view stale"
+    )
+    assert "consecutiveFailures = 0;" in source and "setStale(false);" in source, (
+        "the successful-poll path no longer clears the stale marker, so the "
+        "view cannot recover to live without a manual reload"
+    )
+    assert "window.setInterval(poll, POLL_INTERVAL_MS)" in source, (
+        "polling is no longer periodic; recovery would require a manual reload"
+    )
+    assert 'root.setAttribute("data-stale"' in source, (
+        "the document-level stale state style.css keys off is gone"
+    )
+
+
+def test_the_polling_script_issues_nothing_but_gets():
+    """FR-026/UP-010 on the one script that talks to the server.
+
+    The interface reports and never acts. `test_no_page_renders_a_control`
+    covers the markup; this covers the code that runs after it loads, where a
+    method other than GET would be the one way a control could reappear
+    without any page rendering one.
+    """
+    source = POLL_JS.read_text(encoding="utf-8")
+    # Comments are stripped first: the file's own header says "No POST, no PUT,
+    # no DELETE appears anywhere below", and a scan that flagged its own
+    # documentation would have to be weakened to pass -- which is how a guard
+    # becomes a guard against nothing.
+    code = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    code = re.sub(r"//[^\n]*", "", code)
+
+    assert 'method: "GET"' in code
+    for verb in ("POST", "PUT", "PATCH", "DELETE"):
+        assert verb not in code, f"poll.js names {verb}; this interface never acts"
