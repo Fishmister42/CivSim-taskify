@@ -426,6 +426,11 @@ def _to_camera_state(value: Any) -> Mapping[str, Any]:
 
     An unrecognised or unreadable result becomes an empty camera state, which fails the provenance
     gate closed (FR-026 permits no permissive default) rather than passing a partial one through.
+
+    T260: ``target_unavailable_reason`` rides along unchanged when the Lua reports one -- it names
+    the accessor that could not answer (e.g. "UI.GetMapLookAtWorldTarget is absent on this build"),
+    and `parity.screening`'s provenance gate quotes it in the withheld capture's ``detail`` so the
+    record blames something specific rather than a bare unconfirmed reveal.
     """
     if not isinstance(value, Mapping):
         return {}
@@ -435,6 +440,9 @@ def _to_camera_state(value: Any) -> Mapping[str, Any]:
         "target_plot": value.get("target_plot"),
         "target_revealed": value.get("target_is_revealed") is True,
     }
+    reason = value.get("target_unavailable_reason")
+    if isinstance(reason, str) and reason:
+        state["target_unavailable_reason"] = reason
     return state
 
 

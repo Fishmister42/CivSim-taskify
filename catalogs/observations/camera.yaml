@@ -14,8 +14,17 @@
 # Parity basis note: the camera's position, zoom, and view mode are not privileged information —
 # they are the most visible thing on a player's own screen. This declaration reads only the local
 # player's own camera, and `target_is_revealed` is resolved against the LOCAL player's own
-# revealed-plot state (lua/ingame/camera.lua: `plot:IsRevealed(Game.GetLocalPlayer())`), never
-# another player's.
+# revealed-plot state (lua/ingame/camera.lua:
+# `PlayersVisibility[Game.GetLocalPlayer()]:IsRevealed(x, y)`), never another player's.
+#
+# T260. `target_plot` is now resolved from `UI.GetMapLookAtWorldTarget()` +
+# `UI.GetPlotCoordFromWorld(...)` — the pair Firaxis' own shipped UI Lua uses for exactly this
+# (automation/automation_observercamera.lua:381-382), since the getters this file's earlier comment
+# named (`UI.GetCameraTargetPlot` / `UI.GetCameraZoom` / `UI.IsStrategicView`) were MEASURED absent
+# on build 1.0.12.9 (T213). Both new accessors are UNVERIFIED LIVE: read out of shipped code, not
+# yet probed on a client. When either is absent or errors, no plot is reported at all,
+# `target_is_revealed` stays false, and `target_unavailable_reason` names the accessor that failed
+# — the capture is withheld carrying that reason rather than shown on an assumption.
 
 - declaration_id: camera.read_state
   kind: observation
@@ -27,13 +36,13 @@
     camera is centred on are all plainly visible to the player sitting in front of the game.
   context: InGame
   capability_id: camera.control
-  # All four reads in lua/ingame/camera.lua's CivSim_Camera.read_state are marked UNVERIFIED
-  # against a live client (UI.GetCameraTargetPlot / UI.GetCameraZoom / UI.IsStrategicView), and
-  # each is independently pcall-guarded there: an unreadable field comes back absent rather than
-  # fabricated, which is why only `mode` and `target_is_revealed` are required below. An absent
-  # `zoom` fails the provenance gate closed (screening.py: "camera_state carries no numeric zoom
-  # to check against the declared range"), which is the correct direction — a capture whose camera
-  # state cannot be confirmed must be withheld, never shown on an assumption.
+  # Every read in lua/ingame/camera.lua's CivSim_Camera.read_state is independently pcall-guarded
+  # there: an unreadable field comes back absent rather than fabricated, which is why only `mode`
+  # and `target_is_revealed` are required below. An absent `zoom` fails the provenance gate closed
+  # (screening.py: "camera_state carries no numeric zoom to check against the declared range"),
+  # which is the correct direction — a capture whose camera state cannot be confirmed must be
+  # withheld, never shown on an assumption. `target_unavailable_reason` is present only when the
+  # look-at plot or its reveal state could not be read, and names what failed.
   output_schema:
     type: object
     required: [mode, target_is_revealed]
@@ -44,4 +53,5 @@
       target_plot:
         type: [object, "null"]
         properties: { x: { type: integer }, y: { type: integer } }
+      target_unavailable_reason: { type: [string, "null"] }
   introduced_in_version: "2026.09.2"

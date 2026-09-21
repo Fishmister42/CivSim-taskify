@@ -369,6 +369,29 @@ def _check_geometry(attempt: CaptureAttempt) -> str | None:
 # --------------------------------------------------------------------------
 
 
+def _unrevealed_target_detail(camera_state: Mapping[str, Any]) -> str:
+    """The provenance gate's reason for an unconfirmed reveal, as specific as the state allows.
+
+    Three shapes, in order of how much the camera state actually knows (T260):
+    the Lua's own ``target_unavailable_reason`` (which accessor failed), a look-at plot that
+    resolved but is not revealed to this player, or -- when neither is present -- the original
+    bare statement. Only the wording varies; the capture is withheld in every case.
+    """
+    base = "the view requires a revealed target plot, and none was confirmed revealed"
+    reason = camera_state.get("target_unavailable_reason")
+    if isinstance(reason, str) and reason:
+        return f"{base}: {reason}"
+    plot = camera_state.get("target_plot")
+    if isinstance(plot, Mapping):
+        x, y = plot.get("x"), plot.get("y")
+        if x is not None and y is not None:
+            return (
+                f"{base}: the camera is looking at plot ({x}, {y}), "
+                "which this player has not revealed"
+            )
+    return base
+
+
 def _check_provenance(
     attempt: CaptureAttempt, *, registry: CapabilityRegistry
 ) -> tuple[ParityDeclaration | None, str | None]:
@@ -398,7 +421,11 @@ def _check_provenance(
 
     target_revealed = attempt.camera_state.get("target_revealed")
     if requirements.target_must_be_revealed and target_revealed is not True:
-        return None, "the view requires a revealed target plot, and none was confirmed revealed"
+        # T260: say WHY, when the camera state knows. ``target_unavailable_reason`` is the Lua's
+        # own account of which accessor could not answer (``lua/ingame/camera.lua``); failing that,
+        # a resolved-but-unrevealed plot is named, so "withheld" never reads as an unexplained
+        # false. The verdict is unchanged either way -- unconfirmed still means withheld (FR-026).
+        return None, _unrevealed_target_detail(attempt.camera_state)
 
     return declaration, None
 

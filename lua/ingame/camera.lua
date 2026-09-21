@@ -98,19 +98,103 @@ local function CivSim_Camera_SetViewMode(mode)
     return { ok = (ok and result ~= false), mode = mode }
 end
 
+-- T260 -- the camera's look-at plot, through Firaxis' own pair of accessors.
+--
+-- SOURCE (read out of the shipped UI Lua on this machine, 2026-09-21; steamassets/base/assets/ui/):
+--   automation/automation_observercamera.lua:381-382
+--       wx, wy = UI.GetMapLookAtWorldTarget();
+--       x, y   = UI.GetPlotCoordFromWorld(wx, wy);
+--   worldinput.lua:522 and :534 take the same world target for drag-focus;
+--   minimappanel.lua:893 and fullscreenmappopup.lua:60 map a world point to a plot the same way,
+--   fullscreenmappopup.lua:111-115 shows the off-map answer is -1, and
+--   unitflagmanager.lua:1172 passes the optional world Z as a third argument.
+--
+-- UNVERIFIED LIVE: neither accessor has been probed on this build (1.0.12.9). T213 MEASURED that
+-- `UI.GetCameraTargetPlot` and `UI.GetMapLookAtPlot` are absent here; this pair is Firaxis' own
+-- way of answering the same question, taken from shipped code rather than from a live probe.
+-- Every failure below returns a REASON naming the accessor and no plot at all -- the capture is
+-- then withheld carrying that reason, which is the fail-closed direction FR-026 requires.
+local function CivSim_Camera_LookAtPlot()
+    local okProbe, hasWorldTarget = pcall(function() return UI.GetMapLookAtWorldTarget ~= nil end)
+    if not okProbe then
+        return nil, nil, "UI is not readable in this context"
+    end
+    if not hasWorldTarget then
+        -- Absent on 1.0.12.9 (MEASURED T213); tried anyway for builds that do carry it, so this
+        -- file needs no per-build fork.
+        local okLegacy, lx, ly = pcall(function() return UI.GetCameraTargetPlot() end)
+        if okLegacy and type(lx) == "number" and type(ly) == "number" then
+            return math.floor(lx), math.floor(ly), nil
+        end
+        return nil, nil,
+            "UI.GetMapLookAtWorldTarget is absent on this build and UI.GetCameraTargetPlot answered no plot"
+    end
+    local okWorld, wx, wy, wz = pcall(function() return UI.GetMapLookAtWorldTarget() end)
+    if not okWorld then
+        return nil, nil, "UI.GetMapLookAtWorldTarget errored: " .. tostring(wx)
+    end
+    if type(wx) ~= "number" or type(wy) ~= "number" then
+        return nil, nil, "UI.GetMapLookAtWorldTarget returned no numeric world target"
+    end
+    local okPlot, px, py = pcall(function()
+        -- unitflagmanager.lua:1172 passes a third (world Z) argument; the two call sites that
+        -- start from a look-at target pass two. Pass whatever the world target actually gave.
+        if type(wz) == "number" then
+            return UI.GetPlotCoordFromWorld(wx, wy, wz)
+        end
+        return UI.GetPlotCoordFromWorld(wx, wy)
+    end)
+    if not okPlot then
+        return nil, nil, "UI.GetPlotCoordFromWorld errored: " .. tostring(px)
+    end
+    if type(px) ~= "number" or type(py) ~= "number" then
+        return nil, nil, "UI.GetPlotCoordFromWorld returned no numeric plot coordinate"
+    end
+    px, py = math.floor(px), math.floor(py)
+    if px < 0 or py < 0 then
+        -- fullscreenmappopup.lua:114-116 reads -1 back from this call as "off the map".
+        return nil, nil, "the camera's world target maps to no plot (off-map)"
+    end
+    return px, py, nil
+end
+
+-- Is the camera's target plot one THIS player has revealed (Principle I: a human only sees
+-- revealed terrain)?
+--
+-- MEASURED (T213, live, 1.0.12.9): `Plot:IsRevealed` does not exist on this build; the
+-- `PlayersVisibility` table does, and `PlayersVisibility[pid]:IsRevealed(x, y)` is the known-good
+-- accessor. Firaxis' own minimappanel.lua:891-898 (and fullscreenmappopup.lua:55-64) call the same
+-- object with a plot INDEX -- `Map.GetPlotIndex(x, y)` -- so that overload is tried second, each
+-- form under its own pcall so a raise in the first never hides the second. LOCAL player only;
+-- another player's visibility is never read. Any failure returns false plus a reason, never a
+-- guess.
+local function CivSim_Camera_TargetIsRevealed(x, y)
+    local okVis, vis = pcall(function() return PlayersVisibility[Game.GetLocalPlayer()] end)
+    if not okVis or vis == nil then
+        return false, "PlayersVisibility[Game.GetLocalPlayer()] is not readable on this build"
+    end
+    local okCoord, byCoord = pcall(function() return vis:IsRevealed(x, y) end)
+    if okCoord and type(byCoord) == "boolean" then
+        return byCoord, nil
+    end
+    local okIndex, byIndex = pcall(function() return vis:IsRevealed(Map.GetPlotIndex(x, y)) end)
+    if okIndex and type(byIndex) == "boolean" then
+        return byIndex, nil
+    end
+    return false,
+        "PlayersVisibility[pid]:IsRevealed answered neither the (x, y) nor the plot-index form"
+end
+
 -- Read back current camera state for the verification_predicate.
 local function CivSim_Camera_ReadState()
-    local x, y, zoom, mode = nil, nil, nil, "world"
+    local zoom, mode = nil, "world"
     -- MEASURED (2026-09-21, Linux 1.0.12.9, live, T213): `UI.GetCameraTargetPlot`,
     -- `UI.GetMapLookAtPlot`, `UI.GetCameraZoom` and `UI.IsStrategicView` do NOT exist on this
     -- build; every read below was silently failing under its pcall, so `zoom` was nil and the
     -- provenance gate withheld every capture ("camera_state carries no numeric zoom"). What
     -- exists: `UI.GetMapZoom()` (0..1, 0.707 at the default view), `UI.GetWorldRenderView()`
     -- (0 at the world view; the strategic value is UNVERIFIED and assumed 1), `UI.LookAtPlot`,
-    -- `UI.GetCursorPlotID`. There is no look-at getter, so the camera's target plot stays
-    -- unknown and `target_is_revealed` stays false -- the fail-closed direction.
-    local ok, cx, cy = pcall(function() return UI.GetCameraTargetPlot() end) -- absent on 1.0.12.9
-    if ok then x, y = cx, cy end
+    -- `UI.GetCursorPlotID`. The missing look-at getter is what T260 replaces, above.
     local okZoom, z = pcall(function() return UI.GetCameraZoom() end) -- absent on 1.0.12.9
     if not okZoom or type(z) ~= "number" then
         okZoom, z = pcall(function() return UI.GetMapZoom() end) -- MEASURED: 0.70710706710815
@@ -124,26 +208,24 @@ local function CivSim_Camera_ReadState()
         end)
     end
     if okMode and type(m) == "string" then mode = m end
-    -- T221: pcall-guarded like every other read in this function. It was the one unguarded call
-    -- here, and it became load-bearing once run/composition.py started reading this function every
-    -- decision step to satisfy each view's declared camera_requirements -- a raised `Map` or
-    -- `IsRevealed` error would have failed the whole command rather than degrading the capture.
-    -- `target_is_revealed` stays false on any failure, which is the fail-closed direction FR-026
-    -- requires (screening.py: "A camera state missing that confirmation is treated as *not*
-    -- revealed"). Reveal is read for the LOCAL player only -- never another player's visibility.
+    -- T221/T260: every read in this function is pcall-guarded, because run/composition.py reads
+    -- this function every decision step to satisfy each view's declared camera_requirements -- a
+    -- raised `UI`, `Map` or `IsRevealed` error would fail the whole command rather than degrade
+    -- the capture. `target_is_revealed` stays false on any failure, which is the fail-closed
+    -- direction FR-026 requires (screening.py: "A camera state missing that confirmation is
+    -- treated as *not* revealed"), and `target_unavailable_reason` says WHY, naming the accessor,
+    -- so a withheld capture's record blames something specific instead of a silent false.
+    local x, y, reason = CivSim_Camera_LookAtPlot()
     local revealed = false
     if x ~= nil and y ~= nil then
-        local okReveal, isRevealed = pcall(function()
-            local plot = Map.GetPlot(x, y)
-            return (plot ~= nil and PlayersVisibility[Game.GetLocalPlayer()]:IsRevealed(plot:GetX(), plot:GetY())) -- MEASURED T213: Plot:IsRevealed does not exist; PlayersVisibility does
-        end)
-        revealed = (okReveal and isRevealed == true)
+        revealed, reason = CivSim_Camera_TargetIsRevealed(x, y)
     end
     return {
         mode = mode,
         zoom = zoom,
         target_plot = (x ~= nil and { x = x, y = y } or nil),
         target_is_revealed = revealed,
+        target_unavailable_reason = reason,
     }
 end
 
