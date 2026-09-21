@@ -897,3 +897,28 @@ refusing); every world/city frame withheld `non_player_ui` after provenance pass
 cycles at game turn 35 recorded ended_by_agent on unconfirmed end turns (owner's ruling issued,
 Stage 2's first item); the demo driver hangs on a paused run. Client left InGame, turn 42, tuner
 free. Spend $2.95 of the week's cap. Ledger: spikes/gameplay-2026-09-21/README.md.
+
+### Live S2 — 2026-09-21 (12:51 → 14:25 EDT)
+
+Blocks 13–19, game turn 42 → 48 (block 18: Sonnet 5 saw the unmapped Classical Era card in 41 of 41 delivered frames and asked to acknowledge it 40 times while the text probe said `world` -- first live evidence a model uses the picture; EraReviewPopup mapped in 05766af), spend this stage $1.42 (blocks 13/15/17 $0). Route
+blocker fixed first (c052c39: explicit `prompt.diplomatic_approach` → `prompts.ai_diplomatic_approach`
+table; a blocking prompt with no registered answer is a recorded `not_in_catalog` stall, not a crash)
+and verified live in block 13 — probe reports the greeting with both real statement texts, sampler
+answers first. **Block 14: Sonnet 5 received an image at 8 of 8 steps** (screened_clean,
+shown_to_agent, blob, image_count=1; tier validated, xcomposite) — first frames to a real model on
+Linux; use of the picture not provable from its reasoning. **The click was a no-op**: `CallCallback`
+appears nowhere in Firaxis' UI Lua; nothing reachable from InGame fires a control's callback. Replaced
+by a real click: the Lua hands back the control's rect + `UIManager:GetScreenSizeVal()` (1024×768 on
+a 1920×1200 window — the engine stretches UI space onto the window, scale 1.875 × 1.5625), the
+executor clicks through the host input port. A manual click at the scaled spot answered the greeting
+(operator intervention, recorded). Same path now serves every acknowledge-only popup (the midday
+`close_control_callback` would have reported success with the popup still up). Gathering Storm's
+eruption cinematic (`NaturalDisasterPopup`) blocked `Network.SaveGame` → blocks 16/17 paused in 12 s
+on the turn-1 quicksave before any observation: mapped as `prompt.natural_disaster` /
+`prompts.natural_disaster` (catalog 2026.09.6); **Stage 3 first: the turn-start quicksave must not
+deadlock on a prompt that blocks saving.** Content gate: block 10's withholds were
+`windows_capture_border` from the union profile; views now screen by platform (98c71bb);
+`debug_overlay` corner heuristic still withholds busy-corner frames. Driver: paused = block over, lock
+cleared. Coverage: actions 8 of 38 applied, images delivered 80 of 351 steps.
+Commits: c052c39 98c71bb a58d4b0 56444cf 7b7eb04 e406ba3 05766af. Entry 4 posted on #3. Suite: 1989 passed / 9 skipped / 0 failed at 7b7eb04 (3:14 unloaded; a 12-minute contended run showed 10 wiring failures caused by a Lua comment that named the save call -- the test fake routes bodies by that substring -- reworded).
+VERIFIED LIVE, block 19 (run-08566ab0, $0, 31 s): the era card acknowledged through the production executor's scaled click, then the turn ended by the agent and game-confirmed. Entries 4, 5, 6 on #3. Client on exit:
