@@ -397,21 +397,6 @@ ALLOWLIST: dict[str, str] = {
         "helper is the load-bearing test tier's own entry point (T128, consumed by "
         "tests/unit/test_telemetry_exclusion.py) with no second production role"
     ),
-    "send_input": (
-        "Ruled retained dormant (hypervisor log, Run 6, 2026-09-20): the planned "
-        "production consumer was T217 option B (bespoke UI driver), which died when "
-        "option C resolved (Network.LoadGame from FrontEnd); the owner-authorized "
-        "fallback class -- UI driving for operations the tuner cannot perform -- remains "
-        "plausible future work, so the allowlist keeps the surface visible instead of "
-        "silently dead. THE NEXT CONSUMER MUST DELETE THIS ENTRY -- do not build a "
-        "consumer to launder it away"
-    ),
-    "InputEvent": (
-        "Ruled retained dormant (hypervisor log, Run 6, 2026-09-20) alongside "
-        "send_input: constructed nowhere in src/ (the three adapters only annotate with "
-        "it) since T217's Network.LoadGame resolution removed the planned consumer; "
-        "same ruling, same condition -- THE NEXT CONSUMER MUST DELETE THIS ENTRY"
-    ),
     "capture_preconditions": (
         "T249 (seam half landed): wired -- the Linux implementation of the port's "
         "check_capture_preconditions preflight delegates to it in host/linux/adapter.py, "

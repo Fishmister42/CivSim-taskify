@@ -52,11 +52,18 @@ still confirm the end-to-end sequence (see the T217 task note in
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeGuard
 
 from civsim_harness.errors import HarnessError, NexusError, PreflightError
-from civsim_harness.host.port import HostPlatform
+from civsim_harness.host.port import (
+    GameProcess,
+    HostPlatform,
+    InputEvent,
+    InputEventKind,
+    InputStatus,
+)
 from civsim_harness.models.records import SavePoint
 from civsim_harness.nexus.client import NexusClient, StateIndices
 from civsim_harness.nexus.sentinels import LUA_JSON_PRELUDE, lua_print_json
@@ -65,6 +72,14 @@ from civsim_harness.saves.verify import SAVE_FILE_SUFFIX, resolve_saves_dir
 #: The two Lua state names this loader steers between. ``InGame`` exists only while a game is
 #: loaded; ``MainMenu`` is the front-end state the spike verified carries both ``Network.LoadGame``
 #: and the enums the call table needs.
+#: The key that dismisses Civilization VI's leader-intro screen after a load.
+#: MEASURED, not chosen (spikes/r7-live-client-session-linux.md): `Escape` works;
+#: `Return` and `space` do NOT. The screen appears on EVERY load -- not only on
+#: saves taken before it was first dismissed -- and holds the tuner port closed
+#: indefinitely (150s observed with no recovery), so without this the load path
+#: can only ever time out.
+INTRO_DISMISS_KEY = "Escape"
+
 IN_GAME_STATE_NAME = "InGame"
 MAIN_MENU_STATE_NAME = "MainMenu"
 
@@ -244,6 +259,8 @@ class LuaSaveLoader:
         self._load_timeout_s = load_timeout_s
         self._verify_timeout_s = verify_timeout_s
         self._poll_interval_s = poll_interval_s
+        self._intro_presses = 0
+        self._intro_skipped: str | None = None
 
     async def load(self, save: SavePoint) -> None:
         """Load *save* into the game client, replacing its current state.
@@ -290,6 +307,9 @@ class LuaSaveLoader:
                 save=save,
             )
 
+        self._intro_presses = 0
+        self._intro_skipped = None
+
         # -- 3. the verified front-end load call ------------------------------------------------
         lost_response = await self._issue_load(indices.by_name[MAIN_MENU_STATE_NAME], save)
 
@@ -314,6 +334,7 @@ class LuaSaveLoader:
             ),
             save=save,
             hint=hint,
+            on_unreachable=self._dismiss_intro_screen,
         )
 
         # -- 4b. the far-side assertion ---------------------------------------------------------
@@ -408,6 +429,61 @@ class LuaSaveLoader:
             )
         return None
 
+    def _dismiss_intro_screen(self) -> None:
+        """Press `Escape` once, aimed at the game, while the tuner port is closed.
+
+        Called from `_await_phase`'s unreachable branches during step 4a only -- so it
+        runs exactly while the port is down, and stops the moment the port answers. It
+        therefore cannot leave a stray keystroke in the running game.
+
+        **Why a retry and not one timed press.** The port closes the instant the load is
+        issued, but the intro screen only appears when the load *finishes*, tens of seconds
+        later -- and the screen cannot be observed through the tuner, because the tuner is
+        what it is holding closed. The only observable is the port coming back, which
+        happens *after* dismissal succeeds. A single press at a fixed delay was tried and
+        measured failing; the retry shape is what passed (40.1s vs a 160.4s timeout).
+
+        **Focus first, always.** Synthetic input has no window targeting, so a press
+        without focus goes to whatever the operator has in front of them. A non-`ok`
+        `focus_window` means we do not press at all -- the reason is kept for the timeout
+        error, so a run that failed this way says why instead of looking like a dead client.
+        """
+        if self._host is None:
+            self._intro_skipped = "no host port was supplied, so no key could be sent"
+            return
+        try:
+            process = self._host.locate_game_process()
+            if process is None:
+                self._intro_skipped = "the game process could not be located"
+                return
+            window = self._host.find_game_window(process)
+            if window is None:
+                self._intro_skipped = "the game window could not be resolved"
+                return
+            focused = self._host.focus_window(window)
+            if focused.status is not InputStatus.ok:
+                # Never press at an unfocused window: the keystroke would land
+                # wherever the operator is looking. Refusing loudly is the point.
+                self._intro_skipped = (
+                    f"focus_window reported {focused.status.value} "
+                    f"({focused.reason}), so no key was sent"
+                )
+                return
+            sent = self._host.send_input(
+                [InputEvent(kind=InputEventKind.key_press, key=INTRO_DISMISS_KEY)]
+            )
+            if sent.status is not InputStatus.ok:
+                self._intro_skipped = (
+                    f"send_input reported {sent.status.value} ({sent.reason})"
+                )
+                return
+            self._intro_presses += 1
+            self._intro_skipped = None
+        except Exception as exc:  # noqa: BLE001
+            # A failed keystroke must never break the wait it is helping: the
+            # deadline in `_await_phase` stays the single authority on giving up.
+            self._intro_skipped = f"{type(exc).__name__}: {exc}"
+
     async def _await_phase(
         self,
         *,
@@ -416,6 +492,7 @@ class LuaSaveLoader:
         waiting_for: str,
         save: SavePoint,
         hint: str | None = None,
+        on_unreachable: Callable[[], None] | None = None,
     ) -> StateIndices:
         """Poll the client's state table -- bounded -- until *predicate* holds, reconnecting as
         needed. A refused connection or dropped socket is an *expected* observation mid-load
@@ -438,12 +515,16 @@ class LuaSaveLoader:
             except (NexusError, PreflightError) as exc:
                 last_error = f"{type(exc).__name__}: {exc.message}"
                 needs_reconnect = True
+                if on_unreachable is not None:
+                    on_unreachable()
             except OSError as exc:
                 # A raw socket error (Windows surfaces a peer-closed connection as
                 # ConnectionResetError on the next write, rather than a clean EOF the client
                 # would wrap as NexusError) -- the same expected mid-transition shape.
                 last_error = f"{type(exc).__name__}: {exc}"
                 needs_reconnect = True
+                if on_unreachable is not None:
+                    on_unreachable()
             else:
                 last_states = sorted(indices.by_name)
                 if predicate(indices):
@@ -458,6 +539,10 @@ class LuaSaveLoader:
                         "waited_s": timeout_s,
                         "last_state_table": last_states,
                         "last_transport_error": last_error,
+                        # T248: so a load that failed because it could not aim a
+                        # keystroke says so, instead of looking like a dead client.
+                        "intro_dismiss_presses": self._intro_presses,
+                        "intro_dismiss_skipped": self._intro_skipped,
                     },
                 )
             await asyncio.sleep(self._poll_interval_s)

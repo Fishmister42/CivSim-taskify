@@ -601,6 +601,70 @@ class LinuxHostPlatform:
             saves_dir=root / "Saves" / "Single", app_options_path=root / "AppOptions.txt"
         )
 
+    def focus_window(self, window: GameWindow) -> InputResult:
+        """Activate `window` via EWMH `_NET_ACTIVE_WINDOW` (T248).
+
+        Sends the client message a window manager expects, rather than
+        calling `SetInputFocus` directly: with a WM running, a raw
+        `SetInputFocus` on an unmapped or stacked-under window can leave
+        the window focused-but-invisible, and XTest events then go
+        somewhere the operator cannot see. `_NET_ACTIVE_WINDOW` is what
+        `wmctrl -a` and `xdotool windowactivate` send, and it is the path
+        verified live against Civilization VI on this host.
+
+        X errors are caught and `sync()`ed before reporting success --
+        python-xlib reports them asynchronously, so a call that "returned
+        fine" can still have failed on the wire. That trap produced a
+        confident false pass in this adapter's capture path once already
+        (`spikes/r6-xcomposite-readback-linux.md`).
+        """
+        if self._session_type is LinuxSessionType.wayland:
+            return InputResult(
+                status=InputStatus.unavailable, reason=_WAYLAND_INPUT_UNAVAILABLE_REASON
+            )
+
+        try:
+            from Xlib import X, error
+            from Xlib.display import Display
+            from Xlib.protocol import event as protocol_event
+        except ImportError as exc:
+            return InputResult(
+                status=InputStatus.unavailable,
+                reason=f"python-xlib is not installed; install the 'linux' extra: {exc}",
+            )
+
+        display = Display()
+        try:
+            catch = error.CatchError()
+            xwindow = display.create_resource_object("window", window.handle)
+            atom = display.intern_atom("_NET_ACTIVE_WINDOW")
+            root = display.screen().root
+            message = protocol_event.ClientMessage(
+                window=xwindow,
+                client_type=atom,
+                # format 32, data: source indication 2 (pager/direct user
+                # action -- what a WM honours without focus-stealing
+                # prevention getting in the way), timestamp, requestor.
+                data=(32, [2, X.CurrentTime, 0, 0, 0]),
+            )
+            root.send_event(
+                message,
+                event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask,
+                onerror=catch,
+            )
+            display.sync()
+            if catch.get_error() is not None:
+                return InputResult(
+                    status=InputStatus.failed,
+                    reason=(
+                        f"X error sending _NET_ACTIVE_WINDOW for window {window.handle}: "
+                        f"{catch.get_error()}"
+                    ),
+                )
+            return InputResult(status=InputStatus.ok)
+        finally:
+            display.close()
+
     def send_input(self, events: Sequence[InputEvent]) -> InputResult:
         if self._session_type is LinuxSessionType.wayland:
             # Reported unavailable without being attempted at all (T052):

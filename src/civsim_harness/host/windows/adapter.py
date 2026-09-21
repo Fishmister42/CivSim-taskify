@@ -587,6 +587,39 @@ class WindowsHostPlatform:
                 best, best_mtime = candidate, mtime
         return best if best is not None else candidates[0]
 
+    def focus_window(self, window: GameWindow) -> InputResult:
+        """NOT IMPLEMENTED -- reports `unavailable` rather than pretending (T248).
+
+        The Linux peer wrote this port method and cannot verify a Windows
+        implementation, so it declines to write one blind. This repo's
+        defining failure mode is code that passes its tests and runs on
+        nothing; an unverified `SetForegroundWindow` returning `ok` would
+        tell `send_input`'s caller that a keystroke is aimed at the game
+        when nobody has ever checked that it is.
+
+        **Consequence, stated plainly:** the T248 intro-screen dismissal
+        will refuse on Windows until this lands, so loads will fail there
+        rather than press a key at whatever holds focus. That is the
+        intended failure -- loud, not silent.
+
+        For whoever implements it: the operation is `SetForegroundWindow`
+        (user32), and the non-obvious part is that Windows *refuses* it
+        unless the calling process satisfies the foreground-activation
+        rules -- so it commonly needs `AllowSetForegroundWindow`, an
+        `AttachThreadInput` pairing with the current foreground thread, or
+        a preceding `ShowWindow(SW_RESTORE)` for a minimised window. It
+        returns a BOOL that must be checked: it fails silently by design.
+        """
+        return InputResult(
+            status=InputStatus.unavailable,
+            reason=(
+                "focus_window is not implemented on Windows: the Linux peer added this port "
+                "method (T248) and will not ship an unverified SetForegroundWindow that "
+                "reports success without ever having been run on this platform. Synthetic "
+                "input must not be dispatched until it lands."
+            ),
+        )
+
     def send_input(self, events: Sequence[InputEvent]) -> InputResult:
         try:
             import pydirectinput

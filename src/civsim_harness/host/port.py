@@ -301,6 +301,31 @@ class HostPlatform(Protocol):
         """
         ...
 
+    def focus_window(self, window: GameWindow) -> InputResult:
+        """Give `window` the input focus, so `send_input` reaches the game (T248).
+
+        Synthetic input has **no window targeting**: X11's XTest, and the
+        equivalent on other platforms, delivers to whatever holds focus at
+        that moment. A caller that dispatches a keystroke without first
+        taking focus is not sending it to the game -- it is sending it to
+        whatever the operator happens to be looking at, which on a live
+        host may be their browser.
+
+        So every `send_input` consumer must call this first and honour a
+        non-`ok` result by not pressing. That is the whole reason this
+        operation is on the port rather than left as a documented
+        precondition: a precondition that is merely written down is the
+        "works in isolation, targets nothing in production" defect class
+        this project keeps finding, and a port method is checkable.
+
+        Never raises: like `send_input`, the outcome is a tagged
+        `InputResult`. Platforms that cannot focus a window report
+        `unavailable` with a reason rather than silently doing nothing --
+        a no-op that returns `ok` would make the caller believe the
+        keystroke is aimed at the game.
+        """
+        ...
+
     def free_disk_space(self, path: Path) -> DiskSpace:
         """Report free/total bytes at `path`, for the R17 disk-headroom guard."""
         ...

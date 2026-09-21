@@ -244,6 +244,36 @@ class MacOSHostPlatform:
             ),
         )
 
+    def focus_window(self, window: GameWindow) -> InputResult:
+        """NOT IMPLEMENTED -- reports `unavailable` rather than pretending (T248).
+
+        Same reasoning as the Windows half: the Linux peer added this port
+        method and has no macOS host to verify against, so it declines to
+        write one blind rather than ship a call that returns `ok` without
+        ever having been run.
+
+        **Consequence:** T248's intro dismissal refuses on macOS until this
+        lands, so a load fails loudly instead of pressing a key at whatever
+        holds focus.
+
+        For whoever implements it: activation is per-*application* on
+        macOS, not per-window -- `NSRunningApplication` for the window's
+        pid plus `activate(options:)`, or the Accessibility API
+        (`AXUIElementPerformAction` with `kAXRaiseAction`) for a specific
+        window. Note this host also needs Accessibility permission granted
+        for synthetic input at all, which is the same gate, so the two are
+        worth solving together.
+        """
+        return InputResult(
+            status=InputStatus.unavailable,
+            reason=(
+                "focus_window is not implemented on macOS: the Linux peer added this port "
+                "method (T248) and has no macOS host to verify an NSRunningApplication or "
+                "Accessibility implementation against. Synthetic input must not be "
+                "dispatched until it lands."
+            ),
+        )
+
     def send_input(self, events: Sequence[InputEvent]) -> InputResult:
         try:
             import Quartz
