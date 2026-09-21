@@ -755,3 +755,11 @@ into `probe_host_support`; PNG encoding for Linux captures); Windows/macOS `focu
 bundle); no camera look-at getter -- captures withheld on Linux; `cities.state` is
 GameCore_Tuner so `city.is_selected` cannot be produced there yet (`UI.GetHeadSelectedCity` is
 InGame); deliverable 3 (match store) has no spec yet -- the owner asked for it next.
+
+**Deliverable 3 specced** (owner's instruction: move into 003 after 002/001):
+`specs/003-match-tracking-store/spec.md` via `/speckit-specify` -- five prioritised stories (turn on
+the record before the game moves on; one published contract with the four formerly-probed reads +
+model calls as rows; trends only from gap-free records by the store's own rule; export/import
+bundles + migration from the 2026-09-21 file; archival never touches the record), 29 FRs, 9
+measurable SCs, quality checklist passed, no clarification markers. Next: `/speckit-plan` (bundle
+format directory-vs-archive is the one thing worth asking the owner). Not implemented tonight.
