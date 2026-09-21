@@ -721,3 +721,37 @@ older `tests/live/*` spike scripts.
 then move into deliverable 3; at each stage let a model-driven agent actually play ("step 2.5 /
 3.5"); delegate. Provider key is on this host now, so the model-driven run is the next live item
 after the landed-code demo.
+
+### Linux overnight, second half (00:10 -> 01:30): the demo lands, then the model plays
+
+**Landed-code demo COMPLETED** (`run-9505f323`, `demo-evidence-linux-landed/`): production
+composition root end to end -- V10/V2/V3, identity lock, 3 turn cycles, 3 verified quicksaves,
+14-declaration sweeps, far-side end turns (game 3 -> 5), 12 frames via `capture_window()`, zero
+model calls, labelled. Seven attempts to get there, each stopped by something a fake never said:
+build version unreadable on Linux (`UI.GetAppVersion()` is the accessor), `mod_set` un-passable
+(T251), 5/14 observation bodies erroring (T213 -- `PlayersVisibility`, InGame-only unit API,
+screen_state aggregate never wired), a Lua error costing a 30 s timeout (client now fails fast on
+tag-3 `ERR:`), the quicksave verified before the file landed (bounded appearance wait), a stale
+run-identity lock after a killed runner. All in `t213-observation-bodies-linux.md`.
+
+**First model-driven runs** (`first-model-driven-runs-linux.md`, $1.13 of the $80): Claude Sonnet
+5 decided correctly from the first call ("turn 5, no capital, found the city") and could not
+reach the game for three reasons invisible to 1,648 green tests: the backstop's end-turn readback
+was too early (client confirms after AI turns); `unit.is_selected` was a predicate field nothing
+produced -- every unit/city action structurally unavailable since the catalog was written; and
+README section 4's "selected unit" rule was documented, never implemented. Also: the model was
+never shown the action catalog (DecisionRequest = role + observation). Fixed in `9f49292` and the
+commit after it. **Attempt 4: `units.found_city {"target": 65536}` applied -- Pasargadae
+founded**, read back on a fresh connection. Text-only (no image can reach the agent here: T252 +
+no camera look-at getter on this build), stated on every artifact.
+
+**001**: 27 screenshots + README + a self-contained gallery page, published as a claude.ai
+artifact (`https://claude.ai/artifact/97njw182HGf2XUqUXSe8wo`, private). One real UI defect
+found and fixed (stale marker CSS); three cosmetic ones recorded.
+
+**Windows morning items (all reported on issue #1):** T252 (feed `check_capture_preconditions`
+into `probe_host_support`; PNG encoding for Linux captures); Windows/macOS `focus_window` halves;
+`civsim_resolve` TurnTimerTypes -> nil; `model_calls` table empty (records live in the step
+bundle); no camera look-at getter -- captures withheld on Linux; `cities.state` is
+GameCore_Tuner so `city.is_selected` cannot be produced there yet (`UI.GetHeadSelectedCity` is
+InGame); deliverable 3 (match store) has no spec yet -- the owner asked for it next.

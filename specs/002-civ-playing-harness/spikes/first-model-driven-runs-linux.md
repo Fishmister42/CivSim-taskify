@@ -58,6 +58,33 @@ reasons that were each invisible to 1,648 green tests: an asynchronous confirmat
 predicate vocabulary named but nothing produced, and a documented rule nobody implemented. The
 fake provider's "end the turn" demo could not have found any of them.
 
-## Attempt 4
 
-See the section appended below once it has run.
+## Attempt 4 — `run-d1d3e263…` — FINISHED, $0.408, 21 calls — **Pasargadae founded**
+
+Turn 1, step 1: `units.found_city {"target": 65536}` → `applied / changed_state`. Read back on a
+fresh connection after the run: `{"turn": 15, "cities": 1, "city_name": "Pasargadae",
+"research": "TECH_POTTERY"}`. The first model decision to land in the game through the whole
+production path. The remaining 20 steps found the next gaps: `units.move_to` sent the *unit's* id
+as `target` where the catalog wants the destination plot (refused: the plot predicate); seven
+`research.set_tech` with no target (the catalog text had not said a tech is chosen by name); and the
+model's own `turn.end_turn` recorded `verification_failed` by the same early readback the backstop
+had already been cured of (the turn had ended: 14 → 15). Fixed: the binder falls back to the
+selected subject when the target names no entry; four action summaries state their target shape;
+the agent's end turn gets the bounded confirmation.
+
+## Attempt 5 — `run-8bc17e7e…` — PAUSED at turn 3, $0.294, 16 calls — the first honest stall
+
+Turns 1–2: sixteen `units.move_to {"target": 131073}` — still the warrior's id, not a plot,
+despite the catalog line now saying `{"target": {"x": .., "y": ..}}`; refused each time on
+`target in unit.reachable_plots`, correctly. Turn 3: the civic **Code of Laws completed**, the game
+put up `TechCivicCompletedPopup`, and the harness raised `UnknownScreenEncountered` — the screen is
+on `screens.lua`'s watchlist but maps to no catalog screen id, so the run **stalled visibly**
+(`record_completeness_status: has_gaps`) rather than pressing anything. That is the FR-010
+behaviour the spec asks for, seen live for the first time. **Finding:** the catalog needs an
+acknowledge action for tech/civic-completed popups (the `prompts.era_transition` shape) and a
+`prompt.*` mapping for `TechCivicCompletedPopup` — a human clicks it away; the agent currently
+cannot. The client was left on that popup for the morning to see.
+
+**Net for the night:** $1.42 of $80. One city founded by a model decision; one move-order
+convention the model does not yet follow (the id-vs-plot ambiguity of a single `target` field is a
+catalog-design smell worth a ruling); one unmapped popup that stops play; images still withheld.
