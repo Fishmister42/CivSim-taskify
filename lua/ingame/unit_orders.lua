@@ -1,8 +1,8 @@
 -- lua/ingame/unit_orders.lua
 -- Context: InGame (write/act). Orders only; verification reads back through
 -- lua/gamecore/units.lua's CivSim_Units.state() rather than this file.
--- Backs declaration_ids: units.move_to, units.found_city, units.promote (catalogs/actions/units.yaml),
--- capability_id: units.orders.
+-- Backs declaration_ids: units.move_to, units.found_city, units.promote, units.build_improvement
+-- (catalogs/actions/units.yaml), capability_id: units.orders.
 --
 -- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
 -- neither tuner context exposes `require`, `io`, or `debug`, and no JSON library exists in
@@ -153,10 +153,90 @@ local function CivSim_UnitOrders_Promote(unitId, promotionType)
     return { ok = (ok and result ~= false), unit_id = unitId, promotion = promotionType }
 end
 
+-- Spend a build charge: put an improvement on the plot the selected unit is standing on. This is
+-- the unit panel's build button, and nothing more.
+--
+-- SOURCE (Firaxis' shipped UI on this machine, read 2026-09-21):
+--   steamassets/base/assets/ui/panels/unitpanel.lua
+--     :554-573    the panel lists one button per improvement the plot offers, each greyed exactly
+--                 when UnitManager.CanStartOperation(pUnit, BUILD_IMPROVEMENT, nil, tParameters,
+--                 true) is false with tParameters[PARAM_IMPROVEMENT_TYPE] set
+--     :604,:915   the button carries that improvement's own `Hash` as its click payload
+--                 (AddActionToTable(..., improvement.Hash) -> UnitActionButton:SetVoid1)
+--     :2548-2557  OnUnitActionClicked_BuildImprovement, the click itself:
+--                   tParameters[PARAM_X] = pSelectedUnit:GetX()
+--                   tParameters[PARAM_Y] = pSelectedUnit:GetY()
+--                   tParameters[PARAM_IMPROVEMENT_TYPE] = improvementHash
+--                   UnitManager.RequestOperation(pSelectedUnit, BUILD_IMPROVEMENT, tParameters)
+-- Those four lines are reproduced verbatim below; the improvement is the one the caller named, on
+-- the unit's own plot, and no other plot is reachable through this function at all.
+--
+-- The panel's own gate is re-asked here before the order goes out (`cannot_build_here` is a greyed
+-- button, not a refusal invented by the harness), matching CivSim_UnitOrders_FoundCity above.
+-- UNVERIFIED LIVE: UnitOperationTypes.BUILD_IMPROVEMENT / PARAM_IMPROVEMENT_TYPE and this
+-- parameter-table shape are read out of Firaxis' own caller, not yet exercised against a client.
+local function CivSim_UnitOrders_BuildImprovement(unitId, improvementType)
+    -- The dispatcher passes the decision's `target` as the LAST positional argument, and for a
+    -- build the target is the improvement type name; a lone string argument is therefore the
+    -- improvement and the unit is the selected one (same normalisation as MoveTo above).
+    if type(unitId) == "string" and improvementType == nil then
+        unitId, improvementType = nil, unitId
+    end
+    local unit = CivSim_FindLocalUnit(unitId)
+    if unit == nil then
+        return { ok = false, reason = "unit_not_found" }
+    end
+    if type(improvementType) ~= "string" then
+        return { ok = false, reason = "no_improvement_named", unit_id = unit:GetID() }
+    end
+    local okRow, row = pcall(function() return GameInfo.Improvements[improvementType] end)
+    if not okRow or type(row) ~= "table" or row.Hash == nil then
+        return { ok = false, reason = "unknown_improvement", unit_id = unit:GetID(),
+                 improvement = improvementType }
+    end
+    local tParameters = {}
+    tParameters[UnitOperationTypes.PARAM_X] = unit:GetX()
+    tParameters[UnitOperationTypes.PARAM_Y] = unit:GetY()
+    tParameters[UnitOperationTypes.PARAM_IMPROVEMENT_TYPE] = row.Hash
+    local okCan, can = pcall(function()
+        return UnitManager.CanStartOperation(
+            unit, UnitOperationTypes.BUILD_IMPROVEMENT, nil, tParameters, true)
+    end)
+    if okCan and can == false then
+        return { ok = false, reason = "cannot_build_here", unit_id = unit:GetID(),
+                 improvement = improvementType }
+    end
+    local accepted = UnitManager.RequestOperation(
+        unit, UnitOperationTypes.BUILD_IMPROVEMENT, tParameters)
+    -- Bounded read-back: the two things a human watches change -- the charge counter on the unit's
+    -- own panel, and the improvement that appears on the tile under it. Two single reads, no loop
+    -- and no waiting. Evidence only: whether this counts as `applied` is decided upstream by the
+    -- declaration's verification_predicate against a freshly re-assembled observation, never by
+    -- what this function returns (src/civsim_harness/act/executor.py's own module docstring).
+    local charges = nil
+    pcall(function() if unit.GetBuildCharges then charges = unit:GetBuildCharges() end end)
+    local plotImprovement = nil
+    pcall(function()
+        local plot = Map.GetPlot(unit:GetX(), unit:GetY())
+        if plot ~= nil and plot:GetImprovementType() ~= -1 then
+            plotImprovement = GameInfo.Improvements[plot:GetImprovementType()].ImprovementType
+        end
+    end)
+    return {
+        ok = (accepted ~= false),
+        unit_id = unit:GetID(),
+        improvement = improvementType,
+        plot = { x = unit:GetX(), y = unit:GetY() },
+        charges_remaining = charges,
+        plot_improvement = plotImprovement,
+    }
+end
+
 CivSim_UnitOrders = {
     move_to = CivSim_UnitOrders_MoveTo,
     found_city = CivSim_UnitOrders_FoundCity,
     promote = CivSim_UnitOrders_Promote,
+    build_improvement = CivSim_UnitOrders_BuildImprovement,
 }
 
 -- Example dispatch (performed by the Nexus dispatcher, not by this file):

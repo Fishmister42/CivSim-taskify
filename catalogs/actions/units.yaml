@@ -62,6 +62,42 @@
     acts on the selected settler; send no target, or that settler's unit_id
   introduced_in_version: "2026.09.1"
 
+# Gameplay day (2026-09-21): the first action in this catalog that spends a builder charge. The
+# goal `use_a_builder` (tests/live/goals/use_a_builder.yaml) was authored blocked on exactly this
+# gap -- "NO action in catalogs/actions/ spends a builder charge" -- and the harness had never
+# built an improvement.
+- declaration_id: units.build_improvement
+  kind: action
+  summary: >
+    Spend one of the selected unit's build charges to improve the tile it is standing on.
+    parameters: {"target": "<an improvement_type from that unit's available_builds>"}.
+  parity_basis: >
+    Select a Builder standing on the tile, then click that improvement's button in the build row
+    of its unit action panel (the row the panel fills from the improvements this plot offers).
+  context: InGame
+  capability_id: units.orders
+  # `unit.charges_remaining > 0` is the charge counter on the panel; `target in
+  # unit.available_builds` is that improvement's button being present and not greyed out. A unit
+  # that is not a builder has no build buttons at all, so its available_builds is empty and this
+  # can never hold for it.
+  availability_predicate: >
+    unit.is_selected and unit.owner_is_local_player and unit.charges_remaining > 0
+    and target in unit.available_builds
+  # The charge counter going down by one is what a human watches. DOCUMENTED LIMIT: a Builder
+  # spending its LAST charge is consumed and leaves the map, and the game then selects some other
+  # unit, whose own charges_remaining will not satisfy this -- so that one case reads as rejected
+  # even though the improvement was built. The conservative direction on purpose (FR-011: a
+  # predicate that cannot confirm the effect is never read as success); the plot's own
+  # `improvement` in map.state is the reading that covers it, and the goal run's success predicate
+  # already accepts either.
+  verification_predicate: >
+    unit.charges_remaining == observed_charges_remaining - 1
+  target_kind: name
+  target_hint: >
+    an improvement_type from the selected unit's available_builds, e.g. IMPROVEMENT_FARM --
+    the improvement, never the unit's id or a plot
+  introduced_in_version: "2026.09.9"
+
 - declaration_id: units.promote
   kind: action
   summary: Apply an available promotion to a unit.

@@ -45,7 +45,8 @@ async def test_the_real_catalog_loads_with_the_documented_shape() -> None:
     # 60 -> 58 (catalog 2026.09.5): the 2026-09-21 honesty pass retired
     # prompts.city_state_quest and prompts.religion_selection -- see catalogs/README.md §6.
     # 59 -> 61 (catalog 2026.09.8): prompts.era_dedication and prompts.congress_intro.
-    assert len(catalog.declarations) == 61
+    # 61 -> 62 (catalog 2026.09.9): units.build_improvement, the first charge-spending action.
+    assert len(catalog.declarations) == 62
     # +cities.selection, +yields.read, +selection.orders (2026-09-21)
     assert len(catalog.capabilities) == 27
     assert _UNITS_STATE in catalog.declarations

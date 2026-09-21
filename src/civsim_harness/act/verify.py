@@ -67,6 +67,10 @@ from civsim_harness.models.turn import Observation, StepProgress
 _OBSERVED_FIELD_SOURCES: Mapping[str, tuple[str, str]] = {
     "observed_turn_number": ("game", "turn_number"),
     "observed_diplomatic_favor": ("player", "diplomatic_favor"),
+    # `units.build_improvement`: the build charge counter on the unit panel, read before the order
+    # goes out. The bindings below are built with no ``target``, so the ``unit`` namespace resolves
+    # to the entry ``units.state`` reports as selected -- the same unit a build order acts on.
+    "observed_charges_remaining": ("unit", "charges_remaining"),
 }
 
 

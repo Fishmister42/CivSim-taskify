@@ -48,7 +48,13 @@ CATALOGS_ROOT = _REPO_ROOT / "catalogs"
 # `prompts.congress_intro` (the World Congress "Begin Voting" welcome card, measured stalling a
 # run as `UnknownScreenEncountered` at game turn 57). Both are backed by the existing
 # `prompts.orders` capability, so the capability count is unchanged.
-EXPECTED_DECLARATION_COUNT = 61
+#
+# 61 -> 62, 2026-09-21 (catalog `2026.09.9`): `units.build_improvement` -- the first action in this
+# catalog that spends a builder charge. The directed goal `use_a_builder`
+# (tests/live/goals/use_a_builder.yaml) was authored blocked on exactly this gap. Backed by the
+# existing `units.orders` capability (lua/ingame/unit_orders.lua), so the capability count is
+# unchanged.
+EXPECTED_DECLARATION_COUNT = 62
 EXPECTED_CAPABILITY_COUNT = 27
 
 

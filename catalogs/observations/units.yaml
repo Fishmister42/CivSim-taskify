@@ -8,8 +8,9 @@
     Every unit the local player owns, plus other civilizations' units currently visible on a
     revealed and visible plot.
   parity_basis: >
-    Look at unit flags on the map and the unit panel for a selected unit; movement range and
-    available promotions are exactly what that panel highlights.
+    Look at unit flags on the map and the unit panel for a selected unit; movement range,
+    available promotions and the build buttons offered on the tile it is standing on are exactly
+    what that panel shows.
   context: InGame  # T213 (2026-09-21, measured): GetUnitType, GetReachableMovement, CanStartOperation exist InGame only
   capability_id: units.read
   output_schema:
@@ -44,6 +45,33 @@
               type: array
               items: { type: string }
             charges_remaining: { type: [number, "null"] }
+            # The unit panel's build buttons, reported for the SELECTED unit only -- those buttons
+            # exist only on the panel of the unit a human has selected
+            # (steamassets/base/assets/ui/panels/unitpanel.lua:545-546, :554-573). Same shape as
+            # cities.state's pair: `available_builds` is the live-button subset and is what
+            # units.build_improvement's availability predicate reads
+            # (`target in unit.available_builds`), so it stays a list of plain type names;
+            # `build_options` is the panel's list row for row, greyed rows included.
+            available_builds:
+              type: array
+              items: { type: string }
+            build_options:
+              type: array
+              items:
+                type: object
+                required: [improvement_type, disabled]
+                properties:
+                  improvement_type: { type: string }
+                  # Locale.Lookup(improvement.Name) -- the label printed on the button
+                  # (unitpanel.lua:574).
+                  name: { type: string }
+                  disabled: { type: boolean }
+                  # UnitOperationResults.BEST_IMPROVEMENT: the row the panel frames as the
+                  # recommended action (unitpanel.lua:563, :595-600, :919-933).
+                  is_recommended: { type: boolean }
+            # Why the build list is empty, when the panel's own query could not be asked at all --
+            # never a silent `[]` (the failure that hid cities.state's empty available_productions).
+            available_builds_reason: { type: string }
             queued_path:
               type: [object, "null"]
               properties:

@@ -87,6 +87,94 @@ local function CivSim_GetReachablePlots(unit)
     return reachable
 end
 
+local function CivSim_Units_Try(fn)
+    local ok, value = pcall(fn)
+    if ok then return value end
+    return nil
+end
+
+-- --------------------------------------------------------------------------
+-- The unit panel's build buttons, for the unit whose panel a human is looking at.
+--
+-- SOURCE (Firaxis' shipped UI on this machine, read 2026-09-21):
+--   steamassets/base/assets/ui/panels/unitpanel.lua
+--     :545-546  the operation rows are listed at all only while `pUnit:GetMovesRemaining() > 0`
+--     :336-338  IsBuildingImprovement(actionHash) -> actionHash == UnitOperationTypes.BUILD_IMPROVEMENT
+--     :346-351  GetBuildImprovementParameters -> {PARAM_X = pUnit:GetX(), PARAM_Y = pUnit:GetY()}
+--     :554-561  UnitManager.CanStartOperation(pUnit, actionHash, nil, tParameters, true), then
+--               tResults[UnitOperationResults.IMPROVEMENTS] -- the improvements this plot offers
+--     :566-573  each improvement re-checked with tParameters[PARAM_IMPROVEMENT_TYPE] = eImprovement;
+--               `local isDisabled = not bCanStart` is exactly what greys that row's button out
+--     :563,:595-600,:919-933  BEST_IMPROVEMENT -> the row the panel frames as "Recommended"
+--     :574      the row's human-visible label, Locale.Lookup(improvement.Name)
+--   dlc/expansion2/ui/replacements/unitpanel_expansion2.lua:54-57,:107-118 -- Gathering Storm adds a
+--   second build-button family, BUILD_IMPROVEMENT_ADJACENT, whose click opens an interface mode and
+--   then waits for a map click (UI.SetInterfaceMode). That click is an act the harness has no
+--   action for, so those rows are deliberately NOT listed here -- the same call cities.state makes
+--   for a `requires_placement` production row: listing a button the agent could not finish pressing
+--   would be a promise the catalog cannot keep.
+--
+-- Parity: only the SELECTED unit is asked. The build buttons exist only on the panel of the unit a
+-- human has selected, and this is one CanStartOperation per offered improvement -- asking it of
+-- every unit on the map would be both a read no human performs and a per-turn cost nobody pays.
+-- UNVERIFIED LIVE: T213 measured `UnitManager.CanStartOperation` answering in InGame (which is why
+-- units.state is declared there), but this five-argument, results-returning form and
+-- `UnitOperationResults.IMPROVEMENTS` have not yet been exercised against a live client.
+-- --------------------------------------------------------------------------
+local function CivSim_GetAvailableBuilds(unit)
+    local options = {}
+    local moves = CivSim_Units_Try(function() return unit:GetMovesRemaining() end)
+    if type(moves) ~= "number" or moves <= 0 then
+        return options, nil -- unitpanel.lua:545-546: no moves left, no operation buttons at all
+    end
+    local parameters = CivSim_Units_Try(function()
+        local p = {}
+        p[UnitOperationTypes.PARAM_X] = unit:GetX()
+        p[UnitOperationTypes.PARAM_Y] = unit:GetY()
+        return p
+    end)
+    if type(parameters) ~= "table" then
+        return options, "build_improvement_parameters_unavailable"
+    end
+    local ok, canStart, results = pcall(function()
+        return UnitManager.CanStartOperation(
+            unit, UnitOperationTypes.BUILD_IMPROVEMENT, nil, parameters, true)
+    end)
+    if not ok then
+        -- Never a silent `[]` -- the failure mode that hid cities.state's empty
+        -- `available_productions` for 399 steps. The list stays empty and says why.
+        return options, "can_start_operation_unanswerable"
+    end
+    if canStart ~= true or type(results) ~= "table" then
+        return options, nil -- the panel is showing no build buttons on this plot
+    end
+    local improvements = CivSim_Units_Try(function()
+        return results[UnitOperationResults.IMPROVEMENTS]
+    end)
+    if type(improvements) ~= "table" then
+        return options, nil
+    end
+    local best = CivSim_Units_Try(function() return results[UnitOperationResults.BEST_IMPROVEMENT] end)
+    for _, eImprovement in ipairs(improvements) do
+        parameters[UnitOperationTypes.PARAM_IMPROVEMENT_TYPE] = eImprovement
+        local okRow, rowCanStart = pcall(function()
+            return UnitManager.CanStartOperation(
+                unit, UnitOperationTypes.BUILD_IMPROVEMENT, nil, parameters, true)
+        end)
+        local row = CivSim_Units_Try(function() return GameInfo.Improvements[eImprovement] end)
+        if type(row) == "table" and row.ImprovementType ~= nil then
+            local label = CivSim_Units_Try(function() return Locale.Lookup(row.Name) end)
+            options[#options + 1] = {
+                improvement_type = row.ImprovementType,
+                name = (type(label) == "string" and label ~= "" and label) or row.Name,
+                disabled = not (okRow and rowCanStart == true),
+                is_recommended = (best ~= nil and best ~= -1 and best == eImprovement),
+            }
+        end
+    end
+    return options, nil
+end
+
 local function CivSim_DescribeUnit(unit, localPlayer)
     -- MEASURED (2026-09-21, live, T213): `unit:GetUnitType()` exists in InGame only (nil in
     -- GameCore_Tuner), `GetMovesRemaining`/`GetMaxMoves` answer in both ("2/2" for a Settler),
@@ -136,6 +224,25 @@ local function CivSim_DescribeUnit(unit, localPlayer)
         end
         entry.available_promotions = promotions
         entry.charges_remaining = unit.GetBuildCharges and unit:GetBuildCharges() or nil -- UNVERIFIED
+        -- The build buttons a human sees, and only on the panel they are looking at (see the
+        -- source note above CivSim_GetAvailableBuilds). `build_options` is that list row for row,
+        -- greyed ones included; `available_builds` is the subset whose button is live, which is
+        -- what units.build_improvement's availability predicate reads
+        -- (`target in unit.available_builds`), so it stays a list of plain type names.
+        if entry.is_selected then
+            local buildOptions, buildsReason = CivSim_GetAvailableBuilds(unit)
+            entry.build_options = buildOptions
+            local availableBuilds = {}
+            for _, option in ipairs(buildOptions) do
+                if not option.disabled then
+                    availableBuilds[#availableBuilds + 1] = option.improvement_type
+                end
+            end
+            entry.available_builds = availableBuilds
+            if buildsReason ~= nil then
+                entry.available_builds_reason = buildsReason
+            end
+        end
         -- Queued path, if any (mirrors the little destination marker the UI shows a unit with
         -- a pending multi-turn move order).
         if unit.GetActivityType and unit:GetActivityType() == UnitActivityType.ACTIVITY_OPERATION then -- UNVERIFIED
