@@ -1,0 +1,508 @@
+<title>CivSim Web Evidence</title>
+<style>
+:root{
+  --ground:#f3f4f8;
+  --surface:#ffffff;
+  --ink:#1b1f27;
+  --muted:#5b6473;
+  --line:#d7dbe4;
+  --line-strong:#b9c0cd;
+  --accent:#2b57a8;
+  --accent-ink:#1e3f7c;
+  --warn:#a35a08;
+  --warn-bg:#fbf1e3;
+  --good:#1e6f47;
+  --good-bg:#e5f3ea;
+  --note-bg:#eef1f7;
+  --shot-bg:#101520;
+  --code-bg:#eceef4;
+  --shadow:0 1px 2px rgba(20,25,40,.06),0 6px 20px rgba(20,25,40,.06);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#14171d;
+    --surface:#1b1f27;
+    --ink:#e6e8ed;
+    --muted:#9aa3b1;
+    --line:#2b313c;
+    --line-strong:#3c4452;
+    --accent:#8db4f2;
+    --accent-ink:#b7d0f7;
+    --warn:#f0b35a;
+    --warn-bg:#2b2213;
+    --good:#66c78f;
+    --good-bg:#15291d;
+    --note-bg:#20252e;
+    --shot-bg:#0d1119;
+    --code-bg:#242a34;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.25);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14171d;
+  --surface:#1b1f27;
+  --ink:#e6e8ed;
+  --muted:#9aa3b1;
+  --line:#2b313c;
+  --line-strong:#3c4452;
+  --accent:#8db4f2;
+  --accent-ink:#b7d0f7;
+  --warn:#f0b35a;
+  --warn-bg:#2b2213;
+  --good:#66c78f;
+  --good-bg:#15291d;
+  --note-bg:#20252e;
+  --shot-bg:#0d1119;
+  --code-bg:#242a34;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.25);
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  padding-inline:16px;
+  padding-block:24px 48px;
+}
+.wrap{max-width:1080px;margin-inline:auto}
+h1,h2,h3{text-wrap:balance;line-height:1.2;margin:0}
+h1{font-size:clamp(1.7rem,1.2rem + 2vw,2.4rem);font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.35rem;font-weight:650;margin-top:0}
+h3{font-size:1.05rem;font-weight:650}
+p{margin:0;max-width:72ch}
+a{color:var(--accent);text-underline-offset:.15em}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+code,pre,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;font-size:.92em}
+code{background:var(--code-bg);padding:.08em .35em;border-radius:3px}
+pre{background:var(--code-bg);padding:12px 14px;border-radius:6px;overflow-x:auto;margin:0;line-height:1.5}
+pre code{background:none;padding:0}
+.eyebrow{font-size:.74rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.stack{display:flex;flex-direction:column;gap:12px}
+section{margin-top:44px;display:flex;flex-direction:column;gap:18px}
+section > h2{padding-bottom:8px;border-bottom:1px solid var(--line)}
+
+/* header */
+header.top{display:flex;flex-direction:column;gap:16px}
+header.top .meta{display:flex;flex-wrap:wrap;gap:8px 22px;color:var(--muted);font-size:.9rem}
+header.top .meta span b{color:var(--ink);font-weight:600}
+.callout{
+  background:var(--warn-bg);
+  border-left:4px solid var(--warn);
+  padding:12px 16px;
+  border-radius:0 6px 6px 0;
+  display:flex;flex-direction:column;gap:6px;
+}
+.callout .eyebrow{color:var(--warn)}
+.note{background:var(--note-bg);border-radius:6px;padding:12px 16px;display:flex;flex-direction:column;gap:6px}
+nav.jump{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:.9rem}
+
+/* route table */
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:.92rem}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;background:var(--note-bg)}
+tr:last-child td{border-bottom:0}
+td.mono{white-space:nowrap}
+td.n{color:var(--muted);font-variant-numeric:tabular-nums;width:2.5em}
+
+/* gallery */
+.gallery{display:flex;flex-direction:column;gap:28px}
+figure.card{
+  margin:0;
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:8px;
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+figure.card figcaption{padding:14px 16px 12px;display:flex;flex-direction:column;gap:6px}
+.cardhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.num{font-variant-numeric:tabular-nums;color:var(--muted);font-weight:600}
+.route{font-weight:600;color:var(--ink);word-break:break-all}
+.pill{
+  display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.04em;
+  padding:2px 8px;border-radius:999px;line-height:1.5;white-space:nowrap;
+}
+.pill.ok{background:var(--good-bg);color:var(--good)}
+.pill.intended{background:var(--warn-bg);color:var(--warn)}
+.pill.tall{background:var(--note-bg);color:var(--muted);font-weight:600}
+.file{font-size:.8rem;color:var(--muted)}
+.shot{background:var(--shot-bg);border-top:1px solid var(--line);display:flex;justify-content:center}
+.shot img{display:block;width:100%;height:auto;max-width:100%}
+.shot.phone img{width:auto;max-width:100%}
+.shot.phone{padding:16px}
+.pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:28px}
+.pair figure.card{min-width:0}
+figure.card .fix{color:var(--warn)}
+
+/* findings */
+ol.findings{margin:0;padding-left:1.4em;display:flex;flex-direction:column;gap:14px}
+ol.findings li{max-width:80ch}
+ol.findings li > b{display:block;margin-bottom:2px}
+.fixed{
+  display:inline-block;background:var(--good-bg);color:var(--good);
+  font-size:.72rem;font-weight:700;letter-spacing:.04em;padding:1px 8px;border-radius:999px;vertical-align:middle;margin-left:4px;
+}
+ul.plain{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:6px}
+ul.plain li{max-width:80ch}
+
+footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px;color:var(--muted);font-size:.9rem}
+footer p{max-width:none}
+@media (prefers-reduced-motion:no-preference){a{transition:color .12s}}
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">Spec 001 · Unified web interface · demo evidence</div>
+  <h1>Every page of the CivSim web interface, on fixture data</h1>
+  <p>
+    Spec 001 is a <b>read-only</b> FastAPI + Jinja service that sits over the match store on
+    port <code>8420</code>. Every route serves HTML to a browser and the same view model as JSON
+    (<code>?format=json</code> or <code>Accept: application/json</code>). It reports and never acts:
+    starting, pausing or branching a run is the harness's job, and the game client is never required.
+  </p>
+  <div class="callout">
+    <div class="eyebrow">What you are looking at</div>
+    <p>
+      <b>Every run, turn, step, event, yield and configuration on these pages is synthetic fixture data</b>
+      from <code>tests/web_support/fixtures.py</code> (<code>make_store()</code>, <code>make_catalog_store()</code>,
+      <code>make_event()</code>). Nothing came from a real Civilization VI game: the run ids
+      (<code>run-live</code>, <code>run-01</code>…<code>run-05</code>), the straight-line yields, the
+      <code>2026-09-20T12:0x:00Z</code> timestamps and the reasoning text are all fixture values.
+    </p>
+    <p>
+      The <b>screen captures are real, but all the same frame</b>. The fixtures' capture blobs are an
+      8-byte PNG signature (a broken image), so each screened-clean capture was swapped in-process for one
+      genuine 720×450 window frame the 002 harness took of the Civ VI main menu. It does not correspond to the
+      fixture turn it sits under.
+    </p>
+  </div>
+  <div class="meta">
+    <span><b>Captured</b> 2026-09-21 (UTC 03:5x; the evening of 20 Sep local time)</span>
+    <span><b>Browser</b> Chromium 153 headless, 1440×1000 viewport</span>
+    <span><b>Tall crops</b> 1440×2600 · <b>Mobile</b> 420×900</span>
+    <span><b>Tree</b> commit c96bb1b + uncommitted changes outside <code>src/civsim_web/</code></span>
+  </div>
+  <p>
+    Screenshots are viewport crops, not full-page captures: a page longer than the viewport is cut off at the
+    bottom. That is the screenshot, not the page. The one real match store on this box was not used (see
+    <a href="#not-shown">Not shown yet</a>).
+  </p>
+  <nav class="jump" aria-label="Sections">
+    <a href="#routes">Route map</a>
+    <a href="#gallery">Gallery</a>
+    <a href="#findings">What the pass found</a>
+    <a href="#not-shown">Not shown yet</a>
+    <a href="#reproduce">Reproduce</a>
+  </nav>
+</header>
+
+<section id="routes">
+  <h2>Route map</h2>
+  <p>
+    The service registers 13 routes. Every one of them was requested with a browser
+    <code>Accept: text/html</code> header during this pass except the two marked as not exercised.
+  </p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Route</th><th>What it shows</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">/</td><td>"Active runs" landing. With exactly one playing run it 307-redirects to that run's live view; with more, a list.</td></tr>
+        <tr><td class="mono">/runs</td><td>Run catalog table, sortable (<code>?sort=…&amp;order=…</code>, 31 sortable keys including nested metrics). Gapped runs are quarantined from trending with a stated reason.</td></tr>
+        <tr><td class="mono">/runs/{run_id}</td><td>Live view: glance card (current turn, last decision, last confirmed time), latest screen capture, "act through the harness" box, run summary.</td></tr>
+        <tr><td class="mono">/runs/{run_id}/turns/{n}</td><td>Turn replay: metric trajectory with the turn highlighted, the turn record, every step with what the agent could see and what it decided. <code>?attempt=</code> addresses a superseded attempt; <code>?focus=</code> keeps a panel highlighted while stepping.</td></tr>
+        <tr><td class="mono">/runs/{run_id}/turns/{n}/steps/{i}</td><td>One decision step on its own: observation panels, the capture, the action block.</td></tr>
+        <tr><td class="mono">/runs/{run_id}/events</td><td>Run timeline: one card per event in time order.</td></tr>
+        <tr><td class="mono">/runs/{run_id}/metrics</td><td>Metric trajectories: trend eligibility, gapped turns, one server-rendered SVG series per metric.</td></tr>
+        <tr><td class="mono">/compare?runs=a,b,c</td><td>Comparison: starting-conditions check (Principle IV), quarantined runs, overlaid series.</td></tr>
+        <tr><td class="mono">/runs/{run_id}/panels/{panel_id}</td><td>A run-scoped panel rendered alone, with its registry metadata.</td></tr>
+        <tr><td class="mono">/runs/{run_id}/turns/{n}/panels/{panel_id}</td><td>A turn-scoped panel rendered alone.</td></tr>
+        <tr><td class="mono">/runs/{run_id}/turns/{n}/steps/{i}/panels/{panel_id}</td><td>A step-scoped panel rendered alone. <i>Not exercised in this pass.</i></td></tr>
+        <tr><td class="mono">/captures/{capture_id}/image</td><td>The capture's PNG bytes. Behind every capture slot in the pages below. <i>No separate screenshot.</i></td></tr>
+        <tr><td class="mono">/healthz</td><td>Service and store health plus the panel registry (37 panel ids). JSON only.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Three JSON responses sit alongside the screenshots in this folder: <code>run-live.json</code>
+    (the exact data behind the live view, 19.9 KB), <code>healthz.json</code>, and
+    <code>turn-9-gap-404.json</code>, which shows that the gap page is a structured API answer too.
+  </p>
+</section>
+
+<section id="gallery">
+  <h2>Gallery</h2>
+  <p>
+    In README order. Where a 2600px-tall crop exists it is shown instead of the 1000px one and marked
+    as such. Each image is the page as served, including the defects listed further down.
+  </p>
+  <div class="gallery">
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">01</span><span class="route mono">/</span><span class="pill ok">200</span></div>
+        <p>"Active runs" landing. Two <code>playing</code> runs (<code>run-live</code>, <code>run-live-2</code>) listed as links with a green <b>running</b> dot, then a generic key/value dump of the same run summaries (health, trend eligibility, reasons). The <i>Empty state —</i> row above the list is one of the placeholder rows noted below.</p>
+        <span class="file">01-landing.png</span>
+      </figcaption>
+      <div class="shot"><img src="01-landing.png" width="1440" height="1000" alt="Active runs landing page listing run-live and run-live-2 as running, followed by a nested key/value summary of each run"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">02</span><span class="route mono">/runs</span><span class="pill ok">200</span></div>
+        <p>Run catalog, default sort <code>started_at desc</code>: 7 runs across 13 columns (Run, Trend eligible, Seed, Civilization, Leader, Ruleset, Model, Turns, Record, Comparability, Lifecycle, Started, Ended). Quarantined rows (<code>run-03</code> has_gaps; <code>run-live</code> has a gap at turn 9) are tinted red with a <b>NO</b> badge and a Principle III explanation. Banner: "5 of 7 matching runs may be used as trending input".</p>
+        <span class="file">02-runs-catalog.png</span>
+      </figcaption>
+      <div class="shot"><img src="02-runs-catalog.png" width="1440" height="1000" loading="lazy" alt="Run catalog table with seven runs; two rows tinted red with a NO trend-eligible badge"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">03</span><span class="route mono">/runs?sort=outcome_metrics.science_output&amp;order=desc</span><span class="pill ok">200</span></div>
+        <p>The same table re-sorted by a nested metric field; the sort indicator moves to that column. The README verified this file by HTTP status, content type and file size only, without opening it; this page does not claim more than that.</p>
+        <span class="file">03-runs-catalog-sorted-science-desc.png</span>
+      </figcaption>
+      <div class="shot"><img src="03-runs-catalog-sorted-science-desc.png" width="1440" height="1000" loading="lazy" alt="Run catalog table sorted by science output descending"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">04</span><span class="route mono">/runs/run-live</span><span class="pill ok">200</span><span class="pill tall">tall crop 1440×2600</span></div>
+        <p>The live view. Top: the glance card (run id, <b>running</b> playing, CURRENT TURN 12, LAST DECISION "Found City" with its reasoning, LAST CONFIRMED CURRENT AT) and "What the screen looked like", the turn 12 step 3 capture (the real frame). Below: the "To intervene, act through the harness" box (run id, lifecycle, last known good turn and save), the full RUN SUMMARY, and the start of the Turn 12 section. <span class="fix">The orange "connection lost — this view may be stale" text under the timestamp is defect 1, shown on every load even though the connection was fine; since fixed.</span></p>
+        <span class="file">04b-run-live-tall.png (04-run-live.png is the 1000px crop of the same page)</span>
+      </figcaption>
+      <div class="shot"><img src="04b-run-live-tall.png" width="1440" height="2600" loading="lazy" alt="Live view of run-live: glance card, Civilization VI main menu capture, intervention box and run summary"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">05</span><span class="route mono">/runs/run-live/turns/3</span><span class="pill ok">200</span><span class="pill tall">tall crop 1440×2600</span></div>
+        <p>Turn replay. Run nav (Run / Timeline / Metric trajectories), turn nav (prev/next, Jump list, note the duplicate "1"), the focus bar, and the inline-SVG Metric Trajectory with turn 3 highlighted and a dashed red gap marker at turn 9 where the line breaks. Then the Turn 3 record (attempt 0, authoritative, outcome <code>ended_by_agent</code>, 3 steps, yields, completeness, step window) and Step 1: "WHAT THE AGENT COULD SEE" (Turn State and Cities panels with their catalog guidance), the real capture on the right, and the decision (Found City, <code>units.found_city</code>, applied, parity basis).</p>
+        <span class="file">05b-turn-3-replay-tall.png (05-turn-3-replay.png is the 1000px crop)</span>
+      </figcaption>
+      <div class="shot"><img src="05b-turn-3-replay-tall.png" width="1440" height="2600" loading="lazy" alt="Turn 3 replay: metric trajectory chart with turn 3 highlighted and a gap marker at turn 9, then the turn record and step 1 with two observation panels and the capture"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">06</span><span class="route mono">/runs/run-live/turns/3?focus=observation.map</span><span class="pill ok">200</span></div>
+        <p><code>?focus=</code> is accepted and echoed ("Focused panel: observation.map", and a "clear focus" link appears), but no panel with that id exists in this fixture turn, so nothing is highlighted.</p>
+        <span class="file">06-turn-3-focus-observation-map.png</span>
+      </figcaption>
+      <div class="shot"><img src="06-turn-3-focus-observation-map.png" width="1440" height="1000" loading="lazy" alt="Turn 3 replay with focus set to observation.map; no panel highlighted"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">06b</span><span class="route mono">/runs/run-live/turns/3?focus=observation.cities</span><span class="pill ok">200</span></div>
+        <p>Focus on a panel the turn actually has: <code>observation.cities</code> is highlighted (bold, orange) in the focus bar beside a "clear focus" link, and the turn record reads "Focused panel: observation.cities". The focused step panel itself sits below the 1000px fold.</p>
+        <span class="file">06b-turn-3-focus-observation-cities.png</span>
+      </figcaption>
+      <div class="shot"><img src="06b-turn-3-focus-observation-cities.png" width="1440" height="1000" loading="lazy" alt="Turn 3 replay with observation.cities highlighted in the focus bar"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">07</span><span class="route mono">/runs/run-live/turns/7?attempt=0</span><span class="pill ok">200</span></div>
+        <p>The abandoned attempt, still addressable (FR-009). An orange banner: "This is attempt 0 of turn 7, and it is no longer the authoritative record: attempt 1 superseded it", linking to the current record and to the run timeline, and citing FR-017 (an interrupted run and its resume are one run). The chart highlights turn 7.</p>
+        <span class="file">07-turn-7-attempt-0-superseded.png</span>
+      </figcaption>
+      <div class="shot"><img src="07-turn-7-attempt-0-superseded.png" width="1440" height="1000" loading="lazy" alt="Turn 7 attempt 0 with an orange banner saying attempt 1 superseded it"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">08</span><span class="route mono">/runs/run-live/turns/7</span><span class="pill ok">200</span></div>
+        <p>The authoritative attempt 1 of the same turn, with no banner. Verified in the README by HTTP status and file size only, not opened.</p>
+        <span class="file">08-turn-7-authoritative.png</span>
+      </figcaption>
+      <div class="shot"><img src="08-turn-7-authoritative.png" width="1440" height="1000" loading="lazy" alt="Turn 7 authoritative attempt, no banner"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">09</span><span class="route mono">/runs/run-live/turns/3/steps/1</span><span class="pill ok">200</span></div>
+        <p>A single decision step: progress <code>changed_state</code>, the two observation panels (Turn State, Cities) with their values and catalog guidance, the real capture with its capture id (<code>cap-tc-run-live-t3-a0-s1</code>) and screening status (<code>screened_clean</code>), and the action block (Found City, <code>units.found_city</code>, applied).</p>
+        <span class="file">09-turn-3-step-1.png</span>
+      </figcaption>
+      <div class="shot"><img src="09-turn-3-step-1.png" width="1440" height="1000" loading="lazy" alt="Step 1 of turn 3: observation panels on the left, capture on the right, action block below"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">10</span><span class="route mono">/runs/run-live/turns/9</span><span class="pill intended">404 · intended (FR-016)</span></div>
+        <p><b>This 404 is the designed behaviour, not an error in the app.</b> Turn 9 is a gap in the fixture, and the page says so: "turn gap — Turn 9 is inside this run's recorded range (1-12) but has no authoritative attempt: the harness recorded it as a gap. The run's turn-by-turn record is incomplete and it is unfit for trend comparison." It carries the <code>turn_gaps</code> / <code>turn_range</code> detail and a "Back to the live view" link. The first row reads <i>Error: error</i> (defect 4). The same URL as JSON returns the same structured answer with <code>kind: turn_gap</code>.</p>
+        <span class="file">10-turn-9-gap-404.png</span>
+      </figcaption>
+      <div class="shot"><img src="10-turn-9-gap-404.png" width="1440" height="1000" loading="lazy" alt="Turn gap page explaining that turn 9 has no authoritative attempt, with detail rows and a back link"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">11</span><span class="route mono">/runs/run-live/events</span><span class="pill ok">200</span></div>
+        <p>Run timeline: one card per event in time order, with a colour bar on the left. Visible here: <code>run_started</code>, <code>lifecycle_transition</code> (with From/To detail: created → playing), <code>turn_started</code>, <code>save_taken</code>; the fixture has 9 events in all.</p>
+        <span class="file">11-run-live-events.png</span>
+      </figcaption>
+      <div class="shot"><img src="11-run-live-events.png" width="1440" height="1000" loading="lazy" alt="Run timeline with event cards for run_started, lifecycle_transition, turn_started and save_taken"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">12</span><span class="route mono">/runs/run-live/metrics</span><span class="pill ok">200</span><span class="pill tall">tall crop 1440×2600</span></div>
+        <p>Metric trajectories. "May be used for trending: no" with the reason <code>turn_gaps_recorded</code>, the "Turns with no authoritative record: Turn 9" block, then both server-rendered SVG series (Culture Output, Science Output), each with the dashed gap marker at turn 9 and every point a link to its turn. Below the charts, the generic dump of metrics recorded and series points.</p>
+        <span class="file">12b-run-live-metrics-tall.png (12-run-live-metrics.png is the 1000px crop)</span>
+      </figcaption>
+      <div class="shot"><img src="12b-run-live-metrics-tall.png" width="1440" height="2600" loading="lazy" alt="Metric trajectories page with trend eligibility block and two line charts broken at turn 9"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">13</span><span class="route mono">/compare?runs=run-01,run-02,run-03</span><span class="pill ok">200</span><span class="pill tall">tall crop 1440×2600</span></div>
+        <p>Comparison. "Comparison basis — Same starting conditions: no" (the runs differ in civilization, leader and model_primary; Principle IV), "Quarantined from the trend: run-03", and the legend with TREND ELIGIBLE / QUARANTINED badges. Then the two overlaid series (run-01 blue, run-02 orange; run-03 excluded from every line), "Divergence points —", and the generic per-run dump.</p>
+        <span class="file">13b-compare-run-01-02-03-tall.png (13-compare-run-01-02-03.png is the 1000px crop)</span>
+      </figcaption>
+      <div class="shot"><img src="13b-compare-run-01-02-03-tall.png" width="1440" height="2600" loading="lazy" alt="Compare runs page: comparison basis, quarantined run-03, and two charts with blue and orange lines"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">14</span><span class="route mono">/runs/run-live/panels/run.header</span><span class="pill ok">200</span></div>
+        <p>A single registered panel rendered on its own: a category pill (<code>out_of_game_telemetry</code>), then the registry metadata (id, scope <code>run</code>, category, panel basis, stories US1–US4, 10 source fields, declared-in file) and its current values.</p>
+        <span class="file">14-panel-run-header.png</span>
+      </figcaption>
+      <div class="shot"><img src="14-panel-run-header.png" width="1440" height="1000" loading="lazy" alt="Run Header panel page with registry metadata, story list and source fields"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">15</span><span class="route mono">/runs/run-live/turns/3/panels/capture.screen</span><span class="pill ok">200</span></div>
+        <p>The <code>capture.screen</code> panel for turn 3: its guidance ("Look at the game's own screen at that moment…"), scope <code>step</code>, category <code>in_game</code>, source fields <code>ScreenCapture.capture_id / captured_at / turn_number</code>, declared in <code>live.yaml</code>. The VALUES block begins at the fold.</p>
+        <span class="file">15-panel-turn-3-capture-screen.png</span>
+      </figcaption>
+      <div class="shot"><img src="15-panel-turn-3-capture-screen.png" width="1440" height="1000" loading="lazy" alt="Screen Capture panel page with registry metadata and the start of the values block"></div>
+    </figure>
+
+    <figure class="card">
+      <figcaption>
+        <div class="cardhead"><span class="num">16</span><span class="route mono">/healthz</span><span class="pill ok">200 · JSON only</span></div>
+        <p>Raw JSON in Chromium's own JSON viewer. <code>/healthz</code> returns <code>application/json</code> even for <code>Accept: text/html</code>; it has no HTML template because health is machine-facing. Shows <code>ok: true</code>, store ok, panel registry version 1 with its content hash and all 37 panel ids, and <code>bind_addresses: ["127.0.0.1"]</code>.</p>
+        <span class="file">16-healthz.png</span>
+      </figcaption>
+      <div class="shot"><img src="16-healthz.png" width="1440" height="1000" loading="lazy" alt="Raw JSON health response in the browser's JSON viewer"></div>
+    </figure>
+
+    <div class="pair">
+      <figure class="card">
+        <figcaption>
+          <div class="cardhead"><span class="num">17</span><span class="route mono">/runs/run-live</span><span class="pill ok">200</span><span class="pill tall">mobile 420×900</span></div>
+          <p>Phone width. Everything below the glance card stacks correctly; the glance card does not, and its LAST DECISION and LAST CONFIRMED columns are clipped off the right edge (defect 2: "LAS", "Fo", "Sci", "Ca", "to" are the visible fragments).</p>
+          <span class="file">17-run-live-mobile-420.png</span>
+        </figcaption>
+        <div class="shot phone"><img src="17-run-live-mobile-420.png" width="420" height="900" loading="lazy" alt="Live view at phone width; the glance card's right-hand columns are cut off"></div>
+      </figure>
+      <figure class="card">
+        <figcaption>
+          <div class="cardhead"><span class="num">18</span><span class="route mono">/runs</span><span class="pill ok">200</span><span class="pill tall">mobile 420×900</span></div>
+          <p>Phone width. The catalog table keeps all its columns and scrolls horizontally; only Run through Leader fit in the viewport, and the Trend-eligible explanation wraps into a very tall, narrow column.</p>
+          <span class="file">18-runs-catalog-mobile-420.png</span>
+        </figcaption>
+        <div class="shot phone"><img src="18-runs-catalog-mobile-420.png" width="420" height="900" loading="lazy" alt="Run catalog at phone width; only the first five columns are visible and the explanation column is tall and narrow"></div>
+      </figure>
+    </div>
+
+  </div>
+</section>
+
+<section id="findings">
+  <h2>What the pass found</h2>
+  <p>
+    The README's pixel-level pass covered 01, 02, 04, 04b, 05b, 06, 06b, 07, 09, 10, 11, 12, 13, 13b, 15, 16, 17 and 18;
+    files 03, 05, 08, 12b and 14 were checked only by HTTP status, content type and file size. These are the
+    things it found wrong or misleading.
+  </p>
+  <ol class="findings">
+    <li>
+      <b>"connection lost — this view may be stale" was shown on every load of the live view, even with the connection fine. <span class="fixed">FIXED</span></b>
+      A CSS bug, not a capture artefact. The template renders the marker with the <code>hidden</code> attribute and
+      <code>poll.js</code> only un-hides it after two consecutive failed polls (the DOM after JS confirmed
+      <code>data-stale="false"</code> and <code>hidden=""</code> still set). But <code>style.css</code> declared
+      <code>.stale-marker { display: block }</code>, and an author <code>display</code> rule overrides the user-agent
+      <code>[hidden] { display: none }</code>. So the warning text was visible on 04, 04b and 17 while the orange
+      glance border that a genuine stale state adds was correctly absent. The fix has since landed in
+      <code>src/civsim_web/static/style.css</code> as <code>.stale-marker[hidden] { display: none }</code>
+      (commit <code>3616649</code>). The screenshots above predate it.
+    </li>
+    <li>
+      <b>The live-view glance card overflows at phone width (17).</b>
+      <code>.glance</code> has fixed minimum grid columns (<code>minmax(16rem,1fr) auto minmax(20rem,2fr) auto</code>,
+      at least ~36rem = 576px) and <code>style.css</code> has no <code>@media</code> rule at all, so at 420px the
+      LAST DECISION and LAST CONFIRMED columns are clipped off the right edge. Everything below the card stacks fine.
+    </li>
+    <li>
+      <b>Duplicate "1" in the turn Jump list (05, 05b, 06, 06b: "Jump: 1 1 2 4 5 6 7 8").</b>
+      <code>turn_replay.html</code> emits an unconditional link to turn 1, then its loop over
+      <code>range(max(turn-5,1), turn+6)</code> emits turn 1 again whenever the current turn is 6 or lower. Cosmetic;
+      both links work. On turn 7 (07) the list is correct.
+    </li>
+    <li>
+      <b>Placeholder rows on populated pages.</b>
+      The generic view-model renderer prints <i>Empty state —</i>, <i>Listing limitation —</i>, <i>Active filters —</i>,
+      <i>Requested but unrecorded —</i>, <i>Divergence points —</i> and <i>Unavailable fields —</i> as literal rows
+      even when there is nothing to say (01, 02, 04, 11, 12, 13). This is the UP-005 "absent is shown as absent" rule
+      applied literally; it reads as noise on a page that has data. On the 404 page the first row is <i>Error: error</i>
+      because the error view model literally carries <code>"error": "error"</code>; the informative field is
+      <code>"kind": "turn_gap"</code>, which the HTML page does not show as a row.
+    </li>
+    <li>
+      <b><code>/healthz</code> serves JSON only.</b>
+      It answers <code>application/json</code> even to a browser asking for HTML, so 16 is Chromium's JSON viewer
+      rather than a CivSim page. Deliberate (health is machine-facing), but worth knowing when you open it.
+    </li>
+    <li>
+      <b>Same real frame everywhere.</b>
+      Every capture slot shows the identical Civ VI main-menu frame. That is a limitation of this evidence set, not of
+      the UI, which serves whatever bytes the store returns.
+    </li>
+  </ol>
+  <div class="note">
+    <div class="eyebrow">What looked right</div>
+    <ul class="plain">
+      <li>Real PNG bytes served through <code>/captures/{id}/image</code> render as a proper image in the live view, the replay, the step page and the panel route.</li>
+      <li>The gap turn is refused with a 404 that explains itself (10); the metric charts break their line at the gap and mark it with a dashed red rule (05, 12b); the catalog and comparison quarantine gapped runs with a stated reason (02, 13); the superseded attempt stays reachable with a banner pointing at the authoritative one (07 vs 08). Principle III/IV reasoning is spelled out in prose on every page that applies it.</li>
+      <li>Every route also answers as JSON with the same field names the HTML shows, and the 404 is a structured JSON error, not an HTML-only page.</li>
+      <li>No external requests: Chromium talked only to 127.0.0.1:8420 (page, <code>/static/style.css</code>, <code>/static/poll.js</code>, capture images, and a harmless <code>/favicon.ico</code> 404). No webfonts, no CDN.</li>
+      <li>The dark theme, monospace values and left colour bars are consistent across all pages; nothing rendered with missing styles.</li>
+    </ul>
+  </div>
+  <p>
+    Not exercised in this pass: the step-scoped panel route, <code>?page=</code> on the catalog,
+    <code>?series=</code> on metrics, <code>&amp;metrics=</code> on compare, the withheld-capture rendering (turn 5
+    exists in the fixture but was not screenshotted), the <code>published_port_only</code> store shape, and an
+    unreachable store (the 503 path).
+  </p>
+</section>
+
+<section id="not-shown">
+  <h2>Not shown yet: real-run pages</h2>
+  <p>
+    The one real <code>MatchStore</code> on this box (<code>civsim-match-store.db</code> at the repo root) was not
+    used for these shots. It was in use by a live harness run while they were taken, and it currently holds only
+    paused runs from tonight's live harness attempts: a few-run, few-turn store that would not exercise the catalog,
+    comparison, replay-attempt or gap pages at all.
+  </p>
+  <p>
+    Real-run screenshots follow once a run finishes. Wiring the real store in is a <code>--store module:attr</code>
+    change on the launcher, nothing in the UI.
+  </p>
+</section>
+
+<footer id="reproduce">
+  <p>Reproduce with the shipped CLI (fixture store, no real frames, no merged catalog), then open <code>http://127.0.0.1:8420/</code>:</p>
+  <pre><code>PYTHONPATH=/home/matt/CivSolver .venv/bin/civsim-web \
+  --store tests.web_support.fixtures:make_store --bind 127.0.0.1 serve</code></pre>
+  <p>Full details, including the in-process launcher that merged the catalog fixtures and substituted the real frame, are in this folder's README.md.</p>
+</footer>
+
+</div>
