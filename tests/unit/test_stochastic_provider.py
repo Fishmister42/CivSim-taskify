@@ -622,6 +622,271 @@ def test_the_composition_root_resolves_it_by_name() -> None:
 
 
 # --------------------------------------------------------------------------
+# A blocking prompt is answered, not sampled into
+# --------------------------------------------------------------------------
+
+ACK_POPUP = _action(
+    "prompts.tech_civic_completed",
+    summary=(
+        'Acknowledge the "technology / civic completed" popup ({"target": "continue"}); it '
+        "appears when research or a civic finishes and blocks play until dismissed."
+    ),
+    capability_id="prompts.orders",
+    target_kind="option",
+    target_hint='"continue" -- the popup offers nothing else',
+)
+WAR_PROMPT = _action(
+    "prompts.declare_war_response",
+    summary="Respond to a declaration-of-war notification prompt.",
+    capability_id="prompts.orders",
+    target_kind="option",
+    target_hint="one of the open prompt's offered options (prompt_options)",
+)
+APPROACH_PROMPT = _action(
+    "prompts.ai_diplomatic_approach",
+    summary="Respond to an AI civilization's diplomatic-approach prompt.",
+    capability_id="prompts.orders",
+    target_kind="option",
+    target_hint="one of the open prompt's offered options (prompt_options)",
+)
+
+#: Six ordinary actions to bury the answer in -- the shape of the measured failure, where uniform
+#: sampling needed about seven draws to find the one acknowledge.
+_CROWD = [MOVE_TO, FOUND_CITY, PROMOTE, SET_TECH, DECLARE_WAR, SET_VIEW_MODE]
+
+
+def _screen_state(**overrides: Any) -> tuple[str, Any]:
+    return ("game.screen_state", {"recognized": True, **overrides})
+
+
+def _blocked_board(**screen: Any) -> list[tuple[str, Any]]:
+    return [
+        ("units.state", _units_state()),
+        ("player.state", {"researchable_techs": list(RESEARCHABLE)}),
+        ("diplomacy.state", {"civilizations": [{"player_id": p} for p in RIVAL_PLAYER_IDS]}),
+        _screen_state(**screen),
+    ]
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_a_blocking_prompt_is_answered_on_the_first_draw(seed: int) -> None:
+    """The measured failure, inverted: the acknowledge must come out first, every seed."""
+    provider = StochasticModelProvider(seed=seed, max_actions_per_turn=6)
+    decision = _decide(
+        provider,
+        _request(
+            actions=[*_CROWD, ACK_POPUP, WAR_PROMPT, END_TURN],
+            entries=_blocked_board(
+                screen="prompt.tech_civic_completed",
+                has_blocking_prompt=True,
+                prompt_options=["continue"],
+            ),
+        ),
+    )
+    assert str(decision.action_declaration_id) == "prompts.tech_civic_completed"
+    assert decision.parameters["target"] == "continue"
+    assert decision.is_end_turn is False
+
+
+def test_the_prompt_answer_matched_is_the_one_the_rendered_screen_id_names() -> None:
+    """Two prompt answers are listed; only the one the open prompt names may be drawn.
+
+    `prompt.diplomatic_approach` against `prompts.ai_diplomatic_approach` is the real catalog's
+    own id mismatch, and the reason the match is by containment rather than equality.
+    """
+    for _seed in range(12):
+        provider = StochasticModelProvider(seed=_seed, max_actions_per_turn=6)
+        decision = _decide(
+            provider,
+            _request(
+                actions=[*_CROWD, ACK_POPUP, WAR_PROMPT, APPROACH_PROMPT, END_TURN],
+                entries=_blocked_board(
+                    screen="prompt.diplomatic_approach",
+                    has_blocking_prompt=True,
+                    prompt_options=["friendly", "hostile"],
+                ),
+            ),
+        )
+        assert str(decision.action_declaration_id) == "prompts.ai_diplomatic_approach"
+        assert decision.parameters["target"] in {"friendly", "hostile"}
+
+
+@pytest.mark.parametrize(
+    "screen",
+    [
+        # each of the three signals the brief names, alone
+        {"screen": "prompt.tech_civic_completed", "has_blocking_prompt": False},
+        {"screen": "world", "has_blocking_prompt": True},
+        {"screen": "world", "prompt_options": ["continue"]},
+    ],
+)
+def test_each_blocking_signal_on_its_own_triggers_the_preference(screen: dict[str, Any]) -> None:
+    provider = StochasticModelProvider(seed=4, max_actions_per_turn=6)
+    decision = _decide(
+        provider,
+        _request(actions=[*_CROWD, ACK_POPUP, END_TURN], entries=_blocked_board(**screen)),
+    )
+    assert str(decision.action_declaration_id) == "prompts.tech_civic_completed"
+
+
+def test_an_empty_prompt_options_list_is_not_a_blocking_signal() -> None:
+    """`prompt_options: []` offers nothing to answer with, so it must not divert the draw."""
+    chosen = set()
+    for seed in range(20):
+        provider = StochasticModelProvider(seed=seed, max_actions_per_turn=6)
+        chosen.add(
+            str(
+                _decide(
+                    provider,
+                    _request(
+                        actions=[*_CROWD, END_TURN],
+                        entries=_blocked_board(screen="world", prompt_options=[]),
+                    ),
+                ).action_declaration_id
+            )
+        )
+    assert len(chosen) > 1, "the ordinary uniform draw should still be spreading across actions"
+
+
+def test_it_falls_back_to_the_uniform_draw_when_no_prompt_answer_is_listed() -> None:
+    """A prompt blocks play but nothing listed answers it -- play on, do not stall."""
+    chosen = set()
+    for seed in range(20):
+        provider = StochasticModelProvider(seed=seed, max_actions_per_turn=6)
+        decision = _decide(
+            provider,
+            _request(
+                actions=[*_CROWD, END_TURN],
+                entries=_blocked_board(
+                    screen="prompt.tech_civic_completed",
+                    has_blocking_prompt=True,
+                    prompt_options=["continue"],
+                ),
+            ),
+        )
+        chosen.add(str(decision.action_declaration_id))
+    assert chosen <= {a.declaration_id for a in _CROWD} | {"turn.end_turn"}
+    assert len(chosen) > 1
+
+
+def test_it_falls_back_when_the_matched_answers_target_is_not_shown() -> None:
+    """`prompts.declare_war_response` draws from `prompt_options`; this board shows none.
+
+    The answer is matched but unusable, so the provider must fall through to the ordinary draw
+    rather than inventing an option or stalling on a prompt it cannot answer.
+    """
+    chosen = set()
+    for seed in range(20):
+        provider = StochasticModelProvider(seed=seed, max_actions_per_turn=6)
+        chosen.add(
+            str(
+                _decide(
+                    provider,
+                    _request(
+                        actions=[*_CROWD, WAR_PROMPT, END_TURN],
+                        entries=_blocked_board(
+                            screen="prompt.declare_war_response",
+                            has_blocking_prompt=True,
+                            prompt_options=[],
+                        ),
+                    ),
+                ).action_declaration_id
+            )
+        )
+    assert "prompts.declare_war_response" not in chosen
+    assert len(chosen) > 1
+
+
+def test_answering_a_prompt_does_not_spend_the_turns_action_budget() -> None:
+    """The game demanded a response; that is not the provider spending one of its N moves."""
+    provider = StochasticModelProvider(seed=6, max_actions_per_turn=1)
+    blocked = _request(
+        actions=[*_CROWD, ACK_POPUP, END_TURN],
+        entries=_blocked_board(
+            screen="prompt.tech_civic_completed",
+            has_blocking_prompt=True,
+            prompt_options=["continue"],
+        ),
+    )
+    first = _decide(provider, blocked)
+    assert str(first.action_declaration_id) == "prompts.tech_civic_completed"
+    # The budget of one is still unspent, so the next (unblocked) step still plays a real move.
+    second = _decide(
+        provider,
+        _request(actions=[*_CROWD, END_TURN], entries=[("units.state", _units_state())],
+                 step_index=2),
+    )
+    assert second.is_end_turn is False
+
+
+def test_a_prompt_that_will_not_clear_cannot_loop_the_turn() -> None:
+    """The per-turn repeat bound still applies to a prompt answer, so the turn moves on."""
+    provider = StochasticModelProvider(seed=8, max_actions_per_turn=6)
+    blocked = _blocked_board(
+        screen="prompt.tech_civic_completed",
+        has_blocking_prompt=True,
+        prompt_options=["continue"],
+    )
+    answers = 0
+    for step_index in range(1, 8):
+        decision = _decide(
+            provider,
+            _request(
+                actions=[*_CROWD, ACK_POPUP, END_TURN], entries=blocked, step_index=step_index
+            ),
+        )
+        if str(decision.action_declaration_id) == "prompts.tech_civic_completed":
+            answers += 1
+    assert answers == MAX_REPEATS_PER_TURN
+
+
+def test_every_shipped_prompt_resolves_to_its_own_answer_on_the_first_draw() -> None:
+    """All twelve `prompt.*` screens the shipped catalog names, against the shipped catalog."""
+    import re
+
+    from civsim_harness.capability.loader import load_catalog
+
+    catalog = load_catalog(REPO_ROOT / "catalogs")
+    actions = list(catalog.declarations.values())
+    screen_ids = sorted(
+        set(
+            re.findall(
+                r'"(prompt\.[a-z_]+)"',
+                (REPO_ROOT / "catalogs" / "actions" / "prompts.yaml").read_text(encoding="utf-8"),
+            )
+        )
+    )
+    assert len(screen_ids) >= 12
+
+    for screen_id in screen_ids:
+        board = [
+            *_SHIPPED_BOARD,
+            _screen_state(
+                screen=screen_id, has_blocking_prompt=True, prompt_options=["alpha", "beta"]
+            ),
+        ]
+        chosen = {
+            str(
+                _decide(
+                    StochasticModelProvider(seed=seed, max_actions_per_turn=6),
+                    _request(actions=actions, entries=board),
+                ).action_declaration_id
+            )
+            for seed in range(12)
+        }
+        assert len(chosen) == 1, f"{screen_id} drew {sorted(chosen)} rather than one answer"
+        answer = chosen.pop()
+        assert answer.startswith("prompts."), f"{screen_id} drew {answer}, not a prompt answer"
+        assert _suffix_of(screen_id) in _suffix_of(answer), (
+            f"{screen_id} was answered by {answer}, which does not name that prompt"
+        )
+
+
+def _suffix_of(declaration_id: str) -> str:
+    return declaration_id.partition(".")[2]
+
+
+# --------------------------------------------------------------------------
 # Against the catalog the live lane actually ships
 # --------------------------------------------------------------------------
 

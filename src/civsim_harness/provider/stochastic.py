@@ -35,6 +35,18 @@ listed action falls that way, the turn is ended. A fabricated target would be re
 agent's own decision and would corrupt exactly the refusal/verification statistics this
 provider exists to generate.
 
+**A blocking prompt is answered first, not sampled into.** MEASURED twice in live play: with a
+modal up, uniform sampling needed roughly seven draws to find the one acknowledge action, and a
+whole play block went on nothing else. When the rendered observation says a prompt is blocking
+play -- ``has_blocking_prompt`` true, a ``prompt.*`` screen id, or non-empty ``prompt_options``
+-- this provider samples first from the listed actions that answer *that* prompt, identified by
+matching the rendered screen id against each action's own rendered id and summary, with the
+target drawn from the rendered ``prompt_options``. Only if no such action is listed (or none of
+them yields a usable target) does it fall back to the ordinary uniform draw. Answering the block
+does not spend the turn's action budget below -- the game is demanding a response, this provider
+is not choosing to spend a move -- and the per-turn repeat bound still stops it retrying the same
+answer forever.
+
 **Within-turn behaviour.**
 
 - At most ``max_actions_per_turn`` non-end-turn decisions per turn (default
@@ -178,6 +190,30 @@ _NUMBER_RE: Final = re.compile(r"-?\d+(?:\.\d+)?")
 #: is what tells an option apart from a name, which matters because an option's guidance may
 #: quote the options themselves while a name must always come from the observed state.
 _OPTION_EXAMPLE_MARKER: Final = "offered options"
+
+#: A screen id that names an open prompt, as ``game.screen_state`` renders it
+#: (``"prompt.tech_civic_completed"``). Matched against *any* string in the observed state rather
+#: than against a particular key, so it does not depend on which field a future catalog writes it
+#: under.
+_PROMPT_SCREEN_RE: Final = re.compile(r"^prompt\.[a-z][a-z0-9_]*$")
+
+#: The observed field that carries an open prompt's own offered answers.
+_PROMPT_OPTIONS_FIELD: Final = "prompt_options"
+
+#: The observed field that says a prompt is blocking play.
+_BLOCKING_PROMPT_FIELD: Final = "has_blocking_prompt"
+
+#: How a listed action says, in what the request renders, that it answers a prompt: its id's
+#: first segment, or its summary's own wording. Both are request text -- no catalog is consulted
+#: to decide which actions are prompt answers.
+_PROMPT_ACTION_PREFIX: Final = "prompts."
+_PROMPT_SUMMARY_MARKERS: Final = ("prompt", "popup", "acknowledge")
+
+#: How many leading characters of a prompt-id word must appear in an action's text for the
+#: summary-match tier to count it. Five is enough to bridge the real gaps between a screen id and
+#: the prose that describes it ("declare_war" against "declaration-of-war", "tech_civic_completed"
+#: against "technology / civic completed") without matching on a shared prefix by accident.
+_WORD_STEM_LEN: Final = 5
 
 #: The vocabulary the harness uses for a refused action
 #: (``models/decision.py``'s ``RejectionReason``). Matched against the request text only -- see
@@ -391,6 +427,8 @@ class _ObservedIndex:
     def __init__(self, observed: dict[str, Any]) -> None:
         self._fields: dict[str, list[_Candidate]] = {}
         self._plots: list[_Candidate] = []
+        self._blocking_flagged = False
+        self._prompt_screen_ids: list[str] = []
         self.entry_keys: frozenset[str] = frozenset(observed)
         for key, value in observed.items():
             self._walk(value, entry_key=key, under_selected=False)
@@ -398,6 +436,8 @@ class _ObservedIndex:
     def _walk(self, node: Any, *, entry_key: str, under_selected: bool) -> None:
         if isinstance(node, dict):
             selected = under_selected or node.get("is_selected") is True
+            if node.get(_BLOCKING_PROMPT_FIELD) is True:
+                self._blocking_flagged = True
             if _is_plot(node):
                 self._plots.append(
                     _Candidate(value=_as_plot(node), entry_key=entry_key, under_selected=selected)
@@ -410,6 +450,44 @@ class _ObservedIndex:
         elif isinstance(node, list):
             for item in node:
                 self._walk(item, entry_key=entry_key, under_selected=under_selected)
+        elif isinstance(node, str) and _PROMPT_SCREEN_RE.match(node):
+            if node not in self._prompt_screen_ids:
+                self._prompt_screen_ids.append(node)
+
+    # -- the open prompt, if the request says one is blocking play --------------
+
+    @property
+    def prompt_options(self) -> tuple[str, ...]:
+        """Every answer the request shows the open prompt offering, in the order it showed them."""
+        return tuple(
+            value
+            for candidate in self.field(_PROMPT_OPTIONS_FIELD)
+            for value in _expand(candidate.value)
+            if isinstance(value, str) and value.strip()
+        )
+
+    @property
+    def prompt_screen_ids(self) -> tuple[str, ...]:
+        """Every ``prompt.*`` screen id the observed state names."""
+        return tuple(self._prompt_screen_ids)
+
+    @property
+    def blocking_prompt(self) -> bool:
+        """Whether the request says a prompt is blocking play right now.
+
+        Any of the three signals is enough, per the live finding this preference was written for:
+        the explicit ``has_blocking_prompt`` flag, a ``prompt.*`` screen id, or a non-empty list
+        of offered options. An *empty* ``prompt_options`` is deliberately not a signal -- it
+        offers nothing to answer with -- and an explicit ``has_blocking_prompt: false`` does not
+        veto a ``prompt.*`` screen id: when the request contradicts itself the prompt answer is
+        still tried, so the disagreement lands in the record as a refused decision rather than
+        being resolved silently here.
+        """
+        return (
+            self._blocking_flagged
+            or bool(self._prompt_screen_ids)
+            or bool(self.prompt_options)
+        )
 
     def field(self, name: str) -> list[_Candidate]:
         return self._fields.get(name, [])
@@ -552,6 +630,67 @@ def _target_candidates(action: _ListedAction, index: _ObservedIndex) -> list[Any
 
 
 # --------------------------------------------------------------------------
+# Answering the prompt that is blocking play
+# --------------------------------------------------------------------------
+
+
+def _suffix(declaration_id: str) -> str:
+    """``units.move_to`` -> ``move_to``; ``prompt.congress_vote`` -> ``congress_vote``."""
+    _, _, tail = declaration_id.partition(".")
+    return tail or declaration_id
+
+
+def _looks_like_a_prompt_answer(action: _ListedAction) -> bool:
+    """Whether *action* presents itself, in what the request rendered, as answering a prompt."""
+    if action.declaration_id.startswith(_PROMPT_ACTION_PREFIX):
+        return True
+    summary = action.summary.lower()
+    return any(marker in summary for marker in _PROMPT_SUMMARY_MARKERS)
+
+
+def _matches_prompt(action: _ListedAction, screen_id: str) -> bool:
+    """Whether *action*'s rendered id or summary answers the prompt *screen_id* names.
+
+    Two tiers, both read off the request and nothing else. **Identity**: the screen id's suffix
+    and the action id's suffix contain one another -- exact for most, and the reason
+    ``prompt.diplomatic_approach`` still finds ``prompts.ai_diplomatic_approach``. **Prose**:
+    every word of the screen id's suffix, stemmed to :data:`_WORD_STEM_LEN`, appears in the
+    action's own id and summary text -- which is what bridges ``prompt.declare_war_response`` to
+    a summary that says "declaration-of-war ... Respond".
+    """
+    wanted = _suffix(screen_id)
+    mine = _suffix(action.declaration_id)
+    if wanted in mine or mine in wanted:
+        return True
+    haystack = f"{action.declaration_id} {action.summary}".lower()
+    words = [word for word in wanted.split("_") if len(word) >= 3]
+    return bool(words) and all(word[:_WORD_STEM_LEN] in haystack for word in words)
+
+
+def _prompt_answer_actions(
+    actions: Sequence[_ListedAction], screen_ids: Sequence[str]
+) -> list[_ListedAction]:
+    """The listed actions to try first while a prompt is blocking play, best match first.
+
+    When the request names which prompt is open, the actions matching it are returned alone --
+    that is the whole point of the preference, and offering the rest alongside them would be the
+    uniform draw again. When it does not (``has_blocking_prompt`` or bare options, with no screen
+    id), every listed action that presents itself as a prompt answer is returned, which is still
+    a far smaller set than the full catalog. Empty means nothing listed answers a prompt, and the
+    caller falls back to the ordinary draw.
+    """
+    answers = [action for action in actions if _looks_like_a_prompt_answer(action)]
+    if not answers:
+        return []
+    matched = [
+        action
+        for action in answers
+        if any(_matches_prompt(action, screen_id) for screen_id in screen_ids)
+    ]
+    return matched if matched else answers
+
+
+# --------------------------------------------------------------------------
 # The provider
 # --------------------------------------------------------------------------
 
@@ -637,6 +776,31 @@ class StochasticModelProvider:
         self._refused_ids_turn |= _refused_action_ids(observation, listed_ids)
 
         end_turn = self._end_turn_action(listed)
+        index = _ObservedIndex(_parse_observed_state(observation))
+        pool = [action for action in listed if action is not end_turn]
+
+        # 1. A prompt blocking play is the game demanding a response, not a move this provider
+        #    chose to spend -- so it is answered before the action budget is even consulted, and
+        #    a successful answer does not count against it. MEASURED twice in live play: sampling
+        #    uniformly with a modal up took ~7 draws to find the one acknowledge and burned the
+        #    block. The per-turn repeat bound still applies, so a prompt that will not clear
+        #    cannot loop here: once every answer has been tried its two times, this falls through
+        #    to the ordinary draw exactly as if no prompt had been detected.
+        if index.blocking_prompt:
+            preferred = _prompt_answer_actions(pool, index.prompt_screen_ids)
+            decision = self._sample(
+                preferred,
+                index,
+                listed_count=len(listed),
+                prompt_options=index.prompt_options,
+                answers_prompt=True,
+            )
+            if decision is not None:
+                return decision
+            tried = {id(action) for action in preferred}
+            pool = [action for action in pool if id(action) not in tried]
+
+        # 2. The turn's own action budget.
         if self._actions_this_turn >= self.max_actions_per_turn:
             return self._end_turn_decision(
                 end_turn,
@@ -646,41 +810,78 @@ class StochasticModelProvider:
                 ),
             )
 
-        index = _ObservedIndex(_parse_observed_state(observation))
-        pool = [action for action in listed if action is not end_turn]
-        undecidable = 0
+        # 3. The ordinary uniform draw.
+        decision = self._sample(
+            pool, index, listed_count=len(listed), prompt_options=(), answers_prompt=False
+        )
+        if decision is not None:
+            return decision
 
-        while pool:
-            action = self._weighted_pick(pool)
-            pool.remove(action)
-            needs_target = action.target_example is not None
+        return self._end_turn_decision(
+            end_turn,
+            reason=(
+                f"none of the {len(listed_ids)} action(s) this request lists is still usable "
+                "this turn -- each either has no target the request shows or has already been "
+                "repeated to this turn's bound"
+            ),
+        )
+
+    def _sample(
+        self,
+        pool: Sequence[_ListedAction],
+        index: _ObservedIndex,
+        *,
+        listed_count: int,
+        prompt_options: Sequence[str],
+        answers_prompt: bool,
+    ) -> RawDecision | None:
+        """One decision drawn from *pool*, or ``None`` when nothing in it is usable.
+
+        *answers_prompt* marks the blocking-prompt path: the decision it produces clears a block
+        the game imposed rather than spending the turn's action budget, and *prompt_options* --
+        the open prompt's own offered answers, when the request shows them -- is where its target
+        comes from.
+        """
+        remaining = list(pool)
+        while remaining:
+            action = self._weighted_pick(remaining)
+            remaining.remove(action)
             target: Any | None = None
-            if needs_target:
+            if action.target_example is not None:
                 allowed = [
                     value
-                    for value in _target_candidates(action, index)
+                    for value in self._candidates(action, index, prompt_options)
                     if self._pair_count(action.declaration_id, value) < MAX_REPEATS_PER_TURN
                 ]
                 if not allowed:
                     # Either the request shows no target of the required shape, or every one it
                     # shows has already hit this turn's repeat bound. Both mean "pick a different
                     # action" -- never "make one up" (see the module docstring).
-                    undecidable += 1
                     continue
                 target = self._rng.choice(allowed)
             elif self._pair_count(action.declaration_id, None) >= MAX_REPEATS_PER_TURN:
-                undecidable += 1
                 continue
-            return self._action_decision(action, target, listed_count=len(listed))
+            return self._action_decision(
+                action, target, listed_count=listed_count, answers_prompt=answers_prompt
+            )
+        return None
 
-        return self._end_turn_decision(
-            end_turn,
-            reason=(
-                "no action this request lists is still usable this turn "
-                f"({len(listed_ids)} listed, {undecidable} without a target the request shows "
-                "or already repeated to this turn's bound)"
-            ),
-        )
+    @staticmethod
+    def _candidates(
+        action: _ListedAction, index: _ObservedIndex, prompt_options: Sequence[str]
+    ) -> list[Any]:
+        """Target values for *action*, preferring the open prompt's own offered answers.
+
+        A prompt answer's target is an option, so when the request shows the prompt's
+        ``prompt_options`` those *are* what it may be -- more specific than the general harvest,
+        and the thing the rendered hint ("one of the open prompt's offered options") points at.
+        Anything else (and an action whose target is not option-shaped) goes through the ordinary
+        derivation, so a prompt whose options the request does not show still falls back to what
+        it does show rather than to nothing.
+        """
+        if prompt_options and isinstance(action.target_example, str):
+            return _dedupe(prompt_options)
+        return _target_candidates(action, index)
 
     def _sync_turn(self, step_index: int) -> None:
         """Reset the per-turn memory when *step_index* says a new turn (or attempt) has begun.
@@ -727,9 +928,17 @@ class StochasticModelProvider:
         return None
 
     def _action_decision(
-        self, action: _ListedAction, target: Any | None, *, listed_count: int
+        self,
+        action: _ListedAction,
+        target: Any | None,
+        *,
+        listed_count: int,
+        answers_prompt: bool,
     ) -> RawDecision:
-        self._actions_this_turn += 1
+        if not answers_prompt:
+            # Clearing a block the game imposed is not this provider spending a move of its own,
+            # so only an ordinary draw counts against the turn's action budget.
+            self._actions_this_turn += 1
         self._chosen_ids_run.add(action.declaration_id)
         key = self._pair_key(action.declaration_id, target)
         self._pair_counts_turn[key] = self._pair_counts_turn.get(key, 0) + 1
@@ -739,13 +948,19 @@ class StochasticModelProvider:
             if target is None
             else f"target sampled from what the request shows: {json.dumps(target, default=str)}"
         )
+        drawn_from = (
+            "sampled from the action(s) this request shows as answering the prompt currently "
+            f"blocking play, out of the {listed_count} it lists"
+            if answers_prompt
+            else f"sampled uniformly from the {listed_count} action(s) this request lists as "
+            "available right now"
+        )
         return RawDecision(
             action_declaration_id=DeclarationId(action.declaration_id),
             reasoning=(
-                f"stochastic provider (seed={self.seed}): sampled {action.declaration_id} "
-                f"uniformly from the {listed_count} action(s) this request lists as available "
-                f"right now; {target_note}. No model was consulted and no information outside "
-                "this request was read."
+                f"stochastic provider (seed={self.seed}): {action.declaration_id} {drawn_from}; "
+                f"{target_note}. No model was consulted and no information outside this request "
+                "was read."
             ),
             parameters=parameters,
             is_end_turn=False,
