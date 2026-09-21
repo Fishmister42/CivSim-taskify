@@ -13,7 +13,7 @@
   capability_id: government.read
   output_schema:
     type: object
-    required: [current_government, available_governments, available_policies, governors, available_governors]
+    required: [available_governments, available_policies, governors, available_governors]  # current_government nullable: no government before Code of Laws (measured turn 1, T213)
     properties:
       current_government: { type: [string, "null"] }
       available_governments:

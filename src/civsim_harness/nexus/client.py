@@ -185,6 +185,9 @@ REASON_TIMEOUT = "timeout"
 REASON_INVALID_RESULT_JSON = "invalid_result_json"
 REASON_HANDSHAKE_FAILED = "handshake_failed"
 REASON_CONNECTION_CLOSED = "connection_closed"
+#: The client answered a command with a tag-3 ``ERR:`` payload (a Lua runtime error in the
+#: dispatched chunk) instead of a sentinel-bracketed result -- measured live, see `_await_result`.
+REASON_LUA_ERROR = "lua_error"
 #: Raised by resolve_game_states() when GameCore_Tuner and/or InGame are not
 #: (yet) in the state table -- distinct from REASON_HANDSHAKE_FAILED, which
 #: is reserved for an actual protocol violation (e.g. the wrong response
@@ -880,6 +883,19 @@ class NexusClient:
             frame = await self._read_frame()
             if frame.tag == TAG_ASYNC_OUTPUT:
                 self._correlator.feed(_strip_print_prefix(frame.payload) + "\n")
+            elif frame.tag == TAG_COMMAND and frame.payload.startswith("ERR:"):
+                # MEASURED (2026-09-20/21, Linux 1.0.12.9, live): a Lua runtime error in the
+                # dispatched chunk comes back as a NON-empty tag-3 payload --
+                # "ERR:Runtime Error: [string ...]:68: function expected instead of nil" plus
+                # the stack -- and no sentinel-bracketed result ever follows. Routing that to
+                # telemetry and waiting for sentinels cost every failing observation the full
+                # 30s per-operation timeout and reported it as "timeout" rather than as the
+                # Lua error it was (five of fourteen bodies, T213). Fail now, and name it.
+                raise NexusError(
+                    "the client reported a Lua error for this command instead of a result: "
+                    + frame.payload.splitlines()[0][:300],
+                    detail={"reason": REASON_LUA_ERROR, "lua_error": frame.payload[:2000]},
+                )
             elif frame.tag == TAG_COMMAND and frame.payload:
                 _logger.warning(
                     "nexus: discarding non-empty TAG_COMMAND payload -- the "

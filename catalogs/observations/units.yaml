@@ -10,7 +10,7 @@
   parity_basis: >
     Look at unit flags on the map and the unit panel for a selected unit; movement range and
     available promotions are exactly what that panel highlights.
-  context: GameCore_Tuner
+  context: InGame  # T213 (2026-09-21, measured): GetUnitType, GetReachableMovement, CanStartOperation exist InGame only
   capability_id: units.read
   output_schema:
     type: object

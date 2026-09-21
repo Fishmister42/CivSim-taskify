@@ -118,7 +118,7 @@ local function CivSim_Camera_ReadState()
     if x ~= nil and y ~= nil then
         local okReveal, isRevealed = pcall(function()
             local plot = Map.GetPlot(x, y)
-            return (plot ~= nil and plot:IsRevealed(Game.GetLocalPlayer())) -- UNVERIFIED
+            return (plot ~= nil and PlayersVisibility[Game.GetLocalPlayer()]:IsRevealed(plot:GetX(), plot:GetY())) -- MEASURED T213: Plot:IsRevealed does not exist; PlayersVisibility does
         end)
         revealed = (okReveal and isRevealed == true)
     end

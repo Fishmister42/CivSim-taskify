@@ -68,29 +68,42 @@ end
 -- not confirmed here. This helper is written against the most likely shape and must be corrected
 -- against the live API before first use.
 local function CivSim_GetReachablePlots(unit)
+    -- MEASURED (2026-09-21, live, T213): `UnitManager.GetReachablePlots` does not exist. The real
+    -- call is `UnitManager.GetReachableMovement(unit)` -- InGame only (nil in GameCore_Tuner) --
+    -- and it returns plot INDICES (a Settler at turn 1: 8 of them), resolved through
+    -- `Map.GetPlotByIndex`. This is what the game's own move-preview highlighting shows.
     local reachable = {}
     local ok, result = pcall(function()
-        return UnitManager.GetReachablePlots(unit) -- UNVERIFIED: function name
+        return UnitManager.GetReachableMovement(unit)
     end)
     if ok and type(result) == "table" then
-        for _, p in ipairs(result) do
-            reachable[#reachable + 1] = { x = p:GetX(), y = p:GetY() }
+        for _, index in ipairs(result) do
+            local okP, p = pcall(function() return Map.GetPlotByIndex(index) end)
+            if okP and p ~= nil then
+                reachable[#reachable + 1] = { x = p:GetX(), y = p:GetY() }
+            end
         end
     end
     return reachable
 end
 
 local function CivSim_DescribeUnit(unit, localPlayer)
-    local plot = Map.GetPlot(unit:GetX(), unit:GetY())
+    -- MEASURED (2026-09-21, live, T213): `unit:GetUnitType()` exists in InGame only (nil in
+    -- GameCore_Tuner), `GetMovesRemaining`/`GetMaxMoves` answer in both ("2/2" for a Settler),
+    -- `Unit:IsFortified` does not exist while `GetFortifyTurns` does. This read is therefore
+    -- declared in the InGame context (catalogs/observations/units.yaml), where every accessor
+    -- below has answered.
+    local okType, unitType = pcall(function() return GameInfo.Units[unit:GetUnitType()].UnitType end)
+    local okFort, fortifyTurns = pcall(function() return unit:GetFortifyTurns() end)
     local entry = {
         unit_id = unit:GetID(), -- Unit:GetID()
-        unit_type = GameInfo.Units[unit:GetUnitType()].UnitType, -- UNVERIFIED: exact row/column name
+        unit_type = okType and unitType or nil,
         owner_player_id = unit:GetOwner(),
         owner_is_local_player = (unit:GetOwner() == localPlayer),
         plot = { x = unit:GetX(), y = unit:GetY() },
-        movement_remaining = unit:GetMovesRemaining(), -- UNVERIFIED: exact accessor name
-        max_movement = unit:GetMaxMoves(), -- UNVERIFIED
-        is_fortified = unit.IsFortified and unit:IsFortified() or false, -- UNVERIFIED: guard for read-only visible units
+        movement_remaining = unit:GetMovesRemaining(),
+        max_movement = unit:GetMaxMoves(),
+        is_fortified = (okFort and type(fortifyTurns) == "number" and fortifyTurns > 0) or false,
     }
     if entry.owner_is_local_player then
         entry.reachable_plots = CivSim_GetReachablePlots(unit)
@@ -134,10 +147,15 @@ local function CivSim_Units_GetState()
     for i, player in ipairs(PlayerManager.GetAlive()) do
         if not player.IsMajor or player:IsMajor() then -- UNVERIFIED: Player:IsMajor()
             local playerUnits = player:GetUnits()
-            for _, unit in playerUnits:Members() do -- Player:GetUnits():Members() iterator pattern
+            for _, unit in playerUnits:Members() do -- Player:GetUnits():Members() iterator pattern (verified live)
                 local isOwn = (player:GetID() == localPlayer)
-                local plot = Map.GetPlot(unit:GetX(), unit:GetY())
-                if isOwn or (plot ~= nil and plot:IsVisible(localPlayer)) then
+                -- `Plot:IsVisible(playerID)` does not exist (measured); visibility is the
+                -- player's: PlayersVisibility[playerID]:IsVisible(x, y) -- see lua/gamecore/map.lua.
+                local visible = false
+                pcall(function()
+                    visible = PlayersVisibility[localPlayer]:IsVisible(unit:GetX(), unit:GetY()) == true
+                end)
+                if isOwn or visible then
                     units[#units + 1] = CivSim_DescribeUnit(unit, localPlayer)
                 end
             end

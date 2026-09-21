@@ -147,7 +147,7 @@ local CIVSIM_SCREEN_ID_BY_STATE = {
 -- Lua state and calls this, it reports that screen's own hidden flag. The caller already knows
 -- which screen it targeted (it chose the state index/name), so this function needs no argument
 -- and does not itself decide which screen it is probing.
-local function CivSim_Screens_Probe()
+local function CivSim_Screens_ProbeOwnState()
     local ok, hidden = pcall(function() return ContextPtr:IsHidden() end)
     if not ok then
         -- ContextPtr missing/erroring in a state the dispatcher successfully targeted is distinct
@@ -156,6 +156,61 @@ local function CivSim_Screens_Probe()
         return { screen_probe_ok = false, hidden = nil }
     end
     return { screen_probe_ok = true, hidden = (hidden == true) }
+end
+
+-- MEASURED (2026-09-21, Linux 1.0.12.9, live, T213): the per-state dispatch the header describes
+-- was never wired -- the production executor dispatches `screens.probe` ONCE, from `InGame`, and
+-- validates the result against game.screen_state's aggregate schema, so the per-state shape above
+-- failed every real run's first observation sweep. From `InGame`,
+-- `ContextPtr:LookUpControl("/InGame/<StateName>")` resolves each watchlist screen's own context
+-- (nil for a state that does not exist -- `CivilopediaScreen` is absent on this build, a bogus name
+-- returns nil) and `:IsHidden()` is its open flag; at the plain world view every watchlist screen
+-- answered hidden=true. That is the aggregate, built from `InGame` in one dispatch.
+local function CivSim_Screens_State()
+    local open = {}
+    for _, name in ipairs(CIVSIM_SCREEN_WATCHLIST) do
+        local okC, ctx = pcall(function() return ContextPtr:LookUpControl("/InGame/" .. name) end)
+        if okC and ctx ~= nil then
+            local okH, hidden = pcall(function() return ctx:IsHidden() end)
+            if okH and hidden == false then open[#open + 1] = name end
+        end
+    end
+    if #open == 0 then
+        return {
+            screen = "world_view", raw_screen_id = "InGame", recognized = true,
+            has_blocking_prompt = false, prompt_options = {},
+        }
+    end
+    -- A recognised prompt outranks anything else that is open (it is what blocks the player);
+    -- otherwise the first open watchlist screen names the view.
+    local raw, screen = nil, nil
+    for _, name in ipairs(open) do
+        for id, state in pairs(CIVSIM_SCREEN_ID_BY_STATE) do
+            if state == name and string.sub(id, 1, 7) == "prompt." then raw, screen = name, id end
+        end
+    end
+    if raw == nil then
+        raw = open[1]
+        for id, state in pairs(CIVSIM_SCREEN_ID_BY_STATE) do
+            if state == raw then screen = id end
+        end
+    end
+    if screen == nil then
+        return {
+            screen = "unknown", raw_screen_id = raw, recognized = false,
+            has_blocking_prompt = false, prompt_options = {},
+        }
+    end
+    return {
+        screen = screen, raw_screen_id = raw, recognized = true,
+        has_blocking_prompt = (string.sub(screen, 1, 7) == "prompt."), prompt_options = {},
+    }
+end
+
+-- Dispatched from InGame by the production executor (game.screen_state): the aggregate. The
+-- per-state probe is kept as `probe_own_state` for a future per-state dispatcher.
+local function CivSim_Screens_Probe()
+    return CivSim_Screens_State()
 end
 
 -- Answer a currently open prompt with one of its offered options. UNVERIFIED: the sweep did not
@@ -183,6 +238,7 @@ end
 
 CivSim_Screens = {
     probe = CivSim_Screens_Probe,
+    probe_own_state = CivSim_Screens_ProbeOwnState,
     respond = CivSim_Screens_RespondToPrompt,
 }
 

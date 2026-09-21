@@ -13,7 +13,7 @@
   capability_id: research.read
   output_schema:
     type: object
-    required: [current_research, current_civic, researchable_techs, researchable_civics]
+    required: [researchable_techs, researchable_civics]  # current_research/current_civic nullable: nothing chosen yet at turn 1 (measured, T213)
     properties:
       current_research: { type: [string, "null"] }
       current_civic: { type: [string, "null"] }

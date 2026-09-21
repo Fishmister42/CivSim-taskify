@@ -1,0 +1,469 @@
+{
+  "probed_at": "2026-09-21T04:20:04.089520+00:00",
+  "catalog_version": "version='2026.09.2' content_hash='6c5c864b2d324f8f7e1b8e370343ddbec8667e92624ef7031cb09773b5964a34' declaration_ids=['camera.move', 'camera.read_state', 'camera.set_view_mode', 'camera.zoom', 'cities.purchase_with_faith', 'cities.purchase_with_gold', 'cities.set_production', 'cities.state', 'congress.cast_vote', 'congress.state', 'diplomacy.declare_war', 'diplomacy.make_peace', 'diplomacy.send_delegation', 'diplomacy.state', 'espionage.assign_mission', 'espionage.state', 'game.outcome_state', 'game.screen_state', 'game.turn_state', 'government.state', 'great_people.recruit', 'great_people.state', 'map.state', 'policies.assign_governor', 'policies.change_government', 'policies.slot_policy', 'prompts.ai_diplomatic_approach', 'prompts.city_state_quest', 'prompts.congress_vote', 'prompts.declare_war_response', 'prompts.era_transition', 'prompts.great_person_selection', 'prompts.pantheon_selection', 'prompts.religion_selection', 'prompts.unit_promotion', 'religion.found_religion', 'religion.select_belief', 'religion.select_pantheon', 'religion.state', 'research.set_civic', 'research.set_tech', 'research.state', 'saves.save_game', 'turn.end_turn', 'units.found_city', 'units.move_to', 'units.promote', 'units.state', 'views.city_screen', 'views.congress', 'views.diplomacy', 'views.strategic', 'views.world']",
+  "results": [
+    {
+      "declaration_id": "camera.read_state",
+      "context": "InGame",
+      "capability_id": "camera.control",
+      "status": "OK",
+      "value": {
+        "mode": "world",
+        "target_is_revealed": false
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "cities.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "cities.read",
+      "status": "OK",
+      "value": {
+        "cities": []
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "congress.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "congress.read",
+      "status": "OK",
+      "value": {
+        "local_player_favor": 0,
+        "active_resolutions": [],
+        "is_in_session": false
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "diplomacy.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "diplomacy.read",
+      "status": "OK",
+      "value": {
+        "relations": [
+          {
+            "has_met": false,
+            "player_id": 1
+          },
+          {
+            "has_met": false,
+            "player_id": 2
+          },
+          {
+            "has_met": false,
+            "player_id": 3
+          },
+          {
+            "has_met": false,
+            "player_id": 4
+          },
+          {
+            "has_met": false,
+            "player_id": 5
+          }
+        ]
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "espionage.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "espionage.read",
+      "status": "OK",
+      "value": {
+        "spies": []
+      },
+      "elapsed_ms": 32
+    },
+    {
+      "declaration_id": "game.outcome_state",
+      "context": "GameCore_Tuner",
+      "capability_id": "game.outcome",
+      "status": "OK",
+      "value": {
+        "is_game_over": false,
+        "outcome": "none"
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "game.screen_state",
+      "context": "InGame",
+      "capability_id": "screens.probe",
+      "status": "OK",
+      "value": {
+        "prompt_options": [],
+        "recognized": true,
+        "raw_screen_id": "InGame",
+        "has_blocking_prompt": false,
+        "screen": "world_view"
+      },
+      "elapsed_ms": 66
+    },
+    {
+      "declaration_id": "game.turn_state",
+      "context": "InGame",
+      "capability_id": "turn.control",
+      "status": "OK",
+      "value": {
+        "is_local_player_turn": true,
+        "turn_number": 2,
+        "is_waiting_for_other_players": false
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "government.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "government.read",
+      "status": "OK",
+      "value": {
+        "available_policies": [],
+        "available_governors": [],
+        "governors": [],
+        "available_governments": []
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "great_people.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "great_people.read",
+      "status": "OK",
+      "value": {
+        "recruitable_individuals": [],
+        "points_by_class": []
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "map.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "map.read",
+      "status": "OK",
+      "value": {
+        "width": 74,
+        "revealed_plots": [
+          {
+            "y": 28,
+            "is_currently_visible": true,
+            "feature": "FEATURE_FOREST",
+            "x": 41,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS_HILLS"
+          },
+          {
+            "y": 28,
+            "is_currently_visible": true,
+            "x": 43,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS_MOUNTAIN"
+          },
+          {
+            "y": 29,
+            "is_currently_visible": true,
+            "x": 40,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS"
+          },
+          {
+            "y": 29,
+            "is_currently_visible": true,
+            "x": 41,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS_HILLS"
+          },
+          {
+            "y": 29,
+            "is_currently_visible": true,
+            "x": 42,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS_HILLS"
+          },
+          {
+            "y": 29,
+            "is_currently_visible": true,
+            "feature": "FEATURE_FOREST",
+            "x": 43,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS_HILLS"
+          },
+          {
+            "y": 29,
+            "is_currently_visible": true,
+            "feature": "FEATURE_FOREST",
+            "x": 44,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_PLAINS_HILLS"
+          },
+          {
+            "y": 30,
+            "is_currently_visible": true,
+            "feature": "FEATURE_FOREST",
+            "x": 40,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS"
+          },
+          {
+            "y": 30,
+            "is_currently_visible": true,
+            "x": 41,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS"
+          },
+          {
+            "y": 30,
+            "is_currently_visible": true,
+            "feature": "FEATURE_FOREST",
+            "x": 42,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS"
+          },
+          {
+            "y": 30,
+            "is_currently_visible": true,
+            "x": 43,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS"
+          },
+          {
+            "y": 30,
+            "is_currently_visible": true,
+            "x": 44,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_PLAINS_HILLS"
+          },
+          {
+            "y": 30,
+            "is_currently_visible": true,
+            "feature": "FEATURE_FOREST",
+            "x": 46,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_PLAINS_HILLS"
+          },
+          {
+            "y": 31,
+            "is_currently_visible": true,
+            "x": 40,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_PLAINS"
+          },
+          {
+            "y": 31,
+            "is_currently_visible": true,
+            "x": 41,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS_HILLS"
+          },
+          {
+            "y": 31,
+            "is_currently_visible": true,
+            "feature": "FEATURE_FOREST",
+            "x": 42,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS"
+          },
+          {
+            "y": 31,
+            "is_currently_visible": true,
+            "x": 43,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS"
+          },
+          {
+            "y": 31,
+            "is_currently_visible": true,
+            "feature": "FEATURE_FOREST",
+            "x": 44,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_PLAINS_HILLS"
+          },
+          {
+            "y": 32,
+            "is_currently_visible": true,
+            "x": 43,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS_HILLS"
+          },
+          {
+            "y": 32,
+            "is_currently_visible": true,
+            "x": 44,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_PLAINS"
+          },
+          {
+            "y": 33,
+            "is_currently_visible": true,
+            "feature": "FEATURE_FOREST",
+            "x": 43,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_PLAINS_HILLS"
+          },
+          {
+            "y": 33,
+            "is_currently_visible": true,
+            "x": 44,
+            "owner_player_id": -1,
+            "terrain": "TERRAIN_GRASS_HILLS"
+          }
+        ],
+        "height": 46
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "religion.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "religion.read",
+      "status": "OK",
+      "value": {
+        "pantheon_selected": false,
+        "available_beliefs": [],
+        "city_majority_religions": [],
+        "religion_founded": false
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "research.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "research.read",
+      "status": "OK",
+      "value": {
+        "researchable_techs": [
+          "TECH_POTTERY",
+          "TECH_ANIMAL_HUSBANDRY",
+          "TECH_MINING",
+          "TECH_SAILING",
+          "TECH_ASTROLOGY"
+        ],
+        "current_civic": "CIVIC_CODE_OF_LAWS",
+        "researchable_civics": []
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "units.state",
+      "context": "InGame",
+      "capability_id": "units.read",
+      "status": "OK",
+      "value": {
+        "units": [
+          {
+            "plot": {
+              "y": 30,
+              "x": 43
+            },
+            "owner_player_id": 0,
+            "can_found_city": true,
+            "charges_remaining": 0,
+            "owner_is_local_player": true,
+            "max_movement": 2,
+            "available_promotions": [],
+            "reachable_plots": [
+              {
+                "y": 30,
+                "x": 43
+              },
+              {
+                "y": 31,
+                "x": 43
+              },
+              {
+                "y": 30,
+                "x": 44
+              },
+              {
+                "y": 29,
+                "x": 43
+              },
+              {
+                "y": 29,
+                "x": 42
+              },
+              {
+                "y": 30,
+                "x": 42
+              },
+              {
+                "y": 31,
+                "x": 42
+              },
+              {
+                "y": 32,
+                "x": 44
+              }
+            ],
+            "unit_id": 65536,
+            "is_fortified": false,
+            "unit_type": "UNIT_SETTLER",
+            "movement_remaining": 2
+          },
+          {
+            "plot": {
+              "y": 30,
+              "x": 42
+            },
+            "owner_player_id": 0,
+            "can_found_city": false,
+            "charges_remaining": 0,
+            "owner_is_local_player": true,
+            "max_movement": 2,
+            "available_promotions": [],
+            "reachable_plots": [
+              {
+                "y": 30,
+                "x": 42
+              },
+              {
+                "y": 30,
+                "x": 41
+              },
+              {
+                "y": 30,
+                "x": 43
+              },
+              {
+                "y": 31,
+                "x": 42
+              },
+              {
+                "y": 29,
+                "x": 42
+              },
+              {
+                "y": 29,
+                "x": 41
+              },
+              {
+                "y": 31,
+                "x": 41
+              },
+              {
+                "y": 29,
+                "x": 40
+              },
+              {
+                "y": 31,
+                "x": 40
+              },
+              {
+                "y": 31,
+                "x": 43
+              }
+            ],
+            "unit_id": 131073,
+            "is_fortified": false,
+            "unit_type": "UNIT_WARRIOR",
+            "movement_remaining": 2
+          }
+        ]
+      },
+      "elapsed_ms": 50
+    }
+  ],
+  "ok": 14,
+  "total": 14
+}

@@ -128,7 +128,7 @@ local function CivSim_Cities_GetState()
             for _, city in player:GetCities():Members() do
                 local plot = Map.GetPlot(city:GetX(), city:GetY())
                 local isOwn = (player:GetID() == localPlayer)
-                if isOwn or (plot ~= nil and plot:IsVisible(localPlayer)) then
+                if isOwn or (plot ~= nil and PlayersVisibility[localPlayer]:IsVisible(plot:GetX(), plot:GetY())) then
                     cities[#cities + 1] = CivSim_DescribeCity(city, localPlayer)
                 end
             end

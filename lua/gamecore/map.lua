@@ -70,26 +70,43 @@ local function CivSim_Map_GetState()
     -- LocalPlayerID=0), not merely assumed.
     local localPlayer = Game.GetLocalPlayer()
     local width, height = Map.GetGridSize()   -- VERIFIED (P4): Map.GetGridSize() confirmed to exist.
+    -- MEASURED (2026-09-21, Linux 1.0.12.9, live, T213): `Plot:IsRevealed(playerID)` and
+    -- `Plot:IsVisible(playerID)` do NOT exist ("function expected instead of nil") -- the unguarded
+    -- call errored on the first plot and the whole read timed out in every real run. Visibility
+    -- is the player's, not the plot's: `PlayersVisibility[playerID]:IsRevealed(x, y)` /
+    -- `:IsVisible(x, y)` answer in both Lua contexts (22 revealed plots at turn 1, Small map 74x46).
+    local visibility = PlayersVisibility[localPlayer]
+    local playerResources = nil
+    pcall(function() playerResources = Players[localPlayer]:GetResources() end)
 
     local plots = {}
     for y = 0, height - 1 do
         for x = 0, width - 1 do
             local plot = Map.GetPlot(x, y) -- VERIFIED (P4): Map.GetPlot() confirmed to exist.
-            if plot ~= nil and plot:IsRevealed(localPlayer) then -- Plot:IsRevealed(playerID)
+            if plot ~= nil and visibility:IsRevealed(x, y) then
                 local entry = {
                     x = x,
                     y = y,
-                    terrain = GameInfo.Terrains[plot:GetTerrainType()].TerrainType, -- UNVERIFIED: GameInfo row shape
-                    is_currently_visible = plot:IsVisible(localPlayer),
-                    owner_player_id = plot:GetOwner(), -- -1 when unowned; standard UI shows borders for this
+                    terrain = GameInfo.Terrains[plot:GetTerrainType()].TerrainType, -- VERIFIED live (TERRAIN_OCEAN)
+                    is_currently_visible = visibility:IsVisible(x, y),
+                    owner_player_id = plot:GetOwner(), -- -1 when unowned (verified live); standard UI shows borders for this
                 }
                 if plot:GetFeatureType() ~= -1 then
                     entry.feature = GameInfo.Features[plot:GetFeatureType()].FeatureType -- UNVERIFIED
                 end
-                if plot:GetResourceType() ~= -1 and plot:IsResourceVisible(localPlayer) then
-                    -- UNVERIFIED: Plot:IsResourceVisible — some resources require a tech to be
-                    -- visible even on a revealed plot; only report what the human UI would show.
-                    entry.resource = GameInfo.Resources[plot:GetResourceType()].ResourceType
+                local resourceType = plot:GetResourceType()
+                if resourceType ~= -1 then
+                    -- `Plot:IsResourceVisible` does not exist (measured). Some resources need a
+                    -- tech before the human map shows them, so a resource is reported ONLY when
+                    -- the player's own resource table confirms it visible -- UNVERIFIED accessor,
+                    -- under pcall: if it is absent, no resource is reported at all. Withholding is
+                    -- the Principle I-safe failure; over-revealing is not.
+                    local okV, visible = pcall(function()
+                        return playerResources:IsResourceVisible(GameInfo.Resources[resourceType].Hash)
+                    end)
+                    if okV and visible == true then
+                        entry.resource = GameInfo.Resources[resourceType].ResourceType
+                    end
                 end
                 if plot:GetImprovementType() ~= -1 then
                     entry.improvement = GameInfo.Improvements[plot:GetImprovementType()].ImprovementType -- UNVERIFIED

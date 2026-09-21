@@ -35,6 +35,7 @@ Two paths, preferred to fallback (R18):
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -158,6 +159,34 @@ _VERSION_LUA = (
     + lua_print_json({"ok": "ok", "version": "ok and value or nil"})
 )
 
+# MEASURED (2026-09-20, Linux/Aspyr 1.0.12.9, live): the R18 spike above resolves to "no".
+# ``Modding.GetActiveGameVersion`` does not exist on this client in either state -- ``Modding``
+# is absent from ``GameCore_Tuner`` altogether, and in ``InGame`` the function is nil -- so the
+# preferred path never answers there, and with no Linux ``extract_version`` the host fallback
+# is dead too: every run on this host failed preparation with "could not determine the
+# client's game version". What does answer is **``UI.GetAppVersion()`` in the UI-side
+# ``InGame`` state**: ``"1.0.12.9 (564030)"`` (the same string the T217 spike's raw session
+# recorded). ``UI`` is absent from ``GameCore_Tuner``, so this read targets ``InGame``,
+# resolved fresh on every call exactly like the tuner index. Tried second, after the declared
+# path, so a build where ``Modding.GetActiveGameVersion`` does exist still uses it.
+_UI_VERSION_LUA = (
+    LUA_JSON_PRELUDE
+    + "local ok, value = pcall(function() return tostring(UI.GetAppVersion()) end); "
+    + lua_print_json({"ok": "ok", "version": "ok and value or nil"})
+)
+
+_VERSION_TOKEN = re.compile(r"\d+(?:\.\d+)+")
+
+
+def normalise_version(raw: str) -> str | None:
+    """The dotted version out of what the client prints: ``"1.0.12.9 (564030)"`` ->
+    ``"1.0.12.9"``. The composite pin is compared in that form (contracts/run-configuration.md's
+    own examples, ``"win/1.0.12.9"``; the seed sets pin ``linux/1.0.12.9``), and the
+    parenthesised build number is not part of it. ``None`` when no dotted token is present:
+    a string with no version in it is not a version, and is never passed through as one."""
+    match = _VERSION_TOKEN.search(raw)
+    return match.group(0) if match else None
+
 
 # --------------------------------------------------------------------------
 # GameCore_Tuner state index resolution -- never a raw int captured once
@@ -181,6 +210,9 @@ class _StateIndicesLike(Protocol):
 
     @property
     def game_core_tuner(self) -> int | None: ...
+
+    @property
+    def in_game(self) -> int | None: ...
 
 
 @runtime_checkable
@@ -223,6 +255,26 @@ def _resolve_game_core_tuner_index(source: GameCoreTunerIndexSource) -> int:
     return source()
 
 
+def _resolve_in_game_index(source: GameCoreTunerIndexSource) -> int:
+    """The current ``InGame`` index for the measured ``UI.GetAppVersion()`` read -- only a
+    connected session can supply it; a bare ``GameCore_Tuner`` resolver cannot, and then the
+    UI-side read is simply not reachable (``NexusError``, falling through like any other)."""
+    if isinstance(source, _HasStateIndices):
+        indices = source.state_indices
+        if indices is None or indices.in_game is None:
+            raise NexusError(
+                "Cannot resolve the InGame Lua state index -- this Nexus session has not "
+                "connected, or no game is loaded, so UI.GetAppVersion() is not reachable",
+                detail={"reason": "in_game_state_index_unresolved"},
+            )
+        return indices.in_game
+    raise NexusError(
+        "a bare GameCore_Tuner index resolver cannot supply the InGame index the "
+        "UI.GetAppVersion() read needs; pass the connected client instead",
+        detail={"reason": "in_game_state_index_unresolved"},
+    )
+
+
 def make_tuner_version_reader(
     execute: Callable[[int, str], Awaitable[Any]],
     *,
@@ -251,13 +303,24 @@ def make_tuner_version_reader(
     """
 
     async def _read() -> str | None:
-        try:
-            state_index = _resolve_game_core_tuner_index(game_core_tuner_state_index)
-            result = await execute(state_index, _VERSION_LUA)
-        except NexusError:
-            return None
-        if isinstance(result, dict) and result.get("ok") and result.get("version"):
-            return str(result["version"])
+        # The declared GameCore_Tuner read first (R18's preferred path), then the measured
+        # UI-side read (see `_UI_VERSION_LUA`). Each is "not reachable" on any failure --
+        # an unresolvable index, a transport error, a Lua-side error caught by the pcall, or
+        # a string with no version in it -- and falls through to the next.
+        attempts = (
+            (_resolve_game_core_tuner_index, _VERSION_LUA),
+            (_resolve_in_game_index, _UI_VERSION_LUA),
+        )
+        for resolve, lua_body in attempts:
+            try:
+                state_index = resolve(game_core_tuner_state_index)
+                result = await execute(state_index, lua_body)
+            except NexusError:
+                continue
+            if isinstance(result, dict) and result.get("ok") and result.get("version"):
+                version = normalise_version(str(result["version"]))
+                if version:
+                    return version
         return None
 
     return _read

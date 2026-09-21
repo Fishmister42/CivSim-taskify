@@ -64,7 +64,14 @@ end
 local function CivSim_Diplomacy_GetState()
     local localPlayer = Game.GetLocalPlayer()
     local player = Players[localPlayer]
-    local diploAI = player:GetDiplomaticAI() -- UNVERIFIED: Player:GetDiplomaticAI()
+    -- MEASURED (2026-09-20, Linux 1.0.12.9, live run): `Player:GetDiplomaticAI()` does NOT exist
+    -- in GameCore_Tuner ("function expected instead of nil"), and the unguarded call killed the
+    -- whole diplomacy read -- and with it turn 1 of the first real run. It is the UI-side
+    -- accessor (InGame). Acquired under pcall; when absent, `diplomatic_state` is reported as
+    -- null (unobservable from this context) rather than the read failing.
+    local diploAI = nil
+    local okAI, ai = pcall(function() return player:GetDiplomaticAI() end)
+    if okAI then diploAI = ai end
 
     -- VERIFIED (P4 spot-check): PlayerManager.GetAlive() exists, replacing the unconfirmed
     -- GetAliveMajors() guess. UNVERIFIED: whether it returns majors only or all alive players;
@@ -80,10 +87,17 @@ local function CivSim_Diplomacy_GetState()
                 if hasMet then
                     local stateName = nil
                     local ok2, stateIndex = pcall(function()
-                        return diploAI:GetDiplomaticStateIndex(otherID) -- UNVERIFIED
+                        if diploAI ~= nil then
+                            return diploAI:GetDiplomaticStateIndex(otherID) -- UNVERIFIED
+                        end
+                        -- GameCore-side fallback: the PlayerDiplomacy object. UNVERIFIED.
+                        return player:GetDiplomacy():GetDiplomaticStateIndex(otherID)
                     end)
                     if ok2 and stateIndex then
-                        stateName = GameInfo.DiplomaticStates[stateIndex].StateType -- UNVERIFIED
+                        local okName, name = pcall(function()
+                            return GameInfo.DiplomaticStates[stateIndex].StateType -- UNVERIFIED
+                        end)
+                        if okName then stateName = name end
                     end
                     local hasDelegation = false
                     local ok3, delegation = pcall(function()

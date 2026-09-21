@@ -949,3 +949,54 @@ async def test_a_handshake_failure_on_reconnect_is_not_retried() -> None:
 
     assert excinfo.value.detail["reason"] == REASON_HANDSHAKE_FAILED
     assert sleeps == []  # a protocol violation is not the tail; no retry budget spent
+
+
+async def test_a_lua_runtime_error_fails_the_command_at_once_and_names_it() -> None:
+    """MEASURED (Linux 1.0.12.9, live): a Lua runtime error in a dispatched chunk comes back as a
+    NON-empty tag-3 payload -- `ERR:Runtime Error: [string ...]:68: function expected instead of
+    nil` plus the stack -- and no sentinel-bracketed result ever follows. Before this the client
+    logged it and waited out the full per-operation timeout, so five failing observation bodies
+    each cost 30s and were recorded as "timeout" (T213). Now: a `NexusError` at once, carrying the
+    error text, reason `lua_error`."""
+    import time
+
+    from civsim_harness.nexus.client import REASON_LUA_ERROR
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        decoder = NexusFrameDecoder()
+        while True:
+            chunk = await reader.read(4096)
+            if not chunk:
+                writer.close()
+                return
+            for frame in decoder.feed(chunk):
+                if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
+                    writer.write(encode_frame(TAG_HANDSHAKE, _REAL_APP_REPLY_PAYLOAD))
+                elif frame.tag == TAG_HANDSHAKE and frame.payload == "LSQ:":
+                    writer.write(encode_frame(TAG_HANDSHAKE, _MENU_ONLY_LSQ_PAYLOAD))
+                elif frame.tag == TAG_COMMAND:
+                    writer.write(
+                        encode_frame(
+                            TAG_COMMAND,
+                            'ERR:Runtime Error: [string "print(...)"]:68: function expected '
+                            "instead of nil\nstack traceback:\n\t[C]: in function 'x'",
+                        )
+                    )
+                await writer.drain()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = NexusClient(host="127.0.0.1", port=port, command_timeout_s=30.0)
+    try:
+        await client.connect()
+        started = time.perf_counter()
+        with pytest.raises(NexusError) as raised:
+            await client.execute_command(state_index=0, lua_body="print('never answered')")
+        assert time.perf_counter() - started < 5.0  # not the 30s timeout
+        assert raised.value.detail["reason"] == REASON_LUA_ERROR
+        assert "function expected instead of nil" in str(raised.value)
+        assert "stack traceback" in raised.value.detail["lua_error"]
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()

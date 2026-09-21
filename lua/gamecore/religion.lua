@@ -103,7 +103,7 @@ local function CivSim_Religion_GetState()
             for _, city in otherPlayer:GetCities():Members() do
                 local plot = Map.GetPlot(city:GetX(), city:GetY())
                 local isOwn = (otherPlayer:GetID() == localPlayer)
-                if isOwn or (plot ~= nil and plot:IsVisible(localPlayer)) then
+                if isOwn or (plot ~= nil and PlayersVisibility[localPlayer]:IsVisible(plot:GetX(), plot:GetY())) then
                     local ok4, majorityReligion = pcall(function()
                         return city:GetReligion():GetMajorityReligion() -- UNVERIFIED: City:GetReligion()
                     end)

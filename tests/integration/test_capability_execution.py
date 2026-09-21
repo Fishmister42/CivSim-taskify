@@ -52,12 +52,13 @@ async def test_the_real_catalog_loads_with_the_documented_shape() -> None:
 async def test_a_real_observation_declaration_executes_end_to_end_through_a_real_lua_file() -> None:
     """units.state (catalogs/observations/units.yaml, capability_id units.read) is backed by
     lua/gamecore/units.lua; dispatching it must genuinely load and send that file's own source,
-    not a fixture standing in for it."""
+    not a fixture standing in for it. Declared in the InGame context since T213's live pass
+    (2026-09-21): GetUnitType/GetReachableMovement/CanStartOperation exist only there."""
     async with FakeNexusServer() as server:
         server.queue_response(
             {"units": []},
             match="CivSim_Units.state",
-            state_index=STATE_INDEX_GAME_CORE_TUNER,
+            state_index=STATE_INDEX_IN_GAME,
         )
 
         client = NexusClient(host="127.0.0.1", port=server.port)
@@ -77,14 +78,14 @@ async def test_a_real_observation_declaration_executes_end_to_end_through_a_real
                 lua_root=_REPO_ROOT,
             )
 
-            result = await executor.execute(_UNITS_STATE, context=LuaContext.GAME_CORE_TUNER)
+            result = await executor.execute(_UNITS_STATE, context=LuaContext.IN_GAME)
 
             assert result.declaration_id == _UNITS_STATE
             assert result.value == {"units": []}
 
             # A real request genuinely reached the fake server -- never a fabricated local result.
             assert len(server.received) == 1
-            assert server.received[0].state_index == STATE_INDEX_GAME_CORE_TUNER
+            assert server.received[0].state_index == STATE_INDEX_IN_GAME
             assert "CivSim_Units.state()" in server.received[0].lua_body
             assert server.unmatched_requests == []
         finally:
@@ -99,7 +100,7 @@ async def test_observation_reader_and_action_executor_both_drive_real_declaratio
         server.queue_response(
             {"units": []},
             match="CivSim_Units.state",
-            state_index=STATE_INDEX_GAME_CORE_TUNER,
+            state_index=STATE_INDEX_IN_GAME,
         )
         server.queue_response(
             {"ok": True, "result_is_informative": False, "path": "UI.RequestAction"},
@@ -145,7 +146,7 @@ async def test_observation_reader_and_action_executor_both_drive_real_declaratio
             }
 
             assert len(server.received) == 2
-            assert server.received[0].state_index == STATE_INDEX_GAME_CORE_TUNER
+            assert server.received[0].state_index == STATE_INDEX_IN_GAME
             assert server.received[1].state_index == STATE_INDEX_IN_GAME
             assert "CivSim_TurnControl.end_turn()" in server.received[1].lua_body
             assert server.unmatched_requests == []
