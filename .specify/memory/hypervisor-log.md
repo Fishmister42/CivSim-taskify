@@ -613,3 +613,41 @@ the T246/T247 commit. Day total: 1539 -> 1637 (+98 tests), every fix revert-conf
 shapes, T224 halves, T226 live half, T237) + T248 (BLOCKED on peer publishing the Escape-retry
 patch) + T249 per-platform live halves. NOTHING headless-implementable remains unassigned.
 Next converge pass after T248 lands. Peer still holds the Steam account.
+
+## NIGHT HANDOFF - 2026-09-20 ~00:45 local. Windows host POWERING OFF; main work -> Linux hypervisor.
+
+**Peer returned the account** (comment 5753920708) with a caveat worth keeping: their Steam+client
+exited cleanly at 20:19:18 their-local after 2h10m of clean operation, unattributed, no crash dump
+-- probably the owner (who is home), and the peer correctly notes it does NOT match the Windows
+symptom's shape (7s-after-tuner vs 2h uptime). Not treated as corroboration of anything.
+
+**Peer delivered everything:** T249 live-verified WITH negative control (bd1a1a2); T248 patch
+published (44a2a00, measured FAIL 160.4s -> PASS 40.1s, retry-loop-in-_await_phase design);
+human-slot probe DONE (bcb6d1a): **full programmatic game start works, pinned leader survives**
+-- T237's live half is substantially answered; victory-progress parity evidence (a0999d0/266d28d):
+the game's own World Rankings screen shows ALL alive majors' progress with unmet identities
+anonymised via HasMet; LuaEvents auto-creates finding (7438659); spike-driven demo recording
+(explicitly NOT the deliverable demo, honest README, every frame from capture_window()).
+
+**RULINGS ISSUED (night handoff):**
+1. **T248 -> Linux overnight** (patch author + client holder; Windows offline). Includes the
+   flagged gap: **Option 1, add focus_window to the HostPlatform port** -- called before each
+   press, same T217-B scope, reachability auto-guards it, T235 tripwire applies (send_input/
+   InputEvent allowlist entries deleted with the consumer), Windows/macOS halves honest-minimal
+   per T249 precedent. Option 2 rejected: fragile unattended runs, works-in-isolation class.
+2. **Victory-progress parity: peer's redaction rule ACCEPTED** -- expose victory progress for all
+   alive majors, anonymise identity of un-HasMet civs, exactly the asymmetry worldrankings.lua
+   itself implements (progress shown, identity withheld). This IS Principle I: the human screen
+   shows anonymous standings. The ban is lifted in favour of the redaction; implementation on
+   whichever side touches the observation catalog next.
+3. **Landed-code demo: GREENLIT on Linux** once T248 lands + test_production_save_loader.py
+   re-verifies -- their capture-path recording discipline is proven (152 frames, window-scoped,
+   zero model calls, honest labeling).
+4. T251 filed (mod_set keys on Id not Name).
+
+**MORNING CHECKLIST (Windows-me, read this first):** git fetch --all; expect T248 + focus_window
+landed on live/linux (merge or already merged); read issue #1 from marker file forward
+(.specify/memory/issue-watch-marker.txt); expect T248 re-verification transcript + possibly the
+landed-code demo; Windows Steam may be used again ONLY per handoff protocol (check the board for
+who holds the account); the model-driven run attempt is the standing next Windows live goal --
+transport, images, record integrity, and provider are all verified ready; $80 budget untouched.
