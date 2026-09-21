@@ -59,9 +59,42 @@ RESPONSE_SCHEMA: Final[dict[str, Any]] = {
             "minLength": 1,
             "description": "The full reasoning behind this single decision.",
         },
+        # MEASURED (2026-09-21, gameplay block 1, run-809988bb, reproduced twice out of band):
+        # with `parameters` declared as a bare `{"type": "object"}` under `strict: true`
+        # structured output, Claude Sonnet 5 via OpenRouter answered `"parameters": {}` on all
+        # 32 of 32 decisions while its reasoning named the technology it meant ("Writing is a
+        # strong early pick"); the same request without the schema returned prose. A strict
+        # schema can only fill the properties it declares, so the one parameter every catalog
+        # action takes -- `target` -- is declared here in the shapes the catalog's TargetKinds
+        # take: a name/option string, a unit/city/player/resolution/individual/spy id, a number,
+        # a plot {x, y}, or null for an action that takes no target (stripped by the parser).
         "parameters": {
             "type": "object",
-            "description": "Parameters for the declared action, per its catalog schema.",
+            "description": (
+                "Parameters for the declared action, per its catalog schema. `target` names the "
+                "thing the action acts on; null when the action takes no target."
+            ),
+            "properties": {
+                "target": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "integer"},
+                        {"type": "number"},
+                        {
+                            "type": "object",
+                            "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                            "required": ["x", "y"],
+                            "additionalProperties": False,
+                        },
+                        {"type": "null"},
+                    ],
+                    "description": (
+                        "The action's target exactly as the observed state lists it, or null."
+                    ),
+                }
+            },
+            "required": ["target"],
+            "additionalProperties": False,
         },
         "is_end_turn": {
             "type": "boolean",
@@ -118,6 +151,10 @@ def _as_decision(obj: Any) -> RawDecision | None:
     parameters = obj.get("parameters", {})
     if not isinstance(parameters, dict):
         return None
+    # A null `target` is the schema's spelling of "this action takes no target" (see
+    # RESPONSE_SCHEMA); it is not a parameter, so it never reaches the binder as one.
+    if parameters.get("target", ...) is None:
+        parameters = {k: v for k, v in parameters.items() if k != "target"}
 
     is_end_turn = obj.get("is_end_turn", False)
     if not isinstance(is_end_turn, bool):
