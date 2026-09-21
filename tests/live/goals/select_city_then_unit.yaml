@@ -1,0 +1,28 @@
+id: select_city_then_unit
+order: 6
+title: Select a city, then select a unit
+turn_cap: 2
+
+objective: >
+  Select one of your cities so its panel opens, and then select one of your units so its orders
+  are shown. Do the city first and the unit second.
+
+# cities.select verifies `city.is_selected`, units.select verifies `unit.is_selected`; both
+# applied outcomes are the harness's own read-backs. The third clause is the same fact from the
+# next turn's observation (units.state reports is_selected itself; cities.selection is the
+# InGame half for cities).
+success: >
+  observed_applied_cities_select >= 1
+  and observed_applied_units_select >= 1
+  and player.units.selected
+
+prerequisites:
+  - player.cities.count >= 1
+  - player.units.count >= 1
+
+notes: >
+  Selection is the order that makes every other city and unit order reachable -- every one of
+  their availability predicates starts `city.is_selected and ...` / `unit.is_selected and ...`.
+  Ordering ("city first") is stated in the objective and is NOT part of the success predicate:
+  the store records both decisions with their step_index, so the order is auditable from the
+  record without being asserted here.

@@ -1,0 +1,27 @@
+id: answer_first_meeting
+order: 11
+title: Answer another leader's first approach
+turn_cap: 5
+
+objective: >
+  Another leader is speaking to you and is waiting for an answer. Read what is on screen and
+  choose one of the responses you are offered.
+
+success: observed_applied_prompts_ai_diplomatic_approach >= 1
+
+prerequisites:
+  # game.screen_state: the prompt must actually be up in the starting observation, and it must
+  # be offering options -- prompts.ai_diplomatic_approach's availability_predicate is
+  # `game.has_blocking_prompt and game.current_screen == "prompt.diplomatic_approach"
+  #  and target in prompt.options`.
+  - game.has_blocking_prompt
+  - game.current_screen == "prompt.diplomatic_approach"
+  - game.prompt_options != []
+
+notes: >
+  Cannot be provoked by the harness: a first meeting happens when the game decides it does, so
+  this goal is only runnable from a save whose starting observation already has the approach
+  prompt up -- which is precisely what --feasibility answers per milestone save. Unlike every
+  other prompt family, prompt.diplomatic_approach DOES get real options
+  (CivSim_DiplomacyStatementChoices in lua/ingame/screens.lua), so the action is reachable once
+  the prompt is on screen. One of the five actions attempted live and never applied.

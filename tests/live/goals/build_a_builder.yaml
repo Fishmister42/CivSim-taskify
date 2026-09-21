@@ -1,0 +1,28 @@
+# Part one of the two-part builder chain (owner directive, 2026-09-21): "Add 'build a builder' ->
+# 'use a builder' as a two parter to prove city building capability and builder charge usage."
+
+id: build_a_builder
+order: 12
+title: Build a Builder in your capital
+turn_cap: 12
+
+objective: >
+  Have your city produce a Builder. Select your city so its panel opens, set its production to a
+  Builder, and then end each turn until the Builder has been produced.
+
+# units.state -> a new unit whose unit_type names a Builder, owned by the local player.
+success: player.units.builder_count >= observed_start_builder_count + 1
+
+prerequisites:
+  - player.cities.count >= 1
+  - player.cities.available_productions != []
+
+blocked_by: >
+  cities.state body -- `city.available_productions` is [] on every record in the store today, so
+  cities.set_production can never become available and no production can be chosen. A separate
+  agent is fixing that body; this goal needs no change when the fix lands.
+
+notes: >
+  Proves city building capability end to end: select a city, choose from what the city actually
+  offers, carry the production across several end-turns, and see the unit appear in units.state.
+  Part one of the build -> use chain; see use_a_builder.

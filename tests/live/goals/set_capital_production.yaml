@@ -1,0 +1,30 @@
+id: set_capital_production
+order: 2
+title: Set the capital's production
+turn_cap: 3
+
+objective: >
+  Set what your capital is producing. Select your city first so its panel is open, then choose
+  one of the production items the city offers and set it as the city's current production.
+
+# cities.set_production's own verification_predicate is `target in city.production_queue`, so an
+# `applied` outcome already means the harness re-read the city and saw the item queued. Both
+# halves are required: the store record of the applied action, and the observation that the
+# queue is no longer empty.
+success: observed_applied_cities_set_production >= 1 and player.cities.production_queue != []
+
+prerequisites:
+  - player.cities.count >= 1
+  - player.cities.available_productions != []
+
+blocked_by: >
+  cities.state body -- `city.available_productions` is [] on every record in the store today
+  (lua/gamecore/cities.lua, CivSim_GetAvailableProductions). cities.set_production's
+  availability_predicate is `city.is_selected and city.owner_is_local_player and target in
+  city.available_productions`, so with an empty list the action can never be available and the
+  prerequisite above reports the goal infeasible. Feasibility reports this honestly rather than
+  letting the run burn turns on a refusal.
+
+notes: >
+  Unblocks as soon as the cities.state body reports real production options; the goal itself
+  needs no change when it does.

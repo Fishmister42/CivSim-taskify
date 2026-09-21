@@ -1,0 +1,23 @@
+id: move_unit_to_plot
+order: 5
+title: Move a unit to a plot it can reach
+turn_cap: 3
+
+objective: >
+  Move one of your units. Select a unit, read the plots it can currently reach, and order it to
+  move to one of them.
+
+# units.move_to's verification_predicate is
+# `unit.plot == target or (unit.queued_path != null and unit.queued_path.destination == target)`,
+# so an `applied` outcome means the harness re-read the unit and saw it on -- or pathing to --
+# the plot the agent named. That read-back is the success evidence; nothing else is needed.
+success: observed_applied_units_move_to >= 1
+
+prerequisites:
+  - player.units.count >= 1
+  - player.units.movable_count >= 1
+
+notes: >
+  The plot is read by the agent out of `units.state.reachable_plots` for the selected unit --
+  a plot the harness never suggests. Tests that the agent can carry a structured {x, y} target
+  out of the observation and back into parameters.target in the shape the action wants.

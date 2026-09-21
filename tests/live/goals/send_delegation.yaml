@@ -1,0 +1,27 @@
+id: send_delegation
+order: 7
+title: Send a delegation to a civilization you have met
+turn_cap: 3
+
+objective: >
+  Send a delegation to another civilization you have met. Look at which civilizations you have
+  met and send a delegation to one of them that does not already have one from you.
+
+# diplomacy.send_delegation's verification_predicate is `other_player.has_delegation`, read back
+# out of diplomacy.state. The observation-side clause is the same fact counted across relations.
+success: >
+  observed_applied_diplomacy_send_delegation >= 1
+  and player.delegation_count >= observed_start_delegation_count + 1
+
+prerequisites:
+  # diplomacy.state.relations[].has_met; a delegation costs 25 gold, read from the top bar
+  # (player.yields.gold_balance).
+  - player.met_civ_count >= 1
+  - player.gold >= 25
+
+notes: >
+  One of the five actions attempted live and never applied (loop-state 18:00 coverage). Needs a
+  met civilization, so it only becomes feasible from a save deep enough for a first meeting to
+  have happened -- which is exactly what --feasibility is for. `has_delegation` is emitted by
+  lua/gamecore/diplomacy.lua only for relations where has_met is true, so player.delegation_count
+  is 0 (not absent) before the first meeting.

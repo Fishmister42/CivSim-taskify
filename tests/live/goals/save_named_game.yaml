@@ -1,0 +1,21 @@
+id: save_named_game
+order: 4
+title: Take a named save of the game
+turn_cap: 2
+
+objective: >
+  Save the game. Take a save of the current game through the in-game menu's Save Game command.
+
+# Counts AGENT-ISSUED saves only. The turn-start quicksave (FR-007) is dispatched by
+# run/turn_cycle.py through LuaSaveCapability, not through the decision loop, so it never
+# becomes a Decision and is never counted here.
+success: observed_applied_saves_save_game >= 1
+
+prerequisites:
+  - game.is_local_player_turn
+
+notes: >
+  saves.save_game's availability_predicate is `game.is_local_player_turn` and its
+  verification_predicate is `game.turn_number == observed_turn_number` -- the cheapest action in
+  the catalog to prove end to end, and the one that most directly exercises "the agent chose an
+  action that is not end turn".

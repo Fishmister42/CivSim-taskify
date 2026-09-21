@@ -1,0 +1,26 @@
+id: slot_policy
+order: 8
+title: Slot a policy card
+turn_cap: 3
+
+objective: >
+  Slot a policy card. Look at the policy cards available to you and put one of them into a
+  policy slot.
+
+# policies.slot_policy's verification_predicate is `not (target in player.available_policies)` --
+# the card leaves the available list once it is slotted. The second clause is that same fact
+# seen from the next turn's observation.
+success: >
+  observed_applied_policies_slot_policy >= 1
+  and player.available_policies_count <= observed_start_available_policies_count - 1
+
+prerequisites:
+  # government.state.available_policies is empty until a government exists (Code of Laws).
+  - player.available_policies != []
+  - player.current_government != null
+
+notes: >
+  Only feasible after Code of Laws completes and a government is adopted -- before that
+  `government.state` reports `current_government: null` and `available_policies: []` on every
+  record, which the prerequisites above report as infeasible rather than blocked. Run it from a
+  milestone save deep enough to have a government.

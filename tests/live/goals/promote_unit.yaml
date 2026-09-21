@@ -1,0 +1,20 @@
+id: promote_unit
+order: 9
+title: Promote a unit
+turn_cap: 3
+
+objective: >
+  Promote one of your units. Select a unit that has a promotion available to it and apply one of
+  the promotions it is offered.
+
+# units.promote's verification_predicate is `not (target in unit.available_promotions)`.
+success: observed_applied_units_promote >= 1
+
+prerequisites:
+  # units.state.available_promotions, summed over the local player's own units.
+  - player.units.promotions_available_count >= 1
+
+notes: >
+  Needs a unit that has actually earned a promotion, so it is feasible only from a save where
+  combat (or a policy) has produced one. `available_promotions` is [] for every unit on every
+  record in the store today, which is a game-state fact, not a body gap.

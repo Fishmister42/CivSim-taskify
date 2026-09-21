@@ -1,0 +1,23 @@
+id: found_pantheon
+order: 10
+title: Found a pantheon
+turn_cap: 3
+
+objective: >
+  Choose a pantheon. Look at the beliefs available to you and adopt one of them as your
+  pantheon.
+
+# religion.select_pantheon's verification_predicate is `player.pantheon_selected`; the
+# observation-side clause is the same flag on religion.state the next turn.
+success: player.pantheon_selected
+
+prerequisites:
+  - not player.pantheon_selected
+  - player.available_beliefs != []
+
+notes: >
+  Uses religion.select_pantheon (the Religion screen route), not prompts.pantheon_selection.
+  The prompt route is unreachable today: lua/ingame/screens.lua enumerates prompt options only
+  for acknowledge-only popups and for prompt.diplomatic_approach, so
+  prompts.pantheon_selection's `target in prompt.options` can never hold. Feasible only once
+  enough faith has accumulated for `religion.state.available_beliefs` to be non-empty.

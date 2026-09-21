@@ -1,0 +1,37 @@
+# Part two of the two-part builder chain. `depends_on` makes the driver run build_a_builder
+# first, in the same client session, and carry its end state into this part.
+
+id: use_a_builder
+order: 13
+title: Spend a Builder charge on a tile next to your city
+turn_cap: 8
+depends_on: build_a_builder
+
+objective: >
+  Use your Builder. Move it onto a tile next to your city and have it improve that tile, so one
+  of its charges is spent.
+
+# Either reading is accepted, whichever the observations expose first:
+#   - units.state.charges_remaining for the local player's Builders goes down by one; or
+#   - map.state.revealed_plots gains an `improvement` on a plot this player owns.
+success: >
+  player.units.builder_charges_total <= observed_start_builder_charges_total - 1
+  or player.owned_improved_plot_count >= observed_start_owned_improved_plot_count + 1
+
+prerequisites:
+  - player.units.builder_count >= 1
+  - player.units.builder_charges_total >= 1
+
+blocked_by: >
+  catalog gap -- NO action in catalogs/actions/ spends a builder charge. catalogs/actions/units.yaml
+  declares only units.select, units.move_to, units.found_city and units.promote; there is no
+  units.build_improvement, no harvest, and no unit-operation/command declaration anywhere in the
+  catalog (grepped 2026-09-21: the only occurrences of "improvement"/"charge" in catalogs/ are
+  map.state's per-plot `improvement` field, units.state's `charges_remaining` field, and the
+  `unit.charges_remaining` predicate symbol in catalogs/README.md SS4). Nothing was invented to
+  cover it. The goal is authored against the observations that already exist so that it becomes
+  runnable the moment a charge-spending action is declared and backed.
+
+notes: >
+  Proves builder charge usage. The success predicate reads both of the fields the catalog
+  already declares, so whichever one the live client actually moves is enough.

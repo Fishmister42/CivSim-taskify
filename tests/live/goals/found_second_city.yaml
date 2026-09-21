@@ -1,0 +1,32 @@
+# Goal 1. Directed testing: the agent is asked to puzzle through ONE game item.
+# Principle I: only `objective` is ever shown to the agent. `success` and `prerequisites` are
+# evaluated by the harness against the observations it already recorded in the store; neither is
+# rendered into any prompt, and neither tells the agent anything the game's own UI would not.
+
+id: found_second_city
+order: 1
+title: Found a second city
+turn_cap: 15
+
+objective: >
+  Found a second city. You have a Settler. Select it, look at the map you can see, move it to a
+  plot where a city may be founded, and found the city there. It may take several turns of
+  movement to reach a workable plot; keep moving toward it each turn and end the turn when the
+  Settler has no movement left.
+
+# player.cities.count counts the cities in `cities.state` with owner_is_local_player == true.
+success: player.cities.count >= observed_start_cities_count + 1
+
+prerequisites:
+  # `units.state` -> unit_type contains SETTLER. A settler that must first be produced cannot be
+  # confirmed today: `city.available_productions` is [] on every record (see notes).
+  - player.units.settler_count >= 1
+
+notes: >
+  Tests map reading and multi-turn unit movement -- the two things stochastic play is least
+  likely to chance into, because a settler must be moved deliberately over several turns before
+  units.found_city ever becomes available (availability_predicate:
+  `unit.is_selected and unit.owner_is_local_player and unit.can_found_city`).
+  The "or can be produced" half of the prerequisite is deliberately NOT expressed: with
+  `city.available_productions` empty on every record today there is no observation that could
+  confirm it, and a prerequisite the harness cannot read must not be written as if it could.

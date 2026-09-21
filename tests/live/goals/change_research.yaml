@@ -1,0 +1,23 @@
+id: change_research
+order: 3
+title: Change the current research to a named technology
+turn_cap: 2
+
+objective: >
+  Change what you are currently researching. Look at the technologies listed as researchable and
+  set your current research to one of them that is not what you are researching now.
+
+# research.set_tech's verification_predicate is `player.current_research == target`, so an
+# `applied` outcome is the harness's own read-back; the second clause is the same fact seen
+# from the next turn's observation.
+success: >
+  observed_applied_research_set_tech >= 1
+  and player.current_research != observed_start_current_research
+
+prerequisites:
+  - player.researchable_techs != []
+
+notes: >
+  The narrowest possible "did the agent read a list out of the observation and name one item
+  back" test: one action, one target, one re-read. `research.state.researchable_techs` is
+  populated on every record in the store today, so this is runnable now.
