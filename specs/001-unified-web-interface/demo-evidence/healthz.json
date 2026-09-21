@@ -1,0 +1,56 @@
+{
+    "service": "civsim_web",
+    "ok": true,
+    "store": {
+        "ok": true,
+        "detail": null,
+        "checked_at": "2026-09-21T03:53:05.700522Z"
+    },
+    "panel_registry": {
+        "version": "1",
+        "content_hash": "c0247f1fa61d8ff50f31a9d755f1f8d7e83b32502c9414cefadadd996b0f19dd",
+        "panel_ids": [
+            "action.turn.end_turn",
+            "action.units.found_city",
+            "action.units.move_to",
+            "action.units.promote",
+            "capture.screen",
+            "capture.screening",
+            "catalog.comparison_basis",
+            "catalog.run_row",
+            "catalog.trend_eligibility",
+            "comparison.divergence_points",
+            "comparison.metric_series",
+            "current_turn.number",
+            "current_turn.yields",
+            "decision.action",
+            "decision.model_call",
+            "decision.reasoning",
+            "history.attempt_marker",
+            "history.gap_marker",
+            "history.turn_yields",
+            "observation.cities",
+            "observation.congress",
+            "observation.diplomacy",
+            "observation.espionage",
+            "observation.government",
+            "observation.great_people",
+            "observation.map",
+            "observation.religion",
+            "observation.research",
+            "observation.screen_state",
+            "observation.turn_state",
+            "observation.units",
+            "run.configuration",
+            "run.header",
+            "run.intervention",
+            "run.timeline",
+            "step.record",
+            "turn.record"
+        ]
+    },
+    "bind_addresses": [
+        "127.0.0.1"
+    ],
+    "checked_at": "2026-09-21T03:53:05.700582Z"
+}

@@ -1,0 +1,460 @@
+{
+    "summary": {
+        "run_id": "run-live",
+        "lifecycle_state": "playing",
+        "health": {
+            "state": "running",
+            "reason_event_id": null,
+            "since": "2026-09-20T12:00:00Z",
+            "lifecycle_state": "playing"
+        },
+        "record_completeness_status": "complete",
+        "comparability_status": "comparable",
+        "trend_eligibility": {
+            "eligible": false,
+            "assessed": false,
+            "reasons": [
+                "not_assessed"
+            ],
+            "record_completeness_status": "complete",
+            "gapped_turns": [],
+            "explanation": "Trend eligibility was not assessed for this response. A run is never treated as trend-eligible by default (Principle III)."
+        },
+        "seed": "SEED-0001",
+        "civilization": "GREECE",
+        "leader": "PERICLES",
+        "ruleset": "BBG",
+        "model_primary": "anthropic/claude-sonnet-4",
+        "turn_count": 12,
+        "outcome_metrics": {
+            "science_output": 16.0,
+            "culture_output": 14.0
+        },
+        "started_at": "2026-09-20T12:00:00Z",
+        "ended_at": null,
+        "parent_run_id": null,
+        "parent_turn": null,
+        "observation_catalog_version": "1",
+        "action_catalog_version": "1",
+        "unavailable": []
+    },
+    "current_turn": {
+        "run_id": "run-live",
+        "turn_number": 12,
+        "reference": "/runs/run-live/turns/12",
+        "attempt_index": 0,
+        "is_authoritative": true,
+        "outcome": "ended_by_agent",
+        "steps": [
+            {
+                "run_id": "run-live",
+                "turn_number": 12,
+                "step_index": 1,
+                "reference": "/runs/run-live/turns/12/steps/1",
+                "observation": [
+                    {
+                        "panel_id": "observation.turn_state",
+                        "label": "Turn State",
+                        "value": {
+                            "turn_number": 12,
+                            "science_per_turn": 4
+                        },
+                        "panel_basis": "Look at the turn counter in the top bar and whether the end-turn button is enabled (it is only enabled during the local player's own turn)."
+                    },
+                    {
+                        "panel_id": "observation.cities",
+                        "label": "Cities",
+                        "value": {
+                            "turn_number": 12,
+                            "science_per_turn": 4
+                        },
+                        "panel_basis": "Look at city banners on the map and open a city's production/purchase panel for full detail on an owned city."
+                    }
+                ],
+                "dropped_observation_count": 0,
+                "capture": {
+                    "capture_id": "cap-tc-run-live-t12-a0-s1",
+                    "available": true,
+                    "image_url": "/captures/cap-tc-run-live-t12-a0-s1/image",
+                    "unavailable_reason": null,
+                    "screening_status": "screened_clean",
+                    "captured_at": "2026-09-20T12:12:00Z",
+                    "turn_number": 12,
+                    "unavailable": []
+                },
+                "decision": {
+                    "action_label": "Found City",
+                    "action_label_is_declaration_id": false,
+                    "action_declaration_id": "units.found_city",
+                    "parameters": {},
+                    "is_end_turn": false,
+                    "execution_outcome": "applied",
+                    "rejection_reason": null,
+                    "reasoning": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian camp spawns a second unit.",
+                    "reasoning_label": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian",
+                    "reasoning_is_empty": false,
+                    "reasoning_preview": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian camp spawns a second unit.",
+                    "reasoning_is_truncated": false,
+                    "parity_basis": "Issue the same order through the game's standard UI -- select the unit, city, or screen the order targets and click the corresponding command -- and read whether it was accepted from the map and the HUD.",
+                    "model_call": {
+                        "model_served": "anthropic/claude-sonnet-4",
+                        "latency_ms": 1200,
+                        "cost": {
+                            "input_tokens": 900,
+                            "output_tokens": 120
+                        },
+                        "fallback_occurred": false,
+                        "outcome": "decision_returned",
+                        "category": "out_of_game_telemetry",
+                        "unavailable": []
+                    },
+                    "unavailable": []
+                },
+                "progress": "changed_state",
+                "unavailable": []
+            },
+            {
+                "run_id": "run-live",
+                "turn_number": 12,
+                "step_index": 2,
+                "reference": "/runs/run-live/turns/12/steps/2",
+                "observation": [
+                    {
+                        "panel_id": "observation.turn_state",
+                        "label": "Turn State",
+                        "value": {
+                            "turn_number": 12,
+                            "science_per_turn": 4
+                        },
+                        "panel_basis": "Look at the turn counter in the top bar and whether the end-turn button is enabled (it is only enabled during the local player's own turn)."
+                    },
+                    {
+                        "panel_id": "observation.cities",
+                        "label": "Cities",
+                        "value": {
+                            "turn_number": 12,
+                            "science_per_turn": 4
+                        },
+                        "panel_basis": "Look at city banners on the map and open a city's production/purchase panel for full detail on an owned city."
+                    }
+                ],
+                "dropped_observation_count": 0,
+                "capture": {
+                    "capture_id": "cap-tc-run-live-t12-a0-s2",
+                    "available": true,
+                    "image_url": "/captures/cap-tc-run-live-t12-a0-s2/image",
+                    "unavailable_reason": null,
+                    "screening_status": "screened_clean",
+                    "captured_at": "2026-09-20T12:12:00Z",
+                    "turn_number": 12,
+                    "unavailable": []
+                },
+                "decision": {
+                    "action_label": "Found City",
+                    "action_label_is_declaration_id": false,
+                    "action_declaration_id": "units.found_city",
+                    "parameters": {},
+                    "is_end_turn": false,
+                    "execution_outcome": "applied",
+                    "rejection_reason": null,
+                    "reasoning": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian camp spawns a second unit.",
+                    "reasoning_label": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian",
+                    "reasoning_is_empty": false,
+                    "reasoning_preview": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian camp spawns a second unit.",
+                    "reasoning_is_truncated": false,
+                    "parity_basis": "Issue the same order through the game's standard UI -- select the unit, city, or screen the order targets and click the corresponding command -- and read whether it was accepted from the map and the HUD.",
+                    "model_call": {
+                        "model_served": "anthropic/claude-sonnet-4",
+                        "latency_ms": 1200,
+                        "cost": {
+                            "input_tokens": 900,
+                            "output_tokens": 120
+                        },
+                        "fallback_occurred": false,
+                        "outcome": "decision_returned",
+                        "category": "out_of_game_telemetry",
+                        "unavailable": []
+                    },
+                    "unavailable": []
+                },
+                "progress": "changed_state",
+                "unavailable": []
+            },
+            {
+                "run_id": "run-live",
+                "turn_number": 12,
+                "step_index": 3,
+                "reference": "/runs/run-live/turns/12/steps/3",
+                "observation": [
+                    {
+                        "panel_id": "observation.turn_state",
+                        "label": "Turn State",
+                        "value": {
+                            "turn_number": 12,
+                            "science_per_turn": 4
+                        },
+                        "panel_basis": "Look at the turn counter in the top bar and whether the end-turn button is enabled (it is only enabled during the local player's own turn)."
+                    },
+                    {
+                        "panel_id": "observation.cities",
+                        "label": "Cities",
+                        "value": {
+                            "turn_number": 12,
+                            "science_per_turn": 4
+                        },
+                        "panel_basis": "Look at city banners on the map and open a city's production/purchase panel for full detail on an owned city."
+                    }
+                ],
+                "dropped_observation_count": 0,
+                "capture": {
+                    "capture_id": "cap-tc-run-live-t12-a0-s3",
+                    "available": true,
+                    "image_url": "/captures/cap-tc-run-live-t12-a0-s3/image",
+                    "unavailable_reason": null,
+                    "screening_status": "screened_clean",
+                    "captured_at": "2026-09-20T12:12:00Z",
+                    "turn_number": 12,
+                    "unavailable": []
+                },
+                "decision": {
+                    "action_label": "Found City",
+                    "action_label_is_declaration_id": false,
+                    "action_declaration_id": "units.found_city",
+                    "parameters": {},
+                    "is_end_turn": false,
+                    "execution_outcome": "applied",
+                    "rejection_reason": null,
+                    "reasoning": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian camp spawns a second unit.",
+                    "reasoning_label": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian",
+                    "reasoning_is_empty": false,
+                    "reasoning_preview": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian camp spawns a second unit.",
+                    "reasoning_is_truncated": false,
+                    "parity_basis": "Issue the same order through the game's standard UI -- select the unit, city, or screen the order targets and click the corresponding command -- and read whether it was accepted from the map and the HUD.",
+                    "model_call": {
+                        "model_served": "anthropic/claude-sonnet-4",
+                        "latency_ms": 1200,
+                        "cost": {
+                            "input_tokens": 900,
+                            "output_tokens": 120
+                        },
+                        "fallback_occurred": false,
+                        "outcome": "decision_returned",
+                        "category": "out_of_game_telemetry",
+                        "unavailable": []
+                    },
+                    "unavailable": []
+                },
+                "progress": "changed_state",
+                "unavailable": []
+            }
+        ],
+        "step_window": {
+            "offset": 0,
+            "limit": null,
+            "returned": 3,
+            "total": 3,
+            "has_more": false,
+            "skipped_step_indices": []
+        },
+        "step_count": 3,
+        "yields": {
+            "science_output": 16,
+            "culture_output": 14
+        },
+        "started_at": "2026-09-20T12:12:00Z",
+        "ended_at": "2026-09-20T12:12:00Z",
+        "completeness": {
+            "is_complete": true,
+            "is_gap": false,
+            "missing_step_indices": []
+        },
+        "superseded_by": null,
+        "focus_panel_id": null,
+        "provenance": {
+            "panel_registry_version": "1",
+            "panel_registry_content_hash": "c0247f1fa61d8ff50f31a9d755f1f8d7e83b32502c9414cefadadd996b0f19dd",
+            "observation_catalog_version": "1",
+            "action_catalog_version": "1"
+        },
+        "unavailable": []
+    },
+    "latest_decision": {
+        "action_label": "Found City",
+        "action_label_is_declaration_id": false,
+        "action_declaration_id": "units.found_city",
+        "parameters": {},
+        "is_end_turn": false,
+        "execution_outcome": "applied",
+        "rejection_reason": null,
+        "reasoning": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian camp spawns a second unit.",
+        "reasoning_label": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian",
+        "reasoning_is_empty": false,
+        "reasoning_preview": "Science is 4 behind the plan; queue a Campus in the capital and move the warrior to scout the coast before the barbarian camp spawns a second unit.",
+        "reasoning_is_truncated": false,
+        "parity_basis": "Issue the same order through the game's standard UI -- select the unit, city, or screen the order targets and click the corresponding command -- and read whether it was accepted from the map and the HUD.",
+        "model_call": {
+            "model_served": "anthropic/claude-sonnet-4",
+            "latency_ms": 1200,
+            "cost": {
+                "input_tokens": 900,
+                "output_tokens": 120
+            },
+            "fallback_occurred": false,
+            "outcome": "decision_returned",
+            "category": "out_of_game_telemetry",
+            "unavailable": []
+        },
+        "unavailable": []
+    },
+    "last_confirmed_current_at": "2026-09-21T03:53:05.664520Z",
+    "intervention_info": {
+        "run_id": "run-live",
+        "lifecycle_status": "playing",
+        "last_known_good_turn": 12,
+        "last_known_good_save_id": "save-run-live-t0012",
+        "last_known_good_save_name": "civsim__run-live__t0012",
+        "unavailable": []
+    },
+    "recent_events": [
+        {
+            "event_id": "evt-run_started-0",
+            "event_type": "run_started",
+            "turn_number": null,
+            "step_index": null,
+            "occurred_at": "2026-09-20T12:00:00Z",
+            "detail": {},
+            "unavailable": []
+        },
+        {
+            "event_id": "evt-lifecycle_transition-0",
+            "event_type": "lifecycle_transition",
+            "turn_number": null,
+            "step_index": null,
+            "occurred_at": "2026-09-20T12:00:00Z",
+            "detail": {
+                "from": "created",
+                "to": "playing"
+            },
+            "unavailable": []
+        },
+        {
+            "event_id": "evt-turn_started-1",
+            "event_type": "turn_started",
+            "turn_number": 1,
+            "step_index": null,
+            "occurred_at": "2026-09-20T12:01:00Z",
+            "detail": {},
+            "unavailable": []
+        },
+        {
+            "event_id": "evt-save_taken-1",
+            "event_type": "save_taken",
+            "turn_number": 1,
+            "step_index": null,
+            "occurred_at": "2026-09-20T12:01:00Z",
+            "detail": {
+                "save_name": "civsim__run-live__t0001"
+            },
+            "unavailable": []
+        },
+        {
+            "event_id": "evt-provider_retry-4",
+            "event_type": "provider_retry",
+            "turn_number": 4,
+            "step_index": null,
+            "occurred_at": "2026-09-20T12:04:00Z",
+            "detail": {
+                "attempt": 2,
+                "reason": "overloaded_error"
+            },
+            "unavailable": []
+        },
+        {
+            "event_id": "evt-hang_detected-7",
+            "event_type": "hang_detected",
+            "turn_number": 7,
+            "step_index": null,
+            "occurred_at": "2026-09-20T12:07:00Z",
+            "detail": {
+                "idle_seconds": 95
+            },
+            "unavailable": []
+        },
+        {
+            "event_id": "evt-resumed-8",
+            "event_type": "resumed",
+            "turn_number": 7,
+            "step_index": null,
+            "occurred_at": "2026-09-20T12:08:00Z",
+            "detail": {
+                "from_save": "civsim__run-live__t0007"
+            },
+            "unavailable": []
+        },
+        {
+            "event_id": "evt-model_fallback_used-10",
+            "event_type": "model_fallback_used",
+            "turn_number": 10,
+            "step_index": null,
+            "occurred_at": "2026-09-20T12:10:00Z",
+            "detail": {
+                "requested": "anthropic/claude-sonnet-4",
+                "served": "anthropic/claude-haiku-4"
+            },
+            "unavailable": []
+        },
+        {
+            "event_id": "evt-turn_started-12",
+            "event_type": "turn_started",
+            "turn_number": 12,
+            "step_index": null,
+            "occurred_at": "2026-09-20T12:12:00Z",
+            "detail": {},
+            "unavailable": []
+        }
+    ],
+    "empty_state_reason": null,
+    "panel_registry": {
+        "version": "1",
+        "content_hash": "c0247f1fa61d8ff50f31a9d755f1f8d7e83b32502c9414cefadadd996b0f19dd",
+        "panel_ids": [
+            "action.turn.end_turn",
+            "action.units.found_city",
+            "action.units.move_to",
+            "action.units.promote",
+            "capture.screen",
+            "capture.screening",
+            "catalog.comparison_basis",
+            "catalog.run_row",
+            "catalog.trend_eligibility",
+            "comparison.divergence_points",
+            "comparison.metric_series",
+            "current_turn.number",
+            "current_turn.yields",
+            "decision.action",
+            "decision.model_call",
+            "decision.reasoning",
+            "history.attempt_marker",
+            "history.gap_marker",
+            "history.turn_yields",
+            "observation.cities",
+            "observation.congress",
+            "observation.diplomacy",
+            "observation.espionage",
+            "observation.government",
+            "observation.great_people",
+            "observation.map",
+            "observation.religion",
+            "observation.research",
+            "observation.screen_state",
+            "observation.turn_state",
+            "observation.units",
+            "run.configuration",
+            "run.header",
+            "run.intervention",
+            "run.timeline",
+            "step.record",
+            "turn.record"
+        ]
+    }
+}

@@ -90,6 +90,9 @@ main { padding: 0 1.25rem 3rem; max-width: 1600px; margin: 0 auto; }
 .health-stalled, .health-crashed { color: var(--bad); }
 
 .stale-marker { display: block; margin-top: 0.4rem; color: var(--warn); font-size: 0.85rem; }
+/* `display: block` above beats the HTML `hidden` attribute, so the "connection lost" marker
+   showed on every healthy live view (found by the first screenshot pass, 2026-09-21). */
+.stale-marker[hidden] { display: none; }
 [data-stale="true"] .glance { border-color: var(--warn); }
 
 /* -- honest states ------------------------------------------------------- */

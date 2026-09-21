@@ -1,0 +1,16 @@
+{
+    "error": "error",
+    "kind": "turn_gap",
+    "message": "Turn 9 is inside this run's recorded range (1-12) but has no authoritative attempt: the harness recorded it as a gap. The run's turn-by-turn record is incomplete and it is unfit for trend comparison.",
+    "run_id": "run-live",
+    "turn_number": 9,
+    "detail": {
+        "turn_gaps": [
+            9
+        ],
+        "turn_range": [
+            1,
+            12
+        ]
+    }
+}
