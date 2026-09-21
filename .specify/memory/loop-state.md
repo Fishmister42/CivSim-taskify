@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 18:20 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 18:45 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -34,10 +34,20 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| hang-fix (Opus) | suite hangs in `test_recovery.py` crash-mid-turn since `c795039`; bound the pre-save probe; add faulthandler/timeout defaults to pytest config | `run/turn_cycle.py`, `run/decision_loop.py`, `tests/integration/`, `pyproject.toml` | 17:45 |
-| availability (Opus) | render available/unavailable actions with reasons; `--provider-policy coverage` draws only reachable, unapplied actions; scorecard counts blind draws separately | `agent/context.py`, `provider/stochastic.py`, `store/coverage.py`, their tests | 17:55 |
-| autoplay spike (Fable fork, live) | save t053; AI autoplay in 25-turn chunks; named saves at ~t100/t150/t200; verify each loads | client; `spikes/autoplay-fast-forward-linux.md` | 17:55 |
-| goal runs (Opus) | goal library + `tests/live/goal_run.py` driver + feasibility check; no live runs | `tests/live/goal_run.py`, `tests/live/goals/`, `provider/` wrapper, tests | 18:20 |
+| hang-fix (Opus) | suite hang in `test_recovery.py` crash-mid-turn since `c795039`; four image-path test failures named; add pytest hang defaults | `run/turn_cycle.py`, `run/decision_loop.py`, `tests/integration/`, `pyproject.toml` | 17:45 |
+| availability (Opus) | render available/unavailable actions with reasons; `--provider-policy coverage` draws ONLY reachable, unapplied actions; scorecard counts blind draws separately | `agent/context.py`, `provider/stochastic.py`, `store/coverage.py`, tests | 17:55 |
+| goal runs (Opus) | goal library incl. chain `build_a_builder` → `use_a_builder`; `tests/live/goal_run.py` driver with `--feasibility`; no live runs | `tests/live/goal_run.py`, `tests/live/goals/`, tests | 18:20 |
+| productions fix (Opus) | `city.available_productions` always `[]`; fill from the production panel's own list; `cities.set_production` binds from it | `cities.state` Lua + `catalogs/observations/cities.yaml`, action Lua, tests | 18:30 |
+| dedication chooser (Opus) | `/InGame/DedicationPopup` → `prompt.era_dedication` + `prompts.era_dedication` (option click + Confirm) | `lua/ingame/screens.lua`, `catalogs/actions/prompts.yaml`, acknowledge Lua, tests | 18:45 |
+| Live S4 (Fable fork) | Sonnet 5 blocks from t54 now; goal runs when the driver lands; entries 8+ on #3; wind down 20:45 | client; `spikes/gameplay-2026-09-21/` | 18:45 |
+
+**Autoplay spike (done, `a9ff610`): BLOCKED on a permission the owner must grant.** `AutoplayManager.SetActive(true)`
+was refused by the session's permission classifier ("Modify Shared Resources"); the agent did not
+work around it. Everything else is measured: autoplay exists on this build with Firaxis' methods
+(`automation_standardtests.lua:328-334`), safety save `civsim-gameplay-2026-09-21-t054`, plan in
+`spikes/autoplay-fast-forward-linux.md` + `spikes/autoplay_ff.py`. To unblock: the owner runs
+`! uv run python specs/002-civ-playing-harness/spikes/autoplay_ff.py --turns 2` in the session, or
+adds a Bash allow rule for that script.
 
 ## Queue, in order
 1. Suite green (gate). 2. Goal runs live on the milestone saves until ~20:45, Sonnet 5, back to
