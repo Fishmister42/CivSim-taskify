@@ -1,11 +1,12 @@
-# Screen ids the shipped Civ VI UI has no state for (2026-09-21)
+# Screen ids with no Lua state of their own (2026-09-21)
 
 `civsim store coverage` reports a claimed screen id as unattestable when
 `CIVSIM_SCREEN_ID_BY_STATE` in `lua/ingame/screens.lua` maps no Lua state to it: the identity probe
 can never report it, so no run can ever demonstrate it, so any prompt action gated on it can never
 become available. It flagged six. This note records what reading Firaxis's shipped UI Lua actually
-found for each, so the ones that cannot be mapped are a **documented gap** rather than a silently
-wrong catalog claim, and so nobody later "fixes" the coverage warning by inventing a mapping.
+found for each. Two turned out to be resolvable -- `world`, and, after live play forced a second
+look, `prompt.diplomatic_approach`. The rest are a **documented gap** rather than a silently wrong
+catalog claim, so nobody later "fixes" the coverage warning by inventing a mapping.
 
 Everything below was read, not measured. Read from
 `~/.steam/debian-installation/steamapps/common/Sid Meier's Civilization VI/steamassets/`
@@ -69,18 +70,49 @@ the agent merely opened the religion overview — a false `has_blocking_prompt`,
 thing FR-049 exists to prevent. (Contrast `prompt.pantheon_selection` → `PantheonChooser`, which is
 a dedicated single-purpose context and is correctly mapped.)
 
-## `prompt.diplomatic_approach` — unmappable
+## `prompt.diplomatic_approach` — resolved by probing the MODE, not the state
 
-An AI-initiated approach arrives as `Events.DiplomacyStatement` → `OnDiplomacyStatement`
-(`base/assets/ui/diplomacyactionview.lua:2741`), which sets `ms_ActiveSessionID` and shows the
-**same `DiplomacyActionView` context** in `CONVERSATION_MODE` or `CINEMA_MODE` that the
-player-initiated screen uses in `OVERVIEW_MODE`/`DEAL_MODE`. `DiplomacyActionView` is already mapped
-to the `diplomacy` screen id.
+**Superseded 2026-09-21 (block 7).** This section first concluded "unmappable". Live play proved the
+conclusion too quick: play stalled five harness turns at game turn 35 on Australia's first-meeting
+leader scene (John Curtin, two statement choices), with nine `send_delegation` orders refused and
+four end turns never confirmed, because the probe answered `diplomacy` with
+`has_blocking_prompt=false`.
 
-What separates "the AI is asking me something" from "I opened the diplomacy screen" is
-`ms_ActiveSessionID` and the view mode — private Lua state of that context, invisible to
-`ContextPtr:IsHidden()`. `LeaderScene` is the 3-D leader backdrop, shown for both cases, so it does
-not distinguish them either.
+The state-level reading stands: an AI-initiated approach arrives as `Events.DiplomacyStatement` →
+`OnDiplomacyStatement` (`base/assets/ui/diplomacyactionview.lua:2741`) and shows the **same
+`DiplomacyActionView` context** in `CONVERSATION_MODE`/`CINEMA_MODE` that the player-initiated
+screen uses in `OVERVIEW_MODE`/`DEAL_MODE` (modes at lines 39-42). `LeaderScene` is the 3-D backdrop
+for both, so it does not distinguish them either.
+
+What was missed is that the mode switch is expressed as **control visibility**, which
+`ContextPtr:LookUpControl` can read from InGame:
+
+- `SetConversationMode` shows `Controls.ConversationContainer` and hides `Controls.OverviewContainer`
+  (lines 1744-1756); `OVERVIEW_MODE` does the reverse (lines 1831-1834).
+- The choices are instance-manager instances in `Controls.ConversationSelectionStack`
+  (`InstanceManager:new("ConversationSelectionInstance", "SelectionButton", …)`, line 104), each a
+  `SelectionButton` with a `SelectionText` label inside it (`diplomacyactionview.xml:381-382`, `:432`,
+  `:441`, `:451`).
+- `ApplyStatement` (lines 561-643) sets each label to the localized choice text a human reads,
+  disables the choices that are not takeable, and registers the click callback that calls
+  `handler.OnSelectionButtonClicked(selection.Key)` — `OnSelectConversationDiplomacyStatement`
+  (line 488, bound at line 2534).
+
+So `prompt.diplomatic_approach` is now reported when `ConversationContainer` is visible **and** the
+selection stack holds at least one visible, enabled choice, with `prompt_options` the visible label
+texts. `prompts.ai_diplomatic_approach` answers by clicking the matching `SelectionButton`, whose
+callback closes over the right `selection.Key` and the live session id inside that context's own
+Lua state. There is deliberately **no** fallback to `DiplomacyManager.AddStatement`: the key →
+statement mapping is a long switch inside that handler, and reconstructing it from a label would
+risk answering something other than what the agent chose.
+
+Parity: only enabled, visible choices are offered — a disabled choice is shown to the human but
+cannot be clicked, so offering it would be a superset. The instance manager leaves recycled
+instances in the stack hidden and pushed to the back (`base/assets/ui/techandcivicsupport.lua:216-218`
+documents this), so hidden children are skipped.
+
+Unverified live: every step. Each is `pcall`'d and a failure degrades to the previous behaviour
+(`diplomacy`, non-blocking) rather than inventing a prompt.
 
 ## `prompt.congress_vote` — unmappable
 
@@ -111,8 +143,17 @@ game does not have, and the catalog claim itself should be retired rather than m
 
 ## What the live lane should see
 
-Nothing here is live-verified. The probe's behaviour for each unmapped id is: open that screen and
-the probe answers the id it *is* mapped to (`diplomacy`, `congress`) or `unknown`
-(`ReligionScreen`), never the prompt id — which is the correct, non-guessing outcome under FR-049.
-The newly mapped `prompt.great_work_created` → `GreatWorkShowcase` still needs a live observation
-(see `lua/ingame/screens.lua`).
+Nothing here is live-verified.
+
+- **The next AI greeting**: the probe should answer `prompt.diplomatic_approach` with
+  `has_blocking_prompt` true and the two visible statement texts as `prompt_options`, and
+  `prompts.ai_diplomatic_approach` with one of those texts as `target` should close the scene. If
+  `CallCallback` does not exist on this build, the answer comes back `ok: false` with the error —
+  which is the signal that the click path needs replacing, not that the probe is wrong.
+- **The next relic or great work**: `prompt.great_work_created` with `["continue"]`.
+- **The next completed tech or civic**: the acknowledge should report
+  `mechanism: "close_control_callback"`, and the card shown at the *next* completion should be the
+  new one, not the one already acknowledged.
+- **Everything else here**: open the screen and the probe answers the id it *is* mapped to
+  (`congress`) or `unknown` (`ReligionScreen`), never the prompt id — the correct, non-guessing
+  outcome under FR-049.

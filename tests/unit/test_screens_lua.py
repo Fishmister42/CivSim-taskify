@@ -1,12 +1,14 @@
-"""T253: `lua/ingame/screens.lua` executed for real, with the game's globals stubbed.
+"""`lua/ingame/screens.lua` executed for real, with the game's globals stubbed.
 
-The harness ships Lua it cannot run headlessly, and until now the only check on a Lua edit short
+The harness ships Lua it cannot run headlessly, and until T253 the only check on a Lua edit short
 of a live client was the executor's regex over its dispatch table. This module runs the file in an
-embedded Lua 5.4 (`lupa`) with `ContextPtr` and `UIManager` stubbed to the shape Firaxis's own UI
-scripts use, so what is asserted is the file's *logic* -- which screen id a set of open states
-resolves to, which options it offers, which call it makes to dismiss a popup, and what it returns
-when the call fails. What it cannot assert is that the real client's `UIManager:DequeuePopup`
-accepts another state's context from InGame; that stays UNVERIFIED LIVE and is said so in the Lua.
+embedded Lua 5.4 (`lupa`) with `ContextPtr`, `UIManager` and a control tree stubbed to the shape
+Firaxis's own UI scripts use, so what is asserted is the file's *logic* -- which screen id a set of
+open states resolves to, how a `DiplomacyActionView` MODE is read out of its control visibility,
+which options are offered, which call dismisses a popup or answers a statement, and what comes back
+when a call fails. What it cannot assert is that the real client exposes `CallCallback` on a
+control obtained from another state, or that `UIManager:DequeuePopup` accepts another state's
+context from InGame; both stay UNVERIFIED LIVE and are said so in the Lua.
 
 Skipped, not failed, where `lupa` is absent: it is not a project dependency. Run with
 ``uv run --with lupa pytest tests/unit/test_screens_lua.py``.
@@ -56,6 +58,11 @@ local function make_control(name, hidden)
         M.set_hidden[#M.set_hidden + 1] = self.name
         self.hidden = value
     end
+    -- The three Forge control methods the diplomacy mode probe uses. A control with no text and
+    -- no children answers nil for both, exactly as a plain container does.
+    function c:GetText() return self.text end
+    function c:GetChildren() return self.children end
+    function c:IsDisabled() return self.disabled == true end
     return c
 end
 
@@ -76,6 +83,7 @@ function M.reset(open_states, hidden_states)
     M.fail_dequeue = false
     M.callback_closes = true
     M.callback_errors = false
+    M.diplomacy_closes = true
     M.controls = {}
     for _, s in ipairs(open_states) do M.controls["/InGame/" .. s] = make_control(s, false) end
     for _, s in ipairs(hidden_states) do M.controls["/InGame/" .. s] = make_control(s, true) end
@@ -85,6 +93,46 @@ function M.reset(open_states, hidden_states)
             M.controls["/InGame/" .. state .. "/" .. control] = make_button(state, control, ctx)
         end
     end
+end
+
+-- DiplomacyActionView's conversation mode: the container visible, and one `SelectionButton`
+-- instance per choice in `ConversationSelectionStack`, each with its `SelectionText` label inside
+-- it -- the tree diplomacyactionview.xml declares and `ApplyStatement` fills.
+local DIPLO = "/InGame/DiplomacyActionView"
+
+local function contains(list, value)
+    if list == nil then return false end
+    for _, item in ipairs(list) do if item == value then return true end end
+    return false
+end
+
+function M.set_diplomacy_conversation(texts, disabled_texts, hidden_texts)
+    local container = make_control("ConversationContainer", false)
+    M.controls[DIPLO .. "/ConversationContainer"] = container
+    local stack = make_control("ConversationSelectionStack", false)
+    local kids = {}
+    for _, text in ipairs(texts) do
+        local label = make_control("SelectionText", false)
+        label.text = text
+        local button = make_control("SelectionButton", contains(hidden_texts, text))
+        button.disabled = contains(disabled_texts, text)
+        button.children = { label }
+        function button:CallCallback(eventType)
+            if M.callback_errors then error("stubbed CallCallback failure") end
+            M.clicked[#M.clicked + 1] = "DiplomacyActionView/" .. text
+            if M.diplomacy_closes then container.hidden = true end
+        end
+        kids[#kids + 1] = button
+    end
+    stack.children = kids
+    M.controls[DIPLO .. "/ConversationSelectionStack"] = stack
+end
+
+-- Overview mode: the same context open, its conversation container hidden.
+function M.set_diplomacy_overview()
+    M.controls[DIPLO .. "/ConversationContainer"] = make_control("ConversationContainer", true)
+    local stack = make_control("ConversationSelectionStack", true)
+    M.controls[DIPLO .. "/ConversationSelectionStack"] = stack
 end
 
 -- A build whose controls carry no CallCallback at all: every close control becomes uncallable.
@@ -193,7 +241,8 @@ def test_the_great_work_showcase_is_watched_and_names_its_prompt(lua: tuple[Any,
         # lua/ingame/screens.lua's CIVSIM_SCREEN_ID_BY_STATE comment and
         # specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md.
         ("ReligionScreen", "unknown"),  # not prompt.religion_selection
-        ("DiplomacyActionView", "diplomacy"),  # not prompt.diplomatic_approach
+        # DiplomacyActionView with no conversation controls resolvable: the ordinary screen.
+        ("DiplomacyActionView", "diplomacy"),
         ("WorldCongressPopup", "congress"),  # not prompt.congress_vote
     ],
 )
@@ -230,6 +279,132 @@ def test_the_two_contexts_whose_id_differs_from_their_state_name_are_watched_by_
     runtime, stubs = lua
     assert _state(runtime, stubs, open=[control_id])["raw_screen_id"] == control_id
     assert _state(runtime, stubs, open=[lua_state_name])["screen"] == "world"
+
+
+def _diplomacy(
+    runtime: Any,
+    stubs: Any,
+    *,
+    mode: str,
+    texts: list[str] = (),
+    disabled: list[str] = (),
+    hidden: list[str] = (),
+) -> dict[str, Any]:
+    """Open DiplomacyActionView in `mode` and probe. `conversation` builds the choice stack."""
+    stubs.reset(runtime.table("DiplomacyActionView"), runtime.table())
+    if mode == "conversation":
+        stubs.set_diplomacy_conversation(
+            runtime.table(*texts), runtime.table(*disabled), runtime.table(*hidden)
+        )
+    else:
+        stubs.set_diplomacy_overview()
+    result = runtime.globals()["CivSim_Screens"]["probe"]()
+    return {k: (list(v.values()) if k == "prompt_options" else v) for k, v in result.items()}
+
+
+_GREETING = [
+    "Perhaps you would like to visit our nearby city.",
+    "I have no time for further pleasantries.",
+]
+
+
+def test_a_leader_statement_awaiting_a_choice_is_a_blocking_prompt(
+    lua: tuple[Any, Any],
+) -> None:
+    """MEASURED 2026-09-21 (block 7, game turn 35): play stalled five harness turns on Australia's
+    first-meeting leader scene -- nine send_delegation orders refused, four end turns never
+    confirmed -- because the probe read the STATE (`diplomacy`, not blocking) and not the MODE.
+    The options are the visible choice labels, which is what a human reads."""
+    runtime, stubs = lua
+    state = _diplomacy(runtime, stubs, mode="conversation", texts=_GREETING)
+    assert state["screen"] == "prompt.diplomatic_approach"
+    assert state["raw_screen_id"] == "DiplomacyActionView"
+    assert state["recognized"] is True
+    assert state["has_blocking_prompt"] is True
+    assert state["prompt_options"] == _GREETING
+
+
+def test_the_same_context_in_overview_mode_is_the_ordinary_diplomacy_screen(
+    lua: tuple[Any, Any],
+) -> None:
+    runtime, stubs = lua
+    state = _diplomacy(runtime, stubs, mode="overview")
+    assert state["screen"] == "diplomacy"
+    assert state["has_blocking_prompt"] is False
+    assert state["prompt_options"] == []
+
+
+def test_choices_a_human_cannot_click_are_never_offered(lua: tuple[Any, Any]) -> None:
+    """A disabled choice is visible to the human but not takeable, and a hidden one is a recycled
+    instance manager slot. Offering either would be a superset of what the human can do."""
+    runtime, stubs = lua
+    state = _diplomacy(
+        runtime,
+        stubs,
+        mode="conversation",
+        texts=[*_GREETING, "Declare war (not enough gold)", "A recycled slot"],
+        disabled=["Declare war (not enough gold)"],
+        hidden=["A recycled slot"],
+    )
+    assert state["prompt_options"] == _GREETING
+
+
+def test_conversation_mode_with_nothing_takeable_is_not_a_prompt(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    state = _diplomacy(
+        runtime, stubs, mode="conversation", texts=["Only option"], disabled=["Only option"]
+    )
+    assert state["screen"] == "diplomacy"
+    assert state["has_blocking_prompt"] is False
+
+
+def test_answering_the_approach_clicks_the_matching_choice_button(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=_GREETING)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GREETING[1])
+    )
+    assert result["ok"] is True
+    assert result["mechanism"] == "selection_button_callback"
+    assert result["still_in_conversation"] is False
+    assert list(stubs.clicked.values()) == [f"DiplomacyActionView/{_GREETING[1]}"]
+
+
+def test_an_option_that_is_not_offered_is_refused_and_says_what_was(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=_GREETING)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", "Declare war")
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "option_not_offered"
+    assert list(result["offered"].values()) == _GREETING
+    assert list(stubs.clicked.values()) == []
+
+
+def test_answering_outside_conversation_mode_is_refused(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="overview")
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GREETING[0])
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "not_in_conversation_mode"
+
+
+def test_a_failing_choice_click_fails_rather_than_guessing_at_a_diplomacy_call(
+    lua: tuple[Any, Any],
+) -> None:
+    """There is deliberately no fallback: reconstructing `DiplomacyManager.AddStatement` from a
+    label would risk answering something other than what the agent chose."""
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=_GREETING)
+    stubs.callback_errors = True
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GREETING[0])
+    )
+    assert result["ok"] is False
+    assert "stubbed CallCallback failure" in result["error"]
 
 
 def test_an_unmapped_watchlist_state_is_still_unknown_never_guessed(lua: tuple[Any, Any]) -> None:

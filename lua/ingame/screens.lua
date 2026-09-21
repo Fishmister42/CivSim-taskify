@@ -270,6 +270,94 @@ local CIVSIM_SCREEN_ID_BY_STATE = {
     ["prompt.great_work_created"] = "GreatWorkShowcase",
 }
 
+-- MEASURED 2026-09-21 (gameplay day, block 7, game turn 35): play stalled for five harness turns
+-- on Australia's first-meeting leader scene (John Curtin, two statement choices). Nine
+-- `send_delegation` orders were refused and four end turns never confirmed, because the probe
+-- reported `diplomacy` with has_blocking_prompt=false -- correct for the STATE, wrong for the
+-- MODE. `DiplomacyActionView` is one context for four modes (diplomacyactionview.lua:39-42:
+-- OVERVIEW / CONVERSATION / CINEMA / DEAL), and an AI-initiated approach is CONVERSATION_MODE in
+-- that same context, which is why CIVSIM_SCREEN_ID_BY_STATE alone can never tell them apart.
+--
+-- The mode IS readable from InGame, because the mode switch is expressed as control visibility:
+-- `SetConversationMode` shows `Controls.ConversationContainer` and hides `Controls.
+-- OverviewContainer` (diplomacyactionview.lua:1744-1756), and OVERVIEW_MODE does the reverse
+-- (:1831-1834). The statement's choices are instances in `Controls.ConversationSelectionStack`
+-- (instance manager declared at :104 over the `ConversationSelectionInstance` whose root control
+-- is `SelectionButton`, with a `SelectionText` label inside it --
+-- diplomacyactionview.xml:381-382, :432, :441, :451). `ApplyStatement` (:561-643) fills one
+-- instance per selection, sets its label to the localized choice text a human reads, disables the
+-- ones that are not takeable, and registers the click callback that calls
+-- `handler.OnSelectionButtonClicked(selection.Key)` -- i.e. `OnSelectConversationDiplomacyStatement`
+-- (:488, bound at :2534).
+--
+-- Parity: the options reported are the visible label texts of the ENABLED, VISIBLE choice buttons
+-- only -- exactly the set a human could click, never a superset. A disabled choice is shown to the
+-- human but cannot be taken, so it is not offered. The instance manager leaves recycled instances
+-- in the stack hidden and pushed to the back (techandcivicsupport.lua:216-218 documents this), so
+-- hidden children are skipped rather than reported as choices.
+--
+-- Corroborated by the operator scripting that cleared this greeting by hand
+-- (spikes/gameplay-2026-09-21/operator_answer_greeting.py, MEASURED 12:35 EDT):
+-- `ContextPtr:LookUpControl("/InGame/DiplomacyActionView")` does resolve from InGame and its
+-- `IsHidden()` does report the scene, which is the same path shape the control lookups below use.
+-- That script also measured that answering once is not the end of it -- the leader replies and the
+-- session stays open until the conversation's own Exit choice is taken. That is the human flow
+-- (click a reply, then click Exit), so the probe simply reports the prompt again with the new
+-- options and the agent answers again; `still_in_conversation` on the answer result says so.
+--
+-- UNVERIFIED LIVE: every step here. Each is pcall'd, and a failure degrades to the previous
+-- behaviour (`diplomacy`, not blocking) rather than inventing a prompt.
+local CIVSIM_DIPLOMACY_STATE = "DiplomacyActionView"
+local CIVSIM_DIPLOMACY_CONVERSATION_CONTAINER = "ConversationContainer"
+local CIVSIM_DIPLOMACY_SELECTION_STACK = "ConversationSelectionStack"
+
+-- The visible text of one choice button: its own text if it carries one, else the first non-empty
+-- text among its children (the `SelectionText` label lives inside the `SelectionButton`).
+local function CivSim_ControlText(control)
+    local okT, text = pcall(function() return control:GetText() end)
+    if okT and type(text) == "string" and text ~= "" then return text end
+    local okC, children = pcall(function() return control:GetChildren() end)
+    if not okC or children == nil then return nil end
+    for _, child in ipairs(children) do
+        local okCT, childText = pcall(function() return child:GetText() end)
+        if okCT and type(childText) == "string" and childText ~= "" then return childText end
+    end
+    return nil
+end
+
+local function CivSim_DiplomacyLookUp(controlName)
+    local ok, control = pcall(function()
+        return ContextPtr:LookUpControl("/InGame/" .. CIVSIM_DIPLOMACY_STATE .. "/" .. controlName)
+    end)
+    if not ok then return nil end
+    return control
+end
+
+-- Every visible, enabled statement-choice button currently offered, as {control, text} pairs, or
+-- nil when the diplomacy view is not in conversation mode at all (no statement is awaiting an
+-- answer). An empty list means conversation mode with nothing takeable -- still not a prompt the
+-- agent can answer, so the caller treats it as the ordinary `diplomacy` screen.
+local function CivSim_DiplomacyStatementChoices()
+    local container = CivSim_DiplomacyLookUp(CIVSIM_DIPLOMACY_CONVERSATION_CONTAINER)
+    if container == nil then return nil end
+    local okH, hidden = pcall(function() return container:IsHidden() end)
+    if not okH or hidden ~= false then return nil end
+    local stack = CivSim_DiplomacyLookUp(CIVSIM_DIPLOMACY_SELECTION_STACK)
+    if stack == nil then return nil end
+    local okC, children = pcall(function() return stack:GetChildren() end)
+    if not okC or children == nil then return {} end
+    local choices = {}
+    for _, child in ipairs(children) do
+        local okCh, childHidden = pcall(function() return child:IsHidden() end)
+        local okD, disabled = pcall(function() return child:IsDisabled() end)
+        if okCh and childHidden == false and not (okD and disabled == true) then
+            local text = CivSim_ControlText(child)
+            if text ~= nil then choices[#choices + 1] = { control = child, text = text } end
+        end
+    end
+    return choices
+end
+
 -- VERIFIED (P2): the confirmed screen-identity mechanism. This is written to be dispatched once
 -- *per candidate screen state* (see header) — when the dispatcher targets a given screen's own
 -- Lua state and calls this, it reports that screen's own hidden flag. The caller already knows
@@ -314,6 +402,16 @@ local function CivSim_Screens_State()
             has_blocking_prompt = false, prompt_options = {},
         }
     end
+    -- A leader statement awaiting a choice is a blocking prompt even though it shares its state
+    -- with the ordinary `diplomacy` screen -- it is a mode of that context, not a state of its
+    -- own (block 7, game turn 35; see CIVSIM_DIPLOMACY_STATE above).
+    local diplomacyChoices = nil
+    for _, name in ipairs(open) do
+        if name == CIVSIM_DIPLOMACY_STATE then
+            diplomacyChoices = CivSim_DiplomacyStatementChoices()
+        end
+    end
+
     -- A recognised prompt outranks anything else that is open (it is what blocks the player);
     -- otherwise the first open watchlist screen names the view.
     local raw, screen = nil, nil
@@ -321,6 +419,14 @@ local function CivSim_Screens_State()
         for id, state in pairs(CIVSIM_SCREEN_ID_BY_STATE) do
             if state == name and string.sub(id, 1, 7) == "prompt." then raw, screen = name, id end
         end
+    end
+    if raw == nil and diplomacyChoices ~= nil and #diplomacyChoices > 0 then
+        raw = CIVSIM_DIPLOMACY_STATE
+        -- Written as a literal, not a constant: this is an id the probe answers WITHOUT going
+        -- through CIVSIM_SCREEN_ID_BY_STATE (it must not be in that table, or an open diplomacy
+        -- screen in any mode would report a blocking prompt), and `civsim store coverage` reads
+        -- these literals to know the id is reachable at all.
+        screen = "prompt.diplomatic_approach"
     end
     if raw == nil then
         raw = open[1]
@@ -341,6 +447,8 @@ local function CivSim_Screens_State()
     local options = {}
     if CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS[screen] ~= nil then
         options = { CIVSIM_ACKNOWLEDGE_OPTION }
+    elseif screen == "prompt.diplomatic_approach" and diplomacyChoices ~= nil then
+        for _, choice in ipairs(diplomacyChoices) do options[#options + 1] = choice.text end
     end
     return {
         screen = screen, raw_screen_id = raw, recognized = true,
@@ -458,6 +566,41 @@ local function CivSim_Screens_AcknowledgePopup(promptType, descriptor, optionId)
     return result
 end
 
+-- Answer an AI leader's statement by clicking the choice button a human would click. The callback
+-- on that button was registered inside DiplomacyActionView's own state and closes over the
+-- selection's `Key` and the live session id (diplomacyactionview.lua:591-601), so clicking it runs
+-- `OnSelectConversationDiplomacyStatement(key)` there with the right arguments. That is the whole
+-- reason this goes through the control and not through `DiplomacyManager.AddStatement` directly:
+-- the key -> statement mapping is a 200-line switch in that handler, and reproducing it here would
+-- be guessing at which statement a visible label means.
+--
+-- There is deliberately NO fallback. If the button cannot be clicked, the answer fails and is
+-- recorded as a failure, so the run stalls honestly rather than firing a reconstructed
+-- `DiplomacyManager` call that might answer something other than what the agent chose.
+local function CivSim_Screens_AnswerDiplomaticApproach(promptType, optionId)
+    local choices = CivSim_DiplomacyStatementChoices()
+    if choices == nil then
+        return { ok = false, reason = "not_in_conversation_mode", prompt = promptType,
+                 option = optionId }
+    end
+    local offered = {}
+    for _, choice in ipairs(choices) do offered[#offered + 1] = choice.text end
+    for _, choice in ipairs(choices) do
+        if choice.text == optionId then
+            local okCall, callErr = pcall(function() choice.control:CallCallback(Mouse.eLClick) end)
+            local after = CivSim_DiplomacyStatementChoices()
+            return {
+                ok = okCall, prompt = promptType, option = optionId,
+                mechanism = "selection_button_callback",
+                still_in_conversation = (after ~= nil),
+                error = (not okCall) and tostring(callErr) or nil,
+            }
+        end
+    end
+    return { ok = false, reason = "option_not_offered", prompt = promptType, option = optionId,
+             offered = offered }
+end
+
 local function CivSim_Screens_RespondToPrompt(promptType, optionId)
     if not CivSim_ScreenIsKnown(promptType) then
         return { ok = false, reason = "unknown_prompt" }
@@ -465,6 +608,9 @@ local function CivSim_Screens_RespondToPrompt(promptType, optionId)
     local descriptor = CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS[promptType]
     if descriptor ~= nil then
         return CivSim_Screens_AcknowledgePopup(promptType, descriptor, optionId)
+    end
+    if promptType == "prompt.diplomatic_approach" then
+        return CivSim_Screens_AnswerDiplomaticApproach(promptType, optionId)
     end
     local ok, result = pcall(function()
         return UI.RespondToPrompt(promptType, optionId) -- UNVERIFIED

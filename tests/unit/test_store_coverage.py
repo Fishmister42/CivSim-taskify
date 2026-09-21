@@ -789,9 +789,20 @@ def test_the_probes_world_view_id_is_the_one_the_catalog_vocabulary_declares() -
     CIVSIM_KNOWN_SCREENS both say `world`. One name, and it is the catalog's."""
     screens_lua = REPO_ROOT / "lua" / "ingame" / "screens.lua"
     surface = load_screen_surface(screens_lua)
-    assert surface.direct_screen_ids == ("world",)
+    assert "world" in surface.direct_screen_ids
     assert '"world_view"' not in screens_lua.read_text(encoding="utf-8")
     assert "world_view" not in (REPO_ROOT / "catalogs" / "README.md").read_text(encoding="utf-8")
+
+
+def test_the_diplomatic_approach_is_reachable_without_a_state_mapping() -> None:
+    """MEASURED 2026-09-21 (block 7, turn 35): a leader statement is a MODE of DiplomacyActionView,
+    not a state of its own, so the probe answers the id directly after reading the conversation
+    controls. It must stay out of the state map -- mapping it there would report a blocking prompt
+    for an ordinary open diplomacy screen -- while still being an id coverage can attest."""
+    surface = load_screen_surface(REPO_ROOT / "lua" / "ingame" / "screens.lua")
+    assert "prompt.diplomatic_approach" in surface.direct_screen_ids
+    assert "prompt.diplomatic_approach" not in surface.state_by_screen_id
+    assert surface.state_by_screen_id["diplomacy"] == "DiplomacyActionView"
 
 
 def test_the_great_work_showcase_is_mapped_and_watched() -> None:
@@ -807,7 +818,6 @@ def test_the_great_work_showcase_is_mapped_and_watched() -> None:
     [
         "strategic",
         "prompt.religion_selection",
-        "prompt.diplomatic_approach",
         "prompt.congress_vote",
         "prompt.city_state_quest",
     ],
