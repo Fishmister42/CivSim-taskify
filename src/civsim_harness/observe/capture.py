@@ -11,24 +11,41 @@ unconditionally, because the four image-screening gates (research R7: source, ge
 content) did not exist yet -- FR-030 and SC-019 govern *stored* captures, not merely shown ones, so
 until those gates existed no frame could be certified clean. They exist now
 (:mod:`civsim_harness.parity.screening`, T129), so this module calls them for real: a screened-clean
-frame may be stored and shown; a frame that fails any gate is written as a ``withheld`` record with
-its ``withheld_reason`` and ``blob_ref=None``, plus an ``image_withheld`` event carrying this
-step's ``step_index`` -- **that withheld record is the evidence screening worked and is never
-deleted**.
+frame may be stored and *offered for attachment*; a frame that fails any gate is written as a
+``withheld`` record with its ``withheld_reason`` and ``blob_ref=None``, plus an ``image_withheld``
+event carrying this step's ``step_index`` -- **that withheld record is the evidence screening
+worked and is never deleted**.
 
-**T157 -- bounded retries, then degrade.** Research R7: "any gate failing means withhold and
+**T238 -- clean never means shown.** Every :class:`~civsim_harness.models.turn.ScreenCapture`
+built here carries ``shown_to_agent=False``, including a screened-clean one. ``shown_to_agent``
+is a statement about a decision request actually dispatched to the provider, and no such request
+exists at capture time -- this module used to set it from ``outcome.is_clean``, which recorded an
+*intention*, and the record asserted the agent was shown an image the provider never received.
+The one caller (``run/decision_loop.py``) flips the flag on a validated copy at the moment the
+image is genuinely attached, through ``agent/context.py``'s ``select_screened_images`` chokepoint
+(T134), and never anywhere else.
+
+**T249 -- preconditions are checked before any frame exists.** Every attempt begins by asking the
+host port's :meth:`~civsim_harness.host.port.HostPlatform.check_capture_preconditions` -- the
+cheap per-capture hygiene preflight -- and a non-passing result means the frame is **never
+taken**: ``capture_window`` is not called, and the step takes the same withheld-with-reason path
+as any other host capture failure (no parallel bookkeeping). Passing preconditions grant nothing:
+attachment stays gated on the run's VALIDATED tier (T099/T238, in ``run/decision_loop.py``).
+
+**T157/T240 -- bounded retries, then degrade.** Research R7: "any gate failing means withhold and
 re-capture" -- so a single bad frame (a transient overlay glitch, a capture race) is not immediately
 fatal to the step. :func:`capture_for_step` retries the whole capture-then-screen attempt up to
 *max_attempts* times, stopping at the first clean result. Only once every attempt in the bound is
 exhausted without a clean result does this step count as degraded: the returned
 :class:`StepCapture.visually_degraded` is set, and a ``capture_failed`` event carrying this
-step's ``step_index`` is recorded -- the caller (``run/turn_cycle.py``) rolls that per-step flag
-up to ``TurnCycle.visually_degraded`` and downgrades ``Run.comparability_status`` (FR-050,
-SC-013); neither of those record types is constructed here.
+step's ``step_index`` is recorded -- the caller (``run/decision_loop.py``, the part of the turn
+cycle that produces captures) rolls that per-step flag up to ``TurnCycle.visually_degraded`` (via
+``run/turn_cycle.py``'s persist) and downgrades ``Run.comparability_status`` through the store's
+``update_run`` (FR-050, SC-013); neither of those record types is constructed here.
 
 **Persistence discipline (FR-051, D5).** This module never persists a frame's bytes itself and
 never writes to any store -- writing a :class:`ScreenCapture` and its blob through
-``MatchStore.write_capture(capture, blob)`` is the caller's job (``run/turn_cycle.py``). A clean
+``MatchStore.write_capture(capture, blob)`` is the caller's job (``run/decision_loop.py``). A clean
 result's raw bytes come back on :class:`StepCapture.blob`, verbatim, for the caller to pass to
 that one write path -- there is no second, bypassing way for a frame's bytes to reach durable
 storage from here.
@@ -71,6 +88,20 @@ from civsim_harness.parity.screening import (
 #: recorded visually degraded rather than retried indefinitely (research R7, FR-050).
 DEFAULT_MAX_CAPTURE_ATTEMPTS: Final[int] = 3
 
+#: Wire-ready media types by ``CaptureFrame.image_format`` (upper-cased). Only encoded formats a
+#: provider call can actually carry appear here: a raw framebuffer format (``"BGRA8"`` and kin)
+#: has no wire form, so its clean blob is still stored for the record but
+#: :attr:`StepCapture.blob_media_type` stays ``None`` and the run loop can never attach it to a
+#: decision request as-is -- recorded not shown, which is the truth (T238).
+_WIRE_MEDIA_TYPES: Final[Mapping[str, str]] = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "JPG": "image/jpeg",
+    "WEBP": "image/webp",
+    "GIF": "image/gif",
+    "BMP": "image/bmp",
+}
+
 #: A synthetic, host-level "no frame at all" outcome -- used both when *window* is ``None`` and
 #: when :meth:`~civsim_harness.host.port.HostPlatform.capture_window` itself reports anything other
 #: than :attr:`~civsim_harness.host.port.CaptureStatus.ok`. Never passed to
@@ -88,22 +119,28 @@ def _host_failure_outcome(reason: str) -> ScreeningOutcome:
 
 @dataclass(frozen=True)
 class StepCapture:
-    """One decision step's capture outcome, ready for the caller (``run/turn_cycle.py``) to persist.
+    """One decision step's capture outcome, ready for the caller (``run/decision_loop.py``) to
+    persist.
 
-    ``capture`` is always present -- clean or withheld, exactly one record per step (FR-015).
+    ``capture`` is always present -- clean or withheld, exactly one record per step (FR-015), and
+    always with ``shown_to_agent=False``: whether the frame actually reaches a decision request is
+    settled later, by the run loop, at the moment of attachment (T238; see module docstring).
     ``events`` carries ``image_withheld`` whenever ``capture`` is withheld, plus ``capture_failed``
     whenever ``visually_degraded`` is true (T157) -- both persisted the same way every other record
     in this wave's shape is: returned here, written by the caller, never written by this module.
     ``blob`` is the clean frame's raw bytes, present only when ``capture.screening_status ==
     screened_clean``; pass it verbatim to ``MatchStore.write_capture(capture, blob)`` (FR-051, D5).
-    ``visually_degraded`` is this step's own contribution to ``DecisionStep.visually_degraded`` /
-    ``TurnCycle.visually_degraded`` (FR-050) -- this module does not construct either of those
-    records itself.
+    ``blob_media_type`` is the blob's wire media type when the frame format has one
+    (:data:`_WIRE_MEDIA_TYPES`) -- the only form in which the run loop may build a
+    ``provider.port.Image`` from this capture. ``visually_degraded`` is this step's own
+    contribution to ``DecisionStep.visually_degraded`` / ``TurnCycle.visually_degraded`` (FR-050)
+    -- this module does not construct either of those records itself.
     """
 
     capture: ScreenCapture
     events: tuple[RunEvent, ...]
     blob: bytes | None = None
+    blob_media_type: str | None = None
     visually_degraded: bool = False
 
 
@@ -121,10 +158,25 @@ def _attempt_once(
     expected_process: GameProcess | None,
     detected_text_tokens: frozenset[str],
 ) -> tuple[CapturePath, CaptureAttempt | None, ScreeningOutcome]:
-    """One host-capture-then-screen attempt. Never raises: a host failure and a screening failure
-    both come back as a withheld :class:`~civsim_harness.parity.screening.ScreeningOutcome`, the
-    same shape :func:`capture_for_step`'s retry loop already knows how to interpret.
+    """One host-capture-then-screen attempt. Never raises: a precondition failure, a host failure
+    and a screening failure all come back as a withheld
+    :class:`~civsim_harness.parity.screening.ScreeningOutcome`, the same shape
+    :func:`capture_for_step`'s retry loop already knows how to interpret.
     """
+    # T249: the port's capture-precondition preflight runs BEFORE any frame is taken. A failing
+    # precondition means no frame may be taken at all -- not taken-and-discarded -- so the host is
+    # never asked to capture, and the step takes the exact host-failure degradation path below
+    # (withheld record, ``capture_failed``/``image_withheld`` events carrying the reason). This
+    # check can only take a capture away, never grant one: T099's tier rule still gates actual
+    # attachment in ``run/decision_loop.py``, untouched.
+    preflight = host.check_capture_preconditions()
+    if not preflight.passed:
+        return (
+            CapturePath.NONE,
+            None,
+            _host_failure_outcome(f"capture preconditions failed: {preflight.reason}"),
+        )
+
     selection = select_capture_path(host=host, host_info=host_info, window=window)
     if selection.capture_result.status is not CaptureStatus.ok:
         reason = selection.capture_result.reason or "capture unavailable"
@@ -256,9 +308,11 @@ def capture_for_step(
     degraded = not outcome.is_clean
     blob: bytes | None = None
     blob_ref: str | None = None
+    blob_media_type: str | None = None
     if outcome.is_clean and attempt is not None:
         blob = attempt.frame.image_bytes
         blob_ref = hashlib.sha256(blob).hexdigest()
+        blob_media_type = _WIRE_MEDIA_TYPES.get(attempt.frame.image_format.upper())
 
     if attempt is not None:
         capture = build_screen_capture(
@@ -270,7 +324,11 @@ def capture_for_step(
             captured_at=captured_at,
             attempt=attempt,
             blob_ref=blob_ref,
-            shown_to_agent=outcome.is_clean,
+            # T238: never `outcome.is_clean`. shown_to_agent is a statement about a dispatched
+            # decision request, and none exists at capture time -- the run loop flips this on a
+            # validated copy only at actual attachment, so the record can never claim the agent
+            # saw an image the provider was not handed.
+            shown_to_agent=False,
         )
     else:
         assert outcome.withheld_reason is not None  # every non-clean outcome carries one
@@ -330,5 +388,6 @@ def capture_for_step(
         capture=capture,
         events=tuple(events),
         blob=blob,
+        blob_media_type=blob_media_type,
         visually_degraded=degraded,
     )

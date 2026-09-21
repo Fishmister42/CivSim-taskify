@@ -28,13 +28,48 @@ anything, so the trailing case surfaces here for free, with no separate check ag
 ``list_save_points`` needed on top of the one ``turn_gaps`` already does internally. A run still
 actively playing the highest attempted turn is deliberately left alone by that same check -- its
 quicksave legitimately precedes its ``TurnCycle`` (FR-007), and that is not a gap.
+
+**A branch owes its record from its branch point, not from turn 1 (T239).** A branch replays its
+``parent_turn`` from the parent's turn-start save (``run/runner.py``'s ``_begin``); every turn
+before that lives in the *parent's* record, reachable through the lineage Principle IV requires
+the branch to carry (``parent_run_id``/``parent_turn``, FR-033). ``turn_gaps`` reports turn
+numbers from 1 regardless, so an unfiltered derivation would stamp every branch from turn N > 1
+``has_gaps`` forever on a perfect record -- a false disqualification in exactly the field
+Deliverable 1's trend-eligibility gate consumes. :func:`first_owed_turn` is the one definition of
+that floor; :func:`record_completeness_status` and ``operator/audit.py``'s ``audit_completeness``
+both apply it, so the rolled-up status and the audit's own gap enumeration cannot disagree about
+what a branch owes.
+
+**T239 -- the served and persisted value must be this derivation.** ``Run.record_completeness_
+status`` was a constructor constant (fresh runs ``complete``, branches ``unknown``) that nothing
+in production ever re-derived. :func:`refresh_run_completeness` is the derive-and-persist half:
+production calls it at the moments the answer can change -- a turn persisted
+(``run/turn_cycle.py``), attempts superseded (``run/runner.py``'s ``resume_from``,
+``saves/branching.py``'s abandonment), and every lifecycle stop the runner records
+(``run/runner.py``'s ``_finish``/failure paths) -- and ``run status`` serves a fresh derivation
+on every read (``Runner.get_status``), so a run that died mid-flight still reports the gaps it
+left behind (Principle III).
 """
 
 from __future__ import annotations
 
 from civsim_harness.models.common import RunId
-from civsim_harness.models.run import RecordCompletenessStatus
+from civsim_harness.models.run import RecordCompletenessStatus, Run
 from civsim_harness.store.port import MatchStore
+
+
+def first_owed_turn(run: Run | None) -> int:
+    """The first turn number *run*'s own record owes an authoritative attempt for.
+
+    ``1`` for an ordinary run (and for an unknown/not-yet-persisted one -- the conservative
+    floor). For a branch, its recorded ``parent_turn``: the branch replays that turn from the
+    parent's save, and everything before it is the parent's record (FR-033, Principle IV). One
+    definition, shared by :func:`record_completeness_status` and ``operator/audit.py`` -- see the
+    module docstring.
+    """
+    if run is not None and run.parent_run_id is not None and run.parent_turn is not None:
+        return run.parent_turn
+    return 1
 
 
 def record_completeness_status(store: MatchStore, run_id: RunId) -> RecordCompletenessStatus:
@@ -60,12 +95,34 @@ def record_completeness_status(store: MatchStore, run_id: RunId) -> RecordComple
     if not attempted_turns:
         return RecordCompletenessStatus.UNKNOWN
 
-    if store.turn_gaps(run_id):
+    # A branch owes its record only from its branch point onward -- see the module docstring
+    # (T239). Gaps below that floor are the parent's record, not this run's.
+    floor = first_owed_turn(store.get_run(run_id))
+    if any(gap >= floor for gap in store.turn_gaps(run_id)):
         return RecordCompletenessStatus.HAS_GAPS
 
     highest_turn = max(attempted_turns)
-    for turn in range(1, highest_turn + 1):
+    for turn in range(floor, highest_turn + 1):
         if store.step_gaps(run_id, turn):
             return RecordCompletenessStatus.HAS_GAPS
 
     return RecordCompletenessStatus.COMPLETE
+
+
+def refresh_run_completeness(store: MatchStore, run_id: RunId) -> RecordCompletenessStatus:
+    """Derive ``record_completeness_status`` and persist it onto the stored ``Run`` (T239).
+
+    The persisted field exists for readers on the other side of the port (Deliverable 1's
+    trend-eligibility gate chief among them), so it must track the derivation rather than the
+    constructor default. Called by production at the moments the answer can change: a turn
+    persisted, attempts superseded, and every lifecycle stop the runner records. A run the store
+    does not know (a test's hand-built ``PreparedRun`` that was never persisted) is left alone --
+    there is no row to update, and inventing one here would not be this function's job.
+
+    Returns the derived status either way, so a caller may serve it directly.
+    """
+    status = record_completeness_status(store, run_id)
+    run = store.get_run(run_id)
+    if run is not None and run.record_completeness_status is not status:
+        store.update_run(run_id, record_completeness_status=status)
+    return status

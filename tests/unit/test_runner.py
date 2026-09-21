@@ -619,3 +619,48 @@ async def test_a_run_never_remains_non_terminal_after_an_unrecoverable_condition
         assert status.lifecycle_state is LifecycleState.PAUSED
     finally:
         store.close()
+
+
+async def test_completeness_served_and_persisted_is_the_derivation_not_the_creation_stamp(
+    tmp_path: Path,
+) -> None:
+    """T239 / FR-052, Principle III: the mid-flight-death shape. This file's own ``_build_run``
+    stamps ``record_completeness_status=COMPLETE`` at creation -- exactly the constructor
+    constant the audit found served through ``run status`` forever. The run below quicksaves
+    turn 1 and then exhausts its provider chain before a single ``TurnCycle`` is persisted, so
+    the record genuinely has a gap behind it: both the *served* value (``get_status``, which now
+    derives fresh from the store) and the *persisted* value (re-derived when the runner records
+    the pause) must say ``has_gaps``, the derivation's answer -- never the stamp's ``complete``.
+
+    Revert either half of the wiring and this fails with the live symptom: with ``get_status``
+    serving ``state.run.record_completeness_status`` again, the served value is the stamp's
+    ``complete``; with ``_pause_on_failure``'s refresh removed, the persisted Run keeps it."""
+    store = SqliteMatchStore(tmp_path / "match.db")
+    raw_provider = FakeModelProvider()
+    raw_provider.queue_failed()
+
+    runner, run_id = _build_chain_exhaustion_runner(
+        tmp_path=tmp_path, store=store, raw_provider=raw_provider
+    )
+    try:
+        runner.start(CONFIG_PATH)
+        await _wait_until(lambda: runner.get_status(run_id).last_error is not None)
+
+        # Served: run status reports the derivation, fresh from the record.
+        status = runner.get_status(run_id)
+        assert status.lifecycle_state is LifecycleState.PAUSED
+        assert status.record_completeness_status is RecordCompletenessStatus.HAS_GAPS, (
+            "run status served the creation-time stamp instead of the derivation: turn 1 has a "
+            "quicksave and no TurnCycle, which Principle III requires to surface as has_gaps"
+        )
+
+        # Persisted: the Run the store holds -- what Deliverable 1's trend gate reads across
+        # the port -- carries the derivation too, not the stamp it was created with.
+        persisted = store.get_run(run_id)
+        assert persisted is not None
+        assert persisted.record_completeness_status is RecordCompletenessStatus.HAS_GAPS, (
+            "the persisted Run still carries its creation-time completeness stamp; the gap "
+            "behind this paused run would silently qualify it for trending (FR-052)"
+        )
+    finally:
+        store.close()

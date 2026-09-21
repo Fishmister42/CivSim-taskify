@@ -1044,6 +1044,53 @@ is data, not code, and is described above.
 
 ---
 
+## Phase 8: Amendment conformance (2026-09-20, post-T064)
+
+The owner-authorised amendment to
+`specs/002-civ-playing-harness/contracts/match-store-port.md` (Capability
+extensions, E1–E5) published `get_run_configuration` as a first-class port
+read, keyed by **`run_id`** (E5: run ids resolve and nothing else does). The
+amendment review found this feature's consumer side did not conform.
+
+- [X] T065 Re-key the configuration probe and align the seam with the amended
+  contract. **The defect**: `store_client/reads.py::run_configuration` probed
+  the published operation name but passed `run.config_id` where the published
+  read takes `run_id` — so against a conforming store the probe bound, the
+  lookup mis-keyed, the store answered `None` (E5), and the catalog's
+  seed/civilization/ruleset/model columns rendered *unavailable* on a store
+  that was fully capable; worse, a `config_id` colliding with another run's
+  `run_id` would have silently displayed the **wrong run's** configuration —
+  the exact asymmetric-visibility failure Principle VI (shared observability)
+  forbids. **The fix**: the call site now passes the run's own `run_id`;
+  `RunConfigurationReader` was retired exactly as its docstring promised
+  (deleted, with `MatchStore` in `store_client/port.py` widened to the
+  published read) and `READ_OPERATIONS` gained `get_run_configuration`, so
+  `tests/web_support/fixtures.py::_PublishedPortOnly` no longer models a store
+  *stricter* than the published contract (it now forwards the read); the
+  fake's `get_run_configuration` was re-keyed to model E5 (an unknown
+  `run_id` answers `None` even when it equals some run's `config_id`); stale
+  "the port has no operation that resolves a config_id" prose in
+  `store_client/{port,reads,catalog,fake}.py` was corrected, along with the
+  fixture docstring's miscount of the optional capabilities ("three" while
+  four existed; three remain now that one is published). **Guarding tests**
+  (`tests/contract/test_web_read_api.py`):
+  `test_the_store_receives_the_runs_own_run_id_for_a_configuration_read`
+  asserts on what the far side RECEIVED — a recording conforming store with
+  `run_id != config_id` must receive the run's own `run_id` and the columns
+  must render available — and
+  `test_a_config_id_colliding_with_another_runs_run_id_never_serves_that_runs_configuration`
+  pins the collision case at the seam and through the route. **Revert
+  confirmation**: with `config_id` temporarily restored at the call site, the
+  first fails `assert {'cfg-1'} == {'run-1'}` (the store received the wrong
+  key) and the second fails `assert 'ROME' == 'GREECE'` (the collider run
+  rendered the victim's configuration); with the fix restored both pass. No
+  other test enshrined the stricter-than-contract fixture: the sole
+  `published_port_only` consumer (`test_the_catalog_says_so_when_the_port_can_
+  only_reach_active_runs`) asserts only the catalog-listing gap, which remains
+  a probed capability, and needed no change.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies

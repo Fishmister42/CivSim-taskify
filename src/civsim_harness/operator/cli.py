@@ -2,7 +2,7 @@
 
 This is the ``civsim`` console script (see ``pyproject.toml``
 ``[project.scripts]``). Implements the lifecycle commands (``run
-start|pause|resume|stop|status|resume-from|branch|archive``, ``saves reap``,
+start|pause|resume|stop|status|resume-from|branch|abandon|archive``, ``saves reap``,
 ``seedset accept-build``, ``doctor``) and the record-only audits (``audit
 parity|prompts|decisions|steps|loop|capabilities|recovery|completeness|
 lineage|immutability|builds|models|secrets``) named in
@@ -86,6 +86,7 @@ from civsim_harness.operator.runner_protocol import RunnerProtocol
 from civsim_harness.operator.schemas import RunStatusView
 from civsim_harness.saves.addressing import SaveAddressingError, require_available_save_point
 from civsim_harness.saves.archival import archive_run
+from civsim_harness.saves.branching import abandon_branch_run
 from civsim_harness.saves.reaper import reap
 from civsim_harness.store.port import MatchStore
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
@@ -524,6 +525,57 @@ def run_archive(
         typer.echo(f"run archive failed: {exc.message}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"run {run_id} archived by {operator_identity} at {now.isoformat()}")
+
+
+# --------------------------------------------------------------------------
+# run abandon (T241)
+# --------------------------------------------------------------------------
+
+_ReasonOptionalOption = typer.Option(
+    None, "--reason", help="Why this branch is being abandoned (recorded on the event)"
+)
+
+
+@run_app.command("abandon")
+def run_abandon(
+    run_id: str,
+    reason: str | None = _ReasonOptionalOption,
+    store_path: Path | None = _StorePathOption,
+) -> None:
+    """Abandon branch RUN_ID: record `branch_abandoned`, mark its own turns
+    superseded -- never deleted -- and leave its lifecycle honestly terminal
+    (FR-035, T241).
+
+    Only a branch (a run with recorded lineage) can be abandoned, and only
+    when nothing may still be driving it: `paused`, `finished`, or `failed`.
+    A branch still playing must be paused or stopped first -- abandonment
+    strips the branch's own authoritative record and must not race a live
+    turn loop (FR-004/FR-008). Needs no runner: like `run archive`, this is a
+    recorded `MatchStore` decision (`saves/branching.py`), not a live-session
+    concern.
+    """
+    store = _open_store(store_path)
+    command = "abandon" if reason is None else f"abandon --reason {reason}"
+    _record_command(store, RunId(run_id), command)
+    try:
+        outcome = abandon_branch_run(
+            store, RunId(run_id), reason=reason, occurred_at=datetime.now(UTC)
+        )
+    except HarnessError as exc:
+        typer.echo(f"run abandon failed: {exc.message}", err=True)
+        for key, value in (exc.detail or {}).items():
+            typer.echo(f"  {key}: {value}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    superseded = (
+        ", ".join(str(turn) for turn in outcome.superseded_turns)
+        if outcome.superseded_turns
+        else "-"
+    )
+    typer.echo(f"run {run_id} abandoned (branch of {outcome.run.parent_run_id})")
+    typer.echo(f"lifecycle_state      : {outcome.run.lifecycle_state.value}")
+    typer.echo(f"superseded_turns     : {superseded}")
+    typer.echo(f"record_completeness  : {outcome.run.record_completeness_status.value}")
 
 
 # --------------------------------------------------------------------------

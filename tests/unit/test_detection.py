@@ -830,3 +830,203 @@ def test_recovery_engine_rejects_a_non_positive_attempt_limit() -> None:
         RecoveryEngine(
             run_id=run.run_id, store=store, loader=_FakeLoader(), recovery_attempt_limit=0
         )
+
+
+# --------------------------------------------------------------------------
+# T247 -- a zombie tuner (dead-forever port, live process) must be detectable.
+#
+# A refused Network.HostGame leaves the client alive and painting frames with a
+# permanently dead tuner port (live finding, reproduced twice, 2026-09-20 issue
+# #1). Process/window liveness see health forever; a single timed-out detection
+# pass cannot tell a dead-forever port from a busy client (FR-014). The fix:
+# DetectionWatch counts *consecutive* eaten passes and, once the streak reaches
+# its threshold, classifies the pattern as unresponsive and routes it to
+# recovery. One eaten pass still reports nothing; only the sustained pattern
+# trips. The revert (drop the streak logic) is confirmed below to never detect
+# the zombie within the SC-010 window in the test clock.
+# --------------------------------------------------------------------------
+
+
+class _NeverAnsweringAggregator:
+    """Stands in for a `DetectionAggregator` whose pass never completes -- the zombie tuner whose
+    heartbeat probe hangs on a dead-forever port, so `run_bounded` eats every pass."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def check_once(
+        self,
+        *,
+        run_id: RunId,
+        occurred_at: Any,
+        turn_number: int | None = None,
+        step_index: int | None = None,
+    ) -> list[RunEvent]:
+        import asyncio
+
+        self.calls += 1
+        await asyncio.sleep(3600)  # never returns within any sane pass bound
+        return []  # pragma: no cover - unreachable
+
+
+@dataclass
+class _FlakyAggregator:
+    """Hangs on the listed 1-based call ordinals, completes healthily on the rest -- a client that
+    is busy on some passes but services the watchdog on others (never the zombie)."""
+
+    hang_calls: set[int]
+    calls: int = 0
+
+    async def check_once(
+        self,
+        *,
+        run_id: RunId,
+        occurred_at: Any,
+        turn_number: int | None = None,
+        step_index: int | None = None,
+    ) -> list[RunEvent]:
+        import asyncio
+
+        self.calls += 1
+        if self.calls in self.hang_calls:
+            await asyncio.sleep(3600)
+        return []
+
+
+def _zombie_watch(store: _FakeStore, aggregator: Any, *, threshold: int = 2) -> Any:
+    from civsim_harness.run.detection import DetectionWatch
+
+    return DetectionWatch(
+        aggregator=aggregator,
+        store=store,  # type: ignore[arg-type]
+        run_id=RunId("run-1"),
+        clock=lambda: _T0,
+        liveness=None,  # healthy: no liveness trip, so every pass reaches the aggregate pass
+        pass_bound_s=0.02,  # tiny, so the never-answering pass is eaten near-instantly in test
+        sustained_failure_threshold=threshold,
+    )
+
+
+async def test_a_single_eaten_detection_pass_is_not_a_fault() -> None:
+    """FR-014: one pass that exceeds its own bound is a busy client, not a faulty one -- nothing."""
+    store = _FakeStore(run=_run(LifecycleState.PLAYING))
+    watch = _zombie_watch(store, _NeverAnsweringAggregator(), threshold=2)
+
+    events = await watch.check_now(turn_number=1)
+
+    assert events == ()
+    assert store.events == []  # nothing recorded, nothing to route
+
+
+async def test_sustained_eaten_passes_trip_unresponsive_and_route_to_recovery() -> None:
+    """N consecutive eaten passes are the zombie; they trip unresponsive and route into recovery.
+
+    Reverting `DetectionWatch._on_pass_timed_out` to a bare `return ()` (the pre-T247 behaviour)
+    makes the second assertion fail: the zombie is never detected within the SC-010 window.
+    """
+    from civsim_harness.run.detection import primary_fault
+
+    store = _FakeStore(run=_run(LifecycleState.PLAYING))
+    watch = _zombie_watch(store, _NeverAnsweringAggregator(), threshold=2)
+
+    first = await watch.check_now(turn_number=1)
+    assert first == ()  # one eaten pass: still nothing (FR-014)
+
+    second = await watch.check_now(turn_number=1)
+    assert len(second) == 1
+    event = second[0]
+    assert event.event_type is RunEventType.UNRESPONSIVE_DETECTED
+    assert event.detail["reason"] == "sustained_heartbeat_failure"
+    assert event.detail["consecutive_pass_timeouts"] == 2
+    # It routes into the same recovery path a tripped detection takes.
+    assert primary_fault(list(second)) is RunEventType.UNRESPONSIVE_DETECTED
+    # Durably recorded before being returned (SC-010: detected *and recorded*).
+    assert [e.event_type for e in store.events] == [RunEventType.UNRESPONSIVE_DETECTED]
+
+
+async def test_a_completed_pass_resets_the_sustained_failure_streak() -> None:
+    """A busy-but-servicing client never trips: any completed pass resets the streak (FR-014).
+
+    Passes go eaten, healthy, eaten -- the streak never reaches two in a row, so nothing trips,
+    even though two of the three passes were eaten.
+    """
+    store = _FakeStore(run=_run(LifecycleState.PLAYING))
+    aggregator = _FlakyAggregator(hang_calls={1, 3})
+    watch = _zombie_watch(store, aggregator, threshold=2)
+
+    assert await watch.check_now(turn_number=1) == ()  # eaten -> streak 1
+    assert await watch.check_now(turn_number=1) == ()  # healthy -> streak reset to 0
+    assert await watch.check_now(turn_number=1) == ()  # eaten -> streak 1 again, not sustained
+
+    assert store.events == []
+    assert aggregator.calls == 3
+
+
+async def test_a_zombie_tuner_is_detected_by_sustained_heartbeat_failure() -> None:
+    """End to end through the real heartbeat and the fake's permanently-silent-tuner mode (T247).
+
+    The fake answers the handshake and then services no command ever again -- the live zombie. A
+    real `HeartbeatMonitor` probing it can never complete inside a pass bound smaller than the
+    probe's own timeout, so every pass is eaten; the second consecutive eaten pass is the
+    sustained pattern that trips.
+    """
+    import os
+
+    from civsim_harness.nexus.client import NexusClient
+    from fakes.fake_nexus import FakeNexusServer, loaded_game_state_table
+
+    async with FakeNexusServer(state_table=loaded_game_state_table()) as server:
+        client = NexusClient(host="127.0.0.1", port=server.port, command_timeout_s=5.0)
+        try:
+            await client.connect()  # the handshake succeeds -- the client looks alive
+            server.go_silent_after_handshake()  # ...and now the tuner services nothing
+
+            store = _FakeStore(run=_run(LifecycleState.PLAYING))
+            liveness = ProcessLivenessMonitor(pid=os.getpid())  # process is alive forever
+            watch = _zombie_watch(
+                store,
+                DetectionAggregator(
+                    liveness=liveness,
+                    heartbeat=HeartbeatMonitor(client=client, timeout_s=5.0),
+                ),
+                threshold=2,
+            )
+            # pass_bound_s (0.02) < the heartbeat's 5s probe -> the pass is eaten every time.
+            first = await watch.check_now(turn_number=1)
+            assert first == ()
+            assert store.events == []
+
+            second = await watch.check_now(turn_number=1)
+            assert [e.event_type for e in second] == [RunEventType.UNRESPONSIVE_DETECTED]
+            assert second[0].detail["reason"] == "sustained_heartbeat_failure"
+        finally:
+            await client.close()
+
+
+def test_sustained_failure_default_is_the_smallest_meaningful_streak_within_the_budget() -> None:
+    """The default streak (2), the pass bound, and the cadence are consistent with SC-010.
+
+    - Two is the smallest "sustained": one eaten pass must not be a fault (FR-014).
+    - The pass bound must exceed the heartbeat's own bound, or a real heartbeat could never
+      complete within a pass and normal (first-pass) detection would break.
+    - The common zombie is caught on the *first* pass -- the heartbeat times out at its own bound
+      and the pass completes with hang_detected once the blocking command self-times-out -- landing
+      inside SC-010's 60s; the streak is the backstop for the residual eaten-forever case.
+    """
+    from civsim_harness.nexus.client import DEFAULT_COMMAND_TIMEOUT_S
+    from civsim_harness.run.detection import (
+        DEFAULT_DETECTION_INTERVAL_S,
+        DEFAULT_DETECTION_PASS_BOUND_S,
+        DEFAULT_SUSTAINED_HEARTBEAT_FAILURES,
+    )
+
+    assert DEFAULT_SUSTAINED_HEARTBEAT_FAILURES == 2
+    assert DEFAULT_DETECTION_PASS_BOUND_S > DEFAULT_HEARTBEAT_TIMEOUT_S
+    # The pass bound is floored by FR-014: it must survive a wait on the longest command bound plus
+    # the heartbeat's own bound, so a busy-but-terminating command does not eat the pass.
+    assert DEFAULT_DETECTION_PASS_BOUND_S >= DEFAULT_COMMAND_TIMEOUT_S + DEFAULT_HEARTBEAT_TIMEOUT_S
+    # Common-case detection (pass completes with hang_detected) lands inside SC-010's 60s.
+    common_case_s = (
+        DEFAULT_DETECTION_INTERVAL_S + DEFAULT_COMMAND_TIMEOUT_S + DEFAULT_HEARTBEAT_TIMEOUT_S
+    )
+    assert common_case_s < 60.0

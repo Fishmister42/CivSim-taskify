@@ -52,7 +52,6 @@ __all__ = [
     "READ_OPERATIONS",
     "RunCatalogReader",
     "RunConfigurationLike",
-    "RunConfigurationReader",
     "RunEventLike",
     "RunId",
     "RunLike",
@@ -209,6 +208,19 @@ class MatchStore(Protocol):
         """Look up one run by id. ``None`` when the run never existed."""
         ...
 
+    def get_run_configuration(self, run_id: RunId) -> RunConfigurationLike | None:
+        """The ``RunConfiguration`` this run was created with (FR-018 columns).
+
+        A published port read, **keyed by ``run_id``** -- the same key
+        ``get_run`` takes, never ``Run.config_id``. The amended
+        ``match-store-port.md`` (Capability extensions, E5) is explicit that a
+        conforming store resolves run ids and nothing else: an id that is not
+        a known ``run_id`` answers ``None``, and resolving against a secondary
+        key such as ``config_id`` would turn a config_id/run_id collision into
+        silently serving the wrong run's configuration.
+        """
+        ...
+
     def get_turn_cycle(
         self, run_id: RunId, turn: int, *, authoritative_only: bool = True
     ) -> TurnCycleRecordLike | None:
@@ -267,36 +279,21 @@ class MatchStore(Protocol):
         ...
 
 
-class RunConfigurationReader(Protocol):
-    """An **optional** capability a store may additionally offer.
-
-    This is plan.md Complexity Tracking **C1**, made concrete. FR-018 requires
-    the catalog to list each run's seed, civilization, ruleset, and model --
-    every one of which lives on ``RunConfiguration``, reachable only through
-    ``Run.config_id``. The published ``match-store-port.md`` has no operation
-    that resolves a ``config_id``: ``get_run`` returns the ``Run``, and nothing
-    returns its configuration.
-
-    Rather than widen ``MatchStore`` (which would make 002's real adapter fail
-    to satisfy a Protocol it never agreed to) this capability is declared
-    separately and probed for. A store that offers it gets a fully populated
-    catalog row; a store that does not gets those fields rendered as
-    *unavailable*, never as blank or as a plausible-looking default -- the same
-    honest-state rule FR-025 applies to schema evolution (UP-005).
-
-    **This is a dependency to raise with deliverable 3, not a decision taken
-    here.** When the port publishes a configuration read (or a catalog listing
-    that projects these columns directly), this Protocol should be deleted and
-    ``MatchStore`` widened to match the published contract.
-    """
-
-    def get_run_configuration(self, config_id: str) -> RunConfigurationLike | None:
-        """Resolve a ``Run.config_id`` to its recorded configuration."""
-        ...
+# ``RunConfigurationReader`` used to be declared here as the first optional
+# capability (plan.md Complexity Tracking C1): the pre-amendment
+# ``match-store-port.md`` had no operation that resolved a ``Run.config_id``,
+# so this feature probed for one. The port's owner has since published
+# ``get_run_configuration`` as a first-class read -- keyed by **run_id**, not
+# config_id (amended contract, Capability extensions E5) -- so the Protocol
+# was retired exactly as its own docstring promised: deleted, with
+# ``MatchStore`` above widened to match the published contract. The three
+# Protocols below remain probed capabilities: the amendment makes them
+# obligations on deliverable 3 (E1), but the interim reference adapter may
+# predate them, and structural probing stays the discovery mechanism (E2).
 
 
 class RunCatalogReader(Protocol):
-    """A third **optional** capability -- the listing half of the same C1 gap.
+    """An **optional** capability -- the listing half of the C1 gap.
 
     ``list_active_runs`` is documented for *active* runs (recovery and run
     identity). FR-018's catalog is the full historical record: every run ever
@@ -323,14 +320,14 @@ class RunCatalogReader(Protocol):
 
 
 class CaptureBlobReader(Protocol):
-    """A second **optional** capability, and the second half of the same gap.
+    """Another **optional** capability, and a further half of the same gap.
 
     ``get_capture`` returns the capture *record*, carrying ``blob_ref`` -- a
     content address. The published ``match-store-port.md`` has no operation that
     resolves that address to bytes, so ``GET /captures/{id}/image`` (T029) has
     nothing to serve from the port as published.
 
-    Probed for rather than required, exactly as ``RunConfigurationReader`` is. A
+    Probed for rather than required, exactly as ``RunCatalogReader`` is. A
     store that offers it serves images; a store that does not gets an honest
     "this store cannot resolve capture blobs" response naming the port gap,
     never a placeholder image standing in for the real one -- which
@@ -354,7 +351,7 @@ class CaptureBlobReader(Protocol):
 
 
 class TurnAttemptReader(Protocol):
-    """A fourth **optional** capability -- the one FR-009 needs (US2/T036).
+    """A third **optional** capability -- the one FR-009 needs (US2/T036).
 
     ``contracts/web-read-api.md`` gives ``GET /runs/{id}/turns/{n}`` an
     ``?attempt={k}`` parameter that "selects a specific (including abandoned)
@@ -399,6 +396,7 @@ class TurnAttemptReader(Protocol):
 #: a read added to one and not the other is a drift this feature notices.
 READ_OPERATIONS: tuple[str, ...] = (
     "get_run",
+    "get_run_configuration",
     "get_turn_cycle",
     "list_save_points",
     "get_last_known_good",

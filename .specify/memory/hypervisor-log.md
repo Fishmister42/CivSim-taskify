@@ -443,3 +443,173 @@ commit. Windows blockers noted: Steam relaunches every few minutes (LogonFailure
 no unattended Windows runs until it settles; DX12 exe exits instantly (DX11 only).
 
 **In flight:** nexus transport fix (the critical one); scribe publishing the demo.
+
+---
+
+## Run 6 - 2026-09-20 evening (usage restored; repo PUBLIC; key provisioned)
+
+**Landed and pushed (remote head `f45a5ed`):** `97180f5` T234 nexus transport fix - all three
+client defects fixed, each revert-confirmed against its exact live symptom; fake corrected to the
+REAL protocol with a raw-socket wire audit; `civsim doctor` handshakes live (GameCore_Tuner=10,
+InGame=132). `f45a5ed` provider-test hermeticity (delenv fell through to the real repo-root
+secrets.yaml; now CIVSIM_SECRETS_FILE points at an absent tmp file). Suite: **1547/2/0**.
+
+**OpenRouter key provisioned** via Claude remote, gitignored secrets.yaml, verified live
+(200, spend-capped, paid tier). Owner ruling recorded above: the cap is PRE-SPENT, never ask.
+
+**In flight (three agents):** (1) live-run operator - FIRST model-driven run, bounded 3-5 turns,
+evidence to spikes/demo-evidence/model-driven-*, no code edits allowed; (2) reachability CI +
+negative controls - tests/contract/test_reachability.py + Phase 11 ledger entry, allowlist seeded
+from T229-T234, UNRESOLVED findings come back for hypervisor review; (3) scribe posted the
+bundled update (issue #2 owner comment 5752698028, issue #1 peer comment 5752699811; GIF
+confirmed rendering publicly).
+
+**STANDING OBLIGATION - Steam account handoff:** the Linux peer is BLOCKED on account contention
+(their launch resolves to Remote Play from this machine). Scribe posted a hold request: peer
+holds all launches until the Windows side posts an **ACCOUNT FREE** comment on issue #1. OWED:
+when the model-driven run completes, shut the Windows client down cleanly, then have the scribe
+post ACCOUNT FREE. Peer's next uses: raw_command_probe.py re-run (the empty-tag-3 universality
+gap in nexus-protocol.md) + SaveLoader live checklist + T218/T213. A Linux login mid-run would
+kick the Windows client and gap the run (Principle III).
+
+**Peer hazard relayed:** X11 `import -window` without a timeout froze their desktop 80 min when
+the window closed mid-grab. Correctness argument for the harness capture_window() path; the
+harness never shells out to display-server grab tools.
+
+**T235 landed (reachability enforcement + negative controls), 1568/2/0.** Hypervisor review of
+its three UNRESOLVED findings, ruled 2026-09-20:
+- `send_input` + `InputEvent` (host port, all three adapters, zero src/ callers): **retained
+  dormant.** The planned consumer was T217 option B (bespoke UI driver), which died when C
+  resolved (Network.LoadGame from FrontEnd). The owner-authorized fallback class - UI driving
+  for operations the tuner cannot perform - remains plausible future work; the allowlist keeps
+  the surface visible instead of silently dead. THE NEXT CONSUMER MUST DELETE THE ALLOWLIST
+  ENTRIES. Do not build consumers to launder the entry away.
+- `capture_preconditions` (linux adapter, callers only live tests + spikes): **suspected REAL
+  wiring gap on the Linux side** - hygiene preconditions that run only in tests are exactly the
+  pattern. Referred to the Linux peer (their adapter, their live evidence). QUEUED for the next
+  issue #1 post (rides with ACCOUNT FREE).
+
+### Run 6 results: first model-driven run attempt - BLOCKED at bring-up (host, not harness)
+
+**Zero turns, zero model calls, $0 spent (auth/key: 80 remaining).** Steam shut itself down ~7s
+after the tuner opened, on BOTH windows (bootstrap Shutdown 17:21:01 and 17:32:40 local); game
+never left IntroScreen. Agent honored the single-relaunch rule and stopped. Evidence:
+spikes/demo-evidence/model-driven-run-2026-09-20.md + two bringup JSON logs (uncommitted... commit
+them with the doctor fix).
+
+**CONTENTION HYPOTHESIS (posted to peer for correlation):** the Windows "Steam relaunch loop /
+LogonFailure" and the peer's account contention may be ONE problem - two machines fighting over
+one Steam logon. Peer asked to correlate their launch attempts against 17:21:01/17:32:40. If it
+matches, the fix is pure scheduling: one side owns the account at a time.
+
+**DECISION: account handed to the peer (ACCOUNT FREE posted).** Windows client cannot stay up
+anyway; peer has raw_command_probe.py + SaveLoader checklist + T218/T213 queued. WINDOWS STANDS
+DOWN FROM STEAM until the peer posts the account back. Windows continues headless.
+
+**What the attempt proved live anyway:** composition root loads clean (catalog 53/0), provider
+layer fully healthy through the production resolver - preflight_chain confirms sonnet-5 and
+opus-5 (images, 1M ctx). The one unreachable step was nexus connect against a dead client.
+
+**Findings:** A - doctor false-negative on file-only key -> FIXED as T236 (revert-confirmed).
+B - no cold-client-to-turn-1 path -> FILED as T237 (DEFERRED-LIVE; the old T217-B UI-driver
+authorization is SPENT, a new one needs an owner ruling). C - V2 getters would fail vs an
+arbitrary loaded save (major_count 16-vs-majors, map_type "Continents.lua", RANDOM_SEED vs
+GAME_SYNC_RANDOM_SEED) - corroborates T218, relayed to the peer who owns it. Suite: 1569/2/0.
+
+### Owner-authorized spec amendment: EXECUTED (4ef22f6)
+
+Items 1+2 (001 FR-021/Principle III fail-closed statement; FR-037 behind ComparisonBasis) were
+found ALREADY LANDED in 9c1e87b - verified against code truth this pass, not re-amended. Item 3
+landed now: match-store-port.md "Capability extensions" E1-E5 (four probed reads binding on
+deliverable 3, no stub exposure, honest degradation, capture-withheld => None, run-id keying) +
+get_turn_cycle flag-off = most recent attempt, previously implementation-defined. The ruling's
+scope is now fully discharged.
+
+**Deferred findings from the amendment pass:**
+- get_run_configuration MIS-KEYING in 001's consumer (reads.py passes config_id where the
+  published read takes run_id - wrong-configuration risk on collision) + stale port.py prose +
+  READ_OPERATIONS omission + fixture stricter than contract -> FIX AGENT LAUNCHED (001 lane).
+- Two further C1-family candidates if the contract grows (NOT amended, outside scope): no
+  latest-turn/turn-count read (highest_recorded_turn forward-probes), no metric-series read
+  (yields_by_turn is O(turns)). Parked - compositions over published reads are legal today.
+
+### Convergence audit (read-only, at 60eb482): 001 CONVERGED (65/65); 002 NOT CONVERGED
+
+Phase 12 appended and pushed (28dc5fe): T238 CRITICAL (decision loop never attaches images;
+shown_to_agent can record that it did - falsifiable record), T239 (completeness served as
+constructor constant), T240 (comparability never downgraded - docstring claims it is), T241
+(abandon_branch zero production callers; T226's "only live remains" line is FALSE), T242 (V2
+fallback vacuous incl. victory_types; stale mod_set justification), T243 (V11 footprint preflight
+uncalled), T244 (E5 conformance untested), T245 (dead assembly-failure helper, T231 shape).
+Audit verified all spot-checked Phase 10/11 claims TRUE in code; civsim_web has zero dead
+surfaces; Principle V legally dormant. Parked: DEFAULT_WORST_CASE_CONTEXT_TOKENS placeholder;
+T050/T224 Windows WGC halves are headless-progressable on this host (next wave candidate).
+
+**Phase 12 wave in flight (3 agents, disjoint lanes, ledger writes reserved to hypervisor):**
+A = T238+T240 (decision_loop/context/capture); B = T239+T241+T242+T243 (composition/runner/
+store/operator); C = T244+T245+allowlist-citation refresh (conformance tests/assemble/recovery/
+reachability). Baseline 1572/2/0 at 28dc5fe. Agents report LANDED paragraphs; hypervisor appends,
+commits per lane, pushes.
+
+### Peer live session results (issue #1, evening): contention CONFIRMED, protocol closed, 2 live bugs
+
+- **CONTENTION CONFIRMED = the "Steam relaunch loop" RECLASSIFIED.** Peer's client ran
+  continuously 17:14:38-17:35+, spanning BOTH Windows shutdowns (17:21:01, 17:32:40). One root
+  cause: contested logon. Unattended Windows runs are UNBLOCKED whenever the Windows side owns
+  the account under the handoff protocol. The 8x/day "LogonFailure" mystery is closed.
+- **Tag-3 empty is UNIVERSAL** (1.0.12.9 matches 1.0.12.68). Contract caveat removed. "T234 is
+  not a Windows workaround - it is the protocol."
+- **End-turn crash caution walked back** by the peer (did not reproduce; suspicion moved to blind
+  Return/space presses). Not a blocker.
+- **Two live bugs in shipped Windows-owned code:** LuaSaveLoader never dismisses the leader-intro
+  screen (fails every real load; strands the client) -> T248; capture_preconditions needs a real
+  port preflight seam (peer confirmed gap, ruled stays UNRESOLVED) -> T249.
+- **Start-new-game breakthrough:** CivSim DEFAULT preset LOADS FROM LUA (Network.LoadGame with
+  FileType=GAME_CONFIGURATION, no UI) - also programmatically confirms TURNTIMER_NONE, closing
+  the old turn-timer blocker for good. Remaining gap: no human player slot assigned (why
+  HostGame silently no-ops). Network.HostGame appears nowhere in src/ (quantifies T237).
+- Filed: T246 (2s post-close connection-refusal tail vs reconnect), T247 (zombie tuner invisible
+  to process/window liveness; bounded-pass rule may eat the heartbeat signal), T248-T250 above.
+
+**HYPERVISOR RULINGS (2026-09-20 evening):**
+1. **Demo records with LANDED code only.** Neither a staged failure nor unlanded patches. Path:
+   peer publishes the Escape-retry patch -> Windows transcribes into production LuaSaveLoader
+   (T248) -> peer re-verifies live -> demo.
+2. **T248 falls within the original T217-B grant** (the one authorized operation, "load a named
+   save", is not complete while the intro screen holds the port closed). Input use bounded to
+   dismissing that screen during that operation. T235 tripwire honored: wiring the consumer
+   deletes the send_input/InputEvent allowlist entries.
+3. **Peer's human-slot-assignment probe: GREENLIT.** Discovery on the live client is theirs;
+   integration into preparation/composition stays Windows-side (T237 lane).
+4. **Priority among the new work:** T248 first (blocks every real load, hence demo, branching,
+   recovery), T249 second. T250 sequenced behind the in-flight T239-T243 lane (preparation.py).
+
+### PHASE 12 COMPLETE (b5dcb51). Suite 1607/2/0; ruff + strict mypy clean; wave verified whole.
+
+All eight audit findings landed, every fix revert-confirmed against its live symptom: T238 images
+attach through the T134 chokepoint and shown_to_agent means attachment (R6 gate enforced via
+Run.host_support_tier, fails closed); T239 completeness is the derivation at creation/persist/
+read (first_owed_turn floors branches); T240 mid-run capture degradation downgrades comparability
+via existing update_run; T241 civsim run abandon exists and BRANCH_ABANDONED is finally emitted
+by production; T242 V2 fallback closed for the reference config + fallback-accepted fields
+recorded on the preparing->playing event; T243 V11 refuses for free at preflight; T244 E5
+conformance pinned (sqlite adapter passed untouched); T245 one assembly-failure builder in the
+named home. 002 open: the DEFERRED-LIVE roster + T237 + T246-T250 (T248 blocked on the peer
+publishing their Escape-retry patch; T250 now unblocked - the preparation.py lane landed).
+
+NEXT HEADLESS CANDIDATES: T246 (reconnect tail), T247 (zombie tuner), T250 (in-game-only
+getters), T249 seam half. T248 the moment the peer's patch appears. Then re-converge.
+
+### Peer-findings wave COMPLETE. Suite 1637/2/0 verified whole by the hypervisor.
+
+T246 (reconnect rides the post-close tail; first connect still fails fast), T247 (zombie tuner
+detected via sustained heartbeat streak N=2, FR-014 respected, arithmetic asserted in-code),
+T249 seam half (port preflight; peer's capture_preconditions is the wired Linux code; their
+allowlist finding closed), T250 (in-game-only getters; major_count uses the spike's Players
+derivation; resources recorded unobservable, not run-killing). Commits: 38903b4, cf0552c, +
+the T246/T247 commit. Day total: 1539 -> 1637 (+98 tests), every fix revert-confirmed.
+
+**002 remaining open:** DEFERRED-LIVE roster (T050-T202 live items, T213 extension, T218 Lua
+shapes, T224 halves, T226 live half, T237) + T248 (BLOCKED on peer publishing the Escape-retry
+patch) + T249 per-platform live halves. NOTHING headless-implementable remains unassigned.
+Next converge pass after T248 lands. Peer still holds the Steam account.

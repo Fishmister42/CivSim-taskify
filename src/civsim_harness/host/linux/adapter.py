@@ -29,6 +29,7 @@ from civsim_harness.host._shared import locate_process_by_names, read_disk_space
 from civsim_harness.host.detect import LinuxSessionType
 from civsim_harness.host.port import (
     CaptureFrame,
+    CapturePreconditionResult,
     CaptureResult,
     CaptureStatus,
     DiskSpace,
@@ -305,13 +306,46 @@ class LinuxHostPlatform:
         finally:
             display.close()
 
+    def check_capture_preconditions(self) -> CapturePreconditionResult:
+        """The `HostPlatform` port preflight (T249): `capture_preconditions`' verdict, wired.
+
+        SEAM NOTE -- the Linux peer owns this adapter's live verification.
+        This method deliberately adds no probing of its own: it delegates to
+        `capture_preconditions`, the live-verified probe (X11 Composite
+        extension plus `_NET_WM_CM_Sn` selection ownership, the two
+        conditions that actually decide window-scoped capture on Linux), so
+        the code that ran against a real compositor is the code the
+        production capture path now consults. Non-blocking `warnings` are
+        folded into a passing reason rather than dropped. Anything beyond
+        this minimal adaptation of the verdict -- including whether the
+        Wayland branch should ever pass once the portal path exists --
+        belongs to the peer's live half of T249.
+        """
+        report = self.capture_preconditions()
+        if not report.can_capture:
+            reason = report.detail or (
+                "window-scoped XComposite capture is not obtainable on this display: "
+                f"composite_extension={report.composite_extension}, "
+                f"compositing_manager={report.compositing_manager}"
+            )
+            return CapturePreconditionResult(passed=False, reason=reason)
+        reason = (
+            "Composite extension present and a compositing manager owns this screen's "
+            "_NET_WM_CM_Sn selection (the live-verified R6 preconditions)."
+        )
+        if report.warnings:
+            reason += " Warnings: " + " ".join(report.warnings)
+        return CapturePreconditionResult(passed=True, reason=reason)
+
     def capture_preconditions(self) -> CapturePreconditions:
         """Report whether this display can yield window-scoped frames, and why not.
 
-        Additive to the `HostPlatform` port (which has no preflight hook):
-        preflight needs to fail *before* a run starts rather than discover a
-        dead capture path mid-turn, and the two conditions below are the ones
-        that actually decide it on Linux.
+        Since T249 this is the implementation behind the port's
+        `check_capture_preconditions` preflight (which adapts the verdict to
+        the portable `CapturePreconditionResult`); it remains directly
+        callable because the live tests and spikes assert on its full
+        per-condition report, and the two conditions below are the ones
+        that actually decide window-scoped capture on Linux.
 
         Deliberately does NOT consult `XDG_SESSION_TYPE`. That variable says
         which session protocol is in use, not whether a compositor is running,

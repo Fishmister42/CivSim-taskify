@@ -94,6 +94,10 @@ from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
 from civsim_harness.run.stop import StopEvaluation, evaluate_stop
 from civsim_harness.run.turn_cycle import TurnCycleDependencies, run_turn_cycle
 from civsim_harness.saves.addressing import SaveAddressingError, require_available_save_point
+from civsim_harness.store.completeness import (
+    record_completeness_status,
+    refresh_run_completeness,
+)
 from civsim_harness.store.port import MatchStore
 from civsim_harness.telemetry.logging import get_harness_logger, log_event
 
@@ -518,7 +522,14 @@ class Runner(RunnerProtocol):
                 last_known_good_save=last_known_good,
                 last_error=last_error,
                 connection_health=self._deps.connection_health(),
-                record_completeness_status=state.run.record_completeness_status,
+                # T239, FR-052, Principle III: derived fresh from the store on every read --
+                # never the in-memory Run's own field, which was a creation-time constant for
+                # the whole life of the run before this. Deriving at read time is what makes a
+                # run that died mid-flight report the gaps it left behind, rather than whatever
+                # was last stamped on it.
+                record_completeness_status=record_completeness_status(
+                    self._deps.store, run_id
+                ),
                 comparability_status=state.run.comparability_status,
                 archived=state.run.archived_at is not None,
                 disk_headroom_gb=self._deps.disk_headroom_gb(),
@@ -692,6 +703,10 @@ class Runner(RunnerProtocol):
                     run_id, turn, {**lineage, "superseded_turns": superseded}, self._deps.clock()
                 )
             )
+            # T239: superseding is one of the moments record_completeness_status can change --
+            # the rewound-past attempts just stopped being authoritative -- so the persisted
+            # field is re-derived here rather than carried stale into the replay.
+            refresh_run_completeness(self._deps.store, run_id)
             state.current_turn = turn - 1
             state.current_step = None
             state.pause_requested = False
@@ -883,6 +898,10 @@ class Runner(RunnerProtocol):
             ended_at=state.run.ended_at,
             stop_resolution=state.run.stop_resolution,
         )
+        # T239: a terminal transition is one of the moments record_completeness_status can
+        # change (the trailing-turn rule in turn_gaps widens once the run stops advancing), so
+        # the persisted Run's field is re-derived here rather than left at whatever it was.
+        refresh_run_completeness(self._deps.store, state.run.run_id)
 
     def _handle_run_failure(self, state: _RunState, exc: HarnessError) -> None:
         """Route one ``HarnessError`` raised out of a turn's play loop to the lifecycle state
@@ -937,6 +956,12 @@ class Runner(RunnerProtocol):
             # was violated elsewhere -- still not ours to swallow, so fall back to the same legal
             # pause every other unclassified failure gets, rather than trusting a stale `playing`.
             self._pause_on_failure(state, exc)
+            return
+        # T239: the engine drove the run terminal before raising -- the same
+        # terminal-transition moment `_finish` covers, so the persisted field is re-derived
+        # here too. A run failed mid-flight with a quicksave taken and no TurnCycle behind it
+        # is exactly the gap Principle III requires this field to surface.
+        refresh_run_completeness(self._deps.store, state.run.run_id)
 
     def _pause_on_failure(self, state: _RunState, exc: HarnessError) -> None:
         """Caller holds ``self._lock`` with ``state.last_error`` already set. Transition to
@@ -954,6 +979,10 @@ class Runner(RunnerProtocol):
         )
         self._deps.store.write_run_event(event)
         self._deps.store.update_run(state.run.run_id, lifecycle_state=state.run.lifecycle_state)
+        # T239: `paused` leaves the actively-playing set, which widens turn_gaps' checked range
+        # -- the FR-042 chain-exhaustion shape (a quicksave taken, no TurnCycle ever persisted)
+        # becomes a real, reportable gap at exactly this moment. Persist the derivation.
+        refresh_run_completeness(self._deps.store, state.run.run_id)
 
     def _record_unexpected_failure(self, state: _RunState, exc: Exception) -> None:
         """Last-resort safety net for :meth:`_play_run`: something failed *while this runner was

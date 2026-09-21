@@ -2,7 +2,10 @@
 
 Covers T212 (`host.detect.probe_host_support`), T216 (`_interpret_game_outcome`), T220
 (`_resolve_capture_path`), and T221 (`_to_camera_state`) -- the four places Phase 10 replaced a
-hard-coded placeholder with a resolved value.
+hard-coded placeholder with a resolved value -- plus T249's per-adapter halves of the
+`check_capture_preconditions` port preflight (the bottom section; the capture-path call site is
+pinned in `tests/unit/test_capture_for_step.py` and far-side in
+`tests/integration/test_capture_preflight.py`).
 
 **Why these four and not the run-scoped seams.** T214's terminal-state close, T219's guidance
 resolution, and T222's live `connection_health` all live inside closures over one run's own
@@ -17,6 +20,7 @@ the one failure mode that would silently hand a host a capability nothing ever d
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,14 +34,19 @@ from civsim_harness.host.detect import (
     probe_host_support,
     resolve_support_tier,
 )
+from civsim_harness.host.linux.adapter import CapturePreconditions, LinuxHostPlatform
+from civsim_harness.host.macos.adapter import MacOSHostPlatform
 from civsim_harness.host.port import (
     CaptureFrame,
+    CapturePreconditionResult,
     CaptureResult,
     CaptureStatus,
     GameDirectories,
     GameWindow,
     WindowRect,
 )
+from civsim_harness.host.windows import adapter as windows_adapter
+from civsim_harness.host.windows.adapter import WindowsHostPlatform
 from civsim_harness.models.common import CapturePath, DeclarationId
 from civsim_harness.observe.assemble import CapabilityResult
 from civsim_harness.run.composition import (
@@ -372,3 +381,134 @@ def test_capture_path_names_the_real_mechanism_once_a_frame_is_actually_produced
     )
 
     assert path is CapturePath.XCOMPOSITE
+
+
+# --------------------------------------------------------------------------
+# T249 -- the per-adapter halves of the `check_capture_preconditions` preflight
+# --------------------------------------------------------------------------
+
+
+def test_a_capture_precondition_result_always_carries_its_reason() -> None:
+    """The port type makes an evidence-free verdict unrepresentable in BOTH directions: a pass
+    must name what was checked (or say nothing could be) and a failure must name the unmet
+    condition -- the structural half of "never a hard-coded pass"."""
+    with pytest.raises(ValueError):
+        CapturePreconditionResult(passed=True, reason="")
+    with pytest.raises(ValueError):
+        CapturePreconditionResult(passed=False, reason="   ")
+    assert CapturePreconditionResult(passed=True, reason="checked X").passed is True
+
+
+def test_the_linux_port_preflight_is_the_live_verified_preconditions_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T249's delegation pin: the port method's verdict IS `capture_preconditions`' verdict (the
+    peer's live-verified probe), so the two cannot drift apart silently -- if the port method
+    stopped consulting the legacy probe, the scripted reports below could not flip its answer.
+    The peer owns live verification of the probe itself (seam note in host/linux/adapter.py)."""
+    adapter = LinuxHostPlatform(session_type=LinuxSessionType.x11)
+
+    failing = CapturePreconditions(
+        composite_extension=True,
+        compositing_manager=False,
+        unredirect_fullscreen_windows=None,
+    )
+    monkeypatch.setattr(LinuxHostPlatform, "capture_preconditions", lambda self: failing)
+    refused = adapter.check_capture_preconditions()
+    assert refused.passed is False
+    assert "compositing_manager=False" in refused.reason
+
+    passing = CapturePreconditions(
+        composite_extension=True,
+        compositing_manager=True,
+        unredirect_fullscreen_windows=True,  # the non-blocking warning case
+    )
+    monkeypatch.setattr(LinuxHostPlatform, "capture_preconditions", lambda self: passing)
+    allowed = adapter.check_capture_preconditions()
+    assert allowed.passed is True
+    assert "unredirect" in allowed.reason  # warnings are folded into the reason, not dropped
+
+    detailed = CapturePreconditions(
+        composite_extension=False,
+        compositing_manager=False,
+        unredirect_fullscreen_windows=None,
+        detail="python-xlib is not installed; install the 'linux' extra: boom",
+    )
+    monkeypatch.setattr(LinuxHostPlatform, "capture_preconditions", lambda self: detailed)
+    assert adapter.check_capture_preconditions().reason == detailed.detail
+
+
+def test_the_wayland_preflight_refuses_through_the_real_delegate() -> None:
+    """No monkeypatch: the Wayland branch of the live-verified probe imports nothing, so the
+    whole delegation runs for real on any CI host and must refuse -- the portal capture path is
+    not implemented, so no window-scoped frame is obtainable on that session today."""
+    result = LinuxHostPlatform(
+        session_type=LinuxSessionType.wayland
+    ).check_capture_preconditions()
+
+    assert result.passed is False
+    assert "Wayland" in result.reason
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="resolves real user32/gdi32 entry points")
+def test_windows_preflight_reports_what_it_actually_resolved() -> None:
+    """On a real Windows host the check passes by RESOLVING the PrintWindow path's entry points,
+    and the reason says so -- what was checked, and what a pass does not claim (frame hygiene
+    stays the R6 spike's question). A bare `passed=True` with an empty story would fail here."""
+    result = WindowsHostPlatform().check_capture_preconditions()
+
+    assert result.passed is True
+    assert "gdi32" in result.reason
+    assert "R6" in result.reason
+
+
+def test_windows_preflight_fails_closed_when_the_entry_points_cannot_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Windows check is a real probe, not a constant: take away the thing it checks and the
+    verdict flips, carrying the underlying failure. Runs on every platform via the seam."""
+
+    def _boom() -> object:
+        raise OSError("no user32 on this host")
+
+    monkeypatch.setattr(windows_adapter, "_gdi", _boom)
+    result = WindowsHostPlatform().check_capture_preconditions()
+
+    assert result.passed is False
+    assert "no user32 on this host" in result.reason
+
+
+def test_macos_preflight_is_the_screen_recording_permission_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The macOS half delegates to the same `_preflight_screen_recording` gate `capture_window`
+    runs first, so the port preflight and the capture path cannot disagree about the permission
+    -- and a denial's actionable reason is carried through verbatim."""
+    adapter = MacOSHostPlatform()
+
+    denial = CaptureResult(
+        status=CaptureStatus.unavailable,
+        reason="Screen Recording permission has not been granted to this process.",
+    )
+    monkeypatch.setattr(
+        MacOSHostPlatform, "_preflight_screen_recording", lambda self: denial
+    )
+    refused = adapter.check_capture_preconditions()
+    assert refused.passed is False
+    assert refused.reason == denial.reason
+
+    monkeypatch.setattr(MacOSHostPlatform, "_preflight_screen_recording", lambda self: None)
+    allowed = adapter.check_capture_preconditions()
+    assert allowed.passed is True
+    assert "CGPreflightScreenCaptureAccess" in allowed.reason
+    assert "R6" in allowed.reason  # a pass never claims what only the spike can
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="a real Mac may genuinely hold the grant")
+def test_macos_preflight_refuses_for_real_where_quartz_is_absent() -> None:
+    """No monkeypatch: on any non-macOS host the real delegate runs end to end and must refuse
+    with the actionable install reason, never pass by default."""
+    result = MacOSHostPlatform().check_capture_preconditions()
+
+    assert result.passed is False
+    assert "pyobjc" in result.reason

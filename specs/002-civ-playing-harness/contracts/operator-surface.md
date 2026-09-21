@@ -18,6 +18,7 @@ directing session and for deliverable 4's orchestration.
 | `civsim run stop <run_id>` | `POST /runs/{id}/stop` | Stop with `operator_stop` recorded |
 | `civsim run resume-from <run_id> --turn N` | `POST /runs/{id}/resume-from` | Resume the same run from a recorded save |
 | `civsim run branch <run_id> --turn N --config <c.yaml>` | `POST /runs/{id}/branch` | Start a new run from that save, recording lineage |
+| `civsim run abandon <run_id> [--reason <text>]` | *(no HTTP form)* | Abandon a branch: record `branch_abandoned`, mark its own turns superseded — never deleted — and leave its lifecycle terminal (FR-035) |
 | `civsim run archive <run_id>` | `POST /runs/{id}/archive` | Mark a terminal run archived — the only thing that makes its saves eligible for removal (FR-004, FR-036) |
 | `civsim run status <run_id>` | `GET /runs/{id}/status` | Lifecycle diagnostics — see the bound below |
 | `civsim seedset accept-build <set> --to <build> --reason <text>` | `POST /seedsets/{name}/accept-build` | Record an operator acceptance of a Civ VI build change for that set (FR-002) |
@@ -43,6 +44,20 @@ alongside the current one so the wait is visible rather than looking like a hung
 no longer a branch source; `reap` is the separate, explicitly-invoked deletion over what archival
 made eligible. Keeping them apart means no unattended process ever deletes a save, and `--dry-run`
 is the default posture for the destructive half (FR-036, research R17).
+
+**Abandon is a branch-lifecycle decision, not a delete.** `abandon` accepts only a run with
+recorded lineage (a branch — FR-035 is not a way to touch an arbitrary run's turns), and only one
+nothing may still be driving: `paused`, `finished`, or `failed`. A branch still playing must be
+paused or stopped first — abandonment strips the branch's own authoritative record, and a turn is
+never cut short to honour an operator command (FR-004, FR-008). What it does: records
+`branch_abandoned` (with `--reason`, when given), marks every one of the branch's own turns
+superseded — retrievable forever, never deleted — and, for a `paused` branch, drives the
+lifecycle terminal through the legal `paused → playing → finished` edges with
+`stop_resolution = operator_stop`, so no abandoned branch lingers as a resumable-looking zombie.
+Its `record_completeness_status` is re-derived afterwards (an abandoned branch has no
+authoritative record left to trend on — FR-052, Principle III). Like `archive`, it needs no
+runner and has no HTTP form: it is an operator's recorded store decision, invoked deliberately,
+never part of an unattended flow.
 
 ## The FR-053 bound — what `status` may and may not return
 
@@ -106,6 +121,7 @@ The enforcement is structural rather than a rule someone must remember:
 | Branch target is on a different platform than the parent run | Rejected with the mismatch named; cross-platform save loadability is unproven and Principle IV requires branches to begin from an identical position (FR-034, R20) |
 | Disk headroom below `min_free_disk_gb` | Rejected at preflight; an in-flight run halts in a recorded state. Never resolved by deleting a save (R17) |
 | `archive` on a non-terminal run | Rejected — archival marks a run no longer a branch source, which is not a statement to make about a run still playing |
+| `abandon` on a non-branch, or on a branch still being driven | Rejected — abandonment is a branch-lifecycle action (FR-035), and it must not race a live turn loop's own writes: pause or stop the branch first |
 | `reap` with no archived runs | Succeeds having deleted nothing. An empty reap is the normal case, not an error |
 
 ## Secrets

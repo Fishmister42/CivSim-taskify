@@ -478,6 +478,94 @@ def test_configuration_columns_render_unavailable_when_the_port_cannot_reach_the
     assert "MatchStore port" in reasons["RunConfiguration.civilization"]
 
 
+def test_the_store_receives_the_runs_own_run_id_for_a_configuration_read():
+    """T065: the far-side assertion for the amended contract's keying rule.
+
+    `match-store-port.md` (Capability extensions, E5) keys
+    `get_run_configuration` by **run_id** and forbids resolving anything else.
+    The consumer's probe used to pass `Run.config_id` under the same operation
+    name -- so against a conforming store the probe bound, the lookup
+    mis-keyed, and the configuration columns rendered *unavailable* on a store
+    that was fully capable. Per the far-side rule, this asserts on what the
+    store RECEIVED, not on what our side returned: the recorded key must be
+    the run's own `run_id`.
+    """
+    from web_support.fixtures import make_client, make_store
+
+    class RecordingConfigurationStore:
+        """A conforming store that records every configuration-read key."""
+
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+            self.received_keys: list[str] = []
+
+        def get_run_configuration(self, run_id: str) -> Any | None:
+            self.received_keys.append(run_id)
+            return self._inner.get_run_configuration(run_id)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    inner = make_store()
+    run = inner.get_run("run-1")
+    # The mis-key would be invisible on a run whose two ids happened to agree.
+    assert run.config_id != run.run_id
+
+    store = RecordingConfigurationStore(inner)
+    with make_client(store) as client:
+        body = client.get("/runs/run-1", headers={"Accept": "application/json"}).json()
+
+    # (a) The far side received the run's own run_id -- never its config_id.
+    assert store.received_keys, "the route never performed the configuration read"
+    assert set(store.received_keys) == {run.run_id}
+    # (b) So the configuration renders as available, not as a port gap.
+    summary = body["summary"]
+    assert summary["civilization"] == "GREECE"
+    unavailable = {entry["field"] for entry in summary["unavailable"]}
+    assert "RunConfiguration.civilization" not in unavailable
+
+
+def test_a_config_id_colliding_with_another_runs_run_id_never_serves_that_runs_configuration():
+    """T065: the collision E5 exists to rule out, exercised end to end.
+
+    A store holding a run whose `config_id` equals ANOTHER run's `run_id` must
+    never serve the other run's configuration -- neither at the seam (the
+    fake models E5: run ids resolve, nothing else does) nor through the route
+    (each run renders its own civilization, not its neighbour's).
+    """
+    from civsim_web.store_client.fake import FakeMatchStore
+    from web_support.fixtures import make_client, make_configuration, make_run
+
+    victim_config = make_configuration("cfg-victim", civilization="ROME")
+    victim = make_run("run-victim", config_id="cfg-victim")
+    # The collider's config_id IS the victim's run_id.
+    collider_config = make_configuration("run-victim", civilization="GREECE")
+    collider = make_run("run-collider", config_id="run-victim")
+
+    store = FakeMatchStore(
+        runs=[victim, collider],
+        configurations=[victim_config, collider_config],
+    )
+
+    # At the seam: run ids resolve to the run's OWN configuration (E5) ...
+    assert store.get_run_configuration("run-collider").civilization == "GREECE"
+    assert store.get_run_configuration("run-victim").civilization == "ROME"
+    # ... and a bare config_id is not a key at all, even though a
+    # configuration exists under it.
+    assert store.get_run_configuration("cfg-victim") is None
+
+    # Through the route: neither run ever wears the other's configuration.
+    with make_client(store) as client:
+        collider_body = client.get(
+            "/runs/run-collider", headers={"Accept": "application/json"}
+        ).json()
+        victim_body = client.get(
+            "/runs/run-victim", headers={"Accept": "application/json"}
+        ).json()
+    assert collider_body["summary"]["civilization"] == "GREECE"
+    assert victim_body["summary"]["civilization"] == "ROME"
+
+
 def test_intervention_info_is_present_and_carries_no_control(web_client):
     """FR-027 with UP-010: the facts to act elsewhere, and nothing to act with."""
     body, markup = fetch_both(web_client, "/runs/run-1")

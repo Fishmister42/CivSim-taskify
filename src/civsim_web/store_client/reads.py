@@ -1,14 +1,17 @@
-"""Read compositions, and the two optional capabilities this feature probes for.
+"""Read compositions, and the optional capabilities this feature probes for.
 
 Routes ask this module for what they need; they never learn the store's shape.
 Two reasons, both structural rather than stylistic:
 
-1. **The optional capabilities live behind one door.** ``RunConfigurationReader``
-   and ``CaptureBlobReader`` (``store_client/port.py``) are capabilities a store
-   *may* offer and the published ``match-store-port.md`` does not require. Every
-   probe for one happens here, so "which store features are we depending on that
-   the contract does not promise?" is answerable by reading one file -- and when
-   deliverable 3 publishes those reads, one file changes.
+1. **The optional capabilities live behind one door.** ``CaptureBlobReader``
+   and its siblings (``store_client/port.py``) are capabilities a store *may*
+   offer ahead of deliverable 3 (the amended ``match-store-port.md`` makes them
+   obligations there; the interim adapter may predate them, E1). Every probe
+   for one happens here, so "which store features are we depending on that the
+   contract does not promise?" is answerable by reading one file -- and when
+   deliverable 3 lands a read, one file changes. ``get_run_configuration`` has
+   already crossed over: it is a *published* read now, keyed by ``run_id``
+   (amended contract, Capability extensions E5).
 2. **A read that needs several calls is composed once.** A turn needs its
    record, its gaps, and its steps' capture records; assembling that in each
    route would mean three places to get the gap check wrong.
@@ -63,18 +66,25 @@ def store_is_reachable(store: Any) -> tuple[bool, str | None]:
 
 
 def run_configuration(store: Any, run: Any) -> Any | None:
-    """The run's ``RunConfiguration``, if this store can reach one (plan C1).
+    """The run's ``RunConfiguration``, through the published read.
 
-    ``None`` means the store does not offer the optional
-    ``RunConfigurationReader`` capability, or has no configuration under that
-    id. Either way the caller renders those columns *unavailable* with a
-    reason -- never blank, never a plausible default.
+    ``get_run_configuration`` is a published port read, **keyed by the run's
+    own ``run_id``** -- never by ``Run.config_id`` (amended
+    ``match-store-port.md``, Capability extensions E5: the read resolves run
+    ids and nothing else, so passing a config id to a conforming store answers
+    ``None`` at best and, on a config_id/run_id collision, would silently
+    fetch some *other* run's configuration).
+
+    ``None`` means this store predates the amendment and does not offer the
+    read, or holds no configuration for that run. Either way the caller
+    renders those columns *unavailable* with a reason -- never blank, never a
+    plausible default.
     """
     reader = getattr(store, "get_run_configuration", None)
-    config_id = getattr(run, "config_id", None)
-    if reader is None or config_id is None:
+    run_id = getattr(run, "run_id", None)
+    if reader is None or run_id is None:
         return None
-    return reader(config_id)
+    return reader(run_id)
 
 
 def capture_blob(store: Any, capture_id: str) -> bytes | None:

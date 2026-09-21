@@ -37,7 +37,10 @@ board, because the whole reason the observe-decide-execute-verify loop exists is
 agent the effect of what it just did (research R14). :func:`assemble_observation` raises
 :class:`~civsim_harness.errors.ObservationAssemblyError` on any failure;
 :func:`handle_assembly_failure` turns that raise into its ``observation_assembly_failed``
-:class:`~civsim_harness.models.records.RunEvent` (FR-046). Neither function decides to abandon the
+:class:`~civsim_harness.models.records.RunEvent` (FR-046) -- and per **T245** it is the *only*
+definition of that event: ``resilience/recovery.py`` routes through it rather than carrying an
+inline twin (the same one-definition rule, and the same resolution, as T231's structural-parity
+filter). Neither function decides to abandon the
 turn attempt itself -- consistent with every other pure builder in this wave
 (``run.lifecycle.transition`` is the precedent this follows: return a record, let the caller
 persist and act on it) -- that decision, and the actual replay from the turn's start quicksave,
@@ -230,13 +233,23 @@ def handle_assembly_failure(
     *,
     run_id: RunId,
     turn_number: int,
-    step_index: int,
+    step_index: int | None = None,
     occurred_at: Timestamp,
     event_id: EventId | None = None,
 ) -> RunEvent:
-    """Turn an :class:`~civsim_harness.errors.ObservationAssemblyError` raised while assembling
-    step *step_index* into its ``observation_assembly_failed``
-    :class:`~civsim_harness.models.records.RunEvent` (FR-046, spec edge case).
+    """Turn an :class:`~civsim_harness.errors.ObservationAssemblyError` into its
+    ``observation_assembly_failed`` :class:`~civsim_harness.models.records.RunEvent` (FR-046,
+    spec edge case).
+
+    **T245 -- this is the one definition of that event.** The production caller is
+    ``resilience/recovery.py``'s
+    :meth:`~civsim_harness.resilience.recovery.RecoveryEngine.recover_from_observation_assembly_error`,
+    which used to build the event inline -- leaving this, the named home, the dead twin (T231's
+    exact shape, resolved the same way: the caller routes through the named home). *step_index*
+    is recorded when the caller knows which step's assembly failed; the recovery path passes
+    nothing here because by the time recovery runs the step attribution lives in the error's own
+    ``detail`` (which this function merges into the event's ``detail`` verbatim), not as a
+    separate value threaded alongside it.
 
     This function does not decide what happens to the turn attempt -- that is the run loop's job
     (T110/T114): mark the attempt ``abandoned``, record this event, and replay the turn from its own

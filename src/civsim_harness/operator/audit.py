@@ -69,7 +69,7 @@ from civsim_harness.models.records import RunEvent, RunEventType
 from civsim_harness.models.turn import ScreenCapture
 from civsim_harness.observe.game_build import is_platform_transition
 from civsim_harness.saves.addressing import find_save_point
-from civsim_harness.store.completeness import record_completeness_status
+from civsim_harness.store.completeness import first_owed_turn, record_completeness_status
 from civsim_harness.store.port import MatchStore, TurnCycleRecord
 from civsim_harness.telemetry.redaction import redact_value
 
@@ -798,13 +798,20 @@ def audit_completeness(store: MatchStore, run_id: RunId) -> AuditReport:
 
     turns = _discover_turns(store, run_id)
     highest_turn = max(turns) if turns else 0
-    turn_gap_list = store.turn_gaps(run_id)
+    # T239: a branch owes its record only from its branch point onward -- turns before
+    # `parent_turn` are the parent's record, reachable through the recorded lineage (FR-033,
+    # Principle IV). The floor is `store.completeness.first_owed_turn`, the same single
+    # definition the rolled-up `record_completeness_status` applies, so this audit's own gap
+    # enumeration can never disagree with the status it reports alongside them.
+    floor = first_owed_turn(store.get_run(run_id))
+    turn_gap_list = [turn for turn in store.turn_gaps(run_id) if turn >= floor]
 
     findings: list[dict[str, Any]] = [{"kind": "turn_gap", "turn": turn} for turn in turn_gap_list]
 
     authoritative_count = 0
     step_gap_total = 0
-    for turn in range(1, highest_turn + 1):
+    owed_turns = range(floor, highest_turn + 1)
+    for turn in owed_turns:
         gaps = store.step_gaps(run_id, turn)
         if gaps:
             step_gap_total += len(gaps)
@@ -815,9 +822,10 @@ def audit_completeness(store: MatchStore, run_id: RunId) -> AuditReport:
     outcome = AuditOutcome.FAILED if findings else AuditOutcome.PASSED
     summary = {
         "highest_recorded_turn": highest_turn,
+        "first_owed_turn": floor,
         "turn_gaps": len(turn_gap_list),
         "step_gaps": step_gap_total,
-        "authoritative_turns": f"{authoritative_count}/{highest_turn}",
+        "authoritative_turns": f"{authoritative_count}/{len(owed_turns)}",
         "record_completeness_status": record_completeness_status(store, run_id).value,
     }
     return AuditReport(outcome=outcome, findings=findings, summary=summary)

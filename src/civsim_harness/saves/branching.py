@@ -65,11 +65,13 @@ from civsim_harness.models.run import (
     ComparabilityStatus,
     HostSupportTier,
     LifecycleState,
-    RecordCompletenessStatus,
     Run,
+    StopResolution,
 )
 from civsim_harness.observe.game_build import is_platform_transition
+from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
 from civsim_harness.saves.addressing import require_available_save_point
+from civsim_harness.store.completeness import record_completeness_status, refresh_run_completeness
 from civsim_harness.store.port import MatchStore
 
 # --------------------------------------------------------------------------
@@ -98,6 +100,18 @@ class BranchPlatformSpikeRequiredError(PreflightError):
 class BranchTargetError(PreflightError):
     """FR-035: an abandonment was requested for a run that is not a branch
     (no recorded ``parent_run_id``), or does not exist.
+    """
+
+
+class BranchStillActiveError(PreflightError):
+    """FR-035, T241: abandonment was requested for a branch whose lifecycle
+    state says a run loop may still be driving it (``playing``, either
+    ``waiting_*`` sub-state, ``interrupted``, ``resuming``) or that never
+    reached play at all (``preparing``). Abandoning strips the branch's own
+    authoritative record; doing that under a live turn loop would race the
+    very writes it is superseding (the same discipline
+    ``Runner.resume_from`` applies: pause first -- FR-004/FR-008, a turn is
+    never cut short). Nothing was superseded and nothing was recorded.
     """
 
 
@@ -341,7 +355,10 @@ async def create_branch(
         # The caller drives `preparing -> playing` after that check, on the one code path that
         # already does so for every other run.
         lifecycle_state=LifecycleState.PREPARING,
-        record_completeness_status=RecordCompletenessStatus.UNKNOWN,
+        # T239: the derivation, never a constructor constant. For a child with no record yet
+        # this resolves to UNKNOWN (no save points), and the same one definition
+        # (store/completeness.py) re-derives it the moment the branch has a record of its own.
+        record_completeness_status=record_completeness_status(store, child.run_id),
         # T226: taken from the caller's own host gate, never assumed. See `BranchSource`.
         comparability_status=child.comparability_status,
         host_platform=dict(child.host_platform),
@@ -430,4 +447,128 @@ def abandon_branch(
         detail=detail,
     )
     store.write_run_event(event)
+
+    # T239: superseding is one of the moments record_completeness_status can change, and an
+    # abandoned branch's field must be the derivation -- with its own attempts superseded, that
+    # is honestly `has_gaps` (nothing authoritative remains to trend on), or `unknown` for a
+    # branch that never played a turn of its own.
+    refresh_run_completeness(store, run_id)
     return event
+
+
+#: The lifecycle states :func:`abandon_branch_run` accepts (T241). ``paused`` is the one
+#: non-terminal state with no live turn loop attached by contract (a pause lands only at a turn
+#: boundary); the two terminal states are already over. Everything else is refused -- see
+#: :class:`BranchStillActiveError`.
+_ABANDONABLE_STATES: frozenset[LifecycleState] = frozenset(
+    {LifecycleState.PAUSED, LifecycleState.FINISHED, LifecycleState.FAILED}
+)
+
+
+@dataclass(frozen=True)
+class BranchAbandonment:
+    """What :func:`abandon_branch_run` did, for the operator surface to report (T241)."""
+
+    run: Run
+    """The branch's ``Run`` as persisted after the abandonment -- terminal, with its
+    ``record_completeness_status`` re-derived (T239)."""
+
+    event: RunEvent
+    """The recorded ``branch_abandoned`` event (FR-035)."""
+
+    superseded_turns: tuple[int, ...]
+    """The turn numbers whose authoritative attempts were marked superseded -- never deleted."""
+
+
+def abandon_branch_run(
+    store: MatchStore,
+    run_id: RunId,
+    *,
+    reason: str | None = None,
+    occurred_at: Timestamp,
+) -> BranchAbandonment:
+    """The production abandonment path (T241, FR-035): supersede every one of the branch's own
+    authoritative turns, record ``branch_abandoned``, and leave the run's lifecycle honestly
+    terminal.
+
+    :func:`abandon_branch` is the mechanism (event + supersede, T169); this function is its one
+    production caller's policy:
+
+    - **Which turns**: every turn the branch itself ever attempted -- the distinct turn numbers
+      across its own FR-007 save points. :func:`abandon_branch` already skips a turn with no
+      authoritative attempt, so the trailing in-flight turn of a paused branch needs no special
+      casing here. A turn some *further* branch recorded as its own lineage point is refused by
+      the store itself (parent immutability, FR-034/I12) and surfaces loudly rather than being
+      worked around: a branch that is itself a parent cannot have its lineage point stripped.
+    - **Which lifecycle states**: ``paused``, ``finished``, or ``failed`` only
+      (:class:`BranchStillActiveError` otherwise -- see that error's docstring).
+    - **Terminal honesty**: a branch abandoned from ``paused`` must not linger non-terminal
+      forever with every attempt superseded -- a zombie claiming to be resumable. data-model.md
+      SS4's only legal path out of ``paused`` runs through ``playing``, so the two transitions
+      ``paused -> playing -> finished`` are recorded (the same first edge
+      ``Runner.resume_from`` drives for a paused rewind), the second carrying
+      ``stop_resolution=operator_stop`` -- an operator ended this run, which is exactly what an
+      abandonment is -- and a detail naming the abandonment. An already-terminal branch keeps
+      the terminal state it earned.
+    - **T239**: ``record_completeness_status`` is re-derived and persisted by
+      :func:`abandon_branch` itself, so the abandoned branch's field is the derivation, never a
+      leftover.
+    """
+    run = store.get_run(run_id)
+    if run is None:
+        raise BranchTargetError("cannot abandon: no such run", detail={"run_id": run_id})
+    if run.parent_run_id is None:
+        raise BranchTargetError(
+            "cannot abandon: this run has no recorded parent, so it is not a branch (FR-035)",
+            detail={"run_id": run_id},
+        )
+    if run.lifecycle_state not in _ABANDONABLE_STATES:
+        raise BranchStillActiveError(
+            "cannot abandon: this branch's lifecycle state says a run loop may still be driving "
+            "it -- pause or stop it first (FR-004/FR-008: a turn is never cut short, and "
+            "abandonment must not race a live turn loop's own writes)",
+            detail={"run_id": run_id, "lifecycle_state": run.lifecycle_state.value},
+        )
+
+    turns = sorted({save.turn_number for save in store.list_save_points(run_id)})
+    event = abandon_branch(store, run_id, turns=turns, reason=reason, occurred_at=occurred_at)
+
+    if run.lifecycle_state not in TERMINAL_STATES:
+        # paused -> playing -> finished; see the docstring. Each edge is recorded and persisted
+        # separately, exactly as `run/runner.py` records its own transitions.
+        interim, resume_event = transition(
+            run,
+            LifecycleState.PLAYING,
+            occurred_at=occurred_at,
+            detail={"reason": "branch_abandoned: paused has no direct edge to finished (SS4)"},
+        )
+        store.write_run_event(resume_event)
+        store.update_run(run_id, lifecycle_state=interim.lifecycle_state)
+
+        finish_detail: dict[str, Any] = {"reason": "branch_abandoned"}
+        if reason is not None:
+            finish_detail["abandon_reason"] = reason
+        finished, finish_event = transition(
+            interim,
+            LifecycleState.FINISHED,
+            occurred_at=occurred_at,
+            stop_resolution=StopResolution.OPERATOR_STOP,
+            detail=finish_detail,
+        )
+        store.write_run_event(finish_event)
+        store.update_run(
+            run_id,
+            lifecycle_state=finished.lifecycle_state,
+            ended_at=finished.ended_at,
+            stop_resolution=finished.stop_resolution,
+        )
+        # The lifecycle just left the actively-playing set, which widens turn_gaps' checked
+        # range (a trailing attempted-but-unrecorded turn is now a real gap) -- re-derive.
+        refresh_run_completeness(store, run_id)
+
+    final_run = store.get_run(run_id)
+    assert final_run is not None  # it existed above and nothing here deletes runs
+    superseded = tuple(
+        entry["turn_number"] for entry in event.detail.get("superseded_turns", [])
+    )
+    return BranchAbandonment(run=final_run, event=event, superseded_turns=superseded)

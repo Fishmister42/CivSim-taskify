@@ -54,7 +54,14 @@ everything -- so it is recorded as a `preparation_mismatch` and fails the run, n
 as agreement. That is the FR-002/V2-required direction: a run whose setup cannot be *confirmed*
 must not produce data. An earlier draft of this module echoed each configured value back as its
 own "actual", which made V2 pass vacuously for every field; that is the specific defect this
-binding exists to remove.
+binding exists to remove. Two named, recorded exceptions carve out fields where "fail the run"
+would itself be the fabrication (T242, T250): a configured field with no authored getter at all,
+and a field live-confirmed unobservable in any phase (`map_settings.resources`), are accepted on
+V3 seed-set agreement alone and recorded on the run as `v2_unverified_fields` /
+`v2_unobservable_fields` respectively. The snapshot itself is read in the `InGame` state at the
+post-load, pre-turn-1 moment -- the only phase T218's phase-dependent getters (`mod_set`,
+`opponents.major_count`) are honest in -- so the in-game-only comparison T250 requires runs right
+here, and a front-end value can never be what V2 compares.
 """
 
 from __future__ import annotations
@@ -75,7 +82,7 @@ from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.config.guidance import load_guidance
 from civsim_harness.config.run_config import BranchFrom
 from civsim_harness.config.seed_set import check_seed_set_agreement, load_seed_set_file
-from civsim_harness.errors import HarnessError
+from civsim_harness.errors import DiskHeadroomError, HarnessError, PreflightError
 from civsim_harness.host.detect import (
     HostInfo,
     SupportProbeResult,
@@ -96,7 +103,7 @@ from civsim_harness.models.common import (
 )
 from civsim_harness.models.config import GuidanceSet, RunConfiguration, StopCondition
 from civsim_harness.models.records import RunEvent, RunEventType
-from civsim_harness.models.run import LifecycleState, RecordCompletenessStatus, Run
+from civsim_harness.models.run import LifecycleState, Run
 from civsim_harness.nexus.client import NexusClient
 from civsim_harness.observe.assemble import CapabilityResult
 from civsim_harness.observe.capture_paths import select_capture_path
@@ -148,8 +155,10 @@ from civsim_harness.saves.branching import (
     BranchSource,
     create_branch,
 )
+from civsim_harness.saves.headroom import check_headroom, estimate_footprint
 from civsim_harness.saves.load_game import LuaSaveLoader
 from civsim_harness.saves.save_game import LuaSaveCapability
+from civsim_harness.store.completeness import record_completeness_status
 from civsim_harness.store.port import MatchStore
 from civsim_harness.telemetry.logging import get_harness_logger, log_event
 
@@ -627,6 +636,7 @@ async def _prepare_run(
     run_contexts: dict[RunId, _RunContext],
     run_lock: RunIdentityLock,
     save_loader_factory: Callable[[NexusClient], SaveLoader],
+    disk_check_path: Path,
     branch_from: BranchFrom | None = None,
 ) -> PreparedRun:
     """T210: chain every preparation step this codebase has, in an order deliberately justified
@@ -639,11 +649,13 @@ async def _prepare_run(
 
     1. Seed-set resolution + V3 agreement -- pure, local, no live client touched. A config naming a
        seed set it disagrees with is rejected before anything more expensive is even attempted.
-    2. `catalog_preflight` (FR-022/23, V5), `debug_menu_preflight`, `evaluate_host_gate` (FR-054)
-       and `preflight_chain` (FR-039, P1, V4) -- every gate that needs **no live client at all**,
-       run first because each can refuse the run for free. `evaluate_host_gate` refuses an
-       `UNSUPPORTED` host outright; `debug_menu_preflight` is recorded and never gates (its own
-       docstring: the tuner's callable surface is identical either way).
+    2. `catalog_preflight` (FR-022/23, V5), `debug_menu_preflight`, `evaluate_host_gate` (FR-054),
+       `preflight_chain` (FR-039, P1, V4), and the disk-headroom preflight (V11, T243:
+       `min_free_disk_gb` **and** the run's estimated save/capture footprint must fit in free
+       disk) -- every gate that needs **no live client at all**, run first because each can
+       refuse the run for free. `evaluate_host_gate` refuses an `UNSUPPORTED` host outright;
+       `debug_menu_preflight` is recorded and never gates (its own docstring: the tuner's
+       callable surface is identical either way).
     3. Connect to the live client, then `NexusClient.refresh_state_indices()` -- the **first** of
        this sequence's two phase-boundary re-resolutions (attaching to a client whose phase this
        process has never observed). Nothing may resolve a Lua state index before this.
@@ -718,6 +730,31 @@ async def _prepare_run(
         config.agent_model_config,
         worst_case_context_tokens=worst_case_context_tokens,
     )
+
+    # V11 (T243, T081, research R17): free disk must clear `min_free_disk_gb` AND hold the run's
+    # estimated save + capture footprint, checked here -- before a client is touched or a `Run`
+    # exists -- so a run that would die at its first quicksave is refused for free instead.
+    # `estimate_footprint` is deliberately conservative (its own docstring); nothing is ever
+    # deleted to make room (R17 -- no save is eligible until its run is archived).
+    footprint = estimate_footprint(config)
+    try:
+        check_headroom(
+            host=host,
+            path=disk_check_path,
+            min_free_disk_gb=config.min_free_disk_gb,
+            footprint=footprint,
+        )
+    except DiskHeadroomError as exc:
+        raise PreflightError(
+            "run refused at preflight: free disk space cannot hold min_free_disk_gb plus the "
+            "run's estimated save/capture footprint (V11, R17); nothing was prepared, and "
+            "nothing is ever deleted to make room",
+            detail={
+                **dict(exc.detail),
+                "estimated_footprint_bytes": footprint.total_bytes,
+                "estimated_turns": footprint.estimated_turns,
+            },
+        ) from exc
 
     # -- 3. connect, then resolve the phase we actually attached to ---------------------------
     # From here on the client holds the tuner's single connection slot (research R4), so every
@@ -872,11 +909,16 @@ async def _prepare_connected_run(
         # before the load cannot be assumed valid after it (`nexus/client.py`).
         await nexus_client.refresh_state_indices()
     else:
+        fresh_run_id = RunId(f"run-{uuid.uuid4().hex}")
         run = Run(
-            run_id=RunId(f"run-{uuid.uuid4().hex}"),
+            run_id=fresh_run_id,
             config_id=config.config_id,
             lifecycle_state=LifecycleState.PREPARING,
-            record_completeness_status=RecordCompletenessStatus.COMPLETE,
+            # T239: the derivation (store/completeness.py), never a constructor constant. A run
+            # with no record yet derives UNKNOWN -- there is nothing to judge complete -- and an
+            # earlier draft's hard-coded COMPLETE here was served through `run status` forever,
+            # gaps or not, because nothing in production ever re-derived it.
+            record_completeness_status=record_completeness_status(store, fresh_run_id),
             comparability_status=host_gate_result.comparability_status,
             observation_catalog_version=catalog_result.observation_catalog_version,
             action_catalog_version=catalog_result.action_catalog_version,
@@ -920,20 +962,53 @@ async def _prepare_connected_run(
 
     turn_timer_preflight(read_turn_timer=snapshot.read_turn_timer)
 
+    v2_fallback_fields: list[str] = []
+    v2_unobservable_fields: list[str] = []
+
     def _read_setting(name: str) -> Any:
+        if name in snapshot.unobservable:
+            # T250: a field live-confirmed to have no read path in ANY phase (today:
+            # `map_settings.resources` -- T218 measured all three candidate getters nil). The
+            # previous shape registered an UNVERIFIED getter that always came back unread, so
+            # every run configuring the field died before turn 1 over a value nothing can read
+            # -- the exact false-failure T218 ranked #1. An unreadable field fails closed as
+            # accepted-unverified and RECORDED (the preparing -> playing transition below
+            # carries `v2_unobservable_fields`), it does not kill the run. Distinct from the
+            # `v2_unverified_fields` no-getter tail on purpose: "we looked, and it is not
+            # observable" is a measured fact; "no getter has been authored" is missing work.
+            v2_unobservable_fields.append(name)
+            return configured_fields(config)[name]
+        # T250: a `phase_deferred` field is deliberately NOT special-cased here. This snapshot
+        # is read in the `InGame` state -- the post-load, pre-turn-1 moment, which is exactly
+        # the phase T218's in-game-only getters (`mod_set`, `opponents.major_count`) are honest
+        # in -- so nothing is ever deferred at this pass and those fields are genuinely read and
+        # compared, fail-closed, right here. If a deferred field ever *did* reach this
+        # comparison (a future front-end V2 pass wired without its in-game re-check),
+        # `snapshot.read_setting` returns an `UnreadSetting` naming the deferral and the run
+        # fails closed -- a deferred comparison that never runs must fail the run, never pass
+        # it vacuously.
         value = snapshot.read_setting(name)
         if isinstance(value, UnreadSetting) and value.reason == _NO_READ_PATH_REASON:
             # A narrow, named exception -- not a reversion of `GameSetupSnapshot`'s own "unread
             # is never treated as matching" rule (see `run/preparation.py`'s own module docstring
             # on why an earlier draft of *this* module doing that for every field was a defect).
-            # `_SETTING_GETTERS` has no entry at all for a handful of configured fields today --
-            # `mod_set` chief among them: no Lua capability anywhere in this codebase enumerates
-            # the client's actually-active mod list, so there is no getter to register, not a
-            # forgotten one. Every field `_SETTING_GETTERS` *does* cover still fails closed on a
-            # genuine live mismatch or a getter that errored (a different `UnreadSetting.reason`,
-            # left untouched below) -- only "no read path exists for this field at all" falls
-            # back to the value V3's own seed-set agreement check (step 1 above) already confirmed
-            # this run configuration is entitled to claim.
+            # Every field named by the reference configuration (configs/turn50-validation.yaml)
+            # now has a registered read path in `_SETTING_GETTERS` -- `mod_set` reads back
+            # through `Modding.GetActiveMods()` (in-game only, T250) and
+            # `game_settings.victory_types` through `GameInfo.Victories` (an UNVERIFIED shape
+            # that fails closed to "unread", T242) -- or is declared live-confirmed unobservable
+            # (`map_settings.resources`, caught by the branch above before this one) -- so what
+            # reaches this branch is only the open-ended tail: a custom
+            # `map_settings.*`/`game_settings.*`/`opponents.*` key some configuration names that
+            # no getter has been authored for. Every field `_SETTING_GETTERS` *does* cover still
+            # fails closed on a genuine live mismatch or a getter that errored (a different
+            # `UnreadSetting.reason`, left untouched below); only "no read path exists for this
+            # field at all" falls back to the value V3's own seed-set agreement check (step 1
+            # above) already confirmed this configuration is entitled to claim -- and, per T242,
+            # every field that takes this fallback is RECORDED on the run (the preparing ->
+            # playing transition event below carries the list), never silently treated as
+            # verified.
+            v2_fallback_fields.append(name)
             return configured_fields(config)[name]
         return value
 
@@ -950,10 +1025,35 @@ async def _prepare_connected_run(
             run_lock=run_lock,
         )
 
+    # T242/T250: a field that passed V2 without a live read is recorded on the run -- on the
+    # very transition event that concludes preparation -- so the record says which fields were
+    # accepted on V3 seed-set agreement alone rather than silently wearing "verified". Two
+    # distinct markers, never conflated: `v2_unverified_fields` is the open-ended no-getter tail
+    # (T242), `v2_unobservable_fields` is the live-confirmed not-observable-in-any-phase set
+    # (T250). A phase-deferred field never appears in either -- at this in-game pass it is read
+    # for real, and anywhere else it fails the run (see `_read_setting` above).
+    detail_parts: dict[str, Any] = {}
+    if v2_fallback_fields:
+        detail_parts["v2_unverified_fields"] = sorted(v2_fallback_fields)
+        detail_parts["v2_unverified_reason"] = (
+            "no live read path is registered for these configured fields; their values "
+            "were accepted on the seed-set agreement (V3) alone and are NOT verified "
+            "against the live client (FR-002/V2, T242)"
+        )
+    if v2_unobservable_fields:
+        detail_parts["v2_unobservable_fields"] = sorted(v2_unobservable_fields)
+        detail_parts["v2_unobservable_reason"] = (
+            "these configured fields are live-confirmed unobservable in any game phase "
+            "(T218/T250: no Lua getter exists for them); their values were accepted on the "
+            "seed-set agreement (V3) alone and are NOT verified against the live client -- "
+            "recorded rather than run-killing (FR-002/V2)"
+        )
+    transition_detail: dict[str, Any] | None = detail_parts or None
     playing_run, event = transition(
         run,
         LifecycleState.PLAYING,
         occurred_at=clock(),
+        detail=transition_detail,
     )
     store.write_run_event(event)
     store.update_run(
@@ -1187,6 +1287,7 @@ def build_runner_dependencies(
             run_contexts=run_contexts,
             run_lock=resolved_run_lock,
             save_loader_factory=_save_loader_for,
+            disk_check_path=resolved_disk_check_path,
             branch_from=branch_from,
         )
 

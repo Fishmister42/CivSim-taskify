@@ -371,6 +371,33 @@ async def test_fake_server_stalls_one_operation_while_a_real_heartbeat_still_ans
         await server.stop()
 
 
+async def test_fake_server_permanently_silent_tuner_hangs_a_real_heartbeat() -> None:
+    """The zombie tuner mode (T247): handshake succeeds, then every command hangs.
+
+    Uses the real `civsim_harness.nexus.heartbeat.probe_heartbeat` against the fake's
+    `go_silent_after_handshake` -- the live shape where a refused Network.HostGame leaves the
+    client alive and painting frames while its tuner services nothing. A real heartbeat probe
+    returns `False` (the hang signal) rather than raising, which is what the run's detection layer
+    turns into a sustained-failure trip.
+    """
+    server = FakeNexusServer()
+    server.go_silent_after_handshake()
+    await server.start()
+    client = NexusClient(host="127.0.0.1", port=server.port, command_timeout_s=0.2)
+    try:
+        indices = await client.connect()
+        assert indices.game_core_tuner is not None  # the handshake still succeeded
+
+        # The tuner is alive at the socket but services nothing: the heartbeat hangs.
+        assert await probe_heartbeat(client, timeout_s=0.2) is False
+        # The command was received by the fake (it just never answered) -- proving "silent", not
+        # "never reached".
+        assert server.received  # the heartbeat command arrived
+    finally:
+        await client.close()
+        await server.stop()
+
+
 async def test_fake_server_presents_the_menu_only_state_table_on_demand() -> None:
     server = FakeNexusServer(state_table=menu_only_state_table())
     await server.start()
@@ -479,6 +506,81 @@ async def test_fake_server_speaks_the_live_verified_reply_framing_on_the_wire() 
             await writer.wait_closed()
     finally:
         await server.stop()
+
+
+async def test_fake_server_refuses_connections_during_the_post_close_tail_on_the_wire() -> None:
+    """Raw-socket audit of the post-close refusal tail, no NexusClient in the loop (T246).
+
+    The fake must actually refuse connections for a wall-clock window after the
+    previous one closes -- the live tail (issue #1) a `reconnect()` rides out --
+    so this drives raw sockets and asserts the refusal on the wire:
+
+    - a first session connects and handshakes normally, then closes (arming the tail);
+    - a connection opened inside the window is refused (closed with no reply -- a
+      read returns EOF), and `post_close_refusals` counts it;
+    - once the window elapses, a fresh connection handshakes normally again.
+    """
+    from civsim_harness.nexus.codec import TAG_HANDSHAKE as TH
+    from civsim_harness.nexus.codec import NexusFrameDecoder, encode_frame
+
+    window_s = 0.4
+    server = FakeNexusServer()
+    server.refuse_connections_for_after_close(window_s)
+    await server.start()
+    try:
+
+        async def read_one_frame(reader: asyncio.StreamReader, decoder: NexusFrameDecoder):
+            while True:
+                chunk = await asyncio.wait_for(reader.read(4096), timeout=5.0)
+                if not chunk:
+                    return None
+                frames = decoder.feed(chunk)
+                if frames:
+                    return frames[0]
+
+        # Session 1: connect, handshake, then close -- arming the tail.
+        reader1, writer1 = await asyncio.open_connection("127.0.0.1", server.port)
+        writer1.write(encode_frame(TH, "APP:tail-audit"))
+        await writer1.drain()
+        app_reply = await read_one_frame(reader1, NexusFrameDecoder())
+        assert app_reply is not None and app_reply.tag == TH
+        writer1.close()
+        with contextlib.suppress(OSError):
+            await writer1.wait_closed()
+
+        # Let session 1's handler exit and arm the deadline (well inside the window).
+        await asyncio.sleep(0.05)
+
+        # A connection opened inside the window is refused: the server closes it
+        # without any handshake reply, so a read returns EOF (or, on Windows, the
+        # peer-close surfaces as a ConnectionResetError). Either is "refused".
+        reader2, writer2 = await asyncio.open_connection("127.0.0.1", server.port)
+        writer2.write(encode_frame(TH, "APP:during-tail"))
+        await writer2.drain()
+        try:
+            refused = await asyncio.wait_for(reader2.read(4096), timeout=5.0)
+            assert refused == b""  # refused: connection closed, no reply on the wire
+        except (ConnectionResetError, ConnectionAbortedError):
+            pass  # Windows surfaces the peer-close as a reset rather than a clean EOF
+        writer2.close()
+        with contextlib.suppress(OSError):
+            await writer2.wait_closed()
+
+        # Once the window elapses, a fresh connection handshakes normally again.
+        await asyncio.sleep(window_s)
+        reader3, writer3 = await asyncio.open_connection("127.0.0.1", server.port)
+        writer3.write(encode_frame(TH, "APP:after-tail"))
+        await writer3.drain()
+        reply3 = await read_one_frame(reader3, NexusFrameDecoder())
+        assert reply3 is not None and reply3.tag == TH
+        assert len(reply3.payload.split("\x00")) == 3  # the real odd-field greeting
+        writer3.close()
+        with contextlib.suppress(OSError):
+            await writer3.wait_closed()
+    finally:
+        await server.stop()
+
+    assert server.post_close_refusals >= 1
 
 
 async def test_stray_output_is_discarded_to_telemetry_not_returned_as_a_result() -> None:

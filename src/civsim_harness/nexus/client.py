@@ -1,4 +1,4 @@
-"""Nexus client (T031, T032, T159): connection, handshake, request/response discipline.
+"""Nexus client (T031, T032, T159, T246): connection, handshake, request/response discipline.
 
 First-party asyncio client for the Firaxis Nexus / FireTuner wire protocol
 (research R2) -- no third-party transport library. This is the only module
@@ -108,6 +108,16 @@ spikes agree on the prefix and on draining the ``APP:`` reply
 (specs/002-civ-playing-harness/spikes/r5-raw/t077_enumerate.py,
 nexus_probe.py). contracts/nexus-protocol.md "Reply framing" is the
 normative write-up.
+
+A fourth live finding (2026-09-20 evening, Linux client 1.0.12.9, issue #1 --
+the peer's session) established the *post-close connection-refusal tail*: the
+client refuses new tuner connections for a short window (~2s) after the
+previous one closes, an undocumented timing tail on the "one tuner connection
+at a time" rule. :meth:`NexusClient.reconnect` rides it out with a bounded
+retry-with-backoff; :meth:`connect` (and a :meth:`reconnect` before this client
+has ever connected) still fails fast, so a genuinely dead client never costs
+the retry budget. contracts/nexus-protocol.md "The post-close
+connection-refusal tail" is the normative write-up.
 """
 
 from __future__ import annotations
@@ -116,7 +126,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -143,6 +153,27 @@ DEFAULT_CONNECT_TIMEOUT_S = 5.0
 #: ``execute_command(timeout_s=...)``, e.g. resilience/operation_bounds.py
 #: assigning a different bound per capability).
 DEFAULT_COMMAND_TIMEOUT_S = 30.0
+
+#: How many times :meth:`NexusClient.reconnect` retries a *refused* connection
+#: before giving up -- the bounded retry that rides out the post-close
+#: connection-refusal tail (T246; contracts/nexus-protocol.md "The post-close
+#: connection-refusal tail"; live finding Linux 1.0.12.9, 2026-09-20, issue
+#: #1). This budget applies to a *re*connect only: :meth:`connect` and a
+#: :meth:`reconnect` on a client that has never held a live connection both
+#: fail fast on the first refusal (a genuinely dead client must not cost the
+#: budget). See :meth:`reconnect`.
+DEFAULT_RECONNECT_MAX_ATTEMPTS = 5
+
+#: Initial backoff between reconnect retries, in seconds. Each subsequent
+#: backoff doubles, capped at :data:`DEFAULT_RECONNECT_MAX_BACKOFF_S`, so the
+#: default schedule (0.5, 1.0, 2.0, 2.0) sleeps ~5.5s across five attempts --
+#: comfortably covering the ~2s tail the live session measured, with margin for
+#: a slower host, while staying a bounded, finite budget.
+DEFAULT_RECONNECT_BACKOFF_S = 0.5
+
+#: Ceiling on any single reconnect backoff, so the doubling schedule cannot run
+#: away on a large attempt count.
+DEFAULT_RECONNECT_MAX_BACKOFF_S = 2.0
 
 _REQUIRED_STATES = ("GameCore_Tuner", "InGame")
 
@@ -182,6 +213,35 @@ def _default_telemetry_sink(text: str) -> None:
     passes its own sink via ``NexusClient(on_unmatched_output=...)``.
     """
     _logger.warning("nexus: discarding unmatched output: %s", text)
+
+
+def _is_reconnect_refusal(exc: Exception) -> bool:
+    """Whether *exc* from :meth:`NexusClient.connect` is the post-close refusal tail's symptom.
+
+    The tail (T246; contracts/nexus-protocol.md "The post-close connection-refusal
+    tail") surfaces three ways, all meaning "the previous socket is not yet released,
+    try again":
+
+    - a TCP-level refusal -- ``ConnectionRefusedError`` (or a connect timeout),
+      which :meth:`connect` raises as :class:`PreflightError`;
+    - a client that accepts the socket but drops it with a clean EOF before the
+      handshake completes, which surfaces as :class:`NexusError` with
+      ``REASON_CONNECTION_CLOSED``; and
+    - the same drop as an :class:`OSError` (``ConnectionResetError`` /
+      ``ConnectionAbortedError`` -- Windows surfaces a peer-closed connection this
+      way rather than as a clean EOF, exactly as ``saves/load_game.py``'s reconnect
+      loop already handles).
+
+    All are retried by :meth:`reconnect`. A handshake that fails any *other* way (a
+    real protocol violation -- a malformed state list, the wrong tag) is **not** the
+    tail and is never retried: retrying it would only mask a genuine bug behind a
+    silent loop.
+    """
+    if isinstance(exc, PreflightError):
+        return True
+    if isinstance(exc, NexusError):
+        return exc.detail.get("reason") == REASON_CONNECTION_CLOSED
+    return isinstance(exc, OSError)
 
 
 def _strip_print_prefix(payload: str) -> str:
@@ -322,6 +382,10 @@ class NexusClient:
         connect_timeout_s: float = DEFAULT_CONNECT_TIMEOUT_S,
         command_timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S,
         on_unmatched_output: TelemetrySink | None = None,
+        reconnect_max_attempts: int = DEFAULT_RECONNECT_MAX_ATTEMPTS,
+        reconnect_backoff_s: float = DEFAULT_RECONNECT_BACKOFF_S,
+        reconnect_max_backoff_s: float = DEFAULT_RECONNECT_MAX_BACKOFF_S,
+        reconnect_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._host = host
         self._port = port
@@ -329,6 +393,12 @@ class NexusClient:
         self._connect_timeout_s = connect_timeout_s
         self._command_timeout_s = command_timeout_s
         self._on_unmatched_output: TelemetrySink = on_unmatched_output or _default_telemetry_sink
+        if reconnect_max_attempts < 1:
+            raise ValueError("reconnect_max_attempts must be at least 1")
+        self._reconnect_max_attempts = reconnect_max_attempts
+        self._reconnect_backoff_s = reconnect_backoff_s
+        self._reconnect_max_backoff_s = reconnect_max_backoff_s
+        self._reconnect_sleep = reconnect_sleep
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -337,6 +407,13 @@ class NexusClient:
         self._pending_frames: list[NexusFrame] = []
         self._lock = asyncio.Lock()
         self._state_indices: StateIndices | None = None
+        #: Whether this client has ever completed a live connection. A
+        #: `reconnect()` only rides out the post-close refusal tail when this is
+        #: true -- otherwise it is effectively a first connect and must fail fast
+        #: on a dead client (T246). Set once, never cleared: the tail is a
+        #: property of "there was a socket to release", which stays true for the
+        #: rest of the client's life once it has connected once.
+        self._has_connected = False
 
     @property
     def state_indices(self) -> StateIndices | None:
@@ -395,10 +472,12 @@ class NexusClient:
         except Exception:
             await self._close()
             raise
+        self._has_connected = True
         return self._state_indices
 
     async def reconnect(self) -> StateIndices:
-        """Reconnect discipline (T159): drop any stale connection, then connect() again.
+        """Reconnect discipline (T159, T246): drop any stale connection, then connect() again,
+        retrying a *refused* connection to ride out the post-close refusal tail.
 
         Always re-runs the full handshake and re-resolves state indices.
         Indices captured before a disconnect are never reused, even if the
@@ -408,10 +487,77 @@ class NexusClient:
         result may not yet have game states resolved (``has_game_states``
         may be ``False``) -- call :meth:`resolve_game_states` again if the
         caller needs them.
+
+        **The post-close connection-refusal tail (T246).** A live session
+        (Linux client 1.0.12.9, 2026-09-20, issue #1) established that the
+        client refuses new tuner connections for a short window (~2s) after the
+        previous one closes -- an undocumented timing tail on the "one tuner
+        connection at a time" rule (contracts/nexus-protocol.md). A reconnect
+        that lands inside that window sees a refused connection and, without
+        this retry, would report a perfectly healthy client as dead. So a
+        reconnect whose connect is refused (:class:`PreflightError`) is retried,
+        with a doubling backoff, up to ``reconnect_max_attempts`` -- a bounded,
+        finite budget covering the measured tail with margin.
+
+        **The retry rides on this client having connected before.** The tail
+        exists only because a *previous* socket is still being released; a
+        client that has never connected has no socket to release, so a refusal
+        there is a genuinely-unreachable client and is not retried. This is the
+        same "the first connect() of a session must fail fast" rule as
+        :meth:`connect`: the retry budget is spent only where there is a real
+        tail to ride out, never on a dead client's first contact.
+
+        The tail surfaces two ways, both retried (see :func:`_is_reconnect_refusal`):
+        a TCP-level refusal (:class:`PreflightError`), and a client that accepts
+        the socket then drops it before the handshake completes (:class:`NexusError`
+        with ``REASON_CONNECTION_CLOSED``). A handshake that fails any *other* way --
+        a malformed state list, the wrong tag: a real protocol violation, not a
+        refusal -- is never retried.
         """
         await self._close()
         self._state_indices = None
-        return await self.connect()
+        if not self._has_connected:
+            # No prior live connection -> no socket being released -> no tail to
+            # ride out. Behave exactly like a first connect: one attempt, fail
+            # fast on a refused/unreachable client (T246).
+            return await self.connect()
+
+        backoff = self._reconnect_backoff_s
+        last_error: Exception | None = None
+        for attempt in range(1, self._reconnect_max_attempts + 1):
+            try:
+                return await self.connect()
+            except (PreflightError, NexusError, OSError) as exc:
+                if not _is_reconnect_refusal(exc):
+                    # A real protocol violation, not the refusal tail -- fail at
+                    # once rather than mask a genuine bug behind a silent retry.
+                    raise
+                last_error = exc
+                if attempt >= self._reconnect_max_attempts:
+                    break
+                _logger.debug(
+                    "nexus: reconnect attempt %d/%d refused; backing off %.3gs to ride out the "
+                    "post-close connection-refusal tail (T246)",
+                    attempt,
+                    self._reconnect_max_attempts,
+                    backoff,
+                )
+                await self._reconnect_sleep(backoff)
+                backoff = min(backoff * 2, self._reconnect_max_backoff_s)
+
+        assert last_error is not None  # the loop only exits here via a refusal
+        last_detail = getattr(last_error, "detail", None)
+        last_reason = last_detail.get("reason") if isinstance(last_detail, dict) else None
+        raise PreflightError(
+            "Could not reconnect to the Nexus tuner interface within the bounded post-close "
+            "retry budget; the client is not merely releasing a previous socket",
+            detail={
+                "host": self._host,
+                "port": self._port,
+                "attempts": self._reconnect_max_attempts,
+                "reason": last_reason if last_reason is not None else type(last_error).__name__,
+            },
+        ) from last_error
 
     async def close(self) -> None:
         """Close the connection. Safe to call when already closed."""

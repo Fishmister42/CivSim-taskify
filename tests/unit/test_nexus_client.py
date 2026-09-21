@@ -771,3 +771,156 @@ def test_strip_print_prefix_passes_unprefixed_payloads_through_unchanged() -> No
 def test_strip_print_prefix_tolerates_a_marker_with_no_state_separator() -> None:
     # "O\0" marker but no ": " separator -- strip only the marker, keep the rest.
     assert _strip_print_prefix("O\x00Weird") == "Weird"
+
+
+# --------------------------------------------------------------------------
+# T246 -- the post-close connection-refusal tail (live finding, Linux
+# 1.0.12.9, 2026-09-20, issue #1). The client refuses new tuner connections
+# for a short window (~2s) after the previous one closes; a reconnect() that
+# races that tail must ride it out with a bounded retry rather than conclude
+# the client is dead. connect() (and a reconnect before this client has ever
+# connected) must still fail fast -- a genuinely dead client must not cost the
+# retry budget. Each test below fails against the pre-fix reconnect (a single
+# connect with no retry) with the connection-refused symptom.
+# --------------------------------------------------------------------------
+
+
+async def test_reconnect_rides_out_the_post_close_connection_refusal_tail() -> None:
+    """A reconnect racing the tail retries until the window elapses, then succeeds.
+
+    The fake refuses every connection for a wall-clock window after the previous
+    one closes. ``reconnect()`` closes session 1 (arming the tail) and races it;
+    the bounded retry survives the window instead of misreading the healthy
+    client as dead. Reverting reconnect to a single connect fails this test with
+    a refused connection (`PreflightError`/`NexusError`) during the tail.
+    """
+    async with FakeNexusServer() as server:
+        server.refuse_connections_for_after_close(0.3)
+        client = NexusClient(
+            host="127.0.0.1",
+            port=server.port,
+            reconnect_backoff_s=0.05,
+            reconnect_max_backoff_s=0.05,
+            reconnect_max_attempts=60,
+        )
+        try:
+            first = await client.connect()
+            assert first.has_game_states is True
+
+            second = await client.reconnect()
+        finally:
+            await client.close()
+
+    assert second.has_game_states is True
+    # The tail actually bit -- at least one attempt inside the window was
+    # refused -- and was survived, which is the whole point of the retry.
+    assert server.post_close_refusals >= 1
+
+
+async def test_reconnect_on_a_never_connected_client_fails_fast() -> None:
+    """A reconnect before any live connection spends no retry budget.
+
+    There is no previous socket being released, so a refusal is a genuinely
+    unreachable client (the "first connect fails fast" rule). The injected sleep
+    proves the backoff schedule was never entered.
+    """
+    probe = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+    port = probe.sockets[0].getsockname()[1]
+    probe.close()
+    await probe.wait_closed()
+
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    client = NexusClient(
+        host="127.0.0.1", port=port, connect_timeout_s=1.0, reconnect_sleep=_record_sleep
+    )
+    with pytest.raises(PreflightError):
+        await client.reconnect()
+
+    assert sleeps == []  # never connected -> no tail -> the retry budget stays untouched
+
+
+async def test_reconnect_gives_up_after_the_bounded_budget_when_refusals_never_stop() -> None:
+    """The tail retry is bounded: a client that stays refused surfaces a failure, not a loop.
+
+    A huge post-close window makes every reconnect attempt refused forever; the
+    injected sleep records the backoff schedule without actually pausing. The
+    reconnect gives up after exactly ``reconnect_max_attempts`` attempts, having
+    slept the doubling-and-capped schedule between them.
+    """
+    sleeps: list[float] = []
+
+    async def _instant(delay: float) -> None:
+        sleeps.append(delay)
+
+    async with FakeNexusServer() as server:
+        server.refuse_connections_for_after_close(3600.0)  # effectively forever
+        client = NexusClient(
+            host="127.0.0.1",
+            port=server.port,
+            reconnect_max_attempts=4,
+            reconnect_backoff_s=0.5,
+            reconnect_max_backoff_s=2.0,
+            reconnect_sleep=_instant,
+        )
+        try:
+            await client.connect()
+            with pytest.raises(PreflightError) as excinfo:
+                await client.reconnect()
+        finally:
+            await client.close()
+
+    assert sleeps == [0.5, 1.0, 2.0]  # three backoffs between four attempts, doubling then capped
+    assert excinfo.value.detail["attempts"] == 4
+
+
+async def test_a_handshake_failure_on_reconnect_is_not_retried() -> None:
+    """Only the refusal symptom rides out the tail; a real protocol violation fails at once.
+
+    The server hands back a good handshake first (so the client has connected),
+    then a malformed state list on the reconnect. That is a protocol violation,
+    not the refusal tail, so it is raised immediately with no retry -- the
+    injected sleep is never called.
+    """
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    good_lsq = "0\x00GameCore_Tuner\x001\x00InGame"
+    broken_lsq = "0\x00GameCore_Tuner\x001"  # odd field count -> REASON_HANDSHAKE_FAILED
+    state = {"broken": False}
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        decoder = NexusFrameDecoder()
+        while True:
+            chunk = await reader.read(4096)
+            if not chunk:
+                return
+            for frame in decoder.feed(chunk):
+                if frame.tag == TAG_HANDSHAKE and frame.payload.startswith("APP:"):
+                    writer.write(encode_frame(TAG_HANDSHAKE, _ScriptedTuner.APP_REPLY))
+                    await writer.drain()
+                elif frame.tag == TAG_HANDSHAKE and frame.payload == "LSQ:":
+                    payload = broken_lsq if state["broken"] else good_lsq
+                    writer.write(encode_frame(TAG_HANDSHAKE, payload))
+                    await writer.drain()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = NexusClient(host="127.0.0.1", port=port, reconnect_sleep=_record_sleep)
+    try:
+        await client.connect()  # good handshake -> the client has now connected once
+        state["broken"] = True
+        with pytest.raises(NexusError) as excinfo:
+            await client.reconnect()
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+    assert excinfo.value.detail["reason"] == REASON_HANDSHAKE_FAILED
+    assert sleeps == []  # a protocol violation is not the tail; no retry budget spent

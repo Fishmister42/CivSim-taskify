@@ -541,3 +541,242 @@ async def test_abandon_branch_rejects_a_run_with_no_parent(store: SqliteMatchSto
 
     with pytest.raises(BranchTargetError):
         abandon_branch(store, "standalone-run", turns=[1], occurred_at=NOW)
+
+
+# --------------------------------------------------------------------------
+# T241: the production abandonment path -- abandon_branch_run drives what the
+# CLI's `run abandon` exposes: the FR-035 event, the supersedes, an honestly
+# terminal lifecycle, and (T239) a re-derived record_completeness_status.
+# --------------------------------------------------------------------------
+
+
+async def _make_abandonable_branch(
+    store: SqliteMatchStore, *, run_id: str, lifecycle_state: str
+) -> None:
+    """A branch of `parent-t241` from turn 5 that replayed turn 5 and played turn 6, then landed
+    in *lifecycle_state* -- built through the real `create_branch` so the lineage is genuine."""
+    if store.get_run("parent-t241") is None:  # type: ignore[arg-type]
+        _seed_parent_through_turn(store, "parent-t241", up_to_turn=5)
+    await create_branch(
+        store,
+        _RecordingLoader(),
+        branch_from=BranchFrom(run_id="parent-t241", turn=5),  # type: ignore[arg-type]
+        child=_branch_source(run_id),
+        occurred_at=NOW,
+    )
+    for turn in (5, 6):
+        save_point_id = f"{run_id}-sp{turn}"
+        store.write_save_point(_make_save_point(save_point_id, run_id, turn))
+        store.write_turn_cycle(_make_turn_cycle_record(run_id, turn, save_point_id=save_point_id))
+    if lifecycle_state == "finished":
+        store.update_run(
+            run_id,  # type: ignore[arg-type]
+            lifecycle_state=LifecycleState.FINISHED,
+            ended_at=NOW,
+            stop_resolution="turn_reached",
+        )
+    else:
+        store.update_run(run_id, lifecycle_state=lifecycle_state)  # type: ignore[arg-type]
+
+
+async def test_abandon_branch_run_emits_the_event_supersedes_and_rederives_completeness(
+    store: SqliteMatchStore,
+) -> None:
+    """T241 x T239, asserted entirely on the far side (what the store holds afterwards): the
+    `branch_abandoned` event is on the timeline, every one of the branch's own turns is
+    superseded (never deleted), the terminal state it earned is untouched, and
+    `record_completeness_status` is the derivation -- `has_gaps`, since nothing authoritative
+    remains to trend on (FR-052, Principle III)."""
+    from civsim_harness.models.records import RunEventType
+    from civsim_harness.models.run import RecordCompletenessStatus
+    from civsim_harness.saves.branching import abandon_branch_run
+
+    await _make_abandonable_branch(store, run_id="branch-t241", lifecycle_state="finished")
+
+    outcome = abandon_branch_run(
+        store,
+        "branch-t241",  # type: ignore[arg-type]
+        reason="strategy dead end",
+        occurred_at=NOW,
+    )
+
+    # -- FR-035: the event is on the record, from the production path ------------------------
+    events = store.list_run_events(
+        "branch-t241",  # type: ignore[arg-type]
+        event_types=[RunEventType.BRANCH_ABANDONED],
+    )
+    assert len(events) == 1
+    assert events[0].detail["reason"] == "strategy dead end"
+    assert {t["turn_number"] for t in events[0].detail["superseded_turns"]} == {5, 6}
+    assert outcome.superseded_turns == (5, 6)
+
+    # -- superseded, never deleted ------------------------------------------------------------
+    for turn in (5, 6):
+        assert (
+            store.get_turn_cycle("branch-t241", turn, authoritative_only=True)  # type: ignore[arg-type]
+            is None
+        )
+        retained = store.get_turn_cycle(
+            "branch-t241",  # type: ignore[arg-type]
+            turn,
+            authoritative_only=False,
+        )
+        assert retained is not None, f"turn {turn} was deleted rather than superseded (FR-035)"
+
+    # -- terminal honesty: the state it earned is kept ----------------------------------------
+    abandoned = store.get_run("branch-t241")  # type: ignore[arg-type]
+    assert abandoned is not None
+    assert abandoned.lifecycle_state is LifecycleState.FINISHED
+
+    # -- T239: the persisted completeness is the derivation, not a leftover -------------------
+    assert abandoned.record_completeness_status is RecordCompletenessStatus.HAS_GAPS, (
+        "an abandoned branch has no authoritative record left; anything but has_gaps would "
+        "silently qualify it for trending (FR-052, Principle III)"
+    )
+
+    # -- FR-034 / I12: the parent's own record is untouched ------------------------------------
+    assert (
+        store.get_turn_cycle("parent-t241", 5, authoritative_only=True)  # type: ignore[arg-type]
+        is not None
+    )
+
+
+async def test_abandon_branch_run_drives_a_paused_branch_terminal_through_legal_edges(
+    store: SqliteMatchStore,
+) -> None:
+    """A branch abandoned from `paused` must not linger non-terminal with every attempt
+    superseded -- a zombie claiming to be resumable. SS4's only legal path out of `paused` runs
+    through `playing`, so both edges are recorded and the run ends `finished` with
+    `stop_resolution=operator_stop` (an operator ended it -- that is what an abandonment is)."""
+    from civsim_harness.models.records import RunEventType
+    from civsim_harness.models.run import StopResolution
+    from civsim_harness.saves.branching import abandon_branch_run
+
+    await _make_abandonable_branch(store, run_id="branch-t241-paused", lifecycle_state="paused")
+
+    abandon_branch_run(store, "branch-t241-paused", occurred_at=NOW)  # type: ignore[arg-type]
+
+    final = store.get_run("branch-t241-paused")  # type: ignore[arg-type]
+    assert final is not None
+    assert final.lifecycle_state is LifecycleState.FINISHED
+    assert final.stop_resolution is StopResolution.OPERATOR_STOP
+
+    transitions = store.list_run_events(
+        "branch-t241-paused",  # type: ignore[arg-type]
+        event_types=[RunEventType.LIFECYCLE_TRANSITION],
+    )
+    seen = [(e.detail.get("from"), e.detail.get("to")) for e in transitions]
+    assert ("paused", "playing") in seen
+    assert ("playing", "finished") in seen
+    assert ("paused", "finished") not in seen  # the illegal shortcut is never taken
+
+
+async def test_abandon_branch_run_refuses_a_branch_that_may_still_be_driven(
+    store: SqliteMatchStore,
+) -> None:
+    """Abandonment strips the branch's own authoritative record; doing that under a live turn
+    loop would race its writes (the same pause-first discipline resume_from applies). Refused by
+    name, and nothing is superseded or recorded by the refusal."""
+    from civsim_harness.models.records import RunEventType
+    from civsim_harness.saves.branching import BranchStillActiveError, abandon_branch_run
+
+    await _make_abandonable_branch(store, run_id="branch-t241-live", lifecycle_state="playing")
+
+    with pytest.raises(BranchStillActiveError):
+        abandon_branch_run(store, "branch-t241-live", occurred_at=NOW)  # type: ignore[arg-type]
+
+    # Nothing happened: the turns are still authoritative and no event was written.
+    assert (
+        store.get_turn_cycle("branch-t241-live", 5, authoritative_only=True)  # type: ignore[arg-type]
+        is not None
+    )
+    assert (
+        store.list_run_events(
+            "branch-t241-live",  # type: ignore[arg-type]
+            event_types=[RunEventType.BRANCH_ABANDONED],
+        )
+        == []
+    )
+
+
+async def test_abandon_branch_run_refuses_a_run_that_is_not_a_branch(
+    store: SqliteMatchStore,
+) -> None:
+    from civsim_harness.saves.branching import BranchTargetError, abandon_branch_run
+
+    store.create_run(
+        _make_run("standalone-t241", lifecycle_state="paused"), _make_config("cfg-standalone-241")
+    )
+    with pytest.raises(BranchTargetError):
+        abandon_branch_run(store, "standalone-t241", occurred_at=NOW)  # type: ignore[arg-type]
+
+
+async def test_the_cli_run_abandon_command_reaches_the_production_abandonment(
+    store: SqliteMatchStore, tmp_path: Path
+) -> None:
+    """T241's operator surface: `civsim run abandon` records the command before the effect
+    (lifecycle_command_received, like every other command in the contract's table) and drives
+    the same production path asserted above -- checked on the far side, in the store the CLI
+    wrote through, never on the command's own printed output alone."""
+    from typer.testing import CliRunner
+
+    from civsim_harness.models.records import RunEventType
+    from civsim_harness.operator import cli
+
+    await _make_abandonable_branch(store, run_id="branch-t241-cli", lifecycle_state="finished")
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "run",
+            "abandon",
+            "branch-t241-cli",
+            "--reason",
+            "cli-driven abandonment",
+            "--store-path",
+            str(tmp_path / "match.db"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    # Recorded before effect, then the effect itself -- both on the timeline.
+    commands = store.list_run_events(
+        "branch-t241-cli",  # type: ignore[arg-type]
+        event_types=[RunEventType.LIFECYCLE_COMMAND_RECEIVED],
+    )
+    assert any("abandon" in e.detail.get("command", "") for e in commands)
+    abandoned_events = store.list_run_events(
+        "branch-t241-cli",  # type: ignore[arg-type]
+        event_types=[RunEventType.BRANCH_ABANDONED],
+    )
+    assert len(abandoned_events) == 1
+    assert abandoned_events[0].detail["reason"] == "cli-driven abandonment"
+    assert (
+        store.get_turn_cycle("branch-t241-cli", 5, authoritative_only=True)  # type: ignore[arg-type]
+        is None
+    )
+
+
+async def test_the_cli_run_abandon_refusal_is_specific_and_nonzero(
+    store: SqliteMatchStore, tmp_path: Path
+) -> None:
+    from typer.testing import CliRunner
+
+    from civsim_harness.operator import cli
+
+    store.create_run(
+        _make_run("standalone-t241-cli", lifecycle_state="paused"),
+        _make_config("cfg-standalone-241-cli"),
+    )
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "run",
+            "abandon",
+            "standalone-t241-cli",
+            "--store-path",
+            str(tmp_path / "match.db"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "not a branch" in result.output

@@ -554,3 +554,43 @@ async def test_a_client_that_dies_mid_turn_is_detected_and_the_turn_is_replayed(
         assert record.steps
     finally:
         store.close()
+
+
+async def test_a_persisted_turn_rederives_the_runs_stored_completeness(tmp_path: Path) -> None:
+    """T239: run_turn_cycle's write_then_advance is the "turn persisted" moment, and the stored
+    Run's record_completeness_status must be re-derived there -- not only at the terminal
+    transition. Created UNKNOWN (nothing to judge), still `playing` afterwards (no runner, no
+    _finish in this test), yet the store's Run already carries the derivation: COMPLETE for the
+    gap-free turn just persisted. Fails with the refresh in run/turn_cycle.py reverted, since
+    nothing else in this test ever touches the field."""
+    run_id = RunId("run-t239-persist")
+    run, config = _build_run_and_config(run_id)
+    run = run.model_copy(
+        update={"record_completeness_status": RecordCompletenessStatus.UNKNOWN}
+    )
+    store = SqliteMatchStore(tmp_path / "match.db")
+    try:
+        store.create_run(run, config)
+
+        game = _FakeGame()
+        provider = FakeModelProvider()
+        provider.set_default_decision_factory(_two_step_factory)
+        deps = _make_deps(
+            tmp_path=tmp_path,
+            run_id=run_id,
+            turn_number=1,
+            store=store,
+            game=game,
+            provider=provider,
+        )
+        await run_turn_cycle(deps, run=run)
+
+        persisted = store.get_run(run_id)
+        assert persisted is not None
+        assert persisted.lifecycle_state is LifecycleState.PLAYING  # mid-run, not terminal
+        assert persisted.record_completeness_status is RecordCompletenessStatus.COMPLETE, (
+            "the turn persisted and the stored Run still carries its creation-time "
+            "completeness -- the turn-persisted derive-and-persist moment is unwired (T239)"
+        )
+    finally:
+        store.close()

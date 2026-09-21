@@ -5,12 +5,12 @@ constructor US1 needs and US4's catalog (T049/T050) can reuse rather than
 reimplement.
 
 **The C1 gap, handled honestly.** FR-018's seed, civilization, leader, ruleset
-and model columns all live on 002's ``RunConfiguration``, and the published
-``match-store-port.md`` has *no* read that resolves one from ``Run.config_id``
-(plan.md Complexity Tracking C1; restated in ``store_client/port.py``). A store
-may additionally offer the optional ``RunConfigurationReader`` capability, in
-which case those columns are populated; a store that does not gets them named in
-``unavailable`` with the reason. Never blank, never a plausible-looking default:
+and model columns all live on 002's ``RunConfiguration``. The published
+``match-store-port.md`` (as amended, E5) serves ``get_run_configuration`` keyed
+by the run's own ``run_id`` -- never by ``Run.config_id``, which no read
+resolves (plan.md Complexity Tracking C1; restated in ``store_client/port.py``).
+A store that answers populates those columns; a store that returns ``None``
+gets them named in ``unavailable`` with the reason. Never blank, never a plausible-looking default:
 an empty civilization column that might mean "no civilization" is worse than one
 that says why it is missing (UP-005, FR-025's honest-state rule applied to a
 port gap rather than a schema change).

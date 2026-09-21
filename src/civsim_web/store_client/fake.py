@@ -303,9 +303,11 @@ class FakeTurnCycleRecord:
 class FakeMatchStore:
     """A read-only, in-memory ``MatchStore``.
 
-    Satisfies ``civsim_web.store_client.port.MatchStore`` structurally, plus the
-    optional ``RunConfigurationReader`` capability (plan.md C1) so catalog rows
-    can be exercised before the real port publishes a configuration read.
+    Satisfies ``civsim_web.store_client.port.MatchStore`` structurally --
+    including ``get_run_configuration``, a published read keyed by ``run_id``
+    (amended ``match-store-port.md``, Capability extensions E5) -- plus the
+    three optional capabilities this feature probes for (``list_runs``,
+    ``get_capture_blob``, ``get_turn_cycle_attempt``).
 
     Every method below is a read. There is deliberately no method that mutates
     a record after construction: ``seed_*`` installs fixture data and is the
@@ -393,6 +395,22 @@ class FakeMatchStore:
 
     def get_run(self, run_id: RunId) -> FakeRun | None:
         return self._runs.get(run_id)
+
+    def get_run_configuration(self, run_id: RunId) -> RunConfigurationLike | None:
+        """The configuration the run was created with -- keyed by ``run_id``.
+
+        A *published* port read since the 2026-09-20 amendment to
+        ``match-store-port.md``, whose E5 rule this fake models exactly: run
+        ids resolve and nothing else does. An id that is not a known
+        ``run_id`` answers ``None`` even if it happens to equal some run's
+        ``config_id`` -- resolving against that secondary key is what would
+        let a config_id/run_id collision silently serve the wrong run's
+        configuration.
+        """
+        run = self._runs.get(run_id)
+        if run is None:
+            return None
+        return self._configurations.get(run.config_id)
 
     def get_turn_cycle(
         self, run_id: RunId, turn: int, *, authoritative_only: bool = True
@@ -488,10 +506,6 @@ class FakeMatchStore:
         )
 
     # -- optional capabilities (plan.md Complexity Tracking C1) -------------
-
-    def get_run_configuration(self, config_id: str) -> RunConfigurationLike | None:
-        """See ``port.RunConfigurationReader`` -- not a published port read."""
-        return self._configurations.get(config_id)
 
     def list_runs(self) -> list[FakeRun]:
         """See ``port.RunCatalogReader`` -- not a published port read.

@@ -583,7 +583,10 @@ async def test_run_doctor_capture_path_reflects_support_tier() -> None:
     assert degraded.capture_path.hygiene_spike == "not_passed"
 
 
-async def test_run_doctor_provider_key_presence_only(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_doctor_provider_key_presence_only(tmp_path: Path) -> None:
+    # The absent case pins the file source to a path that cannot exist: with
+    # no override the resolver falls back to Path.cwd()/secrets.yaml, so a
+    # real operator key in the repo root would satisfy "present" here.
     absent = await doctor.run_doctor(
         host=_FakeHost(),
         host_info=_host_info(),
@@ -591,6 +594,7 @@ async def test_run_doctor_provider_key_presence_only(monkeypatch: pytest.MonkeyP
         store=_FakeDoctorStore(),
         catalog_root=REPO_CATALOG_ROOT,
         env={},
+        secrets_file=tmp_path / "absent.yaml",
     )
     assert absent.provider_key.present is False
 
@@ -601,10 +605,35 @@ async def test_run_doctor_provider_key_presence_only(monkeypatch: pytest.MonkeyP
         store=_FakeDoctorStore(),
         catalog_root=REPO_CATALOG_ROOT,
         env={"OPENROUTER_API_KEY": "sk-super-secret-value"},
+        secrets_file=tmp_path / "absent.yaml",
     )
     assert present.provider_key.present is True
     # Presence only -- the value itself must never appear anywhere on the report.
     assert "sk-super-secret-value" not in present.model_dump_json()
+
+
+async def test_run_doctor_sees_a_key_that_lives_only_in_the_secrets_file(
+    tmp_path: Path,
+) -> None:
+    """The live regression: doctor said MISSING on a host whose key lives only
+    in secrets.yaml, while every production provider call authenticated fine --
+    doctor must report presence through the same resolution the adapter uses.
+    """
+    secrets_file = tmp_path / "secrets.yaml"
+    secrets_file.write_text(
+        "openrouter_api_key: sk-file-only-secret-value\n", encoding="utf-8"
+    )
+    report = await doctor.run_doctor(
+        host=_FakeHost(),
+        host_info=_host_info(),
+        nexus_client_factory=_RaisingNexusClient,
+        store=_FakeDoctorStore(),
+        catalog_root=REPO_CATALOG_ROOT,
+        env={},
+        secrets_file=secrets_file,
+    )
+    assert report.provider_key.present is True
+    assert "sk-file-only-secret-value" not in report.model_dump_json()
 
 
 async def test_run_doctor_linux_wayland_platform_line() -> None:

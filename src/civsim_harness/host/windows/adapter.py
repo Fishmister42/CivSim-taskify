@@ -39,6 +39,7 @@ from civsim_harness.errors import PreflightError
 from civsim_harness.host._shared import locate_process_by_names, read_disk_space
 from civsim_harness.host.port import (
     CaptureFrame,
+    CapturePreconditionResult,
     CaptureResult,
     CaptureStatus,
     DiskSpace,
@@ -352,6 +353,42 @@ class WindowsHostPlatform:
         )
         title = str(win32gui.GetWindowText(hwnd))
         return GameWindow(handle=int(hwnd), title=title, rect=rect, pid=process.pid)
+
+    def check_capture_preconditions(self) -> CapturePreconditionResult:
+        """What can actually be checked cheaply on Windows today, and no more (T249).
+
+        The one implemented capture path is `PrintWindow` + `GetDIBits` via
+        ctypes (`_capture_via_print_window`), and the only per-session
+        precondition this adapter can probe for it without a window handle
+        is that the user32/gdi32 entry points resolve -- so that is what is
+        checked, through the same `_gdi()` the capture path itself uses.
+        There is no Windows analogue of the Linux compositor probe: whether
+        `PrintWindow` frames are hygiene-clean (occlusion, borders, overlay
+        chrome) is exactly the R6 spike's question, answered by the recorded
+        spike and carried on the run's support tier, not answerable
+        per-capture from here. A pass therefore means "the capture path is
+        callable", never "the frames are clean" -- per the port contract,
+        passing never substitutes for the R6 spike.
+        """
+        try:
+            _gdi()
+        except Exception as exc:
+            return CapturePreconditionResult(
+                passed=False,
+                reason=(
+                    "user32/gdi32 entry points could not be resolved, so the PrintWindow "
+                    f"capture path cannot run at all: {exc}"
+                ),
+            )
+        return CapturePreconditionResult(
+            passed=True,
+            reason=(
+                "user32/gdi32 entry points resolved; the PrintWindow (R6 rank 3) path is "
+                "callable. No cheaper per-session hygiene precondition exists to probe on "
+                "Windows today -- frame cleanliness is the R6 spike's question, answered "
+                "by the run's support tier, not per-capture."
+            ),
+        )
 
     def capture_window(self, window: GameWindow) -> CaptureResult:
         try:

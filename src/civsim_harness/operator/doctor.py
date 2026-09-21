@@ -45,6 +45,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from civsim_harness.capability.loader import load_catalog
+from civsim_harness.config.secrets import secret_is_present
 from civsim_harness.errors import CatalogError, NexusError, PreflightError
 from civsim_harness.host.detect import (
     UNPROBED,
@@ -293,9 +294,17 @@ def _probe_capture_path(
 
 
 def _probe_provider_key(
-    env: Mapping[str, str], *, env_var: str
+    env: Mapping[str, str], *, env_var: str, secrets_file: Path | None
 ) -> ProviderKeyDiagnostic:
-    return ProviderKeyDiagnostic(env_var=env_var, present=bool(env.get(env_var)))
+    # Presence must come from the same env-then-secrets-file resolution the
+    # provider adapter uses (config.secrets.secret_is_present -- the one call
+    # doctor is contracted to make, contracts/operator-surface.md "Secrets").
+    # An env-only check reported MISSING on a host whose key lives only in
+    # secrets.yaml while every production provider call authenticated fine.
+    return ProviderKeyDiagnostic(
+        env_var=env_var,
+        present=secret_is_present(env_var.lower(), env=env, secrets_file=secrets_file),
+    )
 
 
 def _probe_disk(host: HostPlatform, path: Path) -> DiskDiagnostic:
@@ -329,6 +338,7 @@ async def run_doctor(
     disk_path: Path | None = None,
     env: Mapping[str, str] | None = None,
     provider_key_env_var: str = DEFAULT_PROVIDER_KEY_ENV_VAR,
+    secrets_file: Path | None = None,
 ) -> DoctorReport:
     """Run every `doctor` probe and assemble the full report.
 
@@ -355,7 +365,9 @@ async def run_doctor(
         capture_path=_probe_capture_path(
             resolved_host_info, support_probe, capture_path_name=capture_path_name
         ),
-        provider_key=_probe_provider_key(resolved_env, env_var=provider_key_env_var),
+        provider_key=_probe_provider_key(
+            resolved_env, env_var=provider_key_env_var, secrets_file=secrets_file
+        ),
         disk=_probe_disk(host, resolved_disk_path),
     )
 

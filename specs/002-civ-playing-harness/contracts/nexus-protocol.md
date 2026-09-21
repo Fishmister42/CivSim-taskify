@@ -32,6 +32,27 @@ port.
 requirements-level consequence: a second harness instance cannot interleave actions into the same
 game, which is the primary enforcement of FR-006.
 
+### The post-close connection-refusal tail
+
+**The one-connection rule has an undocumented timing tail: for a short window (~2 s) after a tuner
+connection closes, the client refuses new connections** — the previous socket is not yet fully
+released. This was measured live against a running client (Linux 1.0.12.9, 2026-09-20, issue #1 —
+the peer's account-handoff session) and had not been observed before because no earlier run
+reconnected fast enough to race it.
+
+The consequence is a false-negative liveness reading: a `reconnect()` issued immediately after a
+close lands inside this window, sees a refused connection, and — with no allowance for the tail —
+would conclude "client dead" about a client that is perfectly healthy and merely still releasing
+the previous socket. (This is the same shape, at connection granularity, as the transient-refusal
+corroboration the heartbeat detector already performs; see "Timeouts, health, and failure".)
+
+**Rule.** A reconnect must ride out the tail with a bounded retry-with-backoff before it concludes
+the client is unreachable. A *first* connect (and a reconnect on a client that has never held a
+live connection) must still fail fast on the first refusal: there is no previous socket being
+released, so a refusal there is a genuinely unreachable client, and a dead client must not cost the
+retry budget. `NexusClient.reconnect()` implements exactly this (T246); `NexusClient.connect()` does
+not retry.
+
 ## Wire format
 
 Every message is a header followed by a null-terminated UTF-8 payload.
@@ -85,9 +106,11 @@ capture it was read from.
 
    The prefix is stripped per frame before sentinel correlation. The Linux spikes strip the
    identical prefix (`spikes/r5-raw/t077_enumerate.py`, `t077_probe2.py`, `t077_savetest.py`:
-   `^O\x00[A-Za-z_0-9]+:\s?`), so **Windows and Linux agree on this framing**; whether the empty
-   tag-3 acknowledgement is universal across builds is pending the Linux peer re-running
-   `raw_command_probe.py` (`r5-save-path-windows.md`, "Not yet verified" #1). A non-empty tag-3
+   `^O\x00[A-Za-z_0-9]+:\s?`), so **Windows and Linux agree on this framing**. The empty tag-3
+   acknowledgement is **verified universal across builds**: the Linux peer re-ran
+   `raw_command_probe.py` against `1.0.12.9` (2026-09-20, issue #1) — tag 3 literally empty,
+   sentinels on tag −1 with the same prefix, matching Windows `1.0.12.68` exactly. In the peer's
+   words: T234 is not a Windows workaround, it is the protocol. A non-empty tag-3
    payload has never been observed from a real client; the harness logs one loudly and routes it to
    telemetry rather than accepting it as a result, so a framing change cannot pass silently.
 
@@ -207,7 +230,9 @@ job, so the Python side never parses prose, and a capability's output validates 
 - One `NexusClient` per run, owning the socket and serializing access with a lock — concurrent
   commands on one socket would interleave output across nonces.
 - Reconnection re-runs the full handshake and re-resolves state indices; indices from before a
-  disconnect are not reused.
+  disconnect are not reused. Reconnection also rides out the post-close connection-refusal tail
+  with a bounded retry-with-backoff (see "The post-close connection-refusal tail"), while the first
+  connect fails fast.
 - Indices are also re-resolved on every phase transition within a single connection (see "Lua state
   indices are re-resolved on reconnect and on every phase transition" above) — `connect()` resolves
   whatever exists at that moment, `resolve_game_states()` re-resolves and additionally requires

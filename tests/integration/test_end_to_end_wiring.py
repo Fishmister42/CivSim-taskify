@@ -47,7 +47,7 @@ from civsim_harness.host.detect import (
     OperatingSystem,
     SupportProbeResult,
 )
-from civsim_harness.host.port import GameProcess
+from civsim_harness.host.port import DiskSpace, GameProcess
 from civsim_harness.models.common import CapturePath, DeclarationId, ModelRef, RunId
 from civsim_harness.models.run import ComparabilityStatus, LifecycleState, StopResolution
 from civsim_harness.nexus.client import NexusClient
@@ -102,6 +102,7 @@ class _FakeGame:
         self.config_values = config_values
         self.end_turns_issued = 0
         self.saves_written: list[str] = []
+        self.setup_lua_bodies: list[str] = []
 
     def read_turn_number(self, _command: ReceivedCommand) -> dict[str, Any]:
         return {
@@ -138,9 +139,12 @@ class _FakeGame:
     def read_version(self, _command: ReceivedCommand) -> dict[str, Any]:
         return {"ok": True, "version": GAME_BUILD_VERSION}
 
-    def read_setup(self, _command: ReceivedCommand) -> dict[str, Any]:
+    def read_setup(self, command: ReceivedCommand) -> dict[str, Any]:
         """Answer the single `LuaGameSetupReader` snapshot with the configured setup, keyed the
-        way that reader flattens dotted field names."""
+        way that reader flattens dotted field names. The dispatched body is kept so a test can
+        assert on the Lua the tuner actually received (T250: which getters ran, and which must
+        not have)."""
+        self.setup_lua_bodies.append(command.lua_body)
         return {
             **{key.replace(".", "__"): value for key, value in self.config_values.items()},
             "turn_timer_type": "TURNTIMER_NONE",
@@ -235,13 +239,22 @@ def _write_seed_set(root: Path) -> None:
     )
 
 
-def _write_run_config(path: Path) -> dict[str, Any]:
+def _write_run_config(
+    path: Path,
+    *,
+    extra_game_settings: dict[str, Any] | None = None,
+    extra_map_settings: dict[str, Any] | None = None,
+    extra_opponents: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Write the run configuration and return the flattened setup the fake game must report back.
 
     Deliberately carries only the configured fields `run.preparation`'s own setup reader has a
-    registered getter for: a field with no read path is reported unread and fails V2 closed by
-    design, which is a separate behaviour with its own test below rather than something to work
-    around here.
+    registered getter for: a field with no read path is recorded on the run as unverified (T242)
+    rather than silently treated as agreeing, which is a separate behaviour with its own test
+    below rather than something to work around here. *extra_game_settings* /
+    *extra_map_settings* / *extra_opponents* let such tests add exactly the fields they are
+    about; a test whose client must *not* report one back (an unobservable field, T250) pops it
+    from the returned mapping.
     """
     document = {
         "schema_version": 1,
@@ -252,10 +265,13 @@ def _write_run_config(path: Path) -> dict[str, Any]:
         "leader": _LEADER,
         "ruleset": _RULESET,
         "mod_set": [],
-        "map_settings": {},
-        "game_settings": {"game_speed": "GAMESPEED_ONLINE", "starting_era": "ERA_ANCIENT"},
+        "map_settings": dict(extra_map_settings or {}),
+        "game_settings": dict(
+            {"game_speed": "GAMESPEED_ONLINE", "starting_era": "ERA_ANCIENT"},
+            **(extra_game_settings or {}),
+        ),
         "difficulty": _DIFFICULTY,
-        "opponents": {"city_state_count": 10},
+        "opponents": dict({"city_state_count": 10}, **(extra_opponents or {})),
         "stop_condition": {"type": "turn_reached", "turn": STOP_AT_TURN},
         "model_config": {
             "primary": {"provider": "fake", "model": "primary"},
@@ -277,7 +293,10 @@ def _write_run_config(path: Path) -> dict[str, Any]:
         "difficulty": _DIFFICULTY,
         "game_settings.game_speed": "GAMESPEED_ONLINE",
         "game_settings.starting_era": "ERA_ANCIENT",
+        **{f"game_settings.{key}": value for key, value in (extra_game_settings or {}).items()},
+        **{f"map_settings.{key}": value for key, value in (extra_map_settings or {}).items()},
         "opponents.city_state_count": 10,
+        **{f"opponents.{key}": value for key, value in (extra_opponents or {}).items()},
     }
 
 
@@ -407,10 +426,15 @@ def _compose_dependencies(
     run_lock: RunIdentityLock | None = None,
     client_process: GameProcess | None = None,
     save_loader: Any = None,
+    free_disk_bytes: int | None = None,
 ) -> tuple[Any, SqliteMatchStore]:
     store = SqliteMatchStore(tmp_path / "match-store.db")
     host = FakeHostPlatform()
     host.set_process(client_process if client_process is not None else _live_client_process())
+    if free_disk_bytes is not None:
+        host.set_disk_space(
+            DiskSpace(path=tmp_path, free_bytes=free_disk_bytes, total_bytes=free_disk_bytes * 2)
+        )
     deps = build_runner_dependencies(
         store=store,
         # The real catalog and the real lua/ tree: this is what makes `implementation_ref`
@@ -1291,5 +1315,308 @@ def _runs_with_a_parent(db_path: Path) -> list[str]:
                 "SELECT run_id FROM runs WHERE parent_run_id IS NOT NULL"
             ).fetchall()
         ]
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------
+# T239 -- record_completeness_status is the derivation, through the real
+# composition root
+# --------------------------------------------------------------------------
+
+
+def test_a_branch_completeness_becomes_the_derivation_once_it_has_a_record(
+    tmp_path: Path,
+) -> None:
+    """T239's branch case: a branch is created UNKNOWN (nothing to judge yet) and, once its own
+    record exists, both the persisted Run and `run status` must carry the derivation -- COMPLETE
+    for the gap-free branch this test plays. Before T239 nothing in production ever re-derived
+    the field: a finished branch stayed `unknown` forever on a perfect record, which is exactly
+    what this fails with when the turn-persisted refresh (`run/turn_cycle.py`) and the read-time
+    derivation (`Runner.get_status`) are reverted."""
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+
+    class _NoOpLoader:
+        async def load(self, save: Any) -> None:
+            return None
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        deps, store = _compose_dependencies(
+            tmp_path, port=server.port, provider=_build_provider(), save_loader=_NoOpLoader()
+        )
+        runner = Runner(deps)
+        cli.configure_runner_factory(lambda: runner)
+
+        started = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert started.exit_code == 0, _failure_report(started.output, store)
+        parent_run_id = _wait_for_terminal_run(runner, store, started.output)
+
+        branch_path = tmp_path / "branch.yaml"
+        _write_branch_config(branch_path, parent_run_id=parent_run_id, turn=1)
+        branched = CliRunner().invoke(
+            cli.app, _branch_argv(parent_run_id, 1, branch_path, tmp_path)
+        )
+        assert branched.exit_code == 0, _failure_report(branched.output, store)
+        child_run_id = _parse_run_id(branched.output)
+        _wait_for_terminal_run(runner, store, branched.output)
+
+        # Served: `run status` derives fresh from the record, never the creation-time constant.
+        served = runner.get_status(RunId(child_run_id)).record_completeness_status
+        assert served.value == "complete", (
+            f"run status served {served.value!r} for a finished, gap-free branch -- the "
+            "creation-time UNKNOWN was never re-derived (T239)"
+        )
+
+    # Persisted: the Run the store holds -- what crosses the port to Deliverable 1's trend
+    # gate -- carries the derivation too.
+    child = store.get_run(RunId(child_run_id))
+    assert child is not None
+    assert child.parent_run_id == parent_run_id
+    assert child.record_completeness_status.value == "complete", (
+        "a finished branch with a perfect record stayed stamped "
+        f"{child.record_completeness_status.value!r} forever (T239's exact finding)"
+    )
+    # ...and the fresh run's persisted field is the same derivation.
+    parent = store.get_run(RunId(parent_run_id))
+    assert parent is not None
+    assert parent.record_completeness_status.value == "complete"
+
+
+# --------------------------------------------------------------------------
+# T242 -- the V2 no-read-path fallback is closed: covered fields verify live,
+# and anything that still falls back is recorded on the run
+# --------------------------------------------------------------------------
+
+
+def test_a_field_passing_v2_only_by_fallback_is_recorded_on_the_run(tmp_path: Path) -> None:
+    """T242: `victory_types` now has a real read path (so it must NOT appear as unverified), and
+    a configured field with no getter at all -- the open-ended custom-settings tail -- is
+    RECORDED on the preparing -> playing transition event rather than silently wearing
+    "verified". Far-side assertions only: what the store's timeline holds.
+
+    Reverting either half fails this: with the recording reverted, the transition event carries
+    no `v2_unverified_fields` at all; with the `game_settings.victory_types` getter reverted,
+    the field falls back into the recorded list and the exact-list assertion fails."""
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(
+        config_path,
+        extra_game_settings={
+            # Covered by the new getter (T242): read back live, so V2 for it is real.
+            "victory_types": ["VICTORY_CULTURE", "VICTORY_TECHNOLOGY"],
+            # No getter exists or can exist for an arbitrary custom key: takes the fallback,
+            # which must now be recorded, never silent.
+            "experimental_toggle": "ON",
+        },
+    )
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+    provider = _build_provider()
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        runner, store = _compose(tmp_path, port=server.port, provider=provider)
+        cli.configure_runner_factory(lambda: runner)
+
+        result = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert result.exit_code == 0, _failure_report(result.output, store)
+        run_id = _wait_for_terminal_run(runner, store, result.output)
+
+    playing_transitions = [
+        event
+        for event in store.list_run_events(RunId(run_id))
+        if event.event_type.value == "lifecycle_transition"
+        and event.detail.get("to") == "playing"
+    ]
+    assert len(playing_transitions) == 1
+    detail = playing_transitions[0].detail
+    assert detail.get("v2_unverified_fields") == ["game_settings.experimental_toggle"], (
+        "the preparation event must name exactly the fields that passed V2 through the "
+        "no-read-path fallback -- nothing more (victory_types has a real getter now) and "
+        f"nothing less (silence is the T242 defect). Got: {detail!r}"
+    )
+    assert "seed-set agreement" in detail.get("v2_unverified_reason", "")
+
+
+# --------------------------------------------------------------------------
+# T250 -- phase-dependent settings are read in-game only, and an unobservable
+# field is recorded rather than run-killing
+# --------------------------------------------------------------------------
+
+
+def test_unobservable_resources_is_recorded_on_the_run_not_run_killing(tmp_path: Path) -> None:
+    """T250 halves one and two, far side: a run configuring `map_settings.resources` -- the
+    field the peer's live session confirmed unreadable in either phase -- COMPLETES, with the
+    field recorded on the preparing -> playing transition under its own `v2_unobservable_fields`
+    marker (never conflated with T242's no-getter `v2_unverified_fields`); and the in-game-only
+    reads (`mod_set`, `opponents.major_count`) genuinely ran in the one setup dispatch, at the
+    run's post-load/pre-turn-1 in-game moment, through the phase-correct derivation.
+
+    Reverting either half fails this: with the old `RESOURCES` sentinel getter restored, the
+    field reads back unread, V2 records a mismatch, and the run dies before turn 1 (exit code 1
+    here); with the `GetAIPlayerCount()` getter restored, the dispatched Lua assertion fails.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(
+        config_path,
+        extra_map_settings={"resources": "RESOURCES_STANDARD"},
+        extra_opponents={"major_count": 5},
+    )
+    # The client cannot report resources back -- that is the whole finding. The fake reporting
+    # it anyway would be a fake with a getter the real game does not have.
+    config_values.pop("map_settings.resources")
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+    provider = _build_provider()
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        runner, store = _compose(tmp_path, port=server.port, provider=provider)
+        cli.configure_runner_factory(lambda: runner)
+
+        result = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert result.exit_code == 0, _failure_report(result.output, store)
+        run_id = _wait_for_terminal_run(runner, store, result.output)
+
+    run = store.get_run(run_id)
+    assert run is not None
+    assert run.lifecycle_state is LifecycleState.FINISHED
+
+    # -- the unobservable field is recorded, distinctly, on the run itself --------------------
+    playing_transitions = [
+        event
+        for event in store.list_run_events(RunId(run_id))
+        if event.event_type.value == "lifecycle_transition"
+        and event.detail.get("to") == "playing"
+    ]
+    assert len(playing_transitions) == 1
+    detail = playing_transitions[0].detail
+    assert detail.get("v2_unobservable_fields") == ["map_settings.resources"], (
+        "the unobservable field must be recorded under its own marker on the transition that "
+        f"concludes preparation. Got: {detail!r}"
+    )
+    assert "unobservable" in detail.get("v2_unobservable_reason", "")
+    assert "map_settings.resources" not in detail.get("v2_unverified_fields", []), (
+        "a live-confirmed unobservable field must never be conflated with the no-getter tail"
+    )
+
+    # -- the in-game-only fields were read for real, in-game, phase-correctly -----------------
+    assert game.setup_lua_bodies, "the setup read-back never reached the fake tuner"
+    setup_lua = game.setup_lua_bodies[0]
+    assert "Modding.GetActiveMods" in setup_lua, (
+        "mod_set was not read at the run's in-game moment -- the deferred comparison that "
+        "never runs is the vacuous-pass pattern T250 exists to prevent"
+    )
+    assert "IsMajor" in setup_lua, "major_count was not read through the Players derivation"
+    assert "GetAIPlayerCount" not in setup_lua, (
+        "GetAIPlayerCount() counts city-states, Free Cities, and Barbarians in-game (T218's "
+        "6-vs-16 decomposition) and must not be dispatched in any phase"
+    )
+    assert "RESOURCES" not in setup_lua, "the retired resources sentinel getter was dispatched"
+
+
+def test_an_in_game_only_field_mismatch_still_fails_the_run_closed(tmp_path: Path) -> None:
+    """T250's fail-closed half, far side: the in-game comparison of an in-game-only field is a
+    real V2 gate, not a recorded shrug. The client reports `opponents.major_count` as 16 -- the
+    exact value `GetAIPlayerCount()` would have fabricated from the phase confusion -- where 5
+    was configured: the run fails before turn 1 with the mismatch recorded, and no turn is
+    played. (Recording without comparing would pass here; this is the guard against it.)"""
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path, extra_opponents={"major_count": 5})
+    config_values["opponents.major_count"] = 16
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+    provider = _build_provider()
+
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        runner, store = _compose(tmp_path, port=server.port, provider=provider)
+        cli.configure_runner_factory(lambda: runner)
+
+        result = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+        assert result.exit_code == 1, result.output
+        run_id = _parse_run_id(result.output)
+
+    run = store.get_run(run_id)
+    assert run is not None
+    assert run.lifecycle_state is LifecycleState.FAILED
+    assert game.end_turns_issued == 0
+    assert store.get_turn_cycle(run_id, 1) is None
+
+    mismatches = [
+        mismatch
+        for event in store.list_run_events(run_id)
+        if event.event_type.value == "preparation_mismatch"
+        for mismatch in event.detail.get("mismatches", [])
+    ]
+    major_count_mismatches = [m for m in mismatches if m["field"] == "opponents.major_count"]
+    assert major_count_mismatches, f"the mismatch was not recorded; got {mismatches!r}"
+    assert major_count_mismatches[0]["expected"] == 5
+    assert major_count_mismatches[0]["actual"] == 16
+
+
+# --------------------------------------------------------------------------
+# T243 -- V11's preflight: the estimated footprint must fit in free disk
+# before anything is prepared
+# --------------------------------------------------------------------------
+
+
+def test_a_run_whose_estimated_footprint_cannot_fit_is_refused_at_preflight(
+    tmp_path: Path,
+) -> None:
+    """V11 (T243): with free disk above the configured floor (`min_free_disk_gb: 0`) but below
+    the run's estimated save/capture footprint, `run start` is refused for free -- before a
+    `Run` exists and before the tuner is ever dialled. No server is running on the composed
+    port at all, which is the structural proof the refusal comes from the preflight gate: with
+    the gate reverted, preparation runs on to `connect()` and fails as a connection error that
+    names no V11, and the store-side assertions still hold vacuously -- the output assertion is
+    what catches it."""
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    _write_run_config(config_path)
+
+    # STOP_AT_TURN=2 estimates ~180 MB of saves + captures under saves/headroom.py's documented
+    # conservative defaults; 50 MB free clears the 0-GB floor and cannot hold that.
+    deps, store = _compose_dependencies(
+        tmp_path,
+        port=1,  # nothing listens here -- reaching connect() at all would be the defect
+        provider=_build_provider(),
+        free_disk_bytes=50 * 1024 * 1024,
+    )
+    runner = Runner(deps)
+    cli.configure_runner_factory(lambda: runner)
+
+    result = CliRunner().invoke(cli.app, ["run", "start", str(config_path)])
+
+    assert result.exit_code == 1, result.output
+    assert "V11" in result.output, (
+        "the refusal must name V11's footprint preflight, not surface later as a transport or "
+        f"quicksave failure. Output:\n{result.output}"
+    )
+    assert "estimated" in result.output
+
+    # Refused for free: no Run was created, nothing was prepared, nothing written anywhere.
+    assert store.list_active_runs() == []
+    assert _total_run_count(tmp_path / "match-store.db") == 0
+
+
+def _total_run_count(db_path: Path) -> int:
+    """Every run row, straight from SQLite -- `list_active_runs` alone could hide a run that
+    was created and immediately failed, and the claim is "nothing was created at all"."""
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0])
     finally:
         conn.close()
