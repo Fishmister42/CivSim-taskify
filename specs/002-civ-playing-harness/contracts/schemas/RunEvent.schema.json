@@ -24,6 +24,7 @@
         "model_chain_exhausted",
         "image_withheld",
         "capture_failed",
+        "operator_intervention",
         "branch_created",
         "branch_abandoned",
         "run_archived",
