@@ -252,6 +252,25 @@ class DecisionLoopContext:
 
     clock: Callable[[], Timestamp] = field(default=_utcnow)
 
+    step_index_base: int = 0
+    """The ``step_index`` this loop's first step is numbered *after*: the loop starts at
+    ``step_index_base + 1``. Zero for an ordinary attempt. Non-zero only when
+    ``run/turn_cycle.py`` has already run this attempt's pre-save prompt clearance (see
+    :attr:`stop_after_prompt_answer`) under the same ``turn_cycle_id`` and the main loop must
+    continue the numbering rather than restart it at 1 and collide."""
+
+    stop_after_prompt_answer: bool = False
+    """Pre-save prompt clearance mode (``run/turn_cycle.py``, 2026-09-21, gameplay blocks 16 and
+    17). MEASURED: Gathering Storm's eruption cinematic (``prompt.natural_disaster``) makes the
+    game refuse every save while it is up, and the turn-start quicksave used to run before any
+    observation -- so a save-blocking prompt deadlocked the run before the agent could answer
+    it. In this mode the loop runs the ordinary decision path only while the screen-identity
+    probe reports a blocking prompt: each step is a real, recorded prompt-answer decision
+    (``trigger == prompt_response``), and the loop returns with ``outcome=None`` the moment the
+    fresh board no longer shows a blocking prompt -- zero steps if none was up to begin with.
+    A prompt that will not clear trips the no-progress backstop exactly as it would mid-turn.
+    Nothing else changes: same provider, same dispatch/verify, same capture handling."""
+
 
 #: T225: the shortest literal this loop will hand :func:`enforce_parity_boundary` as a
 #: run-specific forbidden value. ``find_literal_leaks`` matches by plain substring, so a short
@@ -297,7 +316,10 @@ class DecisionLoopResult:
     exits on exactly two conditions is untouched; what the record says about one of them is not.
     """
 
-    outcome: TurnOutcome
+    outcome: TurnOutcome | None
+    """``None`` only in :attr:`DecisionLoopContext.stop_after_prompt_answer` mode, meaning the
+    board showed no blocking prompt (any more) and no turn exit was reached -- the turn has not
+    ended and the caller carries these steps into the attempt it is about to start."""
     steps: tuple[DecisionStepBundle, ...]
     final_no_progress_streak: int
     events: tuple[RunEvent, ...]
@@ -605,7 +627,7 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
     # preparation, so re-reading it per step could never change the answer mid-attempt.
     images_permitted = _images_permitted_for_run(ctx)
 
-    step_index = 1
+    step_index = ctx.step_index_base + 1
     step_id = DecisionStepId(uuid.uuid4().hex)
     initial = await _observe_or_wrap(
         ctx,
@@ -632,6 +654,18 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             # out (T238; the record may not be lost, FR-051/D5).
             ctx.store.write_capture(step_capture.capture, step_capture.blob)
             raise
+
+        if ctx.stop_after_prompt_answer and trigger is not DecisionTrigger.PROMPT_RESPONSE:
+            # Pre-save clearance mode: the board shows no blocking prompt (either none was up, or
+            # the answer just given cleared it), so this fresh read serves no decision request
+            # here -- persisted un-shown (T238) -- and the caller takes its quicksave now.
+            ctx.store.write_capture(step_capture.capture, step_capture.blob)
+            return DecisionLoopResult(
+                outcome=None,
+                steps=tuple(steps),
+                final_no_progress_streak=tracker.streak,
+                events=tuple(events),
+            )
 
         # T238, FR-024/FR-015, T134: this step's own clean capture -- and only it -- may become
         # the request's image, and only through `select_screened_images`. `shown_to_agent` and

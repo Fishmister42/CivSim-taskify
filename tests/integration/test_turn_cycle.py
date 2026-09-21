@@ -489,16 +489,22 @@ async def test_a_client_that_dies_mid_turn_is_detected_and_the_turn_is_replayed(
 
     game = _FakeGame()
     real_read = game.read
+    reads = 0
 
     async def read_and_die() -> tuple[Sequence[CapabilityResult], str]:
         """The client dies during the first attempt's very first observation read.
 
-        The sleep is what gives the watchdog a pass to run in: the cadence is deliberately real
-        (`asyncio.wait` with a timeout), so a decision loop that never yields would finish before
-        any pass happened -- which is exactly why the interval below is small rather than the
-        production default.
+        The very first read of a turn is now the pre-save prompt probe (2026-09-21), which runs
+        before any quicksave exists and therefore cannot be replayed -- so the death is scripted
+        on the *second* read, the first attempt's own initial observation, which is the case this
+        test exists for. The sleep is what gives the watchdog a pass to run in: the cadence is
+        deliberately real (`asyncio.wait` with a timeout), so a decision loop that never yields
+        would finish before any pass happened -- which is exactly why the interval below is small
+        rather than the production default.
         """
-        if alive[0] and loader.loads == []:
+        nonlocal reads
+        reads += 1
+        if alive[0] and loader.loads == [] and reads >= 2:
             alive[0] = False
         await asyncio.sleep(0.05)
         return await real_read()

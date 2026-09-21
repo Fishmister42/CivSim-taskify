@@ -391,9 +391,11 @@ async def test_each_steps_observation_is_assembled_after_the_previous_effect_was
         assert [request.step_index for request in provider.calls] == [1, 2, 3, 4, 5]
 
         # Exactly one capture write per step transition (5 steps -> 6 fresh reads: the initial
-        # one plus one after each step's dispatch), every one bound to a distinct decision step,
-        # and every one of the 5 persisted steps' own decision_step_id has exactly one capture.
-        assert len(spy.capture_writes) == 6
+        # one plus one after each step's dispatch), plus the turn's pre-save prompt probe
+        # (2026-09-21: one fresh read before the quicksave, persisted un-shown when no blocking
+        # prompt is up), every one bound to a distinct decision step, and every one of the 5
+        # persisted steps' own decision_step_id has exactly one capture.
+        assert len(spy.capture_writes) == 7
         capture_step_ids = [c.decision_step_id for c in spy.capture_writes]
         assert len(capture_step_ids) == len(set(capture_step_ids))  # no capture reused
         recorded_step_ids = {b.step.decision_step_id for b in record.steps}

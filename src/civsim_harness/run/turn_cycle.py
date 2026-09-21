@@ -86,7 +86,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -425,9 +425,62 @@ async def _run_decision_loop_watched(
     )
 
 
-async def _take_quicksave(deps: TurnCycleDependencies) -> SavePoint:
+async def _clear_blocking_prompt_before_save(
+    deps: TurnCycleDependencies, *, turn_cycle_id: TurnCycleId
+) -> DecisionLoopResult:
+    """Answer a blocking prompt through the ordinary decision path *before* this turn's quicksave.
+
+    MEASURED (2026-09-21, gameplay blocks 16 and 17, ``run-…`` paused in 12 s): Gathering
+    Storm's eruption cinematic (``prompt.natural_disaster``) makes the game refuse every save
+    while it is up. The turn-start quicksave used to be the first thing this module did, before
+    any observation, so a save-blocking prompt deadlocked the run before the agent could answer
+    it. Principle IV still holds -- the quicksave is taken at the start of the turn, before any
+    non-prompt action -- but the *prompt answer* is the one kind of step that may precede it,
+    because it is the only way a save can exist at all on such a turn.
+
+    Runs the decision loop in its ``stop_after_prompt_answer`` mode under this attempt's own
+    ``turn_cycle_id``: zero steps when no blocking prompt is up (the common case, one fresh
+    read), one or more real prompt-answer decisions otherwise, each recorded exactly as a
+    mid-turn step would be. The steps are carried into the attempt that follows the save (same
+    id, continued numbering), so the record shows the answer where it happened. A prompt that
+    will not clear trips the backstop here; the save is still attempted afterwards and, if the
+    game still refuses it, the run pauses with the save error recorded -- as it always did.
+    """
+    loop_ctx = replace(
+        deps.build_loop_context(turn_cycle_id), stop_after_prompt_answer=True
+    )
+    return await _run_decision_loop_watched(deps, loop_ctx)
+
+
+def _clearance_detail(clearance: DecisionLoopResult | None) -> dict[str, Any]:
+    if clearance is None or not clearance.steps:
+        return {}
+    return {
+        "prompt_answered_before_save": {
+            "step_count": len(clearance.steps),
+            "prompt_types": sorted(
+                {
+                    str(bundle.decision.prompt_type)
+                    for bundle in clearance.steps
+                    if bundle.decision.prompt_type is not None
+                }
+            ),
+            "cleared": clearance.outcome is None,
+        }
+    }
+
+
+async def _take_quicksave(
+    deps: TurnCycleDependencies, *, clearance: DecisionLoopResult | None = None
+) -> SavePoint:
     """FR-007, invariant I2: a named, filesystem-verified quicksave before anything else for this
-    turn. Raises on any failure -- the turn attempt never comes into existence."""
+    turn. Raises on any failure -- the turn attempt never comes into existence.
+
+    *clearance* is the pre-save prompt clearance that ran just before (see
+    :func:`_clear_blocking_prompt_before_save`); its shape rides on the ``save_taken`` /
+    ``save_failed`` event so the timeline says a prompt was answered ahead of this save. If the
+    save then fails, the clearance's model calls are written directly first -- they never reach
+    a turn record, and a call the agent paid for must not vanish with the attempt (FR-042)."""
     try:
         check_headroom(
             host=deps.host, path=deps.disk_check_path, min_free_disk_gb=deps.min_free_disk_gb
@@ -454,6 +507,9 @@ async def _take_quicksave(deps: TurnCycleDependencies) -> SavePoint:
         await deps.save_capability.save_game(save_name)
         verified_save = verify_save(deps.host, save_name, home=deps.home)
     except (NexusError, SaveVerificationError) as exc:
+        if clearance is not None:
+            for bundle in clearance.steps:
+                deps.store.write_model_call(bundle.model_call)
         deps.store.write_run_event(
             RunEvent(
                 event_id=EventId(uuid.uuid4().hex),
@@ -461,7 +517,11 @@ async def _take_quicksave(deps: TurnCycleDependencies) -> SavePoint:
                 turn_number=deps.turn_number,
                 event_type=RunEventType.SAVE_FAILED,
                 occurred_at=deps.clock(),
-                detail={"save_name": save_name, "reason": str(exc)},
+                detail={
+                    "save_name": save_name,
+                    "reason": str(exc),
+                    **_clearance_detail(clearance),
+                },
             )
         )
         raise
@@ -481,7 +541,11 @@ async def _take_quicksave(deps: TurnCycleDependencies) -> SavePoint:
             turn_number=deps.turn_number,
             event_type=RunEventType.SAVE_TAKEN,
             occurred_at=deps.clock(),
-            detail={"save_point_id": save_point.save_point_id, "save_name": save_name},
+            detail={
+                "save_point_id": save_point.save_point_id,
+                "save_name": save_name,
+                **_clearance_detail(clearance),
+            },
         )
     )
     return save_point
@@ -555,7 +619,29 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
     """
     await _detect_between_turns(deps)
 
-    save_point = await _take_quicksave(deps)
+    # 2026-09-21 (gameplay blocks 16/17): a save-blocking prompt is answered *before* the
+    # quicksave, under the first attempt's own id, so the steps land in that attempt's record.
+    first_turn_cycle_id = TurnCycleId(uuid.uuid4().hex)
+    try:
+        clearance = await _clear_blocking_prompt_before_save(
+            deps, turn_cycle_id=first_turn_cycle_id
+        )
+    except ClientFaultDetected as exc:
+        # Same position as _detect_between_turns: no quicksave exists yet, so there is no
+        # attempt to abandon and no start save to resume from -- say so by name rather than
+        # letting the mid-turn wording claim a replay that cannot happen.
+        raise ClientFaultDetected(
+            "the game client was detected faulty during the pre-save prompt probe, before this "
+            "turn's quicksave was taken; the turn never came into existence as an attempt, and "
+            "there is no start save for this turn to resume from (FR-044, SC-010)",
+            events=exc.events,
+            primary=exc.primary,
+            detail={"run_id": str(deps.run_id), "turn_number": deps.turn_number},
+        ) from exc
+    clearance_steps = clearance.steps
+    clearance_events = clearance.events
+
+    save_point = await _take_quicksave(deps, clearance=clearance)
 
     current_run = run
     # T223: the base is 0 for an ordinary forward turn and past the highest attempt already on
@@ -563,12 +649,27 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
     # attempt it superseded (FR-047, and sqlite_adapter's D4 check).
     attempt_index = deps.attempt_index_base
     result: DecisionLoopResult
+    first_attempt = True
     while True:
-        turn_cycle_id = TurnCycleId(uuid.uuid4().hex)
-        loop_ctx = deps.build_loop_context(turn_cycle_id)
+        # Replays start from the quicksave, which was taken *after* the prompt was answered, so
+        # only the first attempt carries the clearance steps and continues their numbering.
+        if first_attempt:
+            turn_cycle_id = first_turn_cycle_id
+            loop_ctx = replace(
+                deps.build_loop_context(turn_cycle_id), step_index_base=len(clearance_steps)
+            )
+        else:
+            turn_cycle_id = TurnCycleId(uuid.uuid4().hex)
+            loop_ctx = deps.build_loop_context(turn_cycle_id)
         started_at = deps.clock()
         try:
             result = await _run_decision_loop_watched(deps, loop_ctx)
+            if first_attempt and clearance_steps:
+                result = replace(
+                    result,
+                    steps=clearance_steps + result.steps,
+                    events=clearance_events + result.events,
+                )
         except ClientFaultDetected as exc:
             # T233, FR-044/FR-045/SC-010. Same shape as the mid-turn observation failure below,
             # for the same reason: the board this attempt was reading can no longer be trusted, so
@@ -607,17 +708,23 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
                     detail={"run_id": str(deps.run_id), "turn_number": deps.turn_number},
                 ) from exc
             attempt_index += 1
+            first_attempt = False
             continue
         except MidTurnObservationFailure as exc:
             ended_at = deps.clock()
-            if exc.steps:
+            abandoned_steps = exc.steps
+            abandoned_events = exc.events
+            if first_attempt and clearance_steps:
+                abandoned_steps = clearance_steps + abandoned_steps
+                abandoned_events = clearance_events + abandoned_events
+            if abandoned_steps:
                 _persist_abandoned_attempt(
                     deps,
                     turn_cycle_id=turn_cycle_id,
                     attempt_index=attempt_index,
                     save_point_id=save_point.save_point_id,
-                    steps=exc.steps,
-                    events=exc.events,
+                    steps=abandoned_steps,
+                    events=abandoned_events,
                     no_progress_streak=exc.no_progress_streak,
                     started_at=started_at,
                     ended_at=ended_at,
@@ -630,8 +737,13 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
             )
             current_run = recovery_result.run
             attempt_index += 1
+            first_attempt = False
             continue
         break
+
+    # Only the pre-save clearance mode returns without a turn exit, and the main loop never
+    # runs in that mode.
+    assert result.outcome is not None
 
     ended_at = deps.clock()
     turn_cycle = TurnCycle(
