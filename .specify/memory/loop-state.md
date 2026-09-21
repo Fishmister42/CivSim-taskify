@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 18:40 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 18:50 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -41,18 +41,19 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| popup mappings (Opus) | dedication chooser → `prompt.era_dedication` + answer; `WorldCongressIntro` watchlist (blocking, Accept) and the congress session as non-blocking `congress`; the greeting's "Goodbye" exit routed to `CloseSession` | `lua/ingame/screens.lua`, `catalogs/actions/prompts.yaml`, `catalogs/observations/game.yaml`, prompt-answer Lua, pins | 18:10 |
+| goal-driver fix (Opus, resumed) | `tests/live/goal_run.py` aborts: `resolve_provider()` now needs `policy` (307a630); add `--provider-policy`; fix two stale blocked-goal pins | `tests/live/goal_run.py`, `tests/unit/test_goal_runs.py` | 18:47 |
 | builder charge (Opus) | selected unit's available builds in `units.state` + `units.build_improvement` from the unit panel's own operation | `catalogs/actions/units.yaml`, `catalogs/observations/units.yaml`, unit Lua, tests | 18:25 |
-| Live S4 (Fable fork) | goal runs from the worktree: the four feasible, then set_capital_production (Builder) → build_a_builder → Settler → found_second_city; coverage blocks between; entries 8+ on #3 (8 posted 18:36); wind down 20:45 | client; `spikes/gameplay-2026-09-21/` | 18:00 |
+| game-over detection (Opus) | defeat at t59 was recorded as `SaveVerificationError`; detect `IsAlive`/end screen before the turn-start save → `stop_resolution` defeat/victory, lifecycle finished, no gap; `EndGameMenu` screen id left to the screens lane; adds a Phase 13 task line | `run/turn_cycle.py`, new `lua/ingame/game_over.lua`, `models/`, `store/`, `tests/integration/` | 18:52 |
+| Live S4 (Fable fork) | after Persia's defeat at t59, labelled operator reload of the last healthy save (~t42); coverage blocks from the worktree now; goal chain (Builder → Settler → second city) once the driver fix lands; entries 8+ on #3; wind down 20:45 | client; `spikes/gameplay-2026-09-21/` | 18:00 |
 
-**Landed 18:16–18:34:** availability rendering + `--provider-policy coverage` (3aad0c8, 307a630); goal
-driver + 13 goals (fc16b0c); scorecard honesty — "attempted while available: 15 of 39" beside
-"applied: 9 of 39" (88923e9); **suite hang fixed** — an unbounded replay loop in the mid-turn
-observation-failure arm, plus six test fakes shifted by the probe read; pytest now has
-`faulthandler_timeout=120`, `timeout=600` (70dacae; suite completes, 2089 passed); **production list
-fixed** — `cities.state` runs InGame and mirrors the production panel, `set_production` issues the
-panel's BUILD op, field `production_required` (1d0b372). **Live worktree at 1d0b372.**
-Still blocked: `use_a_builder` (action being added); autoplay (owner permission).
+**Landed 18:16–18:48:** availability rendering + coverage policy (3aad0c8, 307a630); goal driver + 13
+goals (fc16b0c); scorecard honesty (88923e9); suite hang fixed + pytest timeouts (70dacae); production
+list fixed (1d0b372) and **VERIFIED LIVE** on run-fbd6c25e — `available_productions` lists 8 items incl.
+UNIT_BUILDER and UNIT_SETTLER; blocked markers removed from the two production goals (cfc6cee); popup
+mappings — dedication chooser, congress intro/vote by control visibility, "Goodbye" → CloseSession,
+first-match watchlist order (764b768). **Live worktree at 764b768.** Observed live: first game over
+(defeat, t59) — recorded wrongly as a save error, fix in flight. Still blocked: `use_a_builder`
+(action in flight); autoplay (owner permission).
 
 ## Queue, in order
 1. Suite green (gate). 2. Goal runs live on the milestone saves until ~20:45, Sonnet 5, back to
