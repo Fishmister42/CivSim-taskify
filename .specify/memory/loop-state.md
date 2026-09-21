@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 18:50 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 19:08 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -41,19 +41,20 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| goal-driver fix (Opus, resumed) | `tests/live/goal_run.py` aborts: `resolve_provider()` now needs `policy` (307a630); add `--provider-policy`; fix two stale blocked-goal pins | `tests/live/goal_run.py`, `tests/unit/test_goal_runs.py` | 18:47 |
-| builder charge (Opus) | selected unit's available builds in `units.state` + `units.build_improvement` from the unit panel's own operation | `catalogs/actions/units.yaml`, `catalogs/observations/units.yaml`, unit Lua, tests | 18:25 |
-| game-over detection (Opus) | defeat at t59 was recorded as `SaveVerificationError`; detect `IsAlive`/end screen before the turn-start save → `stop_resolution` defeat/victory, lifecycle finished, no gap; `EndGameMenu` screen id left to the screens lane; adds a Phase 13 task line | `run/turn_cycle.py`, new `lua/ingame/game_over.lua`, `models/`, `store/`, `tests/integration/` | 18:52 |
-| Live S4 (Fable fork) | after Persia's defeat at t59, labelled operator reload of the last healthy save (~t42); coverage blocks from the worktree now; goal chain (Builder → Settler → second city) once the driver fix lands; entries 8+ on #3; wind down 20:45 | client; `spikes/gameplay-2026-09-21/` | 18:00 |
+| goal-runs (Opus, resumed) | unblock `use_a_builder` now that `units.build_improvement` exists; re-check its predicate against the real unit fields; update the chain test | `tests/live/goals/use_a_builder.yaml`, `tests/live/goal_run.py`, `tests/unit/test_goal_runs.py` | 18:57 |
+| builder charge (Opus, resumed) | fix pre-existing `units.promote` bug (promotion name lands in `unitId` → always `unit_not_found`) with the move_to normalisation guard | `act/executor`, unit Lua, `tests/unit/test_promote_dispatch.py` | 18:58 |
+| game-over detection (Opus) | `IsAlive`/end-screen read before the turn-start save → `stop_resolution` defeat/victory; RunEvent schema; Phase 13 task line; spike note incl. the post-defeat `Network.LoadGame` refusal | `run/game_over.py`, `lua/ingame/game_over.lua`, `run/turn_cycle.py`, `run/runner.py`, `run/composition.py`, `models/records.py`, schemas, `data-model.md` | 18:52 |
+| Live S4 (Fable fork) | after the t59 defeat the post-game main menu refused `Network.LoadGame`; relaunching the client (fallback) to load the ~t42 quicksave via the T248 path; then build_a_builder → Settler → found_second_city → use_a_builder; entries 8+ on #3; wind down 20:45 | client; `spikes/gameplay-2026-09-21/` | 18:00 |
 
-**Landed 18:16–18:48:** availability rendering + coverage policy (3aad0c8, 307a630); goal driver + 13
-goals (fc16b0c); scorecard honesty (88923e9); suite hang fixed + pytest timeouts (70dacae); production
-list fixed (1d0b372) and **VERIFIED LIVE** on run-fbd6c25e — `available_productions` lists 8 items incl.
-UNIT_BUILDER and UNIT_SETTLER; blocked markers removed from the two production goals (cfc6cee); popup
-mappings — dedication chooser, congress intro/vote by control visibility, "Goodbye" → CloseSession,
-first-match watchlist order (764b768). **Live worktree at 764b768.** Observed live: first game over
-(defeat, t59) — recorded wrongly as a save error, fix in flight. Still blocked: `use_a_builder`
-(action in flight); autoplay (owner permission).
+**Landed 18:16–18:56:** availability rendering + coverage policy (3aad0c8, 307a630); goal driver + 13
+goals (fc16b0c), `--provider-policy` forwarded + signature drift guards (ed4c793); scorecard honesty
+(88923e9); suite hang fixed + pytest timeouts (70dacae); production list fixed (1d0b372) and VERIFIED
+LIVE (8 items incl. UNIT_BUILDER/UNIT_SETTLER); production goals unblocked (cfc6cee); popup mappings —
+dedication chooser, congress intro/vote, "Goodbye" → CloseSession (764b768); **first charge-spending
+action** `units.build_improvement` + `unit.available_builds` (720e30d). **Suite green at head: 2187
+passed / 9 skipped / 0 failed, no hang. Live worktree at 720e30d.** Observed live: first game over
+(defeat, t59) recorded as a save error (fix in flight); post-defeat main menu refuses Lua loads
+(relaunch needed — loader follow-up). Still blocked: autoplay (owner permission).
 
 ## Queue, in order
 1. Suite green (gate). 2. Goal runs live on the milestone saves until ~20:45, Sonnet 5, back to
