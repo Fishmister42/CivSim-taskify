@@ -73,6 +73,8 @@ earlier iteration of the loop below wrote its own attempt as non-authoritative b
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -126,6 +128,12 @@ from civsim_harness.store.port import DecisionStepBundle, MatchStore, TurnCycleR
 #: on the harness's own behalf (T114), and always through the same act.dispatch/act.verify path
 #: every other action goes through.
 _END_TURN_DECLARATION_ID = DeclarationId("turn.end_turn")
+
+#: How long the no-progress backstop keeps re-reading the game for its end-turn confirmation, and
+#: how often (measured: the client confirms asynchronously, after the AI players' turns; see the
+#: backstop body). Bounded so an unconfirmed turn still fails closed.
+BACKSTOP_CONFIRM_TIMEOUT_S = 45.0
+BACKSTOP_CONFIRM_POLL_S = 2.0
 
 
 def _utcnow() -> Timestamp:
@@ -316,13 +324,28 @@ async def _dispatch_backstop_end_turn(
     declaration = dispatch_outcome.declaration
     assert declaration is not None
     await ctx.execute_action(declaration.declaration_id, {}, None)
-    post_observation = await _fresh_observation()
-    verification = verify_execution(
-        declaration=declaration,
-        pre_observation=pre_observation,
-        post_observation=post_observation,
-        verified_at=ctx.clock(),
-    )
+    # MEASURED (2026-09-21, first model-driven run, Linux 1.0.12.9): the game confirms an end
+    # turn asynchronously -- `UI.RequestAction(ACTION_ENDTURN)` returns, the AI players take
+    # their turns, and only then does `Game.GetCurrentGameTurn()` advance. A single readback
+    # taken the instant the dispatch returned saw turn 5 still turn 5 and raised here, while a
+    # fresh connection a minute later read turn 6: the turn HAD ended. So the readback is
+    # repeated, bounded, until the declared predicate holds -- the same shape `saves/verify.py`
+    # gives a quicksave to land. The bound still fails closed: a turn the game never confirms
+    # within it is still `BackstopEndTurnNotConfirmed`, never assumed.
+    deadline = time.monotonic() + BACKSTOP_CONFIRM_TIMEOUT_S
+    while True:
+        post_observation = await _fresh_observation()
+        verification = verify_execution(
+            declaration=declaration,
+            pre_observation=pre_observation,
+            post_observation=post_observation,
+            verified_at=ctx.clock(),
+        )
+        if verification.execution.outcome is ExecutionOutcome.APPLIED:
+            break
+        if time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(BACKSTOP_CONFIRM_POLL_S)
     if verification.execution.outcome is not ExecutionOutcome.APPLIED:
         raise BackstopEndTurnNotConfirmed(
             "the no-progress backstop ended this turn's attempt and turn.end_turn was dispatched, "

@@ -656,12 +656,19 @@ async def test_the_backstop_end_turn_surfaces_a_recorded_stall_when_blocked_by_a
 
 
 async def test_the_backstop_end_turn_is_not_treated_as_success_when_the_click_is_swallowed(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """T114: ``UI.RequestAction``'s own return value is ``nil`` and carries no information -- a
     non-error dispatch must never be treated as success. When the post-dispatch turn-number
     readback does not confirm the turn actually ended (the click was swallowed), that must also
-    surface as a recorded failure rather than a fabricated success."""
+    surface as a recorded failure rather than a fabricated success.
+
+    The backstop now re-reads the game for a bounded time before concluding this (the live
+    client confirms an end turn asynchronously, after the AI turns -- measured 2026-09-21); the
+    bound is zeroed here so the swallowed click is concluded at once, not after 45 s."""
+    import civsim_harness.run.turn_cycle as turn_cycle_module
+
+    monkeypatch.setattr(turn_cycle_module, "BACKSTOP_CONFIRM_TIMEOUT_S", 0.0)
     run_id = RunId("run-backstop-swallowed")
     run, config = _build_run_and_config(run_id)
     store = SqliteMatchStore(tmp_path / "match.db")

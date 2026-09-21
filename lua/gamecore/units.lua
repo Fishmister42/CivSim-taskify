@@ -95,11 +95,21 @@ local function CivSim_DescribeUnit(unit, localPlayer)
     -- below has answered.
     local okType, unitType = pcall(function() return GameInfo.Units[unit:GetUnitType()].UnitType end)
     local okFort, fortifyTurns = pcall(function() return unit:GetFortifyTurns() end)
+    -- MEASURED (2026-09-21, first model-driven runs): every unit action's availability predicate
+    -- starts `unit.is_selected and ...`, and no observation produced that field, so every unit
+    -- action was structurally unavailable_to_human_now -- 24 of 24 found-city decisions were
+    -- refused before dispatch. The game's selection is `UI.GetHeadSelectedUnit()` (InGame; the
+    -- unit whose action panel a human sees). Reported truthfully: the game selects the unit
+    -- needing orders at turn start, and only that unit is "selected".
+    local okSel, selected = pcall(function() return UI.GetHeadSelectedUnit() end)
+    local isSelected = okSel and selected ~= nil and selected:GetID() == unit:GetID()
+        and selected:GetOwner() == unit:GetOwner()
     local entry = {
         unit_id = unit:GetID(), -- Unit:GetID()
         unit_type = okType and unitType or nil,
         owner_player_id = unit:GetOwner(),
         owner_is_local_player = (unit:GetOwner() == localPlayer),
+        is_selected = (isSelected == true),
         plot = { x = unit:GetX(), y = unit:GetY() },
         movement_remaining = unit:GetMovesRemaining(),
         max_movement = unit:GetMaxMoves(),

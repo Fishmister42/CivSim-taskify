@@ -396,7 +396,7 @@ def write_config(
         },
         "difficulty": EXPECTED["difficulty"],
         "opponents": {},
-        "stop_condition": {"type": "turn_reached", "turn": start_turn + turns},
+        "stop_condition": {"type": "turn_reached", "turn": turns},  # harness-relative: runner.py counts its own turns from 1
         "model_config": {
             "primary": {"provider": "openrouter", "model": PRIMARY_MODEL},
             "fallbacks": [{"provider": "openrouter", "model": FALLBACK_MODEL}],
@@ -452,9 +452,15 @@ def store_counts(db: Path, run_id: str) -> dict[str, Any]:
     try:
 
         def count(table: str) -> int:
+            columns = {row[1] for row in conn.execute(f"pragma table_info({table})")}  # noqa: S608
+            if "run_id" in columns:
+                where = "run_id = ?"
+            else:
+                # decision_steps hang off their turn cycle, not the run.
+                where = "turn_cycle_id in (select turn_cycle_id from turn_cycles where run_id = ?)"
             return conn.execute(
-                f"select count(*) from {table} where run_id = ?",
-                (run_id,),  # noqa: S608
+                f"select count(*) from {table} where {where}",  # noqa: S608
+                (run_id,),
             ).fetchone()[0]
 
         row = conn.execute("select run_json from runs where run_id = ?", (run_id,)).fetchone()

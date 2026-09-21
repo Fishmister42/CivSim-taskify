@@ -70,6 +70,20 @@ end
 -- this file only ever targets the local player's own units, matching this catalog's parity rule.
 local function CivSim_FindLocalUnit(unitId)
     local localPlayer = Game.GetLocalPlayer()
+    -- MEASURED (2026-09-21, first model-driven run, Linux 1.0.12.9): the model chose
+    -- units.found_city eight times in a row with an empty parameter set -- no action declaration
+    -- carries a parameter schema, so it was never told a unit id was wanted -- and every call
+    -- reported `unit_not_found`. A human's "Found City" acts on the unit they have SELECTED, and
+    -- `UI.GetHeadSelectedUnit()` answers in InGame (verified: a table for the selected Settler).
+    -- So a nil id means "the selected unit", which is exactly the parity basis of every action in
+    -- this file; a wrong id is still not found, and nothing here ever picks a unit on its own.
+    if unitId == nil then
+        local ok, selected = pcall(function() return UI.GetHeadSelectedUnit() end)
+        if ok and selected ~= nil and selected:GetOwner() == localPlayer then
+            return selected
+        end
+        return nil
+    end
     local units = Players[localPlayer]:GetUnits()
     for _, u in units:Members() do
         if u:GetID() == unitId then
@@ -103,10 +117,18 @@ end
 local function CivSim_UnitOrders_FoundCity(unitId)
     local unit = CivSim_FindLocalUnit(unitId)
     if unit == nil then
-        return { ok = false, reason = "unit_not_found" }
+        return { ok = false, reason = "unit_not_found", unit_id = unitId }
+    end
+    -- The plot is checked the way the game itself checks it before the button lights up
+    -- (verified live: UnitManager.CanStartOperation(unit, FOUND_CITY) -> true for a Settler).
+    local okCan, can = pcall(function()
+        return UnitManager.CanStartOperation(unit, UnitOperationTypes.FOUND_CITY)
+    end)
+    if okCan and can == false then
+        return { ok = false, reason = "cannot_found_here", unit_id = unit:GetID() }
     end
     local accepted = UnitManager.RequestOperation(unit, UnitOperationTypes.FOUND_CITY, {})
-    return { ok = (accepted ~= false), unit_id = unitId }
+    return { ok = (accepted ~= false), unit_id = unit:GetID() }
 end
 
 -- Apply a promotion to a unit that has one available. UNVERIFIED: the exact operation/command for

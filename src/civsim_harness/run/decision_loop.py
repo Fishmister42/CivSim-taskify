@@ -621,6 +621,10 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             step_index=step_index,
             response_schema=RESPONSE_SCHEMA,
             images=images,
+            # The commands a human sees available (ids + summaries) and the `target`
+            # convention -- without them the model can only guess ids and never targets
+            # (measured 2026-09-21: 24/24 decisions refused before dispatch).
+            actions=ctx.registry.catalog.declarations.values(),
         )
 
         # T225 / Constitution Principle I (NON-NEGOTIABLE), FR-019, FR-020: the detective

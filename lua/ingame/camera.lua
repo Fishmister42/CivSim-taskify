@@ -101,12 +101,29 @@ end
 -- Read back current camera state for the verification_predicate.
 local function CivSim_Camera_ReadState()
     local x, y, zoom, mode = nil, nil, nil, "world"
-    local ok, cx, cy = pcall(function() return UI.GetCameraTargetPlot() end) -- UNVERIFIED
+    -- MEASURED (2026-09-21, Linux 1.0.12.9, live, T213): `UI.GetCameraTargetPlot`,
+    -- `UI.GetMapLookAtPlot`, `UI.GetCameraZoom` and `UI.IsStrategicView` do NOT exist on this
+    -- build; every read below was silently failing under its pcall, so `zoom` was nil and the
+    -- provenance gate withheld every capture ("camera_state carries no numeric zoom"). What
+    -- exists: `UI.GetMapZoom()` (0..1, 0.707 at the default view), `UI.GetWorldRenderView()`
+    -- (0 at the world view; the strategic value is UNVERIFIED and assumed 1), `UI.LookAtPlot`,
+    -- `UI.GetCursorPlotID`. There is no look-at getter, so the camera's target plot stays
+    -- unknown and `target_is_revealed` stays false -- the fail-closed direction.
+    local ok, cx, cy = pcall(function() return UI.GetCameraTargetPlot() end) -- absent on 1.0.12.9
     if ok then x, y = cx, cy end
-    local okZoom, z = pcall(function() return UI.GetCameraZoom() end) -- UNVERIFIED
-    if okZoom then zoom = z end
-    local okMode, m = pcall(function() return UI.IsStrategicView() and "strategic" or "world" end) -- UNVERIFIED
-    if okMode then mode = m end
+    local okZoom, z = pcall(function() return UI.GetCameraZoom() end) -- absent on 1.0.12.9
+    if not okZoom or type(z) ~= "number" then
+        okZoom, z = pcall(function() return UI.GetMapZoom() end) -- MEASURED: 0.70710706710815
+    end
+    if okZoom and type(z) == "number" then zoom = z end
+    local okMode, m = pcall(function() return UI.IsStrategicView() and "strategic" or "world" end) -- absent
+    if not okMode then
+        okMode, m = pcall(function()
+            local view = UI.GetWorldRenderView() -- MEASURED: 0 at the world view
+            return (view == 1) and "strategic" or "world" -- UNVERIFIED: the strategic value
+        end)
+    end
+    if okMode and type(m) == "string" then mode = m end
     -- T221: pcall-guarded like every other read in this function. It was the one unguarded call
     -- here, and it became load-bearing once run/composition.py started reading this function every
     -- decision step to satisfy each view's declared camera_requirements -- a raised `Map` or

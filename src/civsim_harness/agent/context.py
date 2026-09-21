@@ -53,12 +53,12 @@ not a caller error, so most candidates on a long-lived run are supposed to be fi
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any, Final
 
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.errors import CatalogError
-from civsim_harness.models.catalog import DeclarationKind
+from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration
 from civsim_harness.models.common import ModelRef
 from civsim_harness.models.config import GuidanceSet
 from civsim_harness.models.turn import (
@@ -105,8 +105,40 @@ def _render_entry(entry: ObservationEntry) -> str:
     return f"- [{entry.context.value}] {entry.key}: {rendered_value}"
 
 
-def assemble_observation_text(observation: Observation) -> str:
+def assemble_action_catalog_text(declarations: Iterable[ParityDeclaration]) -> str:
+    """Render the actions the agent may choose from: every ``kind: action`` declaration's id and
+    summary, plus the one convention it must follow to act on a subject.
+
+    MEASURED (2026-09-21, the first model-driven runs on Linux): the model was never shown the
+    catalog -- ``DecisionRequest`` carried the role and the observation only -- so it guessed
+    ``units.found_city`` (correctly) and sent no ``target``, and the availability predicate
+    (``unit.is_selected and ...``) bound ``unit`` to nothing: 24 of 24 decisions were refused as
+    ``unavailable_to_human_now`` without ever reaching the game. What is listed here is what a
+    human sees as the commands on screen, one line each -- ids and their summaries, no
+    provenance, no predicate text (FR-020/FR-024).
+    """
+    lines = [
+        "Actions you may take (choose exactly one per step by its id):",
+        "For an action on a unit, city, other player, congress resolution, great person or spy, "
+        'put that subject\'s id from the observed state in parameters.target (e.g. {"target": '
+        "65536}); a plot action takes {\"target\": {\"x\": .., \"y\": ..}}; the game acts only "
+        "on the unit or city it currently shows as selected.",
+    ]
+    for declaration in sorted(declarations, key=lambda d: str(d.declaration_id)):
+        if declaration.kind is not DeclarationKind.ACTION:
+            continue
+        summary = " ".join(str(declaration.summary or "").split())
+        lines.append(f"- {declaration.declaration_id}: {summary}")
+    return "\n".join(lines)
+
+
+def assemble_observation_text(
+    observation: Observation, *, actions: Iterable[ParityDeclaration] | None = None
+) -> str:
     """Build ``DecisionRequest.observation``: this step's parity-filtered state (FR-024).
+
+    *actions*, when given, appends :func:`assemble_action_catalog_text` -- the commands a human
+    would see available -- after the observed state.
 
     Only ``Observation.screen_identity`` and ``Observation.entries`` are
     rendered. Deliberately absent: ``observation_id``, ``decision_step_id``,
@@ -123,6 +155,8 @@ def assemble_observation_text(observation: Observation) -> str:
         lines.append("(none)")
     else:
         lines.extend(_render_entry(entry) for entry in observation.entries)
+    if actions is not None:
+        lines.extend(["", assemble_action_catalog_text(actions)])
     return "\n".join(lines)
 
 
@@ -134,6 +168,7 @@ def assemble_context(
     step_index: int,
     response_schema: dict[str, Any],
     images: list[Image] | None = None,
+    actions: Iterable[ParityDeclaration] | None = None,
 ) -> DecisionRequest:
     """Assemble one decision step's complete ``DecisionRequest`` (T103).
 
@@ -152,7 +187,7 @@ def assemble_context(
     return DecisionRequest(
         model=model,
         system=assemble_system_prompt(guidance),
-        observation=assemble_observation_text(observation),
+        observation=assemble_observation_text(observation, actions=actions),
         images=list(images) if images else [],
         step_index=step_index,
         response_schema=response_schema,

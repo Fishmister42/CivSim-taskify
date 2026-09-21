@@ -27,6 +27,17 @@ SAVE_FILE_SUFFIX = ".Civ6Save"
 #: still catching a save still being flushed to disk.
 DEFAULT_STABILITY_WAIT_S = 0.5
 
+#: How long to wait for the ``.Civ6Save`` to APPEAR before the stability reads begin, and how
+#: often to look. MEASURED (2026-09-21, Linux 1.0.12.9, the first real run through the
+#: composition root): ``Network.SaveGame`` returns before the file lands. The turn-2 quicksave
+#: was reported "expected .Civ6Save not found" and was on disk -- 1,009,647 bytes -- within the
+#: same second; the preparation-time save had a wider gap before its check and passed by
+#: accident. A bounded wait for appearance is not a relaxation of FR-007: the file must still
+#: exist, and still be size-stable across two reads, before the turn proceeds -- the game is
+#: simply given the seconds it demonstrably needs to write it.
+DEFAULT_APPEARANCE_TIMEOUT_S = 10.0
+DEFAULT_APPEARANCE_POLL_S = 0.25
+
 
 class SaveVerificationError(PreflightError):
     """A quicksave could not be verified on the filesystem; the turn must fail
@@ -66,27 +77,41 @@ def verify_save(
     *,
     home: Path | None = None,
     stability_wait_s: float = DEFAULT_STABILITY_WAIT_S,
+    appearance_timeout_s: float = DEFAULT_APPEARANCE_TIMEOUT_S,
+    appearance_poll_s: float = DEFAULT_APPEARANCE_POLL_S,
     sleep: Callable[[float], None] = time.sleep,
 ) -> VerifiedSave:
     """Confirm *save_name* (no extension) exists in the resolved save
     directory with a size stable across two reads, before the turn proceeds
     (research R5).
 
+    The file is given *appearance_timeout_s* to appear (polled every
+    *appearance_poll_s*; the client writes it asynchronously after
+    ``Network.SaveGame`` returns -- see the module constants), then must be
+    size-stable across two reads *stability_wait_s* apart. The poll count is
+    derived from the two durations rather than from a clock, so an injected
+    no-op *sleep* still terminates.
+
     *sleep* is injectable so tests can verify the two-read discipline without
     actually waiting *stability_wait_s* seconds.
 
     Raises :class:`SaveVerificationError` -- never returns a partial or
-    "probably fine" result -- when the file is missing, disappears between
+    "probably fine" result -- when the file never appears, disappears between
     reads, or its size has not stabilised: an unverifiable quicksave fails
     the turn rather than being recorded as taken (FR-007).
     """
     saves_dir = resolve_saves_dir(host, home=home)
     path = saves_dir / f"{save_name}{SAVE_FILE_SUFFIX}"
 
+    polls = max(1, int(appearance_timeout_s / appearance_poll_s)) if appearance_poll_s > 0 else 1
+    for _ in range(polls):
+        if path.is_file():
+            break
+        sleep(appearance_poll_s)
     if not path.is_file():
         raise SaveVerificationError(
             "expected .Civ6Save not found in the resolved save directory",
-            detail={"path": str(path)},
+            detail={"path": str(path), "waited_s": appearance_timeout_s},
         )
     first_size = path.stat().st_size
 

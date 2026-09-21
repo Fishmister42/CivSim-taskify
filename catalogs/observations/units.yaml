@@ -26,6 +26,7 @@
             unit_type: { type: string }
             owner_player_id: { type: integer }
             owner_is_local_player: { type: boolean }
+            is_selected: { type: boolean }  # T213 (2026-09-21): the game's head-selected unit; every unit action's availability predicate reads it
             plot:
               type: object
               required: [x, y]

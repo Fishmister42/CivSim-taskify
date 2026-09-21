@@ -1,0 +1,61 @@
+{
+  "run_id": "run-9505f323bbf846739a5eb2bb0bee9778",
+  "run": {
+    "config_id": "demo-landed-fake-20260921T042851Z",
+    "lifecycle_state": "finished",
+    "stop_resolution": "turn_reached",
+    "host_support_tier": "supported",
+    "record_completeness_status": "complete",
+    "comparability_status": "visually_degraded",
+    "game_build": "linux/1.0.12.9",
+    "capture_path": "xcomposite",
+    "started_at": "2026-09-21T04:28:52.365859Z",
+    "ended_at": "2026-09-21T04:29:00.562876Z"
+  },
+  "turn_cycles": [
+    {
+      "turn_number": 1,
+      "attempt_index": 0,
+      "is_authoritative": true,
+      "step_count": 1
+    },
+    {
+      "turn_number": 2,
+      "attempt_index": 0,
+      "is_authoritative": true,
+      "step_count": 1
+    },
+    {
+      "turn_number": 3,
+      "attempt_index": 0,
+      "is_authoritative": true,
+      "step_count": 1
+    }
+  ],
+  "decision_steps": 3,
+  "save_points": [
+    "civsim__run-9505f323bbf846739a5eb2bb0bee9778__t0001",
+    "civsim__run-9505f323bbf846739a5eb2bb0bee9778__t0002",
+    "civsim__run-9505f323bbf846739a5eb2bb0bee9778__t0003"
+  ],
+  "captures": 6,
+  "captures_shown_to_agent": 0,
+  "capture_withheld_reasons": [
+    "provenance_failure"
+  ],
+  "model_calls": 0,
+  "run_events": 17,
+  "run_events_by_kind": {
+    "lifecycle_transition": 2,
+    "save_taken": 3,
+    "capture_failed": 6,
+    "image_withheld": 6
+  },
+  "game_turn_before": 3,
+  "game_turn_after": 5,
+  "read_back_after": {
+    "turn": 5,
+    "leader": "LEADER_CYRUS",
+    "front_end": false
+  }
+}
