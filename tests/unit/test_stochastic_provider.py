@@ -841,7 +841,11 @@ def test_a_prompt_that_will_not_clear_cannot_loop_the_turn() -> None:
 
 
 def test_every_shipped_prompt_resolves_to_its_own_answer_on_the_first_draw() -> None:
-    """All twelve `prompt.*` screens the shipped catalog names, against the shipped catalog."""
+    """Every `prompt.*` screen the shipped catalog names, against the shipped catalog.
+
+    Twelve until 2026-09-21; ten since the honesty pass retired `prompts.city_state_quest` and
+    `prompts.religion_selection` (catalog `2026.09.5`, catalogs/README.md §6).
+    """
     import re
 
     from civsim_harness.capability.loader import load_catalog
@@ -856,7 +860,7 @@ def test_every_shipped_prompt_resolves_to_its_own_answer_on_the_first_draw() -> 
             )
         )
     )
-    assert len(screen_ids) >= 12
+    assert len(screen_ids) >= 10
 
     for screen_id in screen_ids:
         board = [

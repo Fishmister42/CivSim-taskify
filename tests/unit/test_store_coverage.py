@@ -817,20 +817,42 @@ def test_the_great_work_showcase_is_mapped_and_watched() -> None:
     "screen_id",
     [
         "strategic",
-        "prompt.religion_selection",
         "prompt.congress_vote",
-        "prompt.city_state_quest",
     ],
 )
 def test_the_documented_unmappable_screen_ids_stay_unmapped(screen_id: str) -> None:
-    """None of these has a UI state of its own in the shipped Civ VI UI -- see
-    `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md`. `civsim store coverage`
-    flagging them is correct, and a future mapping here would be a fabrication, so the gap is
-    pinned rather than papered over."""
+    """Neither has a UI state of its own in the shipped Civ VI UI -- see
+    `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md`. The interaction each
+    names is real, so the claim stays and `civsim store coverage` flagging it is correct; a future
+    mapping here would be a fabrication, so the gap is pinned rather than papered over."""
     surface = load_screen_surface(REPO_ROOT / "lua" / "ingame" / "screens.lua")
     assert screen_id in surface.screen_ids, "still a claimed id, so the coverage flag is honest"
     assert screen_id not in surface.state_by_screen_id
     assert screen_id not in surface.direct_screen_ids
+
+
+@pytest.mark.parametrize(
+    ("screen_id", "action_id"),
+    [
+        ("prompt.city_state_quest", "prompts.city_state_quest"),
+        ("prompt.religion_selection", "prompts.religion_selection"),
+    ],
+)
+def test_the_retired_screen_claims_are_gone_from_the_claimed_surface(
+    screen_id: str, action_id: str
+) -> None:
+    """RETIRED 2026-09-21 (catalog `2026.09.5`, catalogs/README.md §6). Unlike the two above,
+    these two claims were not merely unreportable -- they were wrong. There is no city-state quest
+    popup in Civ VI at all and nothing accepts or declines a quest; founding a religion opens the
+    same `ReligionScreen` the launch bar opens, and its real interactions are already claimed as
+    `religion.found_religion` / `religion.select_belief` / `religion.select_pantheon`. Coverage
+    must not count either as a claim awaiting a live demonstration that can never arrive, so both
+    the action and the screen id are withdrawn from every table the harness enumerates. Evidence:
+    `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md`."""
+    claimed = load_claimed_surface(REPO_ROOT / "catalogs")
+    assert action_id not in claimed.action_ids
+    assert screen_id not in claimed.screens.screen_ids
+    assert screen_id not in claimed.prompt_action_by_screen
 
 
 def test_a_missing_screens_lua_yields_an_empty_surface_not_an_error(tmp_path: Path) -> None:

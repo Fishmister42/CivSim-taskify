@@ -99,11 +99,22 @@ end
 -- Known screen/prompt identifiers this catalog declares handling for. Anything the probe reports
 -- outside this set is, by design (FR-049), an "unknown_screen" the harness must stall on rather
 -- than guess about.
+--
+-- RETIRED 2026-09-21 (catalogs/README.md §6, evidence in
+-- specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md):
+--   * `prompt.religion_selection` -- founding a religion opens the SAME `ReligionScreen` the
+--     launch bar opens for browsing, so it is an open screen, not a blocking prompt, and its real
+--     interactions are already claimed by catalogs/actions/religion.yaml. A duplicate overclaim.
+--   * `prompt.city_state_quest` -- there is no city-state quest popup in the shipped UI at all,
+--     and nothing in Civ VI accepts or declines a quest. The claim described an interaction the
+--     game does not have.
+-- Both are gone from here and from catalogs/actions/prompts.yaml. Do not re-add either: the probe
+-- reporting one would be a fabricated prompt, which is exactly what FR-049 exists to prevent.
 local CIVSIM_KNOWN_SCREENS = {
     "world", "strategic", "city_screen", "diplomacy", "congress",
-    "prompt.unit_promotion", "prompt.pantheon_selection", "prompt.religion_selection",
+    "prompt.unit_promotion", "prompt.pantheon_selection",
     "prompt.great_person_selection", "prompt.diplomatic_approach", "prompt.declare_war_response",
-    "prompt.city_state_quest", "prompt.congress_vote", "prompt.era_transition",
+    "prompt.congress_vote", "prompt.era_transition",
     "prompt.tech_civic_completed", "prompt.boost_unlocked", "prompt.great_work_created",
 }
 
@@ -224,32 +235,30 @@ local CIVSIM_SCREEN_WATCHLIST = {
 -- steamassets/base/assets/ui/ and dlc/expansion2/ui/; written up in
 -- specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md). `civsim store coverage`
 -- flags each of these as a claimed screen id that no Lua state maps to. That flag is CORRECT and
--- must stay: none of them has a UI state of its own, so any mapping here would be a fabrication
--- that made the probe assert a screen the client never said was up.
+-- must stay: neither has a UI state of its own, so any mapping here would be a fabrication that
+-- made the probe assert a screen the client never said was up. Both are kept as claims because
+-- the interaction is real and only the probe's reach is missing -- unlike
+-- `prompt.religion_selection` and `prompt.city_state_quest`, whose claims were themselves wrong
+-- and were RETIRED on the same day (see CIVSIM_KNOWN_SCREENS above and catalogs/README.md §6).
 --   * `strategic` — `<LuaContext ID="StrategicView" FileName="StrategicView"/>` (base
 --     ingame.xml:13) carries NO Hidden attribute and strategicview.lua is six lines of comment
 --     with no show/hide logic at all, so its `IsHidden()` is false at the ordinary world view too.
 --     Strategic view is a world *render mode*, not a screen; `UI.GetWorldRenderView()` already
---     answers it through lua/ingame/camera.lua and catalogs/observations/views.yaml.
---   * `prompt.religion_selection` — founding a religion is a NOTIFICATION, not a modal. Activating
---     it fires `LuaEvents.NotificationPanel_OpenReligionPanel()` (notificationpanel.lua:1322) which
---     opens the same `ReligionScreen` the launch bar opens for browsing (religionscreen.lua:1426,
---     :1606-1609). `IsHidden()==false` there means "the religion screen is open", never "a
---     blocking founding prompt is up".
+--     answers it through lua/ingame/camera.lua and catalogs/observations/views.yaml. So the probe
+--     cannot report `strategic`, and must not: watching that context would answer it permanently.
+--   * `prompt.congress_vote` — `WorldCongressPopup` (dlc/expansion2/ui/replacements/ingame.xml:121)
+--     is one context for every stage: proposals, voting (`OnVoteResolution`/`OnVoteProposal`,
+--     worldcongresspopup.lua:983, :1452) and results (`OnWorldCongressResults`, :2347). The
+--     forced-vote moment is `m_CurrentStage`/`m_CurrentPhase` inside that context's own private
+--     Lua state, which `IsHidden()` cannot see, and `congress` already maps to that state —
+--     mapping the prompt id here would both fabricate a distinction and shadow `congress`.
 --   * `prompt.diplomatic_approach` — an AI-initiated approach is `Events.DiplomacyStatement` ->
 --     `OnDiplomacyStatement` (diplomacyactionview.lua:2741), which shows the SAME
 --     `DiplomacyActionView` context in CONVERSATION_MODE/CINEMA_MODE that `diplomacy` already maps
 --     to. What separates the two is `ms_ActiveSessionID`/the view mode, private Lua state of that
---     context that `IsHidden()` cannot see.
---   * `prompt.congress_vote` — `WorldCongressPopup` (dlc/expansion2/ui/replacements/ingame.xml:121)
---     is one context for every stage: proposals, voting (`OnVoteResolution`/`OnVoteProposal`,
---     worldcongresspopup.lua:983, :1452) and results. The forced-vote moment is `m_CurrentStage`/
---     `m_CurrentPhase` inside it, and `congress` already maps to that state.
---   * `prompt.city_state_quest` — there is no city-state quest popup in the shipped UI at all.
---     Quests arrive as notifications (`NotificationTypes.CITYSTATE_QUEST_COMPLETED`,
---     notificationpanel.lua:134) and are read in the `CityStates` partial screen
---     (base/assets/ui/partialscreens/citystates.lua); no state in 00_states.txt corresponds to a
---     blocking quest prompt, so the catalog claim itself is what needs correcting.
+--     context that `IsHidden()` cannot see. Resolved without a state mapping: the mode IS readable
+--     as control visibility, so the probe answers this id directly (see CIVSIM_DIPLOMACY_STATE
+--     below) and it must stay out of this table.
 local CIVSIM_SCREEN_ID_BY_STATE = {
     city_screen = "CityPanel",
     congress = "WorldCongressPopup",
@@ -474,7 +483,7 @@ end
 -- belongs inside that prompt's own state (e.g. driving one of its Controls' callbacks), not a
 -- global `UI.*` function reachable from InGame. Not fixed here — untested, and reported above as
 -- part of the same architectural gap. This generic entry point exists only for prompt types with
--- no dedicated orders file (e.g. era transition acknowledgement, city-state quest acceptance).
+-- no dedicated orders file (e.g. era transition acknowledgement).
 -- Dismiss an acknowledge-only popup the way its own close button does. From the InGame state the
 -- popup's context is reachable as a Control (`ContextPtr:LookUpControl`, the same resolution
 -- CivSim_Screens_State uses to see it), and so is any named control inside it.

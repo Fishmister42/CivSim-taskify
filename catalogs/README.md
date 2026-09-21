@@ -5,7 +5,7 @@ under `lua/`, so a later implementer of the restricted predicate evaluator (T106
 loader (T035) can build against a fixed, written-down vocabulary instead of reverse-engineering it
 from scattered predicate strings. It is data/reference for the swarm, not a project README.
 
-`catalogs/VERSION` is authoritative for the catalog version (`2026.09.1`) and is not touched here.
+`catalogs/VERSION` is authoritative for the catalog version; this file never restates it.
 
 ## 1. Declaration and capability ID conventions
 
@@ -111,7 +111,26 @@ spy.is_available` rather than needing a separate existence check bolted on.
 - `game.has_blocking_prompt` (boolean)
 - `game.active_prompt_type` (string or null) — a `prompts.yaml` declaration family, or null
 - `game.current_screen` (string) — screen-identity probe result (`world`, `city_screen`,
-  `diplomacy`, `congress`, `strategic`, `unknown`, …)
+  `diplomacy`, `congress`, `strategic`, `unknown`, …). The claimed vocabulary is
+  `CIVSIM_KNOWN_SCREENS` in `lua/ingame/screens.lua`; §6 below lists the ids retired from it and
+  the ones kept as documented gaps.
+  - `strategic` — **documented gap, 2026-09-21**: the probe cannot currently report it.
+    `<LuaContext ID="StrategicView" FileName="StrategicView"/>` (`base/assets/ui/ingame.xml:13`)
+    carries no `Hidden` attribute and `strategicview.lua` is six lines of comment with no
+    show/hide logic, so its `IsHidden()` is false at the ordinary world view too — watching it
+    would make the probe answer `strategic` permanently. Strategic view is a world *render mode*,
+    not a screen: `UI.GetWorldRenderView()`, which `lua/ingame/camera.lua` reads and
+    `catalogs/observations/views.yaml` (`views.strategic`) already declares, and which this file's
+    own `camera.mode` enum below covers. The id stays claimed here rather than being mapped to a
+    state, because a mapping would be a fabrication. See
+    `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md` ("`strategic` —
+    unmappable").
+  - `prompt.congress_vote` — **documented gap, 2026-09-21**: the probe cannot currently report it.
+    `WorldCongressPopup` is one context for every stage of a congress and the stage
+    (`m_CurrentStage`/`m_CurrentPhase`) is private to that context's own Lua state, so
+    `IsHidden()` cannot distinguish the forced vote from browsing the session; `congress` already
+    maps to that state. See the same write-up ("`prompt.congress_vote` — unmappable") and the
+    comment above `prompts.congress_vote` in `catalogs/actions/prompts.yaml`.
 - `game.is_waiting_for_other_players` (boolean)
 
 `player.*` (the local human player only — never an opponent's)
@@ -211,3 +230,22 @@ the declaration belongs to a different observation, not a reason to widen the ev
   `catalogs/screening_profiles.yaml`, not inline detector logic.
 - `camera_requirements.mode` must be one of `world`, `strategic`, `city_screen`, `diplomacy`,
   `congress` — the same enum as `camera.mode` above.
+
+## 6. Retired claims
+
+`uv run civsim store coverage` counts every action declaration and every claimed screen id as a
+claim the harness must be able to demonstrate live. A claim that describes an interaction the game
+does not have can never be demonstrated, so it is **withdrawn** here rather than left standing as a
+permanent coverage warning. This list is the history: what was claimed, when it was retired, and
+why. Retiring a claim is a catalog change like any other — bump `catalogs/VERSION`.
+
+| Retired | Claim | Reason |
+|---|---|---|
+| 2026-09-21 (`2026.09.5`) | action `prompts.city_state_quest`, screen id `prompt.city_state_quest` | **The claim was wrong.** There is no city-state quest popup in the shipped UI at all: quests arrive as notifications (`NotificationTypes.CITYSTATE_QUEST_COMPLETED`, `base/assets/ui/panels/notificationpanel.lua:134`, `:253`) and are read in the browsable `CityStates` partial screen (`base/assets/ui/partialscreens/citystates.lua`, `<LuaContext ID="CityStates"/>` at `base/assets/ui/ingame.xml:50`), and nothing in Civ VI accepts or declines a quest. "Accept or decline it in that prompt" described an interaction that does not exist. |
+| 2026-09-21 (`2026.09.5`) | action `prompts.religion_selection`, screen id `prompt.religion_selection` | **Duplicate overclaim.** Founding a religion is a notification that fires `LuaEvents.NotificationPanel_OpenReligionPanel()` (`base/assets/ui/panels/notificationpanel.lua:1322`) and opens the *same* `ReligionScreen` the launch bar opens for browsing (`base/assets/ui/religionscreen.lua:1426-1455`, `:1606-1609`; `base/assets/ui/launchbar.lua:142`). An open screen is not a blocking prompt, and the real interactions are already claimed as `religion.found_religion` / `religion.select_belief` / `religion.select_pantheon` in `catalogs/actions/religion.yaml`. |
+
+Both retirements are evidenced, with file:line citations into Firaxis's shipped UI Lua, by
+`specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md`. The same write-up examined
+`strategic` and `prompt.congress_vote`: those two are **kept** as claims and annotated as
+documented gaps (§4's `game.current_screen` entry), because the interactions are real and only the
+probe's reach is missing — retiring them would hide a gap the harness still owes.

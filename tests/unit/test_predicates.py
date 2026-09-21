@@ -232,30 +232,33 @@ def test_build_bindings_merges_game_namespace_with_screen_rename() -> None:
 
 
 def test_build_bindings_derives_active_prompt_type_for_a_blocking_prompt() -> None:
+    # `prompt.unit_promotion` and its two offered promotions: a shape the shipped catalog still
+    # claims. This test used to be written against `prompt.city_state_quest`, retired 2026-09-21
+    # (catalogs/README.md §6) because no such prompt exists in Civ VI.
     observation = _observation(
         [
             _entry(
                 "game.screen_state",
                 {
-                    "screen": "prompt.city_state_quest",
-                    "raw_screen_id": "prompt.city_state_quest",
+                    "screen": "prompt.unit_promotion",
+                    "raw_screen_id": "prompt.unit_promotion",
                     "recognized": True,
                     "has_blocking_prompt": True,
-                    "prompt_options": ["accept", "decline"],
+                    "prompt_options": ["battlecry", "tortoise"],
                 },
                 context=LuaContext.IN_GAME,
             ),
         ]
     )
-    bindings = build_predicate_bindings(observation=observation, target="accept")
+    bindings = build_predicate_bindings(observation=observation, target="battlecry")
 
-    assert bindings["game"]["active_prompt_type"] == "prompt.city_state_quest"
-    assert bindings["prompt"]["type"] == "prompt.city_state_quest"
+    assert bindings["game"]["active_prompt_type"] == "prompt.unit_promotion"
+    assert bindings["prompt"]["type"] == "prompt.unit_promotion"
     assert bindings["prompt"]["is_active"] is True
-    assert bindings["prompt"]["options"] == ["accept", "decline"]
+    assert bindings["prompt"]["options"] == ["battlecry", "tortoise"]
 
     predicate = (
-        "game.has_blocking_prompt and game.current_screen == 'prompt.city_state_quest' "
+        "game.has_blocking_prompt and game.current_screen == 'prompt.unit_promotion' "
         "and target in prompt.options"
     )
     assert evaluate_predicate(predicate, bindings) is True

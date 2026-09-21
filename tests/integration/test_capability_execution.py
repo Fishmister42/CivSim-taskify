@@ -42,8 +42,11 @@ async def test_the_real_catalog_loads_with_the_documented_shape() -> None:
     catalog = load_catalog(CATALOGS_ROOT)
     # 51/23 before T216 (game.outcome_state + the game.outcome capability) and T221
     # (camera.read_state) -- see tests/contract/test_catalog_integration.py's own constants.
-    assert len(catalog.declarations) == 60  # +prompts.great_work_created (2026-09-21)
-    assert len(catalog.capabilities) == 27  # +cities.selection, +yields.read, +selection.orders (2026-09-21)
+    # 60 -> 58 (catalog 2026.09.5): the 2026-09-21 honesty pass retired
+    # prompts.city_state_quest and prompts.religion_selection -- see catalogs/README.md §6.
+    assert len(catalog.declarations) == 58
+    # +cities.selection, +yields.read, +selection.orders (2026-09-21)
+    assert len(catalog.capabilities) == 27
     assert _UNITS_STATE in catalog.declarations
     assert _END_TURN in catalog.declarations
 

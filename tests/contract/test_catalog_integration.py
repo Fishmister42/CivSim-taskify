@@ -34,7 +34,15 @@ CATALOGS_ROOT = _REPO_ROOT / "catalogs"
 # Bumped from 51/23 by T216 (game.outcome_state + the game.outcome capability, so FR-005's
 # `game_outcome` stop condition can resolve at all) and T221 (camera.read_state, so a capture's
 # camera state stops being empty and a view's declared camera_requirements can be satisfied).
-EXPECTED_DECLARATION_COUNT = 60
+#
+# 60 -> 58, 2026-09-21 (catalog `2026.09.5`): the honesty pass retired `prompts.city_state_quest`
+# and `prompts.religion_selection` -- the first described an interaction Civ VI does not have (no
+# quest popup exists, and nothing accepts or declines a quest), the second duplicated
+# `religion.found_religion`/`select_belief`/`select_pantheon` over a screen that merely opens.
+# See catalogs/README.md §6 and
+# specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md. The capability count is
+# unchanged: `prompts.orders` still backs the ten remaining prompt actions.
+EXPECTED_DECLARATION_COUNT = 58
 EXPECTED_CAPABILITY_COUNT = 27
 
 

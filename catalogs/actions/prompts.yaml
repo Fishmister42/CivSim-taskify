@@ -54,23 +54,14 @@
     one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
-- declaration_id: prompts.religion_selection
-  kind: action
-  summary: Respond to a religion-founding prompt.
-  parity_basis: >
-    A religion-founding prompt appears when a Great Prophet founds a religion in a holy site;
-    pick the religion's name and founder belief in that prompt.
-  context: InGame
-  capability_id: prompts.orders
-  availability_predicate: >
-    game.has_blocking_prompt and game.current_screen == "prompt.religion_selection"
-    and target in prompt.options
-  verification_predicate: >
-    game.current_screen != "prompt.religion_selection"
-  target_kind: option
-  target_hint: >
-    one of the open prompt's offered options (prompt_options)
-  introduced_in_version: "2026.09.1"
+# RETIRED 2026-09-21: `prompts.religion_selection` (and its screen id
+# `prompt.religion_selection`) stood here. Founding a religion is a notification that opens the
+# SAME `ReligionScreen` the launch bar opens for browsing -- an open screen, not a blocking
+# prompt -- and the interactions it offers are already claimed by catalogs/actions/religion.yaml
+# (`religion.found_religion`, `religion.select_belief`, `religion.select_pantheon`). The claim was
+# a duplicate overclaim, so it is withdrawn rather than mapped. Evidence, with file:line citations
+# into Firaxis's shipped UI Lua: specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md
+# ("`prompt.religion_selection` — unmappable"); recorded in catalogs/README.md §6.
 
 - declaration_id: prompts.great_person_selection
   kind: action
@@ -126,27 +117,38 @@
     one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
-- declaration_id: prompts.city_state_quest
-  kind: action
-  summary: Respond to a city-state quest prompt.
-  parity_basis: >
-    A city-state quest prompt appears when a met city-state offers a quest; accept or decline
-    it in that prompt.
-  context: InGame
-  capability_id: prompts.orders
-  availability_predicate: >
-    game.has_blocking_prompt and game.current_screen == "prompt.city_state_quest"
-    and target in prompt.options
-  verification_predicate: >
-    game.current_screen != "prompt.city_state_quest"
-  target_kind: option
-  target_hint: >
-    one of the open prompt's offered options (prompt_options)
-  introduced_in_version: "2026.09.1"
+# RETIRED 2026-09-21: `prompts.city_state_quest` (and its screen id `prompt.city_state_quest`)
+# stood here. There is no city-state quest popup in the shipped UI at all -- quests arrive as
+# notifications and are read in the browsable `CityStates` partial screen -- and nothing in
+# Civ VI accepts or declines a quest, so "accept or decline it in that prompt" described an
+# interaction the game does not have. The claim was wrong, so it is withdrawn rather than mapped.
+# Evidence, with file:line citations into Firaxis's shipped UI Lua:
+# specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md
+# ("`prompt.city_state_quest` — unmappable, and the catalog claim is wrong"); recorded in
+# catalogs/README.md §6.
+
+# DOCUMENTED GAP, 2026-09-21 (specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md,
+# "`prompt.congress_vote` — unmappable"). The claim below is kept -- the forced vote is a real
+# moment a human answers -- but the probe cannot currently report it, and this action can
+# therefore never become available. `WorldCongressPopup`
+# (dlc/expansion2/ui/replacements/ingame.xml:121) is ONE context for every stage of a congress:
+# proposals, the vote itself (`OnVoteResolution`/`OnVoteProposal`, worldcongresspopup.lua:983,
+# :1452) and results (`OnWorldCongressResults`, :2347). Which stage is up lives in
+# `m_CurrentStage`/`m_CurrentPhase`, private to that context's own Lua state, so
+# `ContextPtr:IsHidden()` cannot tell the forced vote from browsing the session. `congress`
+# already maps to that state; mapping `prompt.congress_vote` to it too would fabricate a
+# distinction the client does not expose AND shadow `congress` (the probe prefers a `prompt.*` id
+# when several ids name one open state), trading an attestable id for a fabricated one. Until a
+# per-state dispatcher can read that stage, the honest state is: claimed, unreportable.
 
 - declaration_id: prompts.congress_vote
   kind: action
-  summary: Respond to a forced World Congress vote prompt.
+  summary: >
+    Respond to a forced World Congress vote prompt. DOCUMENTED GAP: the screen-identity probe
+    cannot currently report `prompt.congress_vote`, because the congress stage that distinguishes
+    a forced vote from browsing the session is private to `WorldCongressPopup`'s own Lua state --
+    see the comment above and the 2026-09-21 write-up. This action is claimed but not yet
+    reachable.
   parity_basis: >
     A World Congress vote prompt forces a response on the currently proposed resolution before
     the session can proceed; cast a vote in that prompt.

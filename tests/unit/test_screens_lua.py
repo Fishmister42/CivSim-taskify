@@ -240,7 +240,10 @@ def test_the_great_work_showcase_is_watched_and_names_its_prompt(lua: tuple[Any,
         # `IsHidden()==false` on it cannot mean "a blocking prompt of this family is up". See
         # lua/ingame/screens.lua's CIVSIM_SCREEN_ID_BY_STATE comment and
         # specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md.
-        ("ReligionScreen", "unknown"),  # not prompt.religion_selection
+        # `prompt.religion_selection` was retired outright on 2026-09-21 (catalogs/README.md §6):
+        # opening the religion screen is not a blocking prompt, and its real interactions are
+        # already claimed by catalogs/actions/religion.yaml. An open ReligionScreen is `unknown`.
+        ("ReligionScreen", "unknown"),
         # DiplomacyActionView with no conversation controls resolvable: the ordinary screen.
         ("DiplomacyActionView", "diplomacy"),
         ("WorldCongressPopup", "congress"),  # not prompt.congress_vote
