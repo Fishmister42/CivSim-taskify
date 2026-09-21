@@ -42,6 +42,9 @@ local M = {
     queue = {},
     queue_size = 1,
     purchasable_gold = {},
+    refuse_operation = false,
+    applies_request = true,
+    checked = nil,
     visible = true,
     cities = {},
     requested = nil,
@@ -99,9 +102,14 @@ CityOperationTypes = {
     BUILD = 7,
     PARAM_UNIT_TYPE = "unit", PARAM_BUILDING_TYPE = "building",
     PARAM_DISTRICT_TYPE = "district", PARAM_PROJECT_TYPE = "project",
-    PARAM_INSERT_MODE = "insert", VALUE_REPLACE_AT = "replace",
-    PARAM_QUEUE_DESTINATION_LOCATION = "slot",
+    PARAM_INSERT_MODE = "insert",
+    -- Every insert mode the shipped files use, so a test asserting "exclusive" is asserting a
+    -- choice among real alternatives rather than the only key that exists.
+    VALUE_EXCLUSIVE = "exclusive", VALUE_REPLACE_AT = "replace", VALUE_APPEND = "append",
+    PARAM_QUEUE_DESTINATION_LOCATION = "slot", PARAM_QUEUE_LOCATION = "queue_slot",
 }
+CityOperationResults = { FAILURE_REASONS = "failure_reasons" }
+CityCommandResults = { FAILURE_REASONS = "failure_reasons" }
 CityCommandTypes = {
     PURCHASE = 3,
     PARAM_UNIT_TYPE = "unit", PARAM_BUILDING_TYPE = "building",
@@ -135,12 +143,22 @@ function build_queue:GetTurnsLeft(key, formation) return 5 end
 Locale = { Lookup = function(key) return "display:" .. tostring(key) end }
 
 CityManager = {}
+-- strategicview_mapplacement.lua:56 --
+--   (city, op, tParameters, bReturnResults) -> bCanStart, tResults
+function CityManager.CanStartOperation(city, operation, parameters, returnResults)
+    M.checked = { operation = operation, parameters = parameters }
+    if M.refuse_operation then
+        return false, { failure_reasons = { "LOC_NO_ROOM_IN_QUEUE" } }
+    end
+    return true, {}
+end
 function CityManager.CanStartCommand(city, command, testOnly, parameters, returnResults)
     return M.purchasable_gold[parameters["unit"] or parameters["building"]] == parameters["yield"]
 end
+-- Returns nothing, exactly as the engine does: no shipped call site checks a return value.
 function CityManager.RequestOperation(city, operation, parameters)
     M.requested = { operation = operation, parameters = parameters }
-    return M.request_accepted
+    if M.applies_request then M.current_hash = parameters["unit"] or parameters["building"] or 0 end
 end
 function CityManager.RequestCommand(city, command, parameters)
     M.requested = { command = command, parameters = parameters }
@@ -402,23 +420,104 @@ def test_purchasability_is_the_panels_own_canstartcommand_gate(lua: tuple[Any, A
 # --------------------------------------------------------------------------
 
 
-def test_set_production_issues_the_panels_own_build_operation(orders: tuple[Any, Any]) -> None:
-    """productionpanel.lua:299-301 (PARAM_UNIT_TYPE = the item's *hash*) and :2896-2897 (an
-    ordinary click REPLACES the head of the queue)."""
+def test_set_production_builds_exactly_the_parameter_table_the_shipped_script_builds(
+    orders: tuple[Any, Any],
+) -> None:
+    """MEASURED LIVE 2026-09-21 (run-26d265f6): 9 of 9 BUILD operations were issued and never took,
+    because this action copied the production panel's *queue-aware* insert mode
+    (productionpanel.lua:2896-2897, VALUE_REPLACE_AT at slot 0) into cities whose queue was empty --
+    there was no slot 0 to replace. The shipped programmatic set-production,
+    tutorialuiroot.lua:879-891, names the item by kind as its hash and passes
+    `PARAM_INSERT_MODE = VALUE_EXCLUSIVE` and nothing else. Byte for byte, that table is:"""
     runtime, stubs = orders
     stubs.own_city(65538)
 
     result = dict(runtime.globals()["CivSim_CityOrders"]["set_production"](65538, "UNIT_BUILDER"))
 
+    requested = dict(stubs.requested)
+    assert requested["operation"] == 7  # CityOperationTypes.BUILD
+    assert dict(requested["parameters"]) == {
+        "unit": 101,  # PARAM_UNIT_TYPE = UNIT_BUILDER's Hash, never its type string
+        "insert": "exclusive",  # PARAM_INSERT_MODE = VALUE_EXCLUSIVE
+    }
     assert result["ok"] is True
     assert result["production"] == "UNIT_BUILDER"
     assert result["kind"] == "unit"
-    requested = dict(stubs.requested)
-    assert requested["operation"] == 7  # CityOperationTypes.BUILD
-    parameters = dict(requested["parameters"])
-    assert parameters["unit"] == 101  # PARAM_UNIT_TYPE = UNIT_BUILDER's hash
-    assert parameters["insert"] == "replace"
-    assert parameters["slot"] == 0
+    assert result["insert_mode"] == "exclusive"
+
+
+def test_no_queue_location_is_passed_at_all(orders: tuple[Any, Any]) -> None:
+    """The regression guard with a name: a queue slot is what made this fail live, and
+    tutorialuiroot.lua passes none."""
+    runtime, stubs = orders
+    stubs.own_city(65538)
+
+    runtime.globals()["CivSim_CityOrders"]["set_production"](65538, "UNIT_BUILDER")
+
+    parameters = dict(dict(stubs.requested)["parameters"])
+    assert "slot" not in parameters  # PARAM_QUEUE_DESTINATION_LOCATION
+    assert "queue_slot" not in parameters  # PARAM_QUEUE_LOCATION
+    assert parameters["insert"] != "replace"
+
+
+def test_the_operation_is_asked_before_it_is_issued(orders: tuple[Any, Any]) -> None:
+    """strategicview_mapplacement.lua:56 asks CanStartOperation with the *same* parameter table it
+    is about to request, which is what lets a refusal name itself."""
+    runtime, stubs = orders
+    stubs.own_city(65538)
+
+    runtime.globals()["CivSim_CityOrders"]["set_production"](65538, "UNIT_BUILDER")
+
+    assert dict(dict(stubs.checked)["parameters"]) == dict(dict(stubs.requested)["parameters"])
+
+
+def test_a_refused_operation_names_the_games_own_reason_and_issues_nothing(
+    orders: tuple[Any, Any],
+) -> None:
+    """The failure mode this whole change exists to end: nine identical silent refusals reported
+    only as an unexplained false verification predicate."""
+    runtime, stubs = orders
+    stubs.own_city(65538)
+    stubs.refuse_operation = True
+
+    result = dict(runtime.globals()["CivSim_CityOrders"]["set_production"](65538, "UNIT_BUILDER"))
+
+    assert result["ok"] is False
+    assert result["reason"] == "operation_refused"
+    assert list(result["refusal_reasons"].values()) == ["display:LOC_NO_ROOM_IN_QUEUE"]
+    assert stubs.requested is None
+
+
+def test_the_build_queue_head_is_read_back_rather_than_a_return_value_trusted(
+    orders: tuple[Any, Any],
+) -> None:
+    """`CityManager.RequestOperation` returns nothing in every shipped call site, so the old
+    `ok = (accepted ~= false)` was true no matter what happened."""
+    runtime, stubs = orders
+    stubs.own_city(65538)
+
+    result = dict(runtime.globals()["CivSim_CityOrders"]["set_production"](65538, "UNIT_BUILDER"))
+
+    assert result["confirmed"] is True
+    assert result["current_production"] == "UNIT_BUILDER"
+    assert "reason" not in result
+
+
+def test_an_operation_the_engine_has_not_applied_yet_is_issued_not_confirmed(
+    orders: tuple[Any, Any],
+) -> None:
+    """A queue that has not caught up is reported as `issued_not_yet_confirmed`, never as a
+    refusal; the verification predicate re-read on the next observation stays the authority."""
+    runtime, stubs = orders
+    stubs.own_city(65538)
+    stubs.applies_request = False
+
+    result = dict(runtime.globals()["CivSim_CityOrders"]["set_production"](65538, "UNIT_BUILDER"))
+
+    assert result["ok"] is True
+    assert result["confirmed"] is False
+    assert result["reason"] == "issued_not_yet_confirmed"
+    assert "current_production" not in result
 
 
 def test_set_production_names_a_building_by_its_own_parameter_key(
@@ -432,9 +531,7 @@ def test_set_production_names_a_building_by_its_own_parameter_key(
     )
 
     assert result["ok"] is True
-    parameters = dict(dict(stubs.requested)["parameters"])
-    assert parameters["building"] == 201
-    assert "unit" not in parameters
+    assert dict(dict(stubs.requested)["parameters"]) == {"building": 201, "insert": "exclusive"}
 
 
 def test_set_production_refuses_an_item_that_would_open_plot_placement(
