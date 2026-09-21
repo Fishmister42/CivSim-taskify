@@ -49,6 +49,15 @@ game to exactly the turn number it expected: every iteration re-reads ``outcome.
 victory or defeat, was an operator stop requested, did an unrecoverable failure occur) rather than
 advancing a counter of its own and trusting it. The record reflects what happened, not what was
 planned.
+
+**A game that ended before a turn could begin (2026-09-21, Principle VII).** ``evaluate_stop_facts``
+above answers "what happened *this* turn" only for a turn that *ran*. The turn that discovers a
+defeat cannot run: its very first act is the FR-007 quicksave, and a finished game refuses to
+write one -- measured at 18:50 EDT, where the harness paused with a ``SaveVerificationError`` on a
+run whose honest terminal state was a defeat at game turn 59. ``run/turn_cycle.py`` now reads the
+game's own ending *before* that quicksave and raises
+:class:`~civsim_harness.run.game_over.GameOverDetected`; :meth:`Runner._finish_on_game_over` is
+the one place an exception out of a turn becomes ``finished`` rather than ``paused``.
 """
 
 from __future__ import annotations
@@ -90,8 +99,9 @@ from civsim_harness.operator.schemas import (
 )
 from civsim_harness.resilience.recovery import RecoveryEngine
 from civsim_harness.run.decision_loop import UnknownScreenEncountered
+from civsim_harness.run.game_over import GameOverDetected
 from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
-from civsim_harness.run.stop import StopEvaluation, evaluate_stop
+from civsim_harness.run.stop import StopDecision, StopEvaluation, evaluate_stop
 from civsim_harness.run.turn_cycle import TurnCycleDependencies, run_turn_cycle
 from civsim_harness.saves.addressing import SaveAddressingError, require_available_save_point
 from civsim_harness.store.completeness import (
@@ -916,6 +926,11 @@ class Runner(RunnerProtocol):
           only ever updated when ``run_turn_cycle`` *returns*, which never happens on this path),
           so the fix is to resync from the store, never to call ``transition()`` again (that would
           attempt an illegal ``failed -> failed`` no-op and raise a second time).
+        - ``GameOverDetected`` (2026-09-21, Principle VII): **not a failure at all** -- it is the
+          one ``HarnessError`` this method routes to ``finished`` rather than to ``paused``. The
+          game ended while the run was playing, ``run/turn_cycle.py`` read that before attempting
+          a quicksave a finished game would refuse, and the honest terminal state is the victory
+          or defeat the read named (FR-005). See :meth:`_finish_on_game_over`.
         - ``ProviderChainExhausted`` (FR-042: "pause the run in a recorded state") and
           ``UnknownScreenEncountered`` (FR-049: "stall the run visibly") both land in ``paused`` --
           legal from ``playing``, unlike ``failed``, and exactly the recorded-but-not-terminal
@@ -928,6 +943,13 @@ class Runner(RunnerProtocol):
           recorded, non-destructive state ``playing`` can still reach.
         """
         with self._lock:
+            if isinstance(exc, GameOverDetected):
+                # Deliberately ahead of `state.last_error`: the game ending is not an error, and a
+                # run that finished in a recorded defeat must not also report a `last_error` to
+                # `get_status` -- an operator reading one would go looking for a fault that never
+                # happened.
+                self._finish_on_game_over(state, exc)
+                return
             state.last_error = (type(exc).__name__, self._deps.clock())
             if isinstance(exc, (RecoveryLimitReached, SaveAddressingError)):
                 self._resync_after_external_termination(state, exc)
@@ -941,6 +963,52 @@ class Runner(RunnerProtocol):
                 return
             # Anything else unclassified: `paused` too -- see this method's own docstring.
             self._pause_on_failure(state, exc)
+
+    def _finish_on_game_over(self, state: _RunState, exc: GameOverDetected) -> None:
+        """Caller holds ``self._lock``. Finish *state*'s run on the game's own ending (2026-09-21).
+
+        ``run/turn_cycle.py`` has already written the ``game_over_detected`` event carrying what
+        was read; what is left is the run's own terminal record: ``playing -> finished`` with
+        exactly one ``stop_resolution`` -- the ``victory`` or ``defeat`` the read named -- and
+        every *other* condition that also held right now kept on the timeline as a coincident
+        event (invariant I10, the same treatment the ordinary post-turn path in
+        :meth:`_play_run` gives them).
+
+        **``evaluate_stop_facts`` is still called, and must be.** It is not consulted for the
+        resolution -- the pre-save read is more direct than any fact assembled after a turn that
+        never happened -- but it is the seam where the production composition root closes this
+        run's Nexus client and releases its run-identity lock (``run/composition.py``'s own
+        docstring for it). A run that finished without going through it would hold the tuner's
+        single connection slot until the process exits, which on this host means the *next* block
+        cannot connect at all. Its failure is logged and swallowed: a bookkeeping seam must never
+        be able to stop the run from recording why it ended.
+        """
+        resolution = exc.stop_resolution
+        coincident: tuple[StopResolution, ...] = ()
+        try:
+            facts = self._deps.evaluate_stop_facts(state.prepared, state.current_turn or 0)
+            decision: StopDecision = evaluate_stop(state.prepared.stop_condition, facts)
+            triggered = (
+                (decision.resolution,) if decision.resolution is not None else ()
+            ) + decision.coincident
+            coincident = tuple(other for other in triggered if other is not resolution)
+        except Exception:
+            log_event(
+                get_harness_logger(),
+                logging.WARNING,
+                "run/runner: the stop-facts seam failed while finishing a run on a detected game "
+                "over; the run is still recorded as finished, but this run's client and identity "
+                "lock may not have been released",
+                extra={"run_id": state.run.run_id, "stop_resolution": resolution.value},
+                exc_info=True,
+            )
+        for other in coincident:
+            self._deps.store.write_run_event(
+                _coincident_event(
+                    state.run.run_id, state.current_turn or 0, other, self._deps.clock()
+                )
+            )
+        self._finish(state, resolution=resolution)
 
     def _resync_after_external_termination(self, state: _RunState, exc: HarnessError) -> None:
         """Caller holds ``self._lock`` with ``state.last_error`` already set. See

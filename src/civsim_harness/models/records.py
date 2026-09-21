@@ -158,6 +158,15 @@ class RunEventType(StrEnum):
     # play could continue. Recorded so the run's record says what was not the agent's doing;
     # never counted as a demonstrated capability. `detail` names what, why and the mechanism.
     OPERATOR_INTERVENTION = "operator_intervention"
+    # Gameplay day (2026-09-21, 18:50 EDT): the game was already over when a turn tried to begin
+    # -- the local player had been eliminated at game turn 59 and the client was showing
+    # `EndGameMenu`, so the FR-007 quicksave could never land and the run paused with a save
+    # error instead of finishing with the defeat it had actually suffered. This is the timeline's
+    # record of that reading (`run/turn_cycle.py`'s pre-save probe, `lua/ingame/game_over.lua`):
+    # what was read, from which basis, and which `stop_resolution` the run then terminated with.
+    # Written before the run is transitioned, so the timeline says why it stopped even if the
+    # transition itself then fails (Principle III).
+    GAME_OVER_DETECTED = "game_over_detected"
     BRANCH_CREATED = "branch_created"
     BRANCH_ABANDONED = "branch_abandoned"
     RUN_ARCHIVED = "run_archived"

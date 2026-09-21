@@ -82,7 +82,7 @@ from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.config.guidance import load_guidance
 from civsim_harness.config.run_config import BranchFrom
 from civsim_harness.config.seed_set import check_seed_set_agreement, load_seed_set_file
-from civsim_harness.errors import DiskHeadroomError, HarnessError, PreflightError
+from civsim_harness.errors import DiskHeadroomError, HarnessError, NexusError, PreflightError
 from civsim_harness.host.detect import (
     HostInfo,
     SupportProbeResult,
@@ -137,6 +137,11 @@ from civsim_harness.resilience.liveness import ProcessLivenessMonitor
 from civsim_harness.resilience.recovery import RecoveryEngine, SaveLoader
 from civsim_harness.run.decision_loop import DecisionLoopContext
 from civsim_harness.run.detection import DEFAULT_DETECTION_INTERVAL_S, DetectionWatch
+from civsim_harness.run.game_over import (
+    GameOverReader,
+    LuaGameOverReader,
+    interpret_game_over,
+)
 from civsim_harness.run.identity_lock import RunIdentityLock
 from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
 from civsim_harness.run.preparation import (
@@ -1341,6 +1346,46 @@ def build_runner_dependencies(
             return save_loader
         return LuaSaveLoader(client, host=host, home=home)
 
+    def _game_over_reader_for(ctx: _RunContext) -> GameOverReader:
+        """2026-09-21, Principle VII: the pre-save game-over read for one run's turns.
+
+        Bound to the same connected `NexusClient` everything else dispatches through, and to the
+        same `lua_root` every `implementation_ref` resolves against, so `lua/ingame/game_over.lua`
+        is located exactly the way every catalogued Lua file is. The InGame state index is
+        resolved *per call*, never captured: a Lua state index differs across a phase transition
+        and a stale one silently runs the wrong Lua (`nexus/client.py`).
+
+        The interpreted outcome is also recorded on this run's `_RunContext`, beside the one
+        `_OutcomeTrackingObservationReader` keeps. That is not a second source of truth -- it is
+        the same field, and without it `evaluate_stop_facts` would see `None` for a run whose
+        game ended between two turns, and would therefore never reach the terminal-state close
+        that releases this run's client and identity lock (T214/T227). The value written is only
+        ever one this module's own `_interpret_game_outcome` contract already permits: a
+        recognised `victory`/`defeat`, never a guess.
+        """
+
+        def _in_game_state_index() -> int:
+            indices = ctx.nexus_client.state_indices
+            if indices is None or indices.in_game is None:
+                raise NexusError(
+                    "cannot resolve the InGame Lua state index for the pre-save game-over read",
+                    detail={"reason": "in_game_state_index_unresolved"},
+                )
+            return indices.in_game
+
+        reader = LuaGameOverReader(
+            ctx.execute, in_game_state_index=_in_game_state_index, lua_root=lua_root
+        )
+
+        async def read_game_over() -> Any:
+            value = await reader()
+            outcome = interpret_game_over(value).outcome
+            if outcome is not None:
+                ctx.last_game_outcome = outcome
+            return value
+
+        return read_game_over
+
     async def _prepare(
         config: RunConfiguration, branch_from: BranchFrom | None
     ) -> PreparedRun:
@@ -1491,6 +1536,11 @@ def build_runner_dependencies(
             # the defect the whole of Phase 11 was written about.
             detection=ctx.detection,
             detection_interval_s=detection_interval_s,
+            # 2026-09-21, Principle VII: ask the client whether the game already ended before
+            # asking it for a quicksave it cannot write. Without this line a defeat surfaces as
+            # `SaveVerificationError` and the run pauses instead of finishing (measured 18:50
+            # EDT, game turn 59).
+            read_game_over=_game_over_reader_for(ctx),
         )
 
     def evaluate_stop_facts(prepared: PreparedRun, turn_number: int) -> StopEvaluation:

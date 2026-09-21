@@ -645,9 +645,18 @@ contains as many model calls as it contained decision steps.
 `crash_detected`, `hang_detected`, `unresponsive_detected`, `unknown_screen`, `save_taken`,
 `save_failed`, `save_missing`, `resumed`, `turn_abandoned`, `turn_ended_on_no_progress`,
 `observation_assembly_failed`, `provider_failure`, `provider_retry`, `provider_fallback`,
-`context_rejected`, `model_chain_exhausted`, `image_withheld`, `capture_failed`, `branch_created`,
+`context_rejected`, `model_chain_exhausted`, `image_withheld`, `capture_failed`,
+`operator_intervention`, `game_over_detected`, `branch_created`,
 `branch_abandoned`, `run_archived`, `game_build_change_accepted`, `disk_headroom_low`,
 `persistence_failure`, `recovery_limit_reached`.
+
+`game_over_detected` is the turn-boundary reading of the game's own ending (2026-09-21): the local
+player's alive state, the winning team if there is one, and — only once the game is already over,
+because only then does a human see them — the victory type's name and the winning civilization as
+the end-game screen states them. Written by `run/turn_cycle.py` **before** the start-of-turn
+quicksave and before the run is transitioned, so the timeline says why the run stopped even if the
+transition then fails. Measured cause: a defeat at game turn 59 made the next turn's quicksave
+impossible, and the run paused with a save error instead of finishing with its defeat.
 
 Five of these are new with the clarification session and are worth naming individually, since each
 is the audit trail for a rule that would otherwise be invisible:

@@ -25,6 +25,7 @@
         "image_withheld",
         "capture_failed",
         "operator_intervention",
+        "game_over_detected",
         "branch_created",
         "branch_abandoned",
         "run_archived",

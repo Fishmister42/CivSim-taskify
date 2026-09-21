@@ -6,6 +6,17 @@ entry point for that sequence, and per T114 it is the *only* place permitted to 
 write-before-advance guard (``store/guard.py``) for a turn -- nothing else in this wave calls
 ``persist_turn_before_advance``/``advance_turn``/``write_then_advance`` directly.
 
+**Game over (2026-09-21, Principle VII).** Before anything else for this turn -- ahead of the
+pre-save prompt probe and well ahead of the quicksave -- :func:`_detect_game_over_before_save`
+asks the client whether the game has already ended. MEASURED at 18:50 EDT: Persia was defeated at
+game turn 59, the next turn's quicksave could not land because the game was over, and the run
+paused with ``SaveVerificationError`` -- a save error standing in for a defeat. A finished game
+refuses to save, so that quicksave is not a thing to attempt and recover from; it is a thing that
+must not be attempted. When the game is over this module writes the ``game_over_detected`` event
+and raises :class:`~civsim_harness.run.game_over.GameOverDetected`, which ``run/runner.py`` turns
+into ``playing -> finished`` with a ``victory``/``defeat`` stop resolution. A read that errors is
+not a game over: the turn proceeds exactly as it did before the check existed.
+
 **Quicksave (FR-007, invariant I2).** Before anything else for this turn: check disk headroom
 (``saves.headroom.check_headroom``, research R17 -- never deletes anything, only halts), take the
 named save through the injected :class:`~civsim_harness.saves.save_game.SaveCapability`, and
@@ -83,6 +94,7 @@ earlier iteration of the loop below wrote its own attempt as non-authoritative b
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -130,6 +142,11 @@ from civsim_harness.run.detection import (
     primary_fault,
     run_under_detection,
 )
+from civsim_harness.run.game_over import (
+    GameOverDetected,
+    GameOverReader,
+    interpret_game_over,
+)
 from civsim_harness.saves.headroom import build_disk_headroom_event, check_headroom
 from civsim_harness.saves.save_game import SaveCapability
 from civsim_harness.saves.save_point import build_save_point, save_name_for, write_save_point
@@ -137,6 +154,7 @@ from civsim_harness.saves.verify import SaveVerificationError, verify_save
 from civsim_harness.store.completeness import refresh_run_completeness
 from civsim_harness.store.guard import TurnPersistedToken, write_then_advance
 from civsim_harness.store.port import DecisionStepBundle, MatchStore, TurnCycleRecord
+from civsim_harness.telemetry.logging import get_harness_logger, log_event
 
 #: catalogs/actions/turn.yaml's own declaration_id -- the only action this module ever dispatches
 #: on the harness's own behalf (T114), and always through the same act.dispatch/act.verify path
@@ -240,6 +258,18 @@ class TurnCycleDependencies:
 
     **Not a turn timer** (research R12, FR-014): it bounds how long this module may go without
     *asking*, and is never compared against how long the turn or any step has been running.
+    """
+
+    read_game_over: GameOverReader | None = None
+    """2026-09-21: the pre-save game-over read (``run/game_over.py``, ``lua/ingame/game_over.lua``).
+
+    ``None`` disables the check entirely, which is the right default for a caller driving a
+    scripted in-memory game that has no client to ask -- such a game never ends by victory or
+    defeat, and every existing caller of this module keeps the behaviour it had. The production
+    composition root (``run/composition.py``) always supplies one: without it, a run whose game
+    has already ended discovers that fact only when the FR-007 quicksave the finished game refuses
+    fails, and pauses with a save error instead of finishing with the defeat it actually suffered
+    (measured on the live client at 18:50 EDT, game turn 59).
     """
 
     def __post_init__(self) -> None:
@@ -421,6 +451,79 @@ async def _detect_between_turns(deps: TurnCycleDependencies) -> None:
         events=events,
         primary=fault,
         detail={"run_id": str(deps.run_id), "turn_number": deps.turn_number},
+    )
+
+
+async def _detect_game_over_before_save(deps: TurnCycleDependencies) -> None:
+    """2026-09-21: has the game already ended, *before* this turn's quicksave is attempted?
+
+    MEASURED at 18:50 EDT on the live client: Persia was defeated at game turn 59, the next turn's
+    start-of-turn quicksave could not land because the game was over, and the run paused with
+    ``SaveVerificationError``. A finished game refuses to save, so the FR-007 quicksave is not a
+    thing to attempt-and-recover-from here -- it is a thing that must not be attempted at all. The
+    read therefore sits beside the pre-save prompt probe, in the same before-any-quicksave
+    position, and runs *first*: if the game is over there is no prompt worth answering and no
+    reason to spend a model call on one.
+
+    **A read that errors is not a game over.** Any exception -- a transport failure, a Lua
+    accessor this build does not have, a malformed body -- is swallowed here and the turn proceeds
+    exactly as it did before this check existed. So is any result
+    :func:`~civsim_harness.run.game_over.interpret_game_over` cannot name an outcome from. The
+    cost of a missed detection is the save error this function exists to replace; the cost of a
+    fabricated one is a run recorded as defeated that was still being played, which is
+    categorically worse.
+
+    When the game *is* over: the ``game_over_detected`` event is written first (Principle III --
+    the timeline says why the run stopped even if everything after this fails), then
+    :class:`~civsim_harness.run.game_over.GameOverDetected` is raised. No quicksave is attempted,
+    no ``TurnCycle`` is constructed, and the record carries no gap -- a turn with no quicksave was
+    never an attempted turn, so ``store/completeness.py`` never owes it a record.
+    """
+    reader = deps.read_game_over
+    if reader is None:
+        return
+    try:
+        raw = await reader()
+    except Exception as exc:  # noqa: BLE001 - see this function's docstring: never a game over
+        log_event(
+            get_harness_logger(),
+            logging.WARNING,
+            "run/turn_cycle: the pre-save game-over read failed; the turn proceeds as usual "
+            "(a read that errors is not a game over)",
+            extra={
+                "run_id": str(deps.run_id),
+                "turn_number": deps.turn_number,
+                "error_type": type(exc).__name__,
+            },
+        )
+        return
+
+    read = interpret_game_over(raw)
+    resolution = read.stop_resolution
+    if resolution is None:
+        return
+
+    deps.store.write_run_event(
+        RunEvent(
+            event_id=EventId(uuid.uuid4().hex),
+            run_id=deps.run_id,
+            turn_number=deps.turn_number,
+            event_type=RunEventType.GAME_OVER_DETECTED,
+            occurred_at=deps.clock(),
+            detail={"stop_resolution": resolution.value, **read.as_detail()},
+        )
+    )
+    raise GameOverDetected(
+        "the game was already over when this turn tried to begin, so no start-of-turn quicksave "
+        "was attempted -- a finished game refuses to save, and the run's honest terminal state is "
+        f"a {resolution.value}, recorded as its stop resolution rather than as a save error",
+        stop_resolution=resolution,
+        read=read,
+        detail={
+            "run_id": str(deps.run_id),
+            "turn_number": deps.turn_number,
+            **read.as_detail(),
+        },
     )
 
 
@@ -646,12 +749,27 @@ async def run_turn_cycle(deps: TurnCycleDependencies, *, run: Run) -> TurnCycleO
     recorded ``ClientFaultDetected`` when the client really is gone and is otherwise re-raised
     named as pre-save too. Neither ever replays: there is no start save for this turn yet.
 
+    Also raises :class:`~civsim_harness.run.game_over.GameOverDetected` (2026-09-21, Principle
+    VII) when the pre-save game-over read says the game has already ended: the
+    ``game_over_detected`` event is written first, no quicksave is attempted, and no ``TurnCycle``
+    is constructed -- the turn never comes into existence as an attempt, exactly as for a headroom
+    halt, so ``store/completeness.py`` never owes it a record and the run's ledger carries no gap.
+    ``run/runner.py`` routes it to ``finished`` with the read's own stop resolution, not to the
+    ``paused`` every other unclassified mid-play ``HarnessError`` lands in.
+
     Finally, :class:`~civsim_harness.errors.RecoveryLimitReached` is raised from this module's
     own replay loop when ``MAX_UNPRODUCTIVE_REPLAYS`` consecutive replays each complete no step
     at all -- the FR-048 bound for the case ``RecoveryEngine``'s own count cannot see, because
     every one of those recoveries *succeeded*.
     """
     await _detect_between_turns(deps)
+
+    # 2026-09-21 (18:50 EDT, game turn 59): is the game already over? Asked *before* the pre-save
+    # prompt probe and *before* the quicksave -- a finished game refuses to save, and there is no
+    # prompt on an end-game screen worth spending a model call answering. Raises
+    # `GameOverDetected` when it is (see _detect_game_over_before_save); returns silently on every
+    # other result, including every kind of read failure.
+    await _detect_game_over_before_save(deps)
 
     # 2026-09-21 (gameplay blocks 16/17): a save-blocking prompt is answered *before* the
     # quicksave, under the first attempt's own id, so the steps land in that attempt's record.
