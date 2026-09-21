@@ -24,7 +24,13 @@ from pathlib import Path
 
 import pytest
 
-from civsim_harness.act.prompts import PromptRouteStatus, route_prompt
+from civsim_harness.act.prompts import (
+    PROMPT_ACTION_BY_SCREEN,
+    PromptRouteStatus,
+    prompt_declaration_id_for_screen,
+    prompt_screen_for_declaration_id,
+    route_prompt,
+)
 from civsim_harness.capability.loader import load_catalog
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.host.detect import HostInfo, OperatingSystem
@@ -39,7 +45,7 @@ from civsim_harness.models.decision import DecisionTrigger
 from civsim_harness.models.records import RunEventType
 from civsim_harness.models.turn import TurnOutcome
 from civsim_harness.observe.assemble import CapabilityResult
-from civsim_harness.observe.screen_identity import PROMPT_SCREEN_PREFIX, ScreenIdentityResult
+from civsim_harness.observe.screen_identity import ScreenIdentityResult
 from civsim_harness.parity.screening import load_screening_profiles
 from civsim_harness.provider.port import RawDecision
 from civsim_harness.run.decision_loop import (
@@ -84,8 +90,9 @@ def test_the_real_catalog_declares_more_than_one_prompt_type() -> None:
 def test_each_declared_prompt_type_routes_to_its_own_prompt_response_decision(
     declaration_id: DeclarationId,
 ) -> None:
-    family = str(declaration_id)[len("prompts.") :]
-    screen_name = f"{PROMPT_SCREEN_PREFIX}{family}"
+    # The screen id the probe really reports for this family -- the prefix rule, except where
+    # PROMPT_ACTION_BY_SCREEN records a measured exception (prompt.diplomatic_approach).
+    screen_name = prompt_screen_for_declaration_id(declaration_id)
     screen = ScreenIdentityResult(
         screen=screen_name,
         raw_screen_id=screen_name,
@@ -108,6 +115,75 @@ def test_each_declared_prompt_type_routes_to_its_own_prompt_response_decision(
     assert route.prompt_type == screen_name
     assert route.options == ("OPTION_A", "OPTION_B")
     assert route.event is None  # a decision is routed here, never a stall
+
+
+def test_the_greeting_screen_routes_to_the_catalogs_ai_diplomatic_approach_action() -> None:
+    """Measured 2026-09-21 (gameplay blocks 11-12): the probe reports `prompt.diplomatic_approach`
+    for an AI leader's greeting, the catalog's answer is `prompts.ai_diplomatic_approach`, and the
+    prefix rule alone derived an unregistered id that paused the run before any model call."""
+    assert PROMPT_ACTION_BY_SCREEN["prompt.diplomatic_approach"] == DeclarationId(
+        "prompts.ai_diplomatic_approach"
+    )
+    assert prompt_declaration_id_for_screen("prompt.diplomatic_approach") == DeclarationId(
+        "prompts.ai_diplomatic_approach"
+    )
+    assert (
+        prompt_screen_for_declaration_id(DeclarationId("prompts.ai_diplomatic_approach"))
+        == "prompt.diplomatic_approach"
+    )
+    screen = ScreenIdentityResult(
+        screen="prompt.diplomatic_approach",
+        raw_screen_id="DiplomacyActionView",
+        recognized=True,
+        has_blocking_prompt=True,
+        prompt_options=("Visit our nearby city.", "No time for further pleasantries."),
+    )
+
+    route = route_prompt(
+        screen=screen,
+        run_id=RunId("run-1"),
+        turn_number=42,
+        step_index=1,
+        occurred_at=NOW,
+        registry=_REGISTRY,
+    )
+
+    assert route.status is PromptRouteStatus.prompt_decision
+    assert route.action_declaration_id == DeclarationId("prompts.ai_diplomatic_approach")
+    assert route.prompt_type == "prompt.diplomatic_approach"
+    assert route.options == ("Visit our nearby city.", "No time for further pleasantries.")
+
+
+def test_a_blocking_prompt_with_no_registered_answer_is_a_recorded_stall_not_a_crash() -> None:
+    """A recognised, blocking prompt whose derived action is not in the loaded catalog must come
+    back as `not_in_catalog` carrying an event -- the loop then stalls visibly with the derived id
+    recorded, instead of a bare CatalogError escaping the loop (gameplay block 12's failure)."""
+    screen = ScreenIdentityResult(
+        screen="prompt.never_authored_family",
+        raw_screen_id="CivSim_SomePopup",
+        recognized=True,
+        has_blocking_prompt=True,
+        prompt_options=("continue",),
+    )
+
+    route = route_prompt(
+        screen=screen,
+        run_id=RunId("run-1"),
+        turn_number=42,
+        step_index=1,
+        occurred_at=NOW,
+        registry=_REGISTRY,
+    )
+
+    assert route.status is PromptRouteStatus.not_in_catalog
+    assert route.action_declaration_id is None
+    assert route.prompt_type is None
+    assert route.event is not None
+    assert route.event.event_type is RunEventType.UNKNOWN_SCREEN
+    assert route.event.detail["reason"] == "not_in_catalog"
+    assert route.event.detail["derived_action_id"] == "prompts.never_authored_family"
+    assert route.event.detail["screen"] == "prompt.never_authored_family"
+    assert route.event.detail["prompt_options"] == ["continue"]
 
 
 def test_an_unrecognised_screen_routes_to_a_stall_never_a_default() -> None:

@@ -28,8 +28,10 @@ has no lifecycle or store handle to do that itself.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.errors import CatalogError
@@ -42,6 +44,21 @@ from civsim_harness.observe.screen_identity import PROMPT_SCREEN_PREFIX, ScreenI
 #: (e.g. `prompts.city_state_quest`) -- see `lua/ingame/screens.lua` and `catalogs/actions/
 #: prompts.yaml`'s own header comment, which documents this exact pairing.
 _PROMPT_DECLARATION_PREFIX = "prompts."
+
+#: Explicit exceptions to the prefix rule, screen id -> action declaration id. The catalog names
+#: the greeting's answer ``prompts.ai_diplomatic_approach`` (the human answers an *AI's* approach)
+#: while the screen it answers is ``prompt.diplomatic_approach``. Measured live 2026-09-21 (gameplay
+#: blocks 11 and 12): the prefix-derived ``prompts.diplomatic_approach`` was not registered and the
+#: run paused on ``CatalogError`` before any model call. Every other family follows the prefix rule.
+PROMPT_ACTION_BY_SCREEN: Mapping[str, DeclarationId] = MappingProxyType(
+    {
+        "prompt.diplomatic_approach": DeclarationId("prompts.ai_diplomatic_approach"),
+    }
+)
+
+_PROMPT_SCREEN_BY_ACTION: Mapping[DeclarationId, str] = MappingProxyType(
+    {action: screen for screen, action in PROMPT_ACTION_BY_SCREEN.items()}
+)
 
 
 class PromptRouteStatus(Enum):
@@ -57,6 +74,11 @@ class PromptRouteStatus(Enum):
     unknown_screen = "unknown_screen"
     """The screen was not recognised at all (research R13) -- the run must stall visibly rather
     than guess, click through, or dismiss (FR-049, SC-005)."""
+
+    not_in_catalog = "not_in_catalog"
+    """The screen is a recognised, blocking prompt but the loaded catalog registers no action
+    that answers it -- a catalog gap, recorded as a visible stall with the derived id in the
+    event, never a crash out of the loop (measured 2026-09-21, gameplay blocks 11 and 12)."""
 
 
 @dataclass(frozen=True)
@@ -80,13 +102,15 @@ class PromptRoute:
                 raise ValueError(
                     "PromptRoute.status is 'prompt_decision' but an event was supplied"
                 )
-        elif self.status is PromptRouteStatus.unknown_screen:
+        elif self.status in (PromptRouteStatus.unknown_screen, PromptRouteStatus.not_in_catalog):
             if self.event is None:
-                raise ValueError("PromptRoute.status is 'unknown_screen' but no event was supplied")
+                raise ValueError(
+                    f"PromptRoute.status is '{self.status.value}' but no event was supplied"
+                )
             if self.action_declaration_id is not None or self.prompt_type is not None:
                 raise ValueError(
-                    "PromptRoute.status is 'unknown_screen' but action_declaration_id/prompt_type "
-                    "was supplied"
+                    f"PromptRoute.status is '{self.status.value}' but "
+                    "action_declaration_id/prompt_type was supplied"
                 )
         else:  # no_prompt
             if self.action_declaration_id is not None or self.prompt_type is not None:
@@ -109,8 +133,28 @@ def prompt_declaration_id_for_screen(screen: str) -> DeclarationId:
         raise CatalogError(
             "screen id is not a prompt screen", detail={"screen": screen}
         )
+    explicit = PROMPT_ACTION_BY_SCREEN.get(screen)
+    if explicit is not None:
+        return explicit
     suffix = screen[len(PROMPT_SCREEN_PREFIX) :]
     return DeclarationId(_PROMPT_DECLARATION_PREFIX + suffix)
+
+
+def prompt_screen_for_declaration_id(declaration_id: DeclarationId) -> str:
+    """The inverse of :func:`prompt_declaration_id_for_screen`: the ``prompt.<family>`` screen id
+    that routes to *declaration_id*, honouring :data:`PROMPT_ACTION_BY_SCREEN`'s exceptions.
+
+    Raises :class:`~civsim_harness.errors.CatalogError` for an id outside ``prompts.``.
+    """
+    explicit = _PROMPT_SCREEN_BY_ACTION.get(declaration_id)
+    if explicit is not None:
+        return explicit
+    text = str(declaration_id)
+    if not text.startswith(_PROMPT_DECLARATION_PREFIX):
+        raise CatalogError(
+            "declaration id is not a prompt action", detail={"declaration_id": text}
+        )
+    return PROMPT_SCREEN_PREFIX + text[len(_PROMPT_DECLARATION_PREFIX) :]
 
 
 def route_prompt(
@@ -148,8 +192,27 @@ def route_prompt(
 
     declaration_id = prompt_declaration_id_for_screen(screen.screen)
     if registry is not None:
-        # Raises CatalogError if unresolved -- a genuine catalog gap, not a game-side surprise.
-        registry.resolve(declaration_id)
+        try:
+            registry.resolve(declaration_id)
+        except CatalogError:
+            # A genuine catalog gap, not a game-side surprise -- but the run must record it and
+            # stall visibly, exactly like an unknown screen, rather than crash out of the loop.
+            event = RunEvent(
+                event_id=event_id if event_id is not None else EventId(uuid.uuid4().hex),
+                run_id=run_id,
+                turn_number=turn_number,
+                step_index=step_index,
+                event_type=RunEventType.UNKNOWN_SCREEN,
+                occurred_at=occurred_at,
+                detail={
+                    "raw_screen_id": screen.raw_screen_id,
+                    "screen": screen.screen,
+                    "reason": "not_in_catalog",
+                    "derived_action_id": str(declaration_id),
+                    "prompt_options": list(screen.prompt_options),
+                },
+            )
+            return PromptRoute(status=PromptRouteStatus.not_in_catalog, event=event)
 
     return PromptRoute(
         status=PromptRouteStatus.prompt_decision,

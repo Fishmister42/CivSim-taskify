@@ -556,6 +556,14 @@ def _resolve_trigger(
             "must stall visibly rather than guess (FR-049, research R13)",
             event=route.event,
         )
+    if route.status is PromptRouteStatus.not_in_catalog:
+        assert route.event is not None
+        raise UnknownScreenEncountered(
+            "a recognised blocking prompt is up but the loaded catalog registers no action that "
+            "answers it; the run stalls visibly with the derived id recorded rather than "
+            "crashing (catalog gap, not a game-side surprise)",
+            event=route.event,
+        )
     if route.status is PromptRouteStatus.prompt_decision:
         return DecisionTrigger.PROMPT_RESPONSE, route.prompt_type
     return DecisionTrigger.PROACTIVE, None
