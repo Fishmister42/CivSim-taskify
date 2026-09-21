@@ -43,14 +43,19 @@ implementation report.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import asyncio
+import time
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from civsim_harness.act.predicates import (
     PredicateEvaluationError,
     build_predicate_bindings,
+    evaluate_expression,
     evaluate_predicate,
+    membership_collection,
+    split_conjuncts,
 )
 from civsim_harness.models.catalog import ParityDeclaration
 from civsim_harness.models.common import Timestamp
@@ -99,6 +104,34 @@ class ExecutionVerification:
     progress: StepProgress
 
 
+@dataclass(frozen=True)
+class ConfirmWindow:
+    """How hard the harness looked before it called an effect unconfirmed.
+
+    A client read can lag its own game state: MEASURED 2026-09-21 that a `units.move_to` accepted
+    by `RequestOperation` still showed the warrior on its old plot at +0 s and on the destination
+    at +1 s (four of seven moves in gameplay block 2 were recorded ``verification_failed`` for that
+    reason alone), and that an end turn is confirmed only after the AI players have taken theirs.
+    So verification re-reads, bounded. Recording the window on the result is what keeps the
+    distinction honest in the record: an ``applied`` says which read confirmed it, and a
+    ``verification_failed`` says how long and how often the harness looked before saying so --
+    without that, "the client was a beat behind" and "the game refused the order" are the same row.
+    """
+
+    timeout_s: float
+    poll_s: float
+    attempts: int
+    elapsed_s: float
+
+    def as_detail(self) -> dict[str, Any]:
+        return {
+            "confirm_timeout_s": self.timeout_s,
+            "confirm_poll_s": self.poll_s,
+            "confirm_attempts": self.attempts,
+            "confirm_elapsed_s": round(self.elapsed_s, 3),
+        }
+
+
 def verify_execution(
     *,
     declaration: ParityDeclaration,
@@ -106,6 +139,7 @@ def verify_execution(
     post_observation: Observation,
     target: Any = None,
     verified_at: Timestamp,
+    confirm_window: ConfirmWindow | None = None,
 ) -> ExecutionVerification:
     """Evaluate *declaration*'s ``verification_predicate`` and derive its outcome and progress.
 
@@ -115,6 +149,11 @@ def verify_execution(
     does not re-read state itself). Both must be genuinely fresh, step-scoped observations -- this
     function does not, and cannot, check that its caller obeyed FR-015; it only ever evaluates
     whatever it is handed.
+
+    *confirm_window*, when given, is recorded on the result: on an ``applied`` it says which
+    re-read confirmed the effect, and on a ``verification_failed`` it states the bound the harness
+    looked within and quotes what that last read actually said (see :class:`ConfirmWindow`).
+    :func:`confirm_execution` is the bounded caller that supplies it.
     """
     assert declaration.verification_predicate is not None  # guaranteed for kind == action
 
@@ -131,16 +170,21 @@ def verify_execution(
             verified_at=verified_at,
             reason=f"verification_predicate could not be evaluated: {exc.message}",
             extra_detail=exc.detail,
+            confirm_window=confirm_window,
+            bindings=bindings,
         )
 
     if confirmed:
+        detail: dict[str, Any] = {
+            "declaration_id": str(declaration.declaration_id),
+            "predicate": declaration.verification_predicate,
+            "result": True,
+        }
+        if confirm_window is not None:
+            detail.update(confirm_window.as_detail())
         execution = ActionExecution(
             outcome=ExecutionOutcome.APPLIED,
-            verification={
-                "declaration_id": str(declaration.declaration_id),
-                "predicate": declaration.verification_predicate,
-                "result": True,
-            },
+            verification=detail,
             verified_at=verified_at,
         )
         return ExecutionVerification(execution=execution, progress=StepProgress.CHANGED_STATE)
@@ -150,7 +194,30 @@ def verify_execution(
         verified_at=verified_at,
         reason="verification_predicate evaluated false: the action's expected effect was not "
         "confirmed (e.g. the click was swallowed)",
+        confirm_window=confirm_window,
+        bindings=bindings,
     )
+
+
+def last_read(predicate: str, bindings: Mapping[str, Any]) -> dict[str, Any]:
+    """What the final re-read actually said, expression by expression.
+
+    "Not confirmed" on its own is unreadable in the ledger: ``target in city.production_queue``
+    being false is one thing when the queue holds a Monument and quite another when it is ``[]``.
+    Each top-level ``and`` operand of *predicate* is evaluated for its *value* rather than its
+    truth (:func:`~civsim_harness.act.predicates.evaluate_expression`), and an operand of the form
+    ``target in <collection>`` is quoted as the collection itself -- the thing the harness looked
+    in -- since ``target`` is already recorded on the decision. An operand that cannot be evaluated
+    is recorded as saying so, never omitted.
+    """
+    readings: dict[str, Any] = {}
+    for conjunct in split_conjuncts(predicate):
+        expression = membership_collection(conjunct) or conjunct
+        try:
+            readings[expression] = evaluate_expression(expression, bindings)
+        except PredicateEvaluationError as exc:
+            readings[expression] = f"<could not be evaluated: {exc.message}>"
+    return readings
 
 
 def _rejected(
@@ -159,6 +226,8 @@ def _rejected(
     verified_at: Timestamp,
     reason: str,
     extra_detail: Mapping[str, Any] | None = None,
+    confirm_window: ConfirmWindow | None = None,
+    bindings: Mapping[str, Any] | None = None,
 ) -> ExecutionVerification:
     detail: dict[str, Any] = {
         "declaration_id": str(declaration.declaration_id),
@@ -170,6 +239,10 @@ def _rejected(
         # carries its own inner "reason" key, e.g. the raw comparison failure) can never clobber
         # this function's own, already-informative wrapped message.
         detail.update(extra_detail)
+    if confirm_window is not None:
+        detail.update(confirm_window.as_detail())
+        if bindings is not None and declaration.verification_predicate is not None:
+            detail["last_read"] = last_read(declaration.verification_predicate, bindings)
     detail["reason"] = reason
     execution = ActionExecution(
         outcome=ExecutionOutcome.REJECTED,
@@ -178,3 +251,65 @@ def _rejected(
         verified_at=verified_at,
     )
     return ExecutionVerification(execution=execution, progress=StepProgress.REJECTED)
+
+
+async def confirm_execution[ReadT](
+    *,
+    declaration: ParityDeclaration,
+    pre_observation: Observation,
+    first_read: ReadT,
+    observation_of: Callable[[ReadT], Observation],
+    reobserve: Callable[[], Awaitable[ReadT]],
+    clock: Callable[[], Timestamp],
+    timeout_s: float,
+    poll_s: float,
+    target: Any = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[ExecutionVerification, ReadT]:
+    """Verify one dispatched action, re-reading until it confirms or *timeout_s* runs out.
+
+    **One bounded re-read, for every action.** The first evaluation is against *first_read* -- the
+    observation the run loop already assembled after dispatch, so a client that keeps up costs
+    nothing extra. Only if that says "not confirmed" does this re-read, every *poll_s* until
+    *timeout_s*, and only the LAST of those readings is recorded. The bound fails closed: an effect
+    the game never confirms inside it is still ``verification_failed``, never assumed applied --
+    but it is now recorded with the window it was looked for in and with
+    :func:`last_read`'s quotation of what the final read said, so "the client was a beat behind"
+    and "the game refused the order" stop being the same row in the ledger.
+
+    *first_read* and whatever *reobserve* returns are opaque to this function: the run loop's reads
+    carry recovery events alongside the observation, and it needs the bundle that belongs to the
+    reading actually recorded, not just its ``Observation``. *observation_of* projects one out.
+    *sleep* and *monotonic* are injectable so a test can drive the whole window without waiting.
+
+    Returns the verification and the read it was derived from -- always the last one taken, so the
+    caller records the observation it actually verified against.
+    """
+    started = monotonic()
+    deadline = started + timeout_s
+    read = first_read
+    attempts = 0
+
+    while True:
+        attempts += 1
+        window = ConfirmWindow(
+            timeout_s=timeout_s,
+            poll_s=poll_s,
+            attempts=attempts,
+            elapsed_s=monotonic() - started,
+        )
+        verification = verify_execution(
+            declaration=declaration,
+            pre_observation=pre_observation,
+            post_observation=observation_of(read),
+            target=target,
+            verified_at=clock(),
+            confirm_window=window,
+        )
+        if verification.execution.outcome is ExecutionOutcome.APPLIED:
+            return verification, read
+        if monotonic() >= deadline:
+            return verification, read
+        await sleep(poll_s)
+        read = await reobserve()

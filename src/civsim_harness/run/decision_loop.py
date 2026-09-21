@@ -52,13 +52,12 @@ default or heuristic move for the missing decision.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
-import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, Protocol
 
 from civsim_harness.act.camera import CAMERA_ACTION_DECLARATION_IDS, validate_camera_action
@@ -69,7 +68,7 @@ from civsim_harness.act.dispatch import (
 )
 from civsim_harness.act.predicates import resolve_selected_subject_target
 from civsim_harness.act.prompts import PromptRouteStatus, route_prompt
-from civsim_harness.act.verify import verify_execution
+from civsim_harness.act.verify import confirm_execution
 from civsim_harness.agent.context import assemble_context, select_screened_images
 from civsim_harness.agent.decisions import RESPONSE_SCHEMA, build_decision
 from civsim_harness.capability.registry import CapabilityRegistry
@@ -851,7 +850,38 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
                 raw_decision.parameters,
                 raw_decision.parameters.get("target"),
             )
-            next_fresh = await _observe_or_wrap(
+            # MEASURED (2026-09-21, model-driven attempt 4): the client confirms an end turn
+            # only after the AI players' turns, so the fresh read taken the instant the
+            # dispatch returned recorded the agent's own end turn as `verification_failed`
+            # while the turn had in fact ended (game 14 -> 15 on read-back).
+            #
+            # MEASURED again (2026-09-21, gameplay block 2, run-d2184c44): the same shape for
+            # every other order. `units.move_to` was dispatched, `RequestOperation` accepted
+            # it, and the read taken at +0 s still showed the warrior on its old plot -- the
+            # unit was on the destination at +1 s (probed live, turn 25). Four of seven moves
+            # were recorded `verification_failed` for that reason alone.
+            #
+            # So every action's verification is bounded-re-read by one shared implementation,
+            # `act.verify.confirm_execution` -- the same shape the no-progress backstop's end turn
+            # uses in `turn_cycle.py` -- with a short bound for an in-turn order and the long one
+            # for the end turn. The first evaluation is against the read the loop already took, so
+            # a client that keeps up costs nothing; an effect not confirmed within its bound stays
+            # unconfirmed, now recorded with that bound and with what the last read said.
+            if raw_decision.is_end_turn:
+                confirm_timeout_s, confirm_poll_s = (
+                    END_TURN_CONFIRM_TIMEOUT_S,
+                    END_TURN_CONFIRM_POLL_S,
+                )
+            else:
+                confirm_timeout_s, confirm_poll_s = (
+                    ACTION_CONFIRM_TIMEOUT_S,
+                    ACTION_CONFIRM_POLL_S,
+                )
+
+            # `partial`, not a closure: every value is bound now, at this step, so the re-read
+            # can never pick up a later step's ids (ruff B023's exact hazard).
+            reobserve = partial(
+                _observe_or_wrap,
                 ctx,
                 step_id=next_step_id,
                 step_index=next_step_index,
@@ -859,58 +889,19 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
                 completed_events=tuple(events),
                 no_progress_streak=tracker.streak,
             )
-            verification = verify_execution(
+
+            next_fresh = await reobserve()
+            verification, next_fresh = await confirm_execution(
                 declaration=declaration,
                 pre_observation=observation,
-                post_observation=next_fresh.observation,
+                first_read=next_fresh,
+                observation_of=lambda fresh: fresh.observation,
+                reobserve=reobserve,
                 target=raw_decision.parameters.get("target"),
-                verified_at=ctx.clock(),
+                clock=ctx.clock,
+                timeout_s=confirm_timeout_s,
+                poll_s=confirm_poll_s,
             )
-            if verification.execution.outcome is not ExecutionOutcome.APPLIED:
-                # MEASURED (2026-09-21, model-driven attempt 4): the client confirms an end turn
-                # only after the AI players' turns, so the fresh read taken the instant the
-                # dispatch returned recorded the agent's own end turn as `verification_failed`
-                # while the turn had in fact ended (game 14 -> 15 on read-back). Same bounded
-                # re-read the backstop uses (turn_cycle.py); an unconfirmed end turn within the
-                # bound is still recorded as such, never assumed.
-                #
-                # MEASURED again (2026-09-21, gameplay block 2, run-d2184c44): the same shape for
-                # every other order. `units.move_to` was dispatched, `RequestOperation` accepted
-                # it, and the read taken at +0 s still showed the warrior on its old plot -- the
-                # unit was on the destination at +1 s (probed live, turn 25). Four of seven moves
-                # were recorded `verification_failed` for that reason alone. So every action gets
-                # the bounded re-read, with a short bound for an in-turn order and the long one
-                # for the end turn; an effect not confirmed within its bound stays unconfirmed.
-                if raw_decision.is_end_turn:
-                    confirm_timeout_s, confirm_poll_s = (
-                        END_TURN_CONFIRM_TIMEOUT_S,
-                        END_TURN_CONFIRM_POLL_S,
-                    )
-                else:
-                    confirm_timeout_s, confirm_poll_s = (
-                        ACTION_CONFIRM_TIMEOUT_S,
-                        ACTION_CONFIRM_POLL_S,
-                    )
-                deadline = time.monotonic() + confirm_timeout_s
-                while time.monotonic() < deadline:
-                    await asyncio.sleep(confirm_poll_s)
-                    next_fresh = await _observe_or_wrap(
-                        ctx,
-                        step_id=next_step_id,
-                        step_index=next_step_index,
-                        completed_steps=tuple(steps),
-                        completed_events=tuple(events),
-                        no_progress_streak=tracker.streak,
-                    )
-                    verification = verify_execution(
-                        declaration=declaration,
-                        pre_observation=observation,
-                        post_observation=next_fresh.observation,
-                        target=raw_decision.parameters.get("target"),
-                        verified_at=ctx.clock(),
-                    )
-                    if verification.execution.outcome is ExecutionOutcome.APPLIED:
-                        break
             execution = verification.execution
             progress = verification.progress
 
