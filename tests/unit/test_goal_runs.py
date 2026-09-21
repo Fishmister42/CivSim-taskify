@@ -14,6 +14,7 @@ notes.
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 from dataclasses import dataclass
@@ -27,6 +28,16 @@ if str(REPO / "tests") not in sys.path:
     sys.path.insert(0, str(REPO / "tests"))
 
 from civsim_harness.models.run import LifecycleState  # noqa: E402
+from civsim_harness.provider.openrouter import OpenRouterProvider  # noqa: E402
+from civsim_harness.provider.stochastic import (  # noqa: E402
+    STOCHASTIC_MODEL_NAME_BY_POLICY,
+    StochasticModelProvider,
+)
+from civsim_harness.run.composition import (  # noqa: E402
+    PROVIDER_POLICY_NAMES,
+    build_provider,
+    build_runner_dependencies,
+)
 from live import goal_run  # noqa: E402
 from live.goal_run import (  # noqa: E402
     Goal,
@@ -229,12 +240,20 @@ def test_every_shipped_goal_loads_and_validates() -> None:
 
 
 def test_shipped_blocked_goals_name_their_blocker() -> None:
+    """A `blocked_by` must name something concrete, and it is removed when the block lifts.
+
+    Deliberately not pinned to a fixed set of ids: the two production goals were blocked on the
+    empty `city.available_productions` list and were unblocked in cfc6cee when the body landed,
+    and any future unblocking should be a one-line YAML deletion, not a test edit. What is pinned
+    is that `use_a_builder` stays blocked -- no action in `catalogs/actions/` spends a builder
+    charge -- because unblocking that one requires a new catalog declaration, not a body fix.
+    """
     goals = load_goals()
-    blocked = {g.goal_id: g.blocked_by for g in goals.values() if g.is_blocked}
-    assert set(blocked) == {"set_capital_production", "build_a_builder", "use_a_builder"}
-    assert "available_productions" in (blocked["set_capital_production"] or "")
-    assert "available_productions" in (blocked["build_a_builder"] or "")
-    assert "catalog gap" in (blocked["use_a_builder"] or "")
+    blocked = {g.goal_id: (g.blocked_by or "") for g in goals.values() if g.is_blocked}
+    assert "use_a_builder" in blocked
+    assert "catalog gap" in blocked["use_a_builder"]
+    for goal_id, reason in blocked.items():
+        assert len(reason.split()) >= 5, f"{goal_id}'s blocked_by does not say what is blocking it"
 
 
 def test_depends_on_resolves_to_a_chain() -> None:
@@ -452,18 +471,148 @@ def test_feasibility_reports_which_goals_are_runnable_now() -> None:
 
 
 def test_a_blocked_goal_is_never_reported_runnable_even_with_its_prerequisites_met() -> None:
-    entries = observation(cities=[city(65536, productions=["UNIT_BUILDER"])])
-    report = {row.goal_id: row for row in assess_feasibility(entries)}
-    blocked = report["set_capital_production"]
+    """The block is a statement about the harness, so it outranks a satisfied prerequisite.
+
+    Built from a synthetic library rather than whichever shipped goal happens to be blocked
+    today, so unblocking a real goal (cfc6cee) never breaks this rule's own test.
+    """
+    satisfiable = Goal(
+        goal_id="blocked_sample",
+        title="Blocked sample",
+        objective="Do one thing.",
+        success="player.cities.count >= 1",
+        prerequisites=("player.cities.count >= 1",),
+        turn_cap=2,
+        blocked_by="a body the harness cannot read yet",
+    )
+    report = {
+        row.goal_id: row
+        for row in assess_feasibility(
+            observation(cities=[city(65536)]), goals={satisfiable.goal_id: satisfiable}
+        )
+    }
+    blocked = report["blocked_sample"]
     assert all(check.met for check in blocked.prerequisites)
     assert blocked.runnable is False
     assert blocked.blocked_by is not None
+    assert "BLOCKED" in format_feasibility(list(report.values()))
 
 
 def test_feasibility_text_names_the_unmet_prerequisite() -> None:
     text = format_feasibility(assess_feasibility(observation()))
     assert "player.units.settler_count >= 1" in text
     assert "runnable now" in text
+
+
+# --------------------------------------------------------------------------
+# 3b. The provider hand-off, against the REAL composition root
+# --------------------------------------------------------------------------
+#
+# MEASURED 2026-09-21: T262 (307a630) gave `run/composition.build_provider` and the demo driver's
+# `resolve_provider` a new required `policy` argument. This driver's only call site sat three
+# frames inside a live run, so the drift surfaced as a `TypeError` on the client -- a whole live
+# block lost to a signature change the suite could have caught. Every test below builds the
+# driver's provider through the real production function, never a fake, for exactly that reason.
+
+
+@pytest.mark.parametrize("provider_name", ["openrouter", "stochastic", "fake"])
+@pytest.mark.parametrize("policy", list(PROVIDER_POLICY_NAMES))
+def test_the_driver_can_build_every_provider_through_the_real_composition_root(
+    provider_name: str, policy: str
+) -> None:
+    """`build_goal_provider` is the driver's literal call site -- exercise it, not a copy."""
+    provider = goal_run.build_goal_provider(provider_name, seed=7, policy=policy)
+    if provider_name == "openrouter":
+        # Deliberately None: the composition root builds its own `OpenRouterProvider` default,
+        # so this driver never constructs the paid adapter itself (demo_landed_run's own rule).
+        assert provider is None
+    else:
+        assert provider is not None
+        assert hasattr(provider, "complete")
+
+
+@pytest.mark.parametrize("policy", list(PROVIDER_POLICY_NAMES))
+def test_the_composition_roots_own_build_provider_takes_the_policy_the_driver_passes(
+    policy: str,
+) -> None:
+    """The production function itself, called with the driver's exact keyword arguments."""
+    stochastic = build_provider("stochastic", seed=7, policy=policy)
+    assert isinstance(stochastic, StochasticModelProvider)
+    assert isinstance(build_provider("openrouter", seed=7, policy=policy), OpenRouterProvider)
+
+
+def test_the_stochastic_provider_actually_honours_the_policy_the_driver_forwards() -> None:
+    """Not merely accepted and dropped: the policy reaches what the store records as the model.
+
+    The two policies must never be indistinguishable in `model_calls` (provider/stochastic.py's
+    own P3 note), so a goal run's record says which sampler produced it.
+    """
+    uniform = goal_run.build_goal_provider("stochastic", seed=7, policy="uniform")
+    coverage = goal_run.build_goal_provider("stochastic", seed=7, policy="coverage")
+    assert uniform.policy == "uniform"
+    assert coverage.policy == "coverage"
+    assert STOCHASTIC_MODEL_NAME_BY_POLICY["uniform"] != STOCHASTIC_MODEL_NAME_BY_POLICY[
+        "coverage"
+    ]
+
+
+def test_the_driver_offers_the_same_policy_flag_and_default_as_the_demo_driver() -> None:
+    parser = goal_run.build_parser()
+    args = parser.parse_args(["--goal", "change_research", "out"])
+    assert args.provider_policy == goal_run.DEFAULT_PROVIDER_POLICY == "uniform"
+    assert parser.parse_args(
+        ["--goal", "change_research", "--provider-policy", "coverage", "out"]
+    ).provider_policy == "coverage"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--goal", "change_research", "--provider-policy", "invented", "out"])
+
+
+def test_every_call_this_driver_reuses_from_the_demo_driver_still_binds() -> None:
+    """The same drift guard, widened to every function this driver reuses rather than copies.
+
+    `demo_landed_run` is shared, live-facing code that other agents edit during a play day; a
+    goal run that only discovers a changed signature three frames into a started run costs a
+    block. Binding each call here is cheap and fails in CI instead.
+    """
+    demo = goal_run._demo()
+    inspect.signature(demo.read_setup).bind()
+    inspect.signature(demo.write_config).bind(
+        Path("out"), {}, provider="openrouter", turns=3, use_seed_set=True
+    )
+    inspect.signature(demo.store_counts).bind(Path("store.db"), "run-1")
+    inspect.signature(demo.resolve_provider).bind("stochastic", seed=0, policy="uniform")
+    inspect.signature(demo.Recorder).bind(object())
+    inspect.signature(demo.get_host_platform).bind()
+
+
+def test_the_composition_root_still_accepts_the_drivers_dependency_wiring() -> None:
+    """`guidance_root` is how the objective reaches the agent -- a rename would silence the goal."""
+    inspect.signature(build_runner_dependencies).bind(
+        store=object(),
+        host=object(),
+        catalog_root=Path("catalogs"),
+        guidance_root=Path("out"),
+        provider=None,
+    )
+
+
+def test_run_goal_accepts_and_forwards_the_policy() -> None:
+    """The keyword really reaches `run_goal`, so `main()`'s forwarding cannot silently drop it."""
+    signature = inspect.signature(goal_run.run_goal)
+    assert "provider_policy" in signature.parameters
+    signature.bind(
+        load_goals()["change_research"],
+        Path("out"),
+        provider="stochastic",
+        provider_seed=0,
+        provider_policy="coverage",
+        turns=2,
+        store_path=Path("store.db"),
+        host=None,
+        recorder=None,
+        use_seed_set=True,
+        force=False,
+    )
 
 
 # --------------------------------------------------------------------------

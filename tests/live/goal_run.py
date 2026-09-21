@@ -9,6 +9,8 @@ accomplish and reads the same board a human would.
 
     uv run python -m tests.live.goal_run --goal found_second_city --provider openrouter \
         --turns 15 OUT_DIR
+    uv run python -m tests.live.goal_run --goal move_unit_to_plot --provider stochastic \
+        --provider-policy coverage OUT_DIR
     uv run python -m tests.live.goal_run --feasibility --store civsim-match-store.db
 
 **Principle I (NON-NEGOTIABLE), stated plainly.** The agent receives *only* :attr:`Goal.objective`
@@ -72,6 +74,14 @@ from civsim_harness.act.predicates import (  # noqa: E402
 )
 from civsim_harness.capability.loader import load_catalog  # noqa: E402
 from civsim_harness.models.catalog import DeclarationKind  # noqa: E402
+from civsim_harness.run.composition import PROVIDER_POLICY_NAMES  # noqa: E402
+
+#: The sampling policy `--provider-policy` defaults to, kept identical to
+#: `tests/live/demo_landed_run.py`'s own default so the two drivers behave the same way on the
+#: same flags. `uniform` is the original behaviour; `coverage` (T262) draws only from the actions
+#: the decision request shows as available right now. Both are ignored by every provider without
+#: a sampler (`openrouter`, `fake`).
+DEFAULT_PROVIDER_POLICY = "uniform"
 
 GOALS_DIR: Path = Path(__file__).resolve().parent / "goals"
 CATALOG_ROOT: Path = REPO / "catalogs"
@@ -891,6 +901,19 @@ def _demo() -> Any:
     return importlib.import_module(f"{package}.demo_landed_run")
 
 
+def build_goal_provider(name: str, *, seed: int, policy: str) -> Any:
+    """The provider this driver hands the composition root, resolved as the demo driver does.
+
+    Its own named function, rather than an inline call inside :func:`run_goal`, so a unit test can
+    exercise **this exact call** against the real ``run/composition.build_provider`` for every
+    provider name. MEASURED the hard way (2026-09-21): T262 gave ``build_provider`` and the demo
+    driver's ``resolve_provider`` a new required ``policy`` argument, and this driver -- whose
+    only call site was three frames inside a live run -- aborted with a ``TypeError`` on the
+    client instead of in CI. A signature drift must fail in the suite now.
+    """
+    return _demo().resolve_provider(name, seed=seed, policy=policy)
+
+
 def _patch_config_for_goal(config_path: Path, goal: Goal, guidance_file: str) -> None:
     """Point the written run configuration at this goal's guidance file and turn cap.
 
@@ -924,6 +947,7 @@ def run_goal(
     *,
     provider: str,
     provider_seed: int,
+    provider_policy: str = DEFAULT_PROVIDER_POLICY,
     turns: int,
     store_path: Path,
     host: Any,
@@ -963,12 +987,12 @@ def run_goal(
         host=host,
         catalog_root=catalog_root if catalog_root is not None else CATALOG_ROOT,
         guidance_root=part_dir,
-        provider=demo.resolve_provider(provider, seed=provider_seed),
+        provider=build_goal_provider(provider, seed=provider_seed, policy=provider_policy),
     )
     runner = Runner(deps)
     recorder.note(
         f"PRODUCTION: Runner.start({config_path.name}) [goal={goal.goal_id} "
-        f"provider={provider} turn_cap={turns}]"
+        f"provider={provider} provider_policy={provider_policy} turn_cap={turns}]"
     )
     try:
         run_id = runner.start(config_path)
@@ -979,6 +1003,7 @@ def run_goal(
             "title": goal.title,
             "turn_cap": turns,
             "provider": provider,
+            "provider_policy": provider_policy,
             "reached": False,
             "blocked_by": goal.blocked_by,
             "error": str(exc),
@@ -996,6 +1021,7 @@ def run_goal(
         catalog_root=catalog_root,
     )
     result["provider"] = provider
+    result["provider_policy"] = provider_policy
     result["game_start_turn"] = start_turn
     result["store"] = demo.store_counts(store_path, str(run_id))
     if result.get("final_state") == "paused":
@@ -1141,7 +1167,8 @@ def summarize(results: Mapping[str, Any]) -> str:
     lines.append(f"### Goal run: {chain or results.get('goal', '?')}")
     lines.append("")
     lines.append(
-        f"- provider: `{results.get('provider')}` | started {results.get('started_at')} "
+        f"- provider: `{results.get('provider')}`"
+        f" (policy `{results.get('provider_policy')}`) | started {results.get('started_at')} "
         f"| finished {results.get('finished_at')}"
     )
     for part in parts:
@@ -1246,6 +1273,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--goal", help="goal id from tests/live/goals/")
     parser.add_argument("--provider", choices=("fake", "openrouter", "stochastic"), default="fake")
     parser.add_argument("--provider-seed", type=int, default=0)
+    # T262, same choices and same default as tests/live/demo_landed_run.py: ignored by every
+    # provider without a sampler, so a goal run on `openrouter` is unaffected by it.
+    parser.add_argument(
+        "--provider-policy",
+        choices=PROVIDER_POLICY_NAMES,
+        default=DEFAULT_PROVIDER_POLICY,
+        help=(
+            "how --provider stochastic samples: 'coverage' draws only from the actions the "
+            "request shows as available now; 'uniform' (default) draws from everything it lists"
+        ),
+    )
     parser.add_argument(
         "--turns", type=int, default=None, help="override the goal's own turn_cap"
     )
@@ -1305,6 +1343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "chain": [g.goal_id for g in chain],
         "provider": args.provider,
         "provider_seed": args.provider_seed,
+        "provider_policy": args.provider_policy,
         "store": str(args.store),
         "started_at": datetime.now(UTC).isoformat(),
         "parts": [],
@@ -1316,6 +1355,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 out / f"{index:02d}-{goal.goal_id}",
                 provider=args.provider,
                 provider_seed=args.provider_seed,
+                provider_policy=args.provider_policy,
                 turns=args.turns if args.turns is not None else goal.turn_cap,
                 store_path=Path(args.store),
                 host=host,
