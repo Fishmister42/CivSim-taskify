@@ -459,6 +459,33 @@ def test_refusals_are_grouped_by_reason_and_never_counted_as_demonstrations(
     assert move.attempts == 1 and move.demonstrated is False
 
 
+def test_an_attempt_refused_as_unavailable_is_drawn_while_unavailable_not_an_attempt(
+    store: SqliteMatchStore,
+) -> None:
+    """T262. The dispatcher refused it before it reached the client, because the game was not
+    offering the command -- a human does not make that choice, the button is greyed out. It is
+    counted as drawn while unavailable, and it is not evidence the action was exercised."""
+    scorecard = _score(store, run_ids=(RUN_ID,))
+
+    move = _action(scorecard, "units.move_to")
+    assert (move.attempts, move.drawn_while_unavailable) == (1, 1)
+    assert move.attempts_while_available == 0
+    assert move.only_drawn_while_unavailable is True
+
+    # A refusal for any *other* reason is still a real attempt: the action reached the client.
+    end_turn = _action(scorecard, "turn.end_turn")
+    assert dict(end_turn.refusals_by_reason) == {"verification_failed": 1}
+    assert (end_turn.drawn_while_unavailable, end_turn.attempts_while_available) == (0, 1)
+    assert end_turn.only_drawn_while_unavailable is False
+
+    found_city = _action(scorecard, "units.found_city")
+    assert (found_city.attempts, found_city.attempts_while_available) == (2, 2)
+
+    never = _action(scorecard, "camera.move")
+    assert (never.attempts, never.attempts_while_available) == (0, 0)
+    assert never.only_drawn_while_unavailable is False, "never issued is not drawn-while-greyed"
+
+
 def test_headline_percentages_separate_applied_from_merely_attempted(
     store: SqliteMatchStore,
 ) -> None:
@@ -472,6 +499,13 @@ def test_headline_percentages_separate_applied_from_merely_attempted(
 
     attempted = headlines["Actions ever attempted"]
     assert (attempted.demonstrated, attempted.total) == (4, 5)
+
+    # T262: `units.move_to` was only ever drawn while the game was not offering it, so it does
+    # not count here -- the headline says what was attempted while it could have worked.
+    while_available = headlines["Actions attempted while available"]
+    assert (while_available.demonstrated, while_available.total) == (3, 5)
+    assert while_available.summary == "Actions attempted while available: 3 of 5 (60.0%)"
+    assert "drawn while unavailable" in while_available.note
 
     assert headlines["Observations demonstrated live"].demonstrated == 2
     assert headlines["Views (capture targets) demonstrated"].demonstrated == 1
@@ -488,6 +522,7 @@ def test_the_never_demonstrated_lists_name_every_undemonstrated_id(
     assert never["actions"] == ("camera.move", "turn.end_turn", "units.move_to")
     assert never["actions_attempted_never_applied"] == ("turn.end_turn", "units.move_to")
     assert never["actions_never_attempted"] == ("camera.move",)
+    assert never["actions_only_drawn_while_unavailable"] == ("units.move_to",)
     assert never["observations"] == ("research.state", "units.state")
     assert never["views"] == ("views.city_screen",)
     assert never["screens"] == ("prompt.unit_promotion", "strategic")
@@ -687,10 +722,17 @@ def test_markdown_carries_the_headlines_evidence_and_never_demonstrated_list(
     text = render_markdown(_score(store, run_ids=(RUN_ID,)))
     assert "# CivSim live coverage scorecard" in text
     assert "**Actions demonstrated live: 2 of 5 (40.0%)**" in text
-    assert "| `units.found_city` | 1 | 1 |" in text
+    assert "**Actions attempted while available: 3 of 5 (60.0%)**" in text
+    # applied | refused | drawn while unavailable | attempts while available
+    assert "| `units.found_city` | 1 | 1 | 0 | 2 |" in text
+    assert "| `units.move_to` | 0 | 1 | 1 | 0 |" in text
     assert f"{RUN_ID} t1/s1" in text
     assert "unavailable_to_human_now x1" in text
     assert "**Actions never even attempted (1)**: `camera.move`" in text
+    assert (
+        "**Actions only ever drawn while unavailable (1)**: `units.move_to`" in text
+    )
+    assert "1 of them drawn while unavailable" in text
     assert "## What the store cannot attest to" in text
 
 
@@ -702,6 +744,17 @@ def test_json_carries_the_same_numbers_as_the_markdown(store: SqliteMatchStore) 
     assert headlines["Actions demonstrated live"]["demonstrated"] == 2
     assert headlines["Actions demonstrated live"]["total"] == 5
     assert headlines["Actions demonstrated live"]["percent"] == 40.0
+    while_available = headlines["Actions attempted while available"]
+    assert (while_available["demonstrated"], while_available["total"]) == (3, 5)
+    assert while_available["percent"] == 60.0
+    move = next(row for row in payload["actions"] if row["declaration_id"] == "units.move_to")
+    assert move["attempts"] == 1
+    assert move["drawn_while_unavailable"] == 1
+    assert move["attempts_while_available"] == 0
+    assert move["only_drawn_while_unavailable"] is True
+    assert payload["never_demonstrated"]["actions_only_drawn_while_unavailable"] == [
+        "units.move_to"
+    ]
     found_city = next(
         row for row in payload["actions"] if row["declaration_id"] == "units.found_city"
     )

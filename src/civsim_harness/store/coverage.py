@@ -15,6 +15,15 @@ explicit never-demonstrated list):
   ``ExecutionOutcome.APPLIED`` on record; *attempted* means the agent issued it and the harness
   recorded an outcome of any kind. The two are reported separately because they are wildly
   different claims, and conflating them is exactly how a coverage number lies.
+
+  T262 splits *attempted* once more, for the same reason. An attempt the dispatcher refused as
+  ``unavailable_to_human_now`` never reached the client at all: the agent chose a command the
+  game was not offering, which a human does not do because the button is greyed out. That is
+  **drawn while unavailable**, and it is not evidence about the harness -- it is evidence about
+  how the action was chosen. *Attempts while available* is the difference, and it is what
+  "Actions attempted while available: N of 38" counts. MEASURED (2026-09-21): of the fourteen
+  catalog actions attempted but never applied, nine had *only* ever been drawn while
+  unavailable, and the old headline counted every one of them as an attempt.
 - **observations** -- one row per ``kind: observation`` declaration. *Demonstrated* means it
   produced a non-empty value at at least one decision step (:func:`_is_non_empty`).
 - **views** -- one row per ``kind: view`` declaration: the capture targets. Counted from the
@@ -60,6 +69,7 @@ from civsim_harness.observe.screen_identity import PROMPT_SCREEN_PREFIX, UNKNOWN
 from civsim_harness.store.contract import MatchTrackingStore
 
 __all__ = [
+    "UNAVAILABLE_REFUSAL_REASON",
     "ActionCoverage",
     "ClaimedSurface",
     "CoverageScorecard",
@@ -289,9 +299,27 @@ class Evidence:
         }
 
 
+#: The dispatch-time refusal that means "the agent chose a command the game was not offering"
+#: (``models/decision.py``'s ``RejectionReason.UNAVAILABLE_TO_HUMAN_NOW``). A human does not
+#: make that choice, because the button is greyed out, so counting it as an *attempt at the
+#: action* overstates the surface that has really been exercised. Spelled once, here.
+UNAVAILABLE_REFUSAL_REASON = "unavailable_to_human_now"
+
+
 @dataclass(frozen=True)
 class ActionCoverage:
-    """One catalog action, and what the store says it ever did."""
+    """One catalog action, and what the store says it ever did.
+
+    **Attempts, and attempts that could have worked (T262).** ``attempts`` counts every time the
+    agent issued this action; ``drawn_while_unavailable`` is the subset the dispatcher refused as
+    :data:`UNAVAILABLE_REFUSAL_REASON` -- the agent chose a command the game was not offering, and
+    the action never reached the client. ``attempts_while_available`` is the difference, and it is
+    the honest number: it counts only the times this action was actually on the board when it was
+    chosen, so whether it then applied says something about the harness rather than about the
+    sampler's aim. MEASURED (2026-09-21): nine of the fourteen actions that had been attempted but
+    never applied had *only* ever been drawn while unavailable -- the old headline counted every
+    one of them as a demonstrated attempt.
+    """
 
     declaration_id: str
     applied: int = 0
@@ -305,12 +333,28 @@ class ActionCoverage:
 
     @property
     def attempts(self) -> int:
+        """Every time the agent issued this action, whatever came of it."""
         return self.applied + self.rejected + self.partially_applied
+
+    @property
+    def drawn_while_unavailable(self) -> int:
+        """Attempts refused at dispatch because the game was not offering this command."""
+        return self.refusals_by_reason.get(UNAVAILABLE_REFUSAL_REASON, 0)
+
+    @property
+    def attempts_while_available(self) -> int:
+        """Attempts made while the command was on the board -- never negative by construction."""
+        return self.attempts - self.drawn_while_unavailable
 
     @property
     def demonstrated(self) -> bool:
         """Applied at least once on a live client -- the only claim worth making."""
         return self.applied > 0
+
+    @property
+    def only_drawn_while_unavailable(self) -> bool:
+        """Issued at least once, and never once while the game was offering it."""
+        return self.attempts > 0 and self.attempts_while_available == 0
 
 
 @dataclass(frozen=True)
@@ -500,6 +544,14 @@ class CoverageScorecard:
                 "issued by the agent, applied or refused",
             ),
             Headline(
+                "Actions attempted while available",
+                sum(1 for row in self.actions if row.attempts_while_available > 0),
+                len(self.actions),
+                "issued while the game was actually offering the command -- an attempt refused "
+                f"as {UNAVAILABLE_REFUSAL_REASON} is counted as drawn while unavailable, not as "
+                "an attempt at the action",
+            ),
+            Headline(
                 "Observations demonstrated live",
                 sum(1 for row in self.observations if row.demonstrated),
                 len(self.observations),
@@ -551,6 +603,12 @@ class CoverageScorecard:
             ),
             "actions_never_attempted": tuple(
                 row.declaration_id for row in self.actions if row.attempts == 0
+            ),
+            # T262: issued, but never once while the game was offering the command. These are
+            # not evidence about the harness at all -- they are evidence about how the action
+            # was chosen, and the two must not be read as the same number.
+            "actions_only_drawn_while_unavailable": tuple(
+                row.declaration_id for row in self.actions if row.only_drawn_while_unavailable
             ),
             "observations": tuple(
                 row.declaration_id for row in self.observations if not row.demonstrated
@@ -1086,6 +1144,8 @@ def render_markdown(scorecard: CoverageScorecard) -> str:
                     "action",
                     "applied",
                     "refused",
+                    "drawn while unavailable",
+                    "attempts while available",
                     "first applied",
                     "last applied",
                     "refusals by reason",
@@ -1095,6 +1155,8 @@ def render_markdown(scorecard: CoverageScorecard) -> str:
                         f"`{row.declaration_id}`",
                         str(row.applied),
                         str(row.rejected + row.partially_applied),
+                        str(row.drawn_while_unavailable),
+                        str(row.attempts_while_available),
                         _evidence(row.first_applied),
                         _evidence(row.last_applied),
                         _reasons(row.refusals_by_reason),
@@ -1236,12 +1298,29 @@ def render_markdown(scorecard: CoverageScorecard) -> str:
     out.append(
         f"**Actions attempted but never applied ({len(tried)})**: "
         + (
-            ", ".join(f"`{row.declaration_id}` ({row.attempts} refused)" for row in tried)
+            ", ".join(
+                f"`{row.declaration_id}` ({row.attempts} refused"
+                + (
+                    f", {row.drawn_while_unavailable} of them drawn while unavailable)"
+                    if row.drawn_while_unavailable
+                    else ")"
+                )
+                for row in tried
+            )
             or "_(none)_"
         )
     )
     out.append("")
     out.append(f"**Actions never even attempted ({len(untried)})**: {_inline_list(untried)}")
+    out.append("")
+    only_unavailable = never["actions_only_drawn_while_unavailable"]
+    out.append(
+        f"**Actions only ever drawn while unavailable ({len(only_unavailable)})**: "
+        f"{_inline_list(only_unavailable)} -- issued, but never once while the game was "
+        "offering the command, so the dispatcher refused them before they reached the client. "
+        "These say nothing about the harness; they say the action was chosen off a board that "
+        "did not offer it."
+    )
     out.append("")
     out.append(
         f"**Observations ({len(never['observations'])})**: {_inline_list(never['observations'])}"
@@ -1307,6 +1386,9 @@ def render_json(scorecard: CoverageScorecard) -> dict[str, Any]:
                 "rejected": row.rejected,
                 "partially_applied": row.partially_applied,
                 "attempts": row.attempts,
+                "drawn_while_unavailable": row.drawn_while_unavailable,
+                "attempts_while_available": row.attempts_while_available,
+                "only_drawn_while_unavailable": row.only_drawn_while_unavailable,
                 "prompt_responses": row.prompt_responses,
                 "refusals_by_reason": dict(row.refusals_by_reason),
                 "first_applied": row.first_applied.as_dict() if row.first_applied else None,
