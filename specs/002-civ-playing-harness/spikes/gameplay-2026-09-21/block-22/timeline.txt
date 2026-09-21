@@ -1,0 +1,12 @@
+t+000s  recording started: every frame via production capture_window() (window-scoped)
+t+000s  PRODUCTION: LuaGameSetupReader read-back of the live setup (V2's own path)
+t+000s  live setup: turn=57 civilization=CIVILIZATION_PERSIA leader=LEADER_CYRUS ruleset=RULESET_EXPANSION_2 difficulty=DIFFICULTY_EMPEROR game_speed=GAMESPEED_ONLINE starting_era=ERA_ANCIENT map_size=MAPSIZE_SMALL map_seed=1745156737 major_count=5
+t+000s  PRODUCTION: Runner.start(run-config.yaml) via build_runner_dependencies [provider=openrouter provider_seed=0]
+t+001s  run created: run-0feb5d5575574f62a0dd0b92bda1b1d9
+t+001s  status: playing turn=1 step=None
+t+031s  status: playing turn=2 step=None
+t+098s  status: playing turn=3 step=None
+t+259s  status: paused turn=3 step=None last_error=type='BackstopEndTurnNotConfirmed' at=datetime.datetime(2026, 9, 21, 22, 18, 2, 216124, tzinfo=datetime.timezone.utc)
+t+259s  run paused: the driver treats a paused run as this block's terminal state
+t+259s  run paused after 259s
+t+262s  paused run: stale run-identity lock cleared by the driver (run-0feb5d5575574f62a0dd0b92bda1b1d9.lock.json)

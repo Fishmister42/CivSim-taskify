@@ -1,0 +1,16 @@
+head=3aad0c8
+ M catalogs/README.md
+ M catalogs/VERSION
+ M catalogs/actions/cities.yaml
+ M catalogs/capabilities.yaml
+ M catalogs/observations/cities.yaml
+ M lua/gamecore/cities.lua
+ M lua/ingame/city_orders.lua
+ M pyproject.toml
+ M src/civsim_harness/run/composition.py
+ M src/civsim_harness/run/turn_cycle.py
+ M tests/integration/test_capture_preflight.py
+ M tests/integration/test_image_attachment.py
+ M tests/integration/test_recovery.py
+ M tests/unit/test_turn_state_machine.py
+ M uv.lock

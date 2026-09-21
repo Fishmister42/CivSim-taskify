@@ -1,0 +1,10 @@
+head=df4018e
+ M pyproject.toml
+ M src/civsim_harness/act/predicates.py
+ M src/civsim_harness/agent/context.py
+ M src/civsim_harness/provider/stochastic.py
+ M src/civsim_harness/run/turn_cycle.py
+ M tests/integration/test_capture_preflight.py
+ M tests/integration/test_image_attachment.py
+ M tests/integration/test_recovery.py
+ M uv.lock

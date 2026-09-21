@@ -1,0 +1,13 @@
+t+000s  recording started: every frame via production capture_window() (window-scoped)
+t+000s  PRODUCTION: LuaGameSetupReader read-back of the live setup (V2's own path)
+t+000s  live setup: turn=54 civilization=CIVILIZATION_PERSIA leader=LEADER_CYRUS ruleset=RULESET_EXPANSION_2 difficulty=DIFFICULTY_EMPEROR game_speed=GAMESPEED_ONLINE starting_era=ERA_ANCIENT map_size=MAPSIZE_SMALL map_seed=1745156737 major_count=5
+t+000s  PRODUCTION: Runner.start(run-config.yaml) via build_runner_dependencies [provider=openrouter provider_seed=0]
+t+001s  run created: run-b4531bbec21249d8b999631d0842576c
+t+001s  status: playing turn=1 step=None
+t+134s  status: playing turn=2 step=None
+t+177s  status: playing turn=3 step=None
+t+237s  status: playing turn=4 step=None
+t+239s  status: paused turn=4 step=None last_error=type='UnknownScreenEncountered' at=datetime.datetime(2026, 9, 21, 22, 3, 45, 606942, tzinfo=datetime.timezone.utc)
+t+239s  run paused: the driver treats a paused run as this block's terminal state
+t+239s  run paused after 240s
+t+242s  paused run: stale run-identity lock cleared by the driver (run-b4531bbec21249d8b999631d0842576c.lock.json)
