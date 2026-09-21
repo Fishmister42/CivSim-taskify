@@ -104,3 +104,31 @@ session closed, `UI.CanEndTurn()` true, game turn 35. One `operator_intervention
 written against run-221d541d (the last run before the intervention) with the before/after
 read-backs; the exit click is recorded here. The next first-meeting greeting is the live test of
 the screens lane's mapping; if it arrives first, clear it the same way and say so.
+| 11 | run-fd9c08a1 | 41 → 42 (2 turns; paused at turn 3) | stochastic, seed 17 (prompt-first sampler, 0fa4407) | 4 / 10: `tech_civic_completed`… no — `saves.save_game`, `cities.select` ×2, `turn.end_turn` ×1 applied; `prompts.great_work_created` and `prompts.tech_civic_completed` refused (not on screen), 6 others refused correctly | **paused `CatalogError`**: a new first-meeting greeting arrived at game turn 42; the screens lane's mode-aware probe (working tree) reported it as `prompt.diplomatic_approach` — their mapping seen live — and the sampler derived the action id `prompts.diplomatic_approach`, which is not in the catalog (`prompts.ai_diplomatic_approach` is); the unregistered id paused the run instead of being refused `not_in_catalog`. Driver hung on the paused run, killed, lock cleared. | 1 (snap on exit) | $0 |
+
+## Stage 1 hand-off — 12:48 EDT
+
+**Client on exit:** Civ VI up, InGame, game turn 42, tuner free (no run, no lock). A first-meeting
+greeting (the second civ met) is on screen — see `block-11/frame-turn42-on-exit.jpg` and the
+read-back in the hypervisor log. Clearing it is either the screens lane's `prompts.ai_diplomatic_approach`
+(now mapped in the working tree; the live test) or, if that has not landed,
+`operator_answer_greeting.py <other_player_id> [run_id]` then `… <other_player_id> close`, labelled.
+
+**Resume play:** the two commands at the top of this file, next block number 12 (model, 5 turns).
+
+**Spend today:** $2.95 (blocks 1–3 $1.60, 5 $0.33, 7 $0.46, 8 $0.02, 10 $0.33, three repro
+calls $0.07; stochastic blocks $0). Cap self-managed; nothing else to ask.
+
+**Stage 2 first, in order:** (1) the owner's end-turn ruling — an end turn dispatched but not
+confirmed within the bound is recorded `end_turn_unconfirmed` with `game_turn_advanced: false`,
+harness turn still advances, store completeness excludes such runs from trending; R14 text and
+the "stuck end turn" test change with it. (2) Verify the screens landing live: the greeting on
+screen now is the test of `prompt.diplomatic_approach` + `prompts.ai_diplomatic_approach`;
+`prompts.great_work_created` next time a relic pops. (3) The content gate: after T260 the
+provenance gate passes (`target_revealed: true`, block 10) and every world/city frame is then
+withheld `non_player_ui` with no detail on the capture record (block 9's leader-scene frames
+passed the same gate) — make the gate record what it saw, then find out what. (4) A provider's
+unregistered declaration id must be a `not_in_catalog` refusal, not a paused run (block 11).
+(5) The driver hangs on a paused run (blocks 1, 7, 11): make `demo_landed_run` treat `paused` as
+terminal and write its results. (6) `cities.set_production` has never been chosen — check its
+availability under `city_screen`.

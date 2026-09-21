@@ -876,3 +876,24 @@ hypervisor (cheap models for soaks and batches, Sonnet-class where play is the e
 recorded per run in the store. Live queue starts now in stages, one client owner at a time:
 S1 bring-up + T253 live + Phase 13 live claims + 003 Scenario 8 + T260 look-at probe;
 S2 T177/T191–T194/T198; S3 T200; S4 T201 soak (driver prepared headless in parallel).
+
+### Live S1 — 2026-09-21 (11:14 → 12:48 EDT) — the harness plays, on the record, on issue #3
+
+Owner's redirect at 11:20: visible gameplay, breadth, honesty, entries every 30–45 min. Eleven
+blocks (7 Sonnet 5, 4 stochastic), game turn 17 → 42, three entries on issue #3, 13 commits.
+Actions demonstrated live 4 → 8 of 39 (popup acknowledge, move, end turn, research, select city,
+select unit, named save); attempted 5 → 22. Observations 16/16; screens encountered 2 → 3; views
+0 → 1; images delivered 0 → 7 of ~260 steps (T260 live, block 9: screened_clean + shown +
+image_count 1 at every step, tier validated, xcomposite). Fixed from live measurement: strict
+schema forcing `parameters: {}` (86a92db); bounded verification re-read for every order, research
+via PlayerOperations.RESEARCH, units/cities.select (47dcfba); a dispatcher-refused end turn no
+longer ends the turn (dc67529); a provider-claimed prompt_type under a proactive trigger no
+longer crashes the run (2139479); operator_intervention run events + schema (25282d1, b99f5d6).
+Operator scripting, labelled and not counted: Australia's first-meeting greeting cleared through
+the decline button's own call then Exit (AddResponse NEGATIVE, CloseSession), recorded on
+run-221d541d. Open on exit: a second greeting on screen at game turn 42 (screens lane's mapping
+reported it live; the sampler then derived a non-existent action id and the run paused instead of
+refusing); every world/city frame withheld `non_player_ui` after provenance passes; five turn
+cycles at game turn 35 recorded ended_by_agent on unconfirmed end turns (owner's ruling issued,
+Stage 2's first item); the demo driver hangs on a paused run. Client left InGame, turn 42, tuner
+free. Spend $2.95 of the week's cap. Ledger: spikes/gameplay-2026-09-21/README.md.
