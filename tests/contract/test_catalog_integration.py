@@ -42,7 +42,7 @@ CATALOGS_ROOT = _REPO_ROOT / "catalogs"
 # See catalogs/README.md §6 and
 # specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md. The capability count is
 # unchanged: `prompts.orders` still backs the ten remaining prompt actions.
-EXPECTED_DECLARATION_COUNT = 58
+EXPECTED_DECLARATION_COUNT = 59
 EXPECTED_CAPABILITY_COUNT = 27
 
 

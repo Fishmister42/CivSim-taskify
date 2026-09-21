@@ -49,6 +49,7 @@ local CLOSE_CONTROLS = {
     TechCivicCompletedPopup = "CloseButton",
     BoostUnlockedPopup = "ContinueButton",
     GreatWorkShowcase = "ModalScreenClose",
+    NaturalDisasterPopup = "Close",
 }
 
 local function make_control(name, hidden)
@@ -67,11 +68,17 @@ local function make_control(name, hidden)
 end
 
 local function make_button(stateName, controlName, ctx)
-    local b = { name = controlName }
-    function b:CallCallback(eventType)
-        if M.callback_errors then error("stubbed CallCallback failure") end
-        M.clicked[#M.clicked + 1] = stateName .. "/" .. controlName
-        if M.callback_closes then ctx.hidden = true end
+    local b = { name = controlName, hidden = false }
+    function b:IsHidden() return self.hidden end
+    -- The two Forge accessors the acknowledge reads to hand the harness the button's own
+    -- on-screen rectangle; `M.rect_errors` scripts a build where they are unavailable.
+    function b:GetScreenOffset()
+        if M.rect_errors then error("stubbed GetScreenOffset failure") end
+        return 900, 40
+    end
+    function b:GetSizeVal()
+        if M.rect_errors then error("stubbed GetSizeVal failure") end
+        return 32, 32
     end
     return b
 end
@@ -84,6 +91,7 @@ function M.reset(open_states, hidden_states)
     M.callback_closes = true
     M.callback_errors = false
     M.diplomacy_closes = true
+    M.rect_errors = false
     M.controls = {}
     for _, s in ipairs(open_states) do M.controls["/InGame/" .. s] = make_control(s, false) end
     for _, s in ipairs(hidden_states) do M.controls["/InGame/" .. s] = make_control(s, true) end
@@ -117,10 +125,18 @@ function M.set_diplomacy_conversation(texts, disabled_texts, hidden_texts)
         local button = make_control("SelectionButton", contains(hidden_texts, text))
         button.disabled = contains(disabled_texts, text)
         button.children = { label }
-        function button:CallCallback(eventType)
-            if M.callback_errors then error("stubbed CallCallback failure") end
-            M.clicked[#M.clicked + 1] = "DiplomacyActionView/" .. text
-            if M.diplomacy_closes then container.hidden = true end
+        -- The two Forge accessors the answer reads to hand the harness the button's own
+        -- on-screen rectangle (diplomacyactionview.lua:1876 uses GetScreenOffset the same way).
+        -- Buttons are stacked 60 px apart under the leader; `M.rect_errors` scripts a build
+        -- where the accessor is unavailable from InGame.
+        local index = #kids
+        function button:GetScreenOffset()
+            if M.rect_errors then error("stubbed GetScreenOffset failure") end
+            return 1200, 700 + index * 60
+        end
+        function button:GetSizeVal()
+            if M.rect_errors then error("stubbed GetSizeVal failure") end
+            return 420, 45
         end
         kids[#kids + 1] = button
     end
@@ -135,11 +151,10 @@ function M.set_diplomacy_overview()
     M.controls[DIPLO .. "/ConversationSelectionStack"] = stack
 end
 
--- A build whose controls carry no CallCallback at all: every close control becomes uncallable.
+-- A build whose controls cannot report their own rectangle from InGame: every close control's
+-- click request becomes unbuildable, so the acknowledge falls back to the popup's primitive.
 function M.drop_call_callback()
-    for _, c in pairs(M.controls) do
-        if c.CallCallback ~= nil then c.CallCallback = nil end
-    end
+    M.rect_errors = true
 end
 
 -- A popup whose close control cannot be resolved by name from InGame.
@@ -155,6 +170,8 @@ ContextPtr = {}
 function ContextPtr:LookUpControl(path) return M.controls[path] end
 
 UIManager = {}
+-- The UI's own screen space (measured 1024x768 on a 1920x1200 window, 2026-09-21).
+function UIManager:GetScreenSizeVal() return 1024, 768 end
 function UIManager:DequeuePopup(ctx)
     if M.fail_dequeue then error("stubbed DequeuePopup failure") end
     M.dequeued[#M.dequeued + 1] = ctx.name
@@ -361,16 +378,37 @@ def test_conversation_mode_with_nothing_takeable_is_not_a_prompt(lua: tuple[Any,
     assert state["has_blocking_prompt"] is False
 
 
-def test_answering_the_approach_clicks_the_matching_choice_button(lua: tuple[Any, Any]) -> None:
+def test_answering_the_approach_hands_the_harness_the_matching_buttons_own_rect(
+    lua: tuple[Any, Any],
+) -> None:
+    """Measured 2026-09-21 (blocks 13-14): `CallCallback` is not an engine API and clicked nothing.
+    The answer now returns the chosen button's own on-screen rectangle and asks the harness to
+    click its centre through the host input port -- the same button a human clicks. It never
+    reports itself applied: `ok` stays false until the executor's click, and the action's
+    verification predicate decides the rest."""
     runtime, stubs = lua
     _diplomacy(runtime, stubs, mode="conversation", texts=_GREETING)
     result = dict(
         runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GREETING[1])
     )
-    assert result["ok"] is True
-    assert result["mechanism"] == "selection_button_callback"
-    assert result["still_in_conversation"] is False
-    assert list(stubs.clicked.values()) == [f"DiplomacyActionView/{_GREETING[1]}"]
+    assert result["ok"] is False
+    assert result["reason"] == "requires_host_click"
+    assert result["mechanism"] == "host_click_at_control_rect"
+    assert result["option"] == _GREETING[1]
+    rect = dict(result["click"])
+    assert rect == {"x": 1200, "y": 760, "w": 420, "h": 45}  # the second stacked button
+    # The UI's own screen size rides along so the harness can scale UI units onto the window.
+    assert dict(result["ui_screen"]) == {"w": 1024, "h": 768}
+
+
+def test_the_first_choice_gets_the_first_buttons_rect(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=_GREETING)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GREETING[0])
+    )
+    assert result["reason"] == "requires_host_click"
+    assert dict(result["click"]) == {"x": 1200, "y": 700, "w": 420, "h": 45}
 
 
 def test_an_option_that_is_not_offered_is_refused_and_says_what_was(lua: tuple[Any, Any]) -> None:
@@ -395,19 +433,21 @@ def test_answering_outside_conversation_mode_is_refused(lua: tuple[Any, Any]) ->
     assert result["reason"] == "not_in_conversation_mode"
 
 
-def test_a_failing_choice_click_fails_rather_than_guessing_at_a_diplomacy_call(
+def test_an_unreadable_button_rect_fails_rather_than_guessing_at_a_diplomacy_call(
     lua: tuple[Any, Any],
 ) -> None:
     """There is deliberately no fallback: reconstructing `DiplomacyManager.AddStatement` from a
-    label would risk answering something other than what the agent chose."""
+    label would risk answering something other than what the agent chose. A build whose control
+    accessors are unavailable from InGame reports exactly that."""
     runtime, stubs = lua
     _diplomacy(runtime, stubs, mode="conversation", texts=_GREETING)
-    stubs.callback_errors = True
+    stubs.rect_errors = True
     result = dict(
         runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GREETING[0])
     )
     assert result["ok"] is False
-    assert "stubbed CallCallback failure" in result["error"]
+    assert result["reason"] == "control_rect_unreadable"
+    assert "stubbed GetScreenOffset failure" in result["error"]
 
 
 def test_an_unmapped_watchlist_state_is_still_unknown_never_guessed(lua: tuple[Any, Any]) -> None:
@@ -430,17 +470,19 @@ def test_acknowledging_drives_the_popups_own_close_control_first(
     lua: tuple[Any, Any], screen_id: str, state_name: str, control: str
 ) -> None:
     """MEASURED 2026-09-21 (block 4, turn 30): dequeuing without running the popup's own handler
-    left its private queue holding the already-acknowledged card, which then reappeared. The
-    acknowledge now clicks the control the human clicks, so that handler runs in the popup's own
-    state, and neither fallback is reached."""
+    left its private queue holding the already-acknowledged card, which then reappeared. And
+    (blocks 13-15) `CallCallback` fires nothing, so the acknowledge now hands the harness the close
+    control's own rectangle for a real click; that handler then runs in the popup's own state.
+    Neither fallback is reached, and the Lua never reports the popup dismissed itself."""
     runtime, stubs = lua
     stubs.reset(runtime.table(state_name), runtime.table())
     result = dict(runtime.globals()["CivSim_Screens"]["respond"](screen_id, "continue"))
-    assert result["ok"] is True
-    assert result["mechanism"] == "close_control_callback"
+    assert result["ok"] is False
+    assert result["reason"] == "requires_host_click"
+    assert result["mechanism"] == "host_click_at_control_rect"
     assert result["close_control"] == control
-    assert result["hidden_after"] is True
-    assert list(stubs.clicked.values()) == [f"{state_name}/{control}"]
+    assert dict(result["click"]) == {"x": 900, "y": 40, "w": 32, "h": 32}
+    assert dict(result["ui_screen"]) == {"w": 1024, "h": 768}
     assert list(stubs.dequeued.values()) == []
     assert list(stubs.set_hidden.values()) == []
 
@@ -454,9 +496,12 @@ def test_acknowledging_drives_the_popups_own_close_control_first(
         # `ContextPtr:SetHide(true)` (greatworkshowcase.lua HideScreen), so DequeuePopup would be
         # the wrong call for it and the fallback is per-popup, not one call for all three.
         ("prompt.great_work_created", "GreatWorkShowcase", "ContextPtr:SetHide"),
+        # NaturalDisasterPopup's own Close() is a SetHide plus a LuaEvent (naturaldisasterpopup.lua
+        # :87-122), not a UIManager popup, so its fallback is SetHide too.
+        ("prompt.natural_disaster", "NaturalDisasterPopup", "ContextPtr:SetHide"),
     ],
 )
-def test_a_build_without_callcallback_falls_back_to_that_popups_own_primitive(
+def test_a_build_whose_controls_report_no_rect_falls_back_to_that_popups_own_primitive(
     lua: tuple[Any, Any], screen_id: str, state_name: str, mechanism: str
 ) -> None:
     runtime, stubs = lua
@@ -465,7 +510,7 @@ def test_a_build_without_callcallback_falls_back_to_that_popups_own_primitive(
     result = dict(runtime.globals()["CivSim_Screens"]["respond"](screen_id, "continue"))
     assert result["ok"] is True
     assert result["mechanism"] == mechanism
-    assert result["fallback_reason"] == "close_control_uncallable"
+    assert result["fallback_reason"] == "close_control_rect_unreadable"
     assert result["hidden_after"] is True
     if mechanism == "UIManager:DequeuePopup":
         assert list(stubs.dequeued.values()) == [state_name]
@@ -488,24 +533,21 @@ def test_a_close_control_that_cannot_be_resolved_records_why_before_falling_back
     assert list(stubs.clicked.values()) == []
 
 
-def test_a_close_control_that_leaves_the_popup_open_stops_rather_than_dequeuing(
-    lua: tuple[Any, Any],
-) -> None:
-    """A queued popup whose own handler shows the NEXT card leaves the context visible. That is
-    what a human sees after clicking Continue, so dequeuing on top of it would destroy a card the
-    human would have been shown -- the acknowledge stops and says the popup is still up."""
+def test_handing_back_a_click_request_never_dequeues_or_hides(lua: tuple[Any, Any]) -> None:
+    """A queued popup whose own handler shows the NEXT card leaves the context visible after the
+    human's click. Dequeuing on top of that would destroy a card the human would have been shown,
+    so the Lua stops at the click request: the executor clicks, the verification predicate reports
+    whether the popup is still current, and the agent acknowledges again -- one click per card."""
     runtime, stubs = lua
     stubs.reset(runtime.table("TechCivicCompletedPopup"), runtime.table())
-    stubs.callback_closes = False
     result = dict(
         runtime.globals()["CivSim_Screens"]["respond"]("prompt.tech_civic_completed", "continue")
     )
-    assert list(stubs.clicked.values()) == ["TechCivicCompletedPopup/CloseButton"]
-    assert result["ok"] is True
-    assert result["mechanism"] == "close_control_callback"
-    assert result["hidden_after"] is False
-    assert result["note"] == "still_open_next_queued_card_likely_shown"
+    assert result["reason"] == "requires_host_click"
+    assert result["ok"] is False
+    assert "hidden_after" not in result
     assert list(stubs.dequeued.values()) == []
+    assert list(stubs.set_hidden.values()) == []
 
 
 def test_a_failing_dequeue_is_returned_as_itself_with_the_error(lua: tuple[Any, Any]) -> None:
@@ -523,19 +565,33 @@ def test_a_failing_dequeue_is_returned_as_itself_with_the_error(lua: tuple[Any, 
     assert list(stubs.dequeued.values()) == []
 
 
-def test_a_failing_close_control_callback_is_recorded_and_does_not_stop_the_fallback(
+def test_a_hidden_close_control_is_recorded_and_does_not_stop_the_fallback(
     lua: tuple[Any, Any],
 ) -> None:
+    """A close control that exists but is hidden cannot be clicked by a human either; the
+    acknowledge says so and falls back to the popup's own primitive rather than clicking air."""
     runtime, stubs = lua
     stubs.reset(runtime.table("BoostUnlockedPopup"), runtime.table())
-    stubs.callback_errors = True
+    stubs.controls["/InGame/BoostUnlockedPopup/ContinueButton"].hidden = True
     result = dict(
         runtime.globals()["CivSim_Screens"]["respond"]("prompt.boost_unlocked", "continue")
     )
-    assert result["fallback_reason"] == "close_control_uncallable"
-    assert "stubbed CallCallback failure" in result["close_control_error"]
+    assert result["fallback_reason"] == "close_control_hidden"
     assert result["ok"] is True
     assert list(stubs.dequeued.values()) == ["BoostUnlockedPopup"]
+
+
+def test_the_natural_disaster_cinematic_is_a_recognised_blocking_prompt(
+    lua: tuple[Any, Any],
+) -> None:
+    """MEASURED 2026-09-21 (game turn 42): a Gathering Storm eruption cinematic blocked play and
+    quicksaves while the probe said `world`; `/InGame/NaturalDisasterPopup` was hidden=false."""
+    runtime, stubs = lua
+    state = _state(runtime, stubs, open=["NaturalDisasterPopup"], hidden=["CityPanel"])
+    assert state["screen"] == "prompt.natural_disaster"
+    assert state["recognized"] is True
+    assert state["has_blocking_prompt"] is True
+    assert state["prompt_options"] == ["continue"]
 
 
 @pytest.mark.parametrize(

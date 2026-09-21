@@ -116,6 +116,7 @@ local CIVSIM_KNOWN_SCREENS = {
     "prompt.great_person_selection", "prompt.diplomatic_approach", "prompt.declare_war_response",
     "prompt.congress_vote", "prompt.era_transition",
     "prompt.tech_civic_completed", "prompt.boost_unlocked", "prompt.great_work_created",
+    "prompt.natural_disaster",
 }
 
 -- T253 (MEASURED 2026-09-21, attempt 5 of the first model-driven runs): the civic "Code of Laws"
@@ -185,6 +186,22 @@ local CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS = {
         close_control = "ModalScreenClose",
         fallback = "set_hide",
     },
+    -- MEASURED 2026-09-21 (gameplay day, game turn 42, after block 15): a Gathering Storm volcanic
+    -- eruption raised "NATURAL DISASTER OCCURRING / Megacolossal Eruption" full-screen; the probe
+    -- answered `world` because nothing watched it, and the game's save call returned false under it
+    -- (spelled out here would route every probe to the test fake's save handler, which matches
+    -- bodies by that name),
+    -- so block 16 failed its turn-1 quicksave in 12 s. The state is `NaturalDisasterPopup`
+    -- (dlc/expansion2/ui/additions/naturaldisasterpopup.xml; `/InGame/NaturalDisasterPopup`
+    -- reported hidden=false while it was up, live). Its own header `Close` button
+    -- (naturaldisasterpopup.xml:22) runs `OnClose` -> `Close()` (lua:87,132), which hides the
+    -- context and raises `LuaEvents.NaturalDisasterPopup_Closed`; `set_hide` is the honest fallback
+    -- since `Close()` itself is a SetHide plus that event. Not a UIManager popup.
+    ["prompt.natural_disaster"] = {
+        state = "NaturalDisasterPopup",
+        close_control = "Close",
+        fallback = "set_hide",
+    },
 }
 local CIVSIM_ACKNOWLEDGE_OPTION = "continue"
 
@@ -224,7 +241,7 @@ local CIVSIM_SCREEN_WATCHLIST = {
     "WorldCongressBetweenTurns", "WorldCongressIntro", "EventPopup", "EraCompletePopup",
     "NaturalWonderPopup", "LeaderScene", "TechCivicCompletedPopup", "BoostUnlockedPopup",
     "Civilopedia", "InGamePopup", "TopOptionsMenu", "PausePanel", "Options", "SaveGameMenu",
-    "LoadGameMenu",
+    "LoadGameMenu", "NaturalDisasterPopup",
 }
 
 -- VERIFIED (P2, screen_identity.md) that each named state exists; UNVERIFIED that
@@ -277,6 +294,9 @@ local CIVSIM_SCREEN_ID_BY_STATE = {
     -- `/InGame/GreatWorkShowcase` reports hidden=false for exactly that popup is what the live
     -- lane still has to observe.
     ["prompt.great_work_created"] = "GreatWorkShowcase",
+    -- MEASURED 2026-09-21: `/InGame/NaturalDisasterPopup` hidden=false while the eruption
+    -- cinematic was up (see CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS).
+    ["prompt.natural_disaster"] = "NaturalDisasterPopup",
 }
 
 -- MEASURED 2026-09-21 (gameplay day, block 7, game turn 35): play stalled for five harness turns
@@ -507,6 +527,28 @@ end
 -- reachable here. Every step is pcall'd and every outcome returned, so a failure is recorded as
 -- itself and the action's own verification predicate (the popup is no longer the current screen)
 -- is what decides `applied`.
+-- The request the harness completes with a real click: the control's own on-screen rectangle in
+-- UI units (`GetScreenOffset` + `GetSizeVal`, the accessors diplomacyactionview.lua:1876 itself
+-- uses for `UI.SetLeaderPosition`) plus the UI's own screen size, because the engine lays the UI
+-- out in that space (MEASURED 2026-09-21: 1024x768 on a 1920x1200 window) and stretches it onto
+-- the window -- the executor scales by the window it actually found. nil when either accessor is
+-- unavailable, so the caller can fall back honestly rather than guess at a position.
+local function CivSim_Screens_HostClickRequest(control)
+    local okO, ox, oy = pcall(function() return control:GetScreenOffset() end)
+    local okS, sw, sh = pcall(function() return control:GetSizeVal() end)
+    if not (okO and type(ox) == "number" and type(oy) == "number") then return nil end
+    if not (okS and type(sw) == "number" and type(sh) == "number") then return nil end
+    local okU, uw, uh = pcall(function() return UIManager:GetScreenSizeVal() end)
+    local uiScreen = nil
+    if okU and type(uw) == "number" and type(uh) == "number" and uw > 0 and uh > 0 then
+        uiScreen = { w = uw, h = uh }
+    end
+    return {
+        ok = false, reason = "requires_host_click", mechanism = "host_click_at_control_rect",
+        click = { x = ox, y = oy, w = sw, h = sh }, ui_screen = uiScreen,
+    }
+end
+
 local function CivSim_Screens_AcknowledgePopup(promptType, descriptor, optionId)
     if optionId ~= CIVSIM_ACKNOWLEDGE_OPTION then
         return { ok = false, reason = "unknown_option", prompt = promptType, option = optionId }
@@ -526,36 +568,30 @@ local function CivSim_Screens_AcknowledgePopup(promptType, descriptor, optionId)
         close_control = descriptor.close_control,
     }
 
-    -- 1. The button a human clicks. Its callback was registered in the popup's own state, so
-    --    invoking it runs that popup's own OnClose/TryClose there -- queue and all.
+    -- 1. The button a human clicks. Its callback was registered in the popup's own state, so a
+    --    real click runs that popup's own OnClose/TryClose there -- queue and all.
+    --    MEASURED LIVE 2026-09-21 (blocks 13-15): `control:CallCallback(Mouse.eLClick)` returns
+    --    without error and fires nothing (it is not an engine API; see the diplomacy answer
+    --    below), so this step now hands the harness the button's own on-screen rectangle and the
+    --    executor clicks it through the host input port -- the same button, the same click, the
+    --    popup's own handler, its queue consumed. One click per card, as a human does: if the
+    --    next queued card appears, the verification predicate reports the popup still current
+    --    and the agent acknowledges again.
     local controlPath = "/InGame/" .. stateName .. "/" .. descriptor.close_control
     local okB, button = pcall(function() return ContextPtr:LookUpControl(controlPath) end)
     if not okB or button == nil then
         result.fallback_reason = "close_control_absent"
     else
-        local okCall, callErr = pcall(function() button:CallCallback(Mouse.eLClick) end)
-        if not okCall then
-            result.fallback_reason = "close_control_uncallable"
-            result.close_control_error = tostring(callErr)
+        local okBH, buttonHidden = pcall(function() return button:IsHidden() end)
+        if okBH and buttonHidden == true then
+            result.fallback_reason = "close_control_hidden"
         else
-            local okS, hiddenNow = pcall(function() return ctx:IsHidden() end)
-            if okS and hiddenNow == true then
-                result.ok = true
-                result.mechanism = "close_control_callback"
-                result.hidden_after = true
+            local request = CivSim_Screens_HostClickRequest(button)
+            if request ~= nil then
+                for k, v in pairs(request) do result[k] = v end
                 return result
             end
-            -- The callback ran and the popup is still up. For a queued popup that is the CORRECT
-            -- outcome: `TryClose` showed the next card behind this one, which is exactly what a
-            -- human sees after clicking Continue. Falling back here would dequeue the whole
-            -- context and destroy a card the human would have been shown, so this path stops.
-            -- The action's verification predicate reports the popup still current and the agent
-            -- acknowledges again -- one click per card, as a human does.
-            result.ok = true
-            result.mechanism = "close_control_callback"
-            result.hidden_after = false
-            result.note = "still_open_next_queued_card_likely_shown"
-            return result
+            result.fallback_reason = "close_control_rect_unreadable"
         end
     end
 
@@ -586,6 +622,23 @@ end
 -- There is deliberately NO fallback. If the button cannot be clicked, the answer fails and is
 -- recorded as a failure, so the run stalls honestly rather than firing a reconstructed
 -- `DiplomacyManager` call that might answer something other than what the agent chose.
+--
+-- MEASURED LIVE 2026-09-21 (gameplay blocks 13 and 14, game turn 42, Georgia's greeting):
+-- `control:CallCallback(Mouse.eLClick)` returned without error and did nothing -- the offered
+-- choices were identical at all 16 steps and the leader never answered. `CallCallback` appears
+-- nowhere in Firaxis' shipped UI Lua (steamassets/base/assets/ui, grep 2026-09-21), so it is not
+-- an engine API for firing a registered callback; nothing reachable from InGame can invoke the
+-- closure `ApplyStatement` registered on the button (diplomacyactionview.lua:599-602), and the
+-- statement key it closes over is not readable from outside that state (`GetSessionInfo` exposes
+-- only ToPlayer/FromPlayer). That is a documented Firetuner gap (constitution, Principle II).
+--
+-- What a human does is click the button, so this function now returns the button's own on-screen
+-- rectangle (`GetScreenOffset` + `GetSizeVal`, the accessors diplomacyactionview.lua:1876 itself
+-- uses for `UI.SetLeaderPosition`) and asks the harness to perform that click through the host's
+-- synthetic-input port at the rectangle's centre. Nothing else is touched: the same button, the
+-- same click, the game's own handler. Without a host click the answer stays `ok = false` with
+-- reason `requires_host_click`, and the action's verification predicate decides `applied`.
+-- UNVERIFIED LIVE until the first greeting answered this way is recorded.
 local function CivSim_Screens_AnswerDiplomaticApproach(promptType, optionId)
     local choices = CivSim_DiplomacyStatementChoices()
     if choices == nil then
@@ -596,14 +649,20 @@ local function CivSim_Screens_AnswerDiplomaticApproach(promptType, optionId)
     for _, choice in ipairs(choices) do offered[#offered + 1] = choice.text end
     for _, choice in ipairs(choices) do
         if choice.text == optionId then
-            local okCall, callErr = pcall(function() choice.control:CallCallback(Mouse.eLClick) end)
-            local after = CivSim_DiplomacyStatementChoices()
-            return {
-                ok = okCall, prompt = promptType, option = optionId,
-                mechanism = "selection_button_callback",
-                still_in_conversation = (after ~= nil),
-                error = (not okCall) and tostring(callErr) or nil,
-            }
+            -- MEASURED LIVE 2026-09-21 (game turn 42, Georgia's greeting): a click at the
+            -- unscaled position hit empty scene; one at the position scaled by the UI's own
+            -- screen size answered the greeting (see CivSim_Screens_HostClickRequest).
+            local request = CivSim_Screens_HostClickRequest(choice.control)
+            if request == nil then
+                local okO, ox = pcall(function() return choice.control:GetScreenOffset() end)
+                return {
+                    ok = false, reason = "control_rect_unreadable", prompt = promptType,
+                    option = optionId, error = (not okO) and tostring(ox) or "GetSizeVal unavailable",
+                }
+            end
+            request.prompt = promptType
+            request.option = optionId
+            return request
         end
     end
     return { ok = false, reason = "option_not_offered", prompt = promptType, option = optionId,

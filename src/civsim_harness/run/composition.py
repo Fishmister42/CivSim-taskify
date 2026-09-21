@@ -1092,6 +1092,11 @@ async def _prepare_connected_run(
         execute_command=execute,
         session=nexus_client,
         lua_root=lua_root,
+        # A Lua result of the shape {ok=false, reason="requires_host_click", click={x,y,w,h}} is
+        # completed with a real synthetic click at that control's centre (measured Firetuner gap,
+        # 2026-09-21: no Lua API reachable from InGame fires a control's registered callback).
+        host=host,
+        window_resolver=window_provider,
     )
     run_contexts[playing_run.run_id] = _RunContext(
         config=config,

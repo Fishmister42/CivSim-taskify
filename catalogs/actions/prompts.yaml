@@ -241,6 +241,29 @@
 # (greatworkshowcase.lua HideScreen) -- which is why lua/ingame/screens.lua picks the dismissal
 # mechanism per popup rather than assuming DequeuePopup everywhere.
 
+- declaration_id: prompts.natural_disaster
+  kind: action
+  summary: >
+    Acknowledge a natural-disaster cinematic ({"target": "continue"}); Gathering Storm raises it
+    full-screen when a volcano erupts, a river floods, a storm or drought strikes, and it blocks
+    play (and saving) until dismissed.
+  parity_basis: >
+    The cinematic shows the affected plots with a title banner and a description of what
+    happened, plus a close button in the banner's corner; a human clicks that close button (or
+    presses Escape) to dismiss it and carry on. Measured 2026-09-21: a "Megacolossal Eruption" at
+    game turn 42 blocked play and quicksaves until dismissed.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.natural_disaster"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.natural_disaster"
+  target_kind: option
+  target_hint: >
+    the single offered option, "continue" (prompt_options)
+  introduced_in_version: "2026.09.6"
+
 - declaration_id: prompts.great_work_created
   kind: action
   summary: >

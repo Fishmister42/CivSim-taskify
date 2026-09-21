@@ -63,6 +63,13 @@ from typing import Any, Protocol, runtime_checkable
 
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.errors import CatalogError, NexusError
+from civsim_harness.host.port import (
+    GameWindow,
+    HostPlatform,
+    InputEvent,
+    InputEventKind,
+    InputStatus,
+)
 from civsim_harness.models.common import CapabilityId, DeclarationId, LuaContext
 from civsim_harness.observe.assemble import CapabilityResult
 
@@ -269,6 +276,8 @@ class CapabilityExecutor:
         execute_command: Callable[[int, str], Awaitable[Any]],
         session: _HasStateIndices,
         lua_root: Path | str = Path("."),
+        host: HostPlatform | None = None,
+        window_resolver: Callable[[], GameWindow | None] | None = None,
     ) -> None:
         """*execute_command* is typically a thin closure over
         :meth:`~civsim_harness.nexus.client.NexusClient.execute_command`, called positionally as
@@ -291,6 +300,8 @@ class CapabilityExecutor:
         self._execute_command = execute_command
         self._session = session
         self._lua_root = Path(lua_root)
+        self._host = host
+        self._window_resolver = window_resolver
         self._dispatch_table_cache: dict[str, tuple[str, str, frozenset[str]]] = {}
 
     async def execute(
@@ -336,7 +347,81 @@ class CapabilityExecutor:
         )
 
         value = await self._execute_command(state_index, lua_body)
+        value = self._perform_host_click_if_requested(value, declaration_id=declaration_id)
         return CapabilityResult(declaration_id=declaration_id, value=value)
+
+    def _perform_host_click_if_requested(self, value: Any, *, declaration_id: DeclarationId) -> Any:
+        """Complete a Lua result of the shape ``{ok=false, reason="requires_host_click",
+        click={x, y, w, h}}`` by clicking the centre of that rectangle through the host's
+        synthetic-input port (measured gap, 2026-09-21: no Lua API reachable from InGame fires a
+        control's registered callback, so the button a human clicks -- `lua/ingame/screens.lua`,
+        `CivSim_Screens_AnswerDiplomaticApproach` -- can only be clicked as a human clicks it).
+
+        The rectangle is in the game's own UI space (the accessors Firaxis uses for
+        `UI.SetLeaderPosition`); it is offset by the game window's screen origin from
+        ``window_resolver`` before dispatch. Without a host or a resolvable window the result is
+        returned unchanged -- still ``ok=false`` with its own reason -- never reported clicked.
+        """
+        if not isinstance(value, Mapping) or value.get("reason") != "requires_host_click":
+            return value
+        rect = value.get("click")
+        if not isinstance(rect, Mapping) or any(
+            not isinstance(rect.get(k), int | float) for k in ("x", "y", "w", "h")
+        ):
+            return {**value, "reason": "requires_host_click", "host_click": "rect_malformed"}
+        if self._host is None or self._window_resolver is None:
+            return {**value, "host_click": "no_host_input_port"}
+        window = self._window_resolver()
+        if window is None:
+            return {**value, "host_click": "game_window_unresolved"}
+        origin_x, origin_y = window.rect.left, window.rect.top
+        # The UI lays itself out in its own screen space (measured 2026-09-21: 1024x768 while the
+        # window was 1920x1200) and the engine stretches it onto the window, so a UI-space rect
+        # is scaled by window/ui per axis. Without a reported UI size the rect is taken as pixels.
+        ui_screen = value.get("ui_screen")
+        scale_x = scale_y = 1.0
+        scale_source = "assumed_1_to_1"
+        if (
+            isinstance(ui_screen, Mapping)
+            and isinstance(ui_screen.get("w"), int | float)
+            and isinstance(ui_screen.get("h"), int | float)
+            and ui_screen["w"] > 0
+            and ui_screen["h"] > 0
+        ):
+            scale_x = window.rect.width / float(ui_screen["w"])
+            scale_y = window.rect.height / float(ui_screen["h"])
+            scale_source = "window_over_ui_screen"
+        cx = int(origin_x + (rect["x"] + rect["w"] / 2) * scale_x)
+        cy = int(origin_y + (rect["y"] + rect["h"] / 2) * scale_y)
+        result = self._host.send_input(
+            [
+                InputEvent(kind=InputEventKind.mouse_move, x=cx, y=cy),
+                InputEvent(kind=InputEventKind.mouse_click, x=cx, y=cy, button="left"),
+            ]
+        )
+        clicked = {
+            "x": cx,
+            "y": cy,
+            "window_origin": [origin_x, origin_y],
+            "scale": [round(scale_x, 4), round(scale_y, 4)],
+            "scale_source": scale_source,
+        }
+        if result.status is InputStatus.ok:
+            return {
+                **value,
+                "ok": True,
+                "reason": None,
+                "mechanism": "host_click_at_control_rect",
+                "clicked_at": clicked,
+                "declaration_id": str(declaration_id),
+            }
+        return {
+            **value,
+            "host_click": "input_failed",
+            "host_click_status": result.status.value,
+            "host_click_reason": result.reason,
+            "clicked_at": clicked,
+        }
 
     def _load_dispatch_table(self, implementation_ref: str) -> tuple[str, str, frozenset[str]]:
         """Load and parse *implementation_ref*'s Lua source, cached by path (never a state index --

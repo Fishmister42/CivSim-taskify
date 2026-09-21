@@ -40,8 +40,8 @@ from civsim_harness.models.records import RunEvent, RunEventType
 from civsim_harness.observe.screen_identity import PROMPT_SCREEN_PREFIX, ScreenIdentityResult
 
 #: `prompts.yaml`'s own naming convention: a screen id `prompt.<family>` (e.g.
-#: `prompt.city_state_quest`) answers to the action declaration `prompts.<family>`
-#: (e.g. `prompts.city_state_quest`) -- see `lua/ingame/screens.lua` and `catalogs/actions/
+#: `prompt.tech_civic_completed`) answers to the action declaration `prompts.<family>`
+#: (e.g. `prompts.tech_civic_completed`) -- see `lua/ingame/screens.lua` and `catalogs/actions/
 #: prompts.yaml`'s own header comment, which documents this exact pairing.
 _PROMPT_DECLARATION_PREFIX = "prompts."
 
