@@ -31,7 +31,11 @@ pipeline as every other decision (FR-008: "recorded like any other decision"), w
 the loop can end on that decision regardless of whether its own verification reported ``applied``
 or ``rejected`` (the loop watches the agent's *decision*, per research R14's pseudocode "decision
 was end_turn => ended_by_agent", not the outcome of dispatching it -- see
-``run/decision_loop.py``). What this module's own "end turn" phase performs, strictly after the
+``run/decision_loop.py``) -- with one measured exception: an end-turn decision the dispatcher
+refused *before* it reached the game (``unavailable_to_human_now``, e.g. a blocking prompt is up)
+ended nothing, so the loop treats it as any other refused step and continues (gameplay block 4,
+2026-09-21: three "ended_by_agent" turns at the same game turn under an unacknowledged popup).
+What this module's own "end turn" phase performs, strictly after the
 acknowledged store commit, is the *harness's own* seal on the attempt: advancing through
 ``store.guard`` is what turns "the record is durable" into "the run may now be told this turn is
 over." No further Nexus dispatch happens here for the ``ended_by_agent`` case, because none is

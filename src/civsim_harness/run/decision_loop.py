@@ -881,7 +881,21 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
         )
         steps.append(bundle)
 
-        if raw_decision.is_end_turn:
+        # MEASURED (2026-09-21, gameplay block 4, run-fd5fa128, stochastic provider): a "Civic
+        # Completed" popup was up, the provider never acknowledged it, and its `turn.end_turn`
+        # decision was refused by the dispatcher three turns running (`unavailable_to_human_now`:
+        # `not game.has_blocking_prompt` was false) -- so the order never reached the game and
+        # the game turn stayed at 30 -- yet each turn record read `ended_by_agent` and the next
+        # harness turn began at the same game turn. R14's "decision was end_turn => ended_by_
+        # agent" holds for an end turn that was *dispatched* (the client confirms it late, after
+        # the AI turns, and a slow round must never be split across two records); an end turn the
+        # dispatcher refused before it reached the game cannot have ended anything, so the step
+        # stays a refused step and the loop continues -- the no-progress backstop, and its own
+        # honest `BackstopEndTurnNotConfirmed` pause under a blocking prompt, take it from there.
+        end_turn_reached_the_game = raw_decision.is_end_turn and (
+            execution.rejection_reason is not RejectionReason.UNAVAILABLE_TO_HUMAN_NOW
+        )
+        if end_turn_reached_the_game:
             # The turn's final fresh read (taken to verify the end-turn effect, I14) never
             # serves another decision, so its capture reached no request -- persisted un-shown,
             # which is the truth of what happened (T238).
