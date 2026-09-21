@@ -1206,3 +1206,116 @@ With multiple contributors, after Foundational completes:
   dependency.
 - Commit after each task or logical group; stop at any checkpoint to validate a story independently
   before proceeding to the next.
+
+---
+
+## Phase 9: Convergence (2026-09-21)
+
+`/speckit-converge` against the shipped code, after Phase 8 closed and all 65 prior tasks were `[X]`
+with the suite green (1650 passed / 8 skipped). Assessed: FR-001 – FR-037, the buildable success
+criteria (SC-003/004/005/008/010/012/014/015/016), the ten UI Principles, `data-model.md`'s V1 – V10,
+both contracts, and Constitution Principles I, III, IV and VI.
+
+**No constitution MUST is violated and nothing below is a Principle I leak.** The gate still refuses
+unregistered fields, the capture rule still fails closed on an unrecognised status, the read-only
+boundary still holds by AST scan, and quarantine still refuses to construct rather than silently
+averaging. The findings have a thinner shape in common: **four audits are narrower than the sentence
+that describes them, and two correct behaviours are guarded by nothing**, so a later edit could undo
+them with all 1650 tests still passing. That is the failure mode this project has caught twice
+before (002's `_read_setting` comparing a value to itself; `doctor`'s hard-coded `0`), found here a
+third time by looking at what each audit actually iterates rather than at what its docstring claims.
+
+- [ ] T066 **HIGH** Bring `GET /healthz` inside the FR-030 credential audits per FR-030 (partial).
+  **The defect**: `test_no_view_model_declares_a_credential_shaped_field` walks
+  `pkgutil.iter_modules(civsim_web.viewmodels.__path__)` plus `ErrorView`, and
+  `test_no_secrets_in_any_response` is parametrised over the hand-written `ROUTES` list.
+  `StoreHealthView` and `ServiceHealthView` are declared in `src/civsim_web/app.py` — *outside* the
+  `viewmodels` package — and `/healthz` is not in `ROUTES`, so the one route that reports a real
+  store's connection state is in **neither** scan, while the schema test's own docstring claims it
+  walks "every view model reachable from a registered route's response". `StoreHealthView.detail` is
+  set from `getattr(health, "detail", None)` or `f"ping raised: {exc}"` — a raw store exception
+  rendered verbatim on a page FR-028 requires to be unauthenticated on the LAN, which is exactly
+  where a DSN or bearer token surfaces. Fix: redact `detail` at the `StoreHealthView` boundary
+  (FR-030 is a *second* pass, not a rerun of the store's own), add `/healthz` to `ROUTES`, and make
+  the schema scan cover every `ViewModel` subclass in the whole `civsim_web` package rather than one
+  sub-package — with a negative control proving the widened scan can fail.
+- [ ] T067 **HIGH** Read captures only for the steps the step window returns, in
+  `src/civsim_web/routes/turns.py`, per FR-036 (contradicts). `reads.capture_records_for_turn(store,
+  record)` iterates `record.steps` — the **full** list — and issues one `store.get_capture` per
+  declared id, and the route calls it *before* `build_turn_cycle_view` applies `step_offset`/
+  `step_limit` via `viewmodels/turn.py::_window`. So rendering 50 steps of a 200-step turn performs
+  ~200 capture-record reads: "viewing a turn MUST NOT require loading captures beyond those being
+  viewed", violated at the record level. (Image **bytes** are correctly lazy — own route,
+  `loading="lazy"`, cached — so only the record reads are at fault.) Fix: promote `_window`'s
+  selection to a shared helper and read captures for the selected bundles only, so the window and
+  the capture reads cannot disagree. **`routes/live.py` is deliberately out of scope**: it renders
+  the whole turn on purpose, because `latest_decision_of` reads the *last* step and a bounded window
+  there would make FR-001's "most recent agent decision" show step 50 of 200. Add a test that counts
+  `get_capture` calls on a run carrying a capture on every step — the current 300+-turn fixture is
+  built with `captures=[]` and says so, which is why nothing caught this.
+- [ ] T068 **HIGH** Guard the live page's four couplings to `static/poll.js` per FR-002 and spec Edge
+  Cases ("the connection drops — the view marks itself as possibly stale and recovers to live without
+  a manual reload") (partial). The behaviour is implemented and correct:
+  `templates/live/run_detail.html` carries `data-live="true"`, `data-run-id`, `<script
+  src="/static/poll.js" defer>` and `<span id="stale-marker" hidden>`, and `poll.js` sets
+  `data-stale` on a missed poll and clears it on recovery. **Nothing asserts any of it.** The only
+  test touching the file regex-reads `POLL_INTERVAL_MS`; `test_static_is_mounted` asserts a `/static`
+  mount exists and nothing more; a `<script>` tag is not a `data-field`, so `test_json_html_parity`
+  cannot see it. Deleting any one of the four lines leaves all 1650 tests green while the live view
+  silently stops updating. US3 note 4 already established the pattern for this exact situation —
+  source-level guards in `tests/contract/test_web_parity_boundary.py` over `trajectory.js`, because
+  research R2 declines a JS runner — and it was never applied to the poll script. Add the equivalent
+  guards there, plus a rendered-markup assertion that the live page wires the script and ships the
+  stale marker.
+- [ ] T069 **HIGH** Widen the entity-heading pattern in `src/civsim_web/registry/harness_schema.py`
+  so `ParityDeclaration` is scanned, per SC-005 and `contracts/panel-registry.md` Conformance
+  (partial). `_NUMBERED_ENTITY = r"^##\s+\d+\.\s+(\w+)\s*$"` requires the entity name to end the
+  line; 002 heads that section `## 10. ParityDeclaration (catalog entry)`, so the entity never
+  parses and `_OTHER_H2` closes the block. The consequence is bigger than the Phase 7 note recorded:
+  `registry/coverage.py` iterates `schema.fields_by_entity`, so the SC-005 coverage audit — and the
+  line `civsim-web doctor` prints, "167 fields scanned" — leaves **one whole 002 entity outside the
+  scan**, in an audit the contract calls release-blocking. The fix is safe to make: `ParityDeclaration`
+  has no `ENTITY_PATHS` placement, so its twelve fields classify as `invisible` and no panel declares
+  one. Assert `ParityDeclaration` is in the scanned set and that the count rises, so the widening
+  cannot silently regress.
+- [ ] T070 **MEDIUM** Document `GET /`'s real behaviour and `LandingView` in
+  `contracts/web-read-api.md` and `data-model.md`, per `contracts/web-read-api.md` (contradicts).
+  `LandingView` (`viewmodels/run_detail.py`) is a top-level response served at `GET /` and it appears
+  in **no** artifact. The contract disagrees with itself and with the code three ways: its route
+  table says `GET /` returns "the single active run (or a chooser, if several are active)"; its
+  amendment paragraph says `GET /` "is a redirect ... (or to `/runs` if none is)" with "no `Accept:
+  application/json` equivalent of its own"; the code redirects `307` only when exactly **one** run is
+  active and otherwise renders a `LandingView` as HTML *or* JSON — the chooser and the explanatory
+  empty state the spec's Edge Cases require. The code is right and all three cases are tested; the
+  artifacts are wrong. Also add `LandingView` to §13's V10 enumeration, which was amended to be
+  exhaustive-with-a-stated-exception (`DecisionStepView`) and now has an unstated second omission.
+- [ ] T071 **MEDIUM** Cite FR-037 where `ComparisonBasis` is implemented and tested, per spec
+  Amendment B (partial). Amendment B added FR-037 so the behaviour would be "traceable from
+  constitution to requirement to implementation to test" — and the identifier **FR-037 appears
+  nowhere in this feature's code, tests, or task list**. `viewmodels/comparison.py` and its three
+  pinning tests cite "Principle IV" only; the repo's sole `FR-037` hit is 002's unrelated
+  requirement. The behaviour is fully correct; the traceability the amendment claims to have
+  established does not yet exist, which is the precise failure Amendment B said it was preventing.
+- [ ] T072 **MEDIUM** Test that the auto-detect bind path *drops* a non-private address, per FR-029
+  (partial). The explicit-config path is well pinned (`test_a_wildcard_bind_is_refused` over
+  `0.0.0.0`/`::`/`*`/`""`; `test_non_private_and_link_local_addresses_are_refused` over `8.8.8.8`,
+  `203.0.113.5`, `169.254.10.1`). But `detect_private_addresses` — the default whenever `--bind` is
+  unset — is asserted only by `test_detected_addresses_always_include_loopback_last`, which checks
+  `all(is_bindable_address(a))` over output that the function already filtered with that same
+  predicate. It is self-referential: deleting the filter still passes on any RFC1918-only host. Stub
+  the interface enumeration with a public and a link-local address and assert neither is returned.
+- [ ] T073 **MEDIUM** Pin three implemented-but-unasserted requirement clauses (partial): (a)
+  FR-021's "a signal it could not read at all counts as absent" — `derive_trend_eligibility` with
+  `gapped_turns=None` yields `not_assessed`, and neither that reason nor
+  `record_completeness_status_unrecognized` is asserted anywhere under `tests/`; (b) FR-033's
+  run+turn binding — no test asserts a *clean* capture renders at its own turn during replay, and
+  `capture["turn_number"]` is never asserted, so nothing would catch turn N showing turn N−1's
+  capture; (c) FR-019's `unknown_sort_field` 400 branch in `routes/catalog.py::_unknown_field_error`,
+  whose sibling filter-field branch is tested and whose sort-field branch is not.
+- [ ] T074 **LOW** Correct two in-code claims the 2026-09-20 amendments made false (partial):
+  `cli.py`'s `CONTRACT_ROUTES` comment says the step-scoped panel shape "is in `data-model.md` SS12
+  and in neither table", but `contracts/web-read-api.md`'s view-reference table gained that row in
+  the amendment; and `viewmodels/base.py::HealthState`'s docstring still says "the first seven are
+  FR-003's verbatim vocabulary", calls `paused`/`unknown` states "the vocabulary lacks", and reports
+  both as "findings against the spec" — Amendment C folded both into FR-003, so the enum is correct
+  and only the prose is stale.
