@@ -1,0 +1,783 @@
+"""A seeded, uniformly-sampling ``ModelProvider`` that costs nothing (T261).
+
+**What it is for.** The live lane wants *breadth of demonstrated harness behaviour* -- many
+different actions dispatched, verified, refused and recorded -- without paying for a model and
+without the scripted-single-decision narrowness of ``tests/fakes/fake_provider.py`` (which ends
+every turn immediately and therefore exercises exactly one declaration). This provider picks
+uniformly among the actions *the request itself lists*, derives a target from what the same
+request shows, and returns it. Play quality is not a goal; coverage of the action surface at
+$0 is.
+
+**Principle I (NON-NEGOTIABLE) is the whole design constraint here, and it is enforced
+structurally rather than by care.** The only thing this module reads is the
+``DecisionRequest`` it was handed: ``request.observation`` (the parity-filtered state text plus
+the rendered action catalog, exactly as the model would read it) and ``request.step_index``.
+It imports nothing from ``store``, ``observe``, ``capability`` (the catalog loaders), ``act``,
+``run`` or ``host``; it opens no file, reads no YAML, and speaks to no game. That is not a
+convention -- ``tests/unit/test_stochastic_provider.py`` walks this module's transitive
+first-party import closure and fails if any of those packages appears in it. A provider that
+could consult the catalog's own ``availability_predicate`` would be choosing with information
+the agent does not have, which is precisely the leak Principle I exists to prevent: the
+measurements it would improve would no longer be measurements of an agent playing at human
+parity.
+
+**How a target is derived, and why it is never invented.** T256 gave every action a rendered
+``-- target: <one concrete example>; <hint>`` tail (``agent/context.py``), and both halves name
+their own source in plain text -- "a unit_id from units.state", "a destination plot from the
+selected unit's reachable_plots", "a promotion from the selected unit's available_promotions".
+This module reads that tail for two things: the JSON *example* fixes the shape the target must
+have (a ``{"x": .., "y": ..}`` plot, an integer id, a name string, a number, or no target at
+all), and the identifiers named in the prose say which observed field to draw candidate values
+from. Candidates are harvested out of the observed-state lines' own JSON and sampled uniformly.
+When no candidate of the required shape can be found in what the request shows, the action is
+**dropped and another is sampled** -- never completed with a plausible-looking guess. If every
+listed action falls that way, the turn is ended. A fabricated target would be recorded as the
+agent's own decision and would corrupt exactly the refusal/verification statistics this
+provider exists to generate.
+
+**Within-turn behaviour.**
+
+- At most ``max_actions_per_turn`` non-end-turn decisions per turn (default
+  :data:`DEFAULT_MAX_ACTIONS_PER_TURN`), then the end turn. This is a property of *this
+  provider's* play, not of the harness: ``run/decision_loop.py`` deliberately has no step cap
+  (invariant I16), and nothing here asks it to acquire one.
+- No listed actions at all (or none whose target can be derived) -> end the turn.
+- An action id the request reports as refused is **down-weighted, not forbidden**
+  (:data:`REFUSED_ACTION_WEIGHT`), using only :func:`_refused_action_ids` -- a narrow scan of
+  the request text for the harness's own rejection vocabulary. The harness does not render
+  refusal information into the observation today, so that scan ordinarily finds nothing and
+  nothing is down-weighted; it is written against the text rather than against a private
+  channel so that it starts working the moment such information *is* rendered, and can never
+  start working by reading a record the agent cannot see.
+- The same ``(action id, target)`` pair is chosen at most :data:`MAX_REPEATS_PER_TURN` times in
+  one turn, from this provider's own memory of what it returned -- the loop bound. A pair that
+  has hit the bound is skipped and another is sampled.
+- An action id not yet chosen anywhere in this run is mildly preferred (weight ``1.0`` against
+  :data:`ALREADY_CHOSEN_WEIGHT` for one already seen), again from its own memory only. "Mildly"
+  is the point: it biases towards breadth without ever making the choice deterministic.
+
+A turn boundary is read off ``request.step_index`` (the decision loop restarts it at 1 for every
+turn *and* every replayed attempt), so the per-turn state above resets on exactly the same
+signal the harness itself uses, with nothing carried across a turn that should not be.
+
+**Accounting.** Every call reports ``model_served = stochastic/uniform-v1`` and a zero
+:class:`~civsim_harness.models.common.Cost`, so the store's ``model_calls`` table shows this
+run's decisions as served by ``provider=stochastic`` at ``amount_usd=0.0`` rather than
+attributing them to whichever model the configuration nominally names (P3: a substituted model
+must always be *reported*, never hidden). The zero is not a placeholder or an independent
+pricing of anything -- it is this provider's own true, provider-reported usage (P7): no request
+leaves the process.
+"""
+
+from __future__ import annotations
+
+import json
+import random
+import re
+import time
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass
+from typing import Any, Final
+
+from civsim_harness.models.common import Cost, DeclarationId, ModelRef
+from civsim_harness.models.records import CallOutcome
+from civsim_harness.provider.port import (
+    DecisionRequest,
+    DecisionResponse,
+    ModelCapabilities,
+    RawDecision,
+)
+
+# --------------------------------------------------------------------------
+# Identity and tunables
+# --------------------------------------------------------------------------
+
+#: What the store records as the provider for every call this adapter serves.
+STOCHASTIC_PROVIDER_NAME: Final = "stochastic"
+
+#: The "model" half of :data:`STOCHASTIC_MODEL_REF`. Versioned because the sampling policy is
+#: what a recorded run is reproducible *against*: a future change to how actions are weighted or
+#: targets harvested should be a new name here, not a silent re-interpretation of old records.
+STOCHASTIC_MODEL_NAME: Final = "uniform-v1"
+
+#: Reported as ``DecisionResponse.model_served`` on every call (P3).
+STOCHASTIC_MODEL_REF: Final = ModelRef(
+    provider=STOCHASTIC_PROVIDER_NAME, model=STOCHASTIC_MODEL_NAME
+)
+
+#: Provider-reported usage for a call that never left the process (P7).
+ZERO_COST: Final = Cost(input_tokens=0, output_tokens=0, total_tokens=0, amount_usd=0.0)
+
+#: How many non-end-turn decisions this provider makes in one turn before ending it.
+DEFAULT_MAX_ACTIONS_PER_TURN: Final = 6
+
+#: The catalog's own well-known end-turn declaration id -- the same "named by convention, looked
+#: up in what the request actually shows" arrangement ``run/decision_loop.py`` uses for
+#: ``game.screen_state``. It is only ever *used* as a fallback: :meth:`_end_turn_action` prefers
+#: whichever listed action the request itself presents as the end turn.
+END_TURN_DECLARATION_ID: Final = DeclarationId("turn.end_turn")
+
+#: Weight multiplier for an action id the request reports as refused earlier in this turn.
+#: Deliberately not zero: a refusal is often about *this* target or *this* moment, and forbidding
+#: the id outright would hide from the record that the same action becomes available again.
+REFUSED_ACTION_WEIGHT: Final = 0.25
+
+#: Weight multiplier for an action id already chosen somewhere in this run -- the mild coverage
+#: preference. Close to 1.0 on purpose; this biases, it does not schedule.
+ALREADY_CHOSEN_WEIGHT: Final = 0.6
+
+#: How many times one ``(action id, target)`` pair may be chosen within a single turn.
+MAX_REPEATS_PER_TURN: Final = 2
+
+#: What :meth:`StochasticModelProvider.describe` reports. This adapter performs no I/O, so there
+#: is no context window to exceed and no wire format for an image to be dropped from: it accepts
+#: whatever it is handed and reports ``image_count`` faithfully (it simply does not look at the
+#: pixels). ``confirmed=True`` because these are facts about this module, not an unverified claim
+#: about a remote service.
+_UNBOUNDED_CONTEXT_TOKENS: Final = 1_000_000_000
+
+
+# --------------------------------------------------------------------------
+# Reading the request -- the only input this module has
+# --------------------------------------------------------------------------
+
+#: The header ``agent.context.assemble_action_catalog_text`` writes above the action list.
+#: Everything before it in ``request.observation`` is observed state; everything after it that
+#: looks like a bullet is an action the request presents as available right now.
+_ACTION_SECTION_HEADER: Final = "Actions you may take"
+
+#: One observed-state line, exactly as ``agent.context._render_entry`` renders it:
+#: ``- [InGame] units.state: {"units": [...]}``.
+_STATE_LINE_RE: Final = re.compile(r"^- \[(?P<context>[^\]]*)\]\s+(?P<key>[^:]+):\s*(?P<value>.*)$")
+
+#: One action line: ``- units.move_to: <summary> -- target: <example>; <hint>``.
+_ACTION_LINE_RE: Final = re.compile(r"^-\s+(?P<id>[A-Za-z0-9_.]+):\s*(?P<rest>.*)$")
+
+#: The separator T256 renders between an action's summary and its target guidance.
+_TARGET_SEPARATOR: Final = " -- target: "
+
+#: A snake_case identifier, optionally dotted (``unit_id``, ``units.state``,
+#: ``player.researchable_techs``) -- how the rendered example and hint name the observed field a
+#: target is drawn from. Deliberately requires an ``_`` or a ``.``: a bare English word in the
+#: prose ("a revealed plot", "a name exactly as the observed state lists it") must not be read as
+#: naming an observed field, or a technology target would be sampled from city *names* because
+#: "name" happens to be a key somewhere in the state.
+_IDENTIFIER_RE: Final = re.compile(
+    r"\b[a-z][a-z0-9_]*(?:[._][a-z][a-z0-9_]*)+\b"
+)
+
+#: A double-quoted literal in the target guidance, e.g. ``"world" or "strategic"``. Used only for
+#: option-shaped targets, where the request is *enumerating the offered options* rather than
+#: illustrating a shape.
+_QUOTED_RE: Final = re.compile(r'"([^"]+)"')
+
+#: A numeric literal in the target guidance, e.g. ``from 0.05 (closest) to 1.0 (farthest)``.
+_NUMBER_RE: Final = re.compile(r"-?\d+(?:\.\d+)?")
+
+#: The rendered example's own wording for the two string-shaped target kinds. "offered options"
+#: is what tells an option apart from a name, which matters because an option's guidance may
+#: quote the options themselves while a name must always come from the observed state.
+_OPTION_EXAMPLE_MARKER: Final = "offered options"
+
+#: The vocabulary the harness uses for a refused action
+#: (``models/decision.py``'s ``RejectionReason``). Matched against the request text only -- see
+#: the module docstring on why this is deliberately a text scan and not a record read.
+_REFUSAL_MARKERS: Final = (
+    "unavailable_to_human_now",
+    "not_in_catalog",
+    "illegal_in_context",
+    "out_of_parity_camera",
+    "rejection_reason",
+    "was refused",
+    "was rejected",
+)
+
+
+@dataclass(frozen=True)
+class _ListedAction:
+    """One action line as the request rendered it."""
+
+    declaration_id: str
+    summary: str
+    #: The parsed ``{"target": <example>}`` value from the rendered example, or ``None`` when the
+    #: request shows this action as taking no target at all.
+    target_example: Any | None
+    #: Everything after ``-- target: `` -- example prose plus hint. The prose names the observed
+    #: field a real target is drawn from; the example only fixes its shape.
+    target_guidance: str
+    #: The hint half alone (the guidance after the example's JSON), which is where an option's
+    #: own offered values and a number's own range are written.
+    target_hint: str
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    """One value harvested from the observed state, with where it came from."""
+
+    value: Any
+    entry_key: str
+    under_selected: bool
+
+
+def _parse_observed_state(observation: str) -> dict[str, Any]:
+    """Every observed-state line's declaration key mapped to its decoded JSON value.
+
+    Stops at the action-catalog header: nothing below it is observed state. A line whose value
+    will not decode as JSON is skipped rather than raised on -- this is a best-effort read of
+    text written for a model, and a single odd line must not cost the whole turn.
+    """
+    values: dict[str, Any] = {}
+    for line in observation.splitlines():
+        if line.startswith(_ACTION_SECTION_HEADER):
+            break
+        match = _STATE_LINE_RE.match(line)
+        if match is None:
+            continue
+        try:
+            values[match.group("key").strip()] = json.loads(match.group("value"))
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return values
+
+
+def _split_target_example(guidance: str) -> tuple[Any | None, str]:
+    """``(example target value, the hint that followed it)`` from one rendered target tail.
+
+    The example is found by locating ``{"target":`` and reading to its balanced closing brace,
+    which is more robust than a regex against an example whose value is itself an object
+    (``{"target": {"x": 43, "y": 31}}``). ``(None, guidance)`` when the tail shows no example at
+    all -- which is how T256 renders an action that takes no target.
+    """
+    start = guidance.find('{"target"')
+    if start == -1:
+        return None, guidance
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(guidance)):
+        char = guidance[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                blob = guidance[start : index + 1]
+                try:
+                    parsed = json.loads(blob)
+                except (json.JSONDecodeError, ValueError):
+                    return None, guidance
+                if not isinstance(parsed, dict) or "target" not in parsed:
+                    return None, guidance
+                return parsed["target"], guidance[index + 1 :]
+    return None, guidance
+
+
+def _parse_listed_actions(observation: str) -> list[_ListedAction]:
+    """Every action the request lists as available right now, in the order it listed them.
+
+    Only bullets *below* the action-catalog header are read, so an observed-state line can never
+    be mistaken for an action. An action rendered without a target tail (one authored before
+    T256) is treated as taking no target, which is what the pre-T256 rendering meant.
+    """
+    actions: list[_ListedAction] = []
+    in_section = False
+    for line in observation.splitlines():
+        if not in_section:
+            in_section = line.startswith(_ACTION_SECTION_HEADER)
+            continue
+        match = _ACTION_LINE_RE.match(line)
+        if match is None:
+            continue
+        rest = match.group("rest")
+        summary, separator, guidance = rest.partition(_TARGET_SEPARATOR)
+        example, hint = _split_target_example(guidance) if separator else (None, "")
+        actions.append(
+            _ListedAction(
+                declaration_id=match.group("id"),
+                summary=summary.strip(),
+                target_example=example,
+                target_guidance=guidance,
+                target_hint=hint,
+            )
+        )
+    return actions
+
+
+def _refused_action_ids(observation: str, listed_ids: frozenset[str]) -> frozenset[str]:
+    """Action ids this request reports as refused, from the request text alone.
+
+    Scans for the harness's own rejection vocabulary and, on any line carrying it, collects the
+    declaration-id-shaped tokens that are also ids this same request listed as actions. Returns
+    an empty set when the request says nothing about a refusal -- which is the ordinary case
+    today, since nothing renders refusal information into the observation yet. Deliberately
+    intersected with *listed_ids*: an observed-state key is itself a dotted declaration id, and
+    only an action can be down-weighted.
+    """
+    if not listed_ids:
+        return frozenset()
+    refused: set[str] = set()
+    for line in observation.splitlines():
+        lowered = line.lower()
+        if not any(marker in lowered for marker in _REFUSAL_MARKERS):
+            continue
+        refused.update(token for token in _IDENTIFIER_RE.findall(line) if token in listed_ids)
+    return frozenset(refused)
+
+
+# --------------------------------------------------------------------------
+# Harvesting candidate targets out of the observed state
+# --------------------------------------------------------------------------
+
+
+def _is_plot(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("x"), int)
+        and isinstance(value.get("y"), int)
+        and not isinstance(value.get("x"), bool)
+        and not isinstance(value.get("y"), bool)
+    )
+
+
+def _as_plot(value: Any) -> dict[str, int]:
+    """A plot reduced to exactly the two coordinates a target is compared on.
+
+    The values are the request's own; only the surrounding keys are dropped, so a plot harvested
+    from a richer object (a unit's ``plot``, a path's ``destination``) is offered in the same
+    shape T256's example shows.
+    """
+    return {"x": int(value["x"]), "y": int(value["y"])}
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _expand(value: Any) -> Iterator[Any]:
+    """*value* itself, plus its items when it is a list.
+
+    An observed field named by a hint is as often the list (``reachable_plots``,
+    ``available_promotions``) as it is the scalar (``unit_id``), so both readings are offered and
+    the shape filter decides which one was meant.
+    """
+    yield value
+    if isinstance(value, list):
+        yield from value
+
+
+class _ObservedIndex:
+    """Every value in the observed state, indexed by the field name it was written under.
+
+    Built once per call. ``under_selected`` records whether a value sat inside an object the game
+    reports as selected (``is_selected: true``) -- the distinction a hint like "the selected
+    unit's reachable_plots" is drawing, and the only way to prefer the unit a unit order will
+    actually act on without consulting anything outside the request.
+    """
+
+    def __init__(self, observed: dict[str, Any]) -> None:
+        self._fields: dict[str, list[_Candidate]] = {}
+        self._plots: list[_Candidate] = []
+        self.entry_keys: frozenset[str] = frozenset(observed)
+        for key, value in observed.items():
+            self._walk(value, entry_key=key, under_selected=False)
+
+    def _walk(self, node: Any, *, entry_key: str, under_selected: bool) -> None:
+        if isinstance(node, dict):
+            selected = under_selected or node.get("is_selected") is True
+            if _is_plot(node):
+                self._plots.append(
+                    _Candidate(value=_as_plot(node), entry_key=entry_key, under_selected=selected)
+                )
+            for name, child in node.items():
+                self._fields.setdefault(name, []).append(
+                    _Candidate(value=child, entry_key=entry_key, under_selected=selected)
+                )
+                self._walk(child, entry_key=entry_key, under_selected=selected)
+        elif isinstance(node, list):
+            for item in node:
+                self._walk(item, entry_key=entry_key, under_selected=under_selected)
+
+    def field(self, name: str) -> list[_Candidate]:
+        return self._fields.get(name, [])
+
+    @property
+    def plots(self) -> list[_Candidate]:
+        return list(self._plots)
+
+    def has_field(self, name: str) -> bool:
+        return name in self._fields
+
+
+def _named_sources(guidance: str, index: _ObservedIndex) -> tuple[list[str], frozenset[str]]:
+    """``(field names, observation keys)`` the rendered target guidance names.
+
+    Both halves are read out of the prose the request already shows the model: "a unit_id from
+    units.state" names the field ``unit_id`` and the entry ``units.state``; "an individual_id
+    from great_people.state's recruitable_individuals" names two fields and one entry. Only
+    identifiers that actually exist in this request's observed state are returned, so a hint
+    naming a field the game did not report contributes nothing rather than a guess.
+    """
+    fields: list[str] = []
+    entries: set[str] = set()
+    for token in _IDENTIFIER_RE.findall(guidance):
+        if token in index.entry_keys:
+            entries.add(token)
+            continue
+        leaf = token.rsplit(".", 1)[-1]
+        if index.has_field(leaf) and leaf not in fields:
+            fields.append(leaf)
+    return fields, frozenset(entries)
+
+
+def _dedupe(values: Iterable[Any]) -> list[Any]:
+    """Distinct values, order preserved, keyed by their JSON rendering (plots are dicts)."""
+    seen: set[str] = set()
+    unique: list[Any] = []
+    for value in values:
+        key = json.dumps(value, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(value)
+    return unique
+
+
+def _collect(
+    candidates: Sequence[_Candidate],
+    *,
+    entries: frozenset[str],
+    prefer_selected: bool,
+    accept: Callable[[Any], bool],
+    convert: Callable[[Any], Any],
+) -> list[Any]:
+    """Shape-filter *candidates* down to usable target values.
+
+    *entries* restricts to the observation entries the guidance named (when it named any);
+    *prefer_selected* drops back to the full set only when nothing sat under a selected object,
+    so "the selected unit's ..." is honoured when the game reports a selection and does not turn
+    into "no target available" when it does not.
+    """
+    scoped = [c for c in candidates if not entries or c.entry_key in entries]
+    if prefer_selected:
+        selected = [c for c in scoped if c.under_selected]
+        if selected:
+            scoped = selected
+    return _dedupe(
+        convert(value)
+        for candidate in scoped
+        for value in _expand(candidate.value)
+        if accept(value)
+    )
+
+
+def _target_candidates(action: _ListedAction, index: _ObservedIndex) -> list[Any]:
+    """Every target value *this request shows* that fits *action*'s rendered example.
+
+    Empty means "the request does not show a usable target for this action" -- the caller drops
+    the action rather than inventing one. Never returns a value that was not read out of the
+    request: the only literals ever taken from the guidance itself are an option's own offered
+    values and a number's own stated range, both of which the request is *enumerating* rather
+    than illustrating.
+    """
+    example = action.target_example
+    guidance = action.target_guidance
+    fields, entries = _named_sources(guidance, index)
+    prefer_selected = "selected" in guidance.lower()
+    named: list[_Candidate] = [c for name in fields for c in index.field(name)]
+
+    if _is_plot(example):
+        source = named if named else index.plots
+        return _collect(
+            source,
+            entries=entries,
+            prefer_selected=prefer_selected,
+            accept=_is_plot,
+            convert=_as_plot,
+        )
+
+    if isinstance(example, str):
+        values = _collect(
+            named,
+            entries=entries,
+            prefer_selected=prefer_selected,
+            accept=lambda v: isinstance(v, str) and bool(v.strip()),
+            convert=lambda v: v,
+        )
+        if values:
+            return values
+        if _OPTION_EXAMPLE_MARKER in guidance.lower():
+            # The request is listing the options themselves (e.g. `"world" or "strategic"`), so
+            # the quoted literals ARE what it shows as available -- not an illustration of one.
+            return _dedupe(_QUOTED_RE.findall(action.target_hint))
+        return []
+
+    if _is_int(example):
+        return _collect(
+            named,
+            entries=entries,
+            prefer_selected=prefer_selected,
+            accept=_is_int,
+            convert=int,
+        )
+
+    if _is_number(example):
+        # A number's range is stated in the hint (e.g. "from 0.05 (closest) to 1.0 (farthest)");
+        # the example itself is only a shape, so it is never offered as a value.
+        stated = _dedupe(float(text) for text in _NUMBER_RE.findall(action.target_hint))
+        if stated:
+            return stated
+        return _collect(
+            named,
+            entries=entries,
+            prefer_selected=prefer_selected,
+            accept=_is_number,
+            convert=float,
+        )
+
+    return []
+
+
+# --------------------------------------------------------------------------
+# The provider
+# --------------------------------------------------------------------------
+
+
+class StochasticModelProvider:
+    """A ``ModelProvider`` that samples uniformly from what the request shows (T261).
+
+    Satisfies :class:`~civsim_harness.provider.port.ModelProvider` structurally (it is a
+    ``Protocol``, so no inheritance is needed), and is wired the same way every other adapter is:
+    handed to ``run/composition.py``'s ``build_runner_dependencies(provider=...)``, where the
+    ordinary ``ProviderChain`` wraps it.
+
+    *seed* fixes the sampling stream and is kept on :attr:`seed` so the run that used it can be
+    reported and repeated; *max_actions_per_turn* is how many non-end-turn decisions it makes
+    before ending the turn.
+    """
+
+    def __init__(
+        self,
+        *,
+        seed: int = 0,
+        max_actions_per_turn: int = DEFAULT_MAX_ACTIONS_PER_TURN,
+    ) -> None:
+        if max_actions_per_turn < 0:
+            raise ValueError("max_actions_per_turn cannot be negative")
+        self.seed = seed
+        self.max_actions_per_turn = max_actions_per_turn
+        self._rng = random.Random(seed)
+
+        # Own memory only -- never a record, never the store. See the module docstring.
+        self._chosen_ids_run: set[str] = set()
+        self._last_step_index: int | None = None
+        self._actions_this_turn = 0
+        self._pair_counts_turn: dict[tuple[str, str], int] = {}
+        self._refused_ids_turn: set[str] = set()
+
+    # -- ModelProvider protocol ---------------------------------------------
+
+    def describe(self, model: ModelRef) -> ModelCapabilities:
+        """Report this adapter's own capabilities (P1 chain preflight, FR-039).
+
+        Independent of *model*: nothing about which model a configuration names changes what this
+        adapter can carry, because it sends nothing anywhere. See
+        :data:`_UNBOUNDED_CONTEXT_TOKENS`.
+        """
+        return ModelCapabilities(
+            accepts_images=True,
+            max_context_tokens=_UNBOUNDED_CONTEXT_TOKENS,
+            max_images_per_request=None,
+            confirmed=True,
+        )
+
+    def complete(self, request: DecisionRequest) -> DecisionResponse:
+        """Serve exactly one decision for *request*'s single decision step.
+
+        Never fails: there is no wire, no quota and no parse to go wrong, so every call comes
+        back ``CallOutcome.DECISION_RETURNED``. ``request`` is read and never modified (the
+        "Adapter obligations" the port contract names), and ``image_count`` is reported as the
+        request's own, so no image can be recorded as dropped that was not.
+        """
+        started = time.perf_counter()
+        decision = self._decide(request)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return DecisionResponse(
+            decision=decision,
+            model_served=STOCHASTIC_MODEL_REF,
+            latency_ms=latency_ms,
+            cost=ZERO_COST,
+            retry_count=0,
+            fallback_occurred=False,
+            image_count=len(request.images),
+            outcome=CallOutcome.DECISION_RETURNED,
+        )
+
+    # -- sampling -----------------------------------------------------------
+
+    def _decide(self, request: DecisionRequest) -> RawDecision:
+        self._sync_turn(request.step_index)
+
+        observation = request.observation
+        listed = _parse_listed_actions(observation)
+        listed_ids = frozenset(action.declaration_id for action in listed)
+        self._refused_ids_turn |= _refused_action_ids(observation, listed_ids)
+
+        end_turn = self._end_turn_action(listed)
+        if self._actions_this_turn >= self.max_actions_per_turn:
+            return self._end_turn_decision(
+                end_turn,
+                reason=(
+                    f"this provider takes at most {self.max_actions_per_turn} action(s) per "
+                    f"turn and has taken {self._actions_this_turn}"
+                ),
+            )
+
+        index = _ObservedIndex(_parse_observed_state(observation))
+        pool = [action for action in listed if action is not end_turn]
+        undecidable = 0
+
+        while pool:
+            action = self._weighted_pick(pool)
+            pool.remove(action)
+            needs_target = action.target_example is not None
+            target: Any | None = None
+            if needs_target:
+                allowed = [
+                    value
+                    for value in _target_candidates(action, index)
+                    if self._pair_count(action.declaration_id, value) < MAX_REPEATS_PER_TURN
+                ]
+                if not allowed:
+                    # Either the request shows no target of the required shape, or every one it
+                    # shows has already hit this turn's repeat bound. Both mean "pick a different
+                    # action" -- never "make one up" (see the module docstring).
+                    undecidable += 1
+                    continue
+                target = self._rng.choice(allowed)
+            elif self._pair_count(action.declaration_id, None) >= MAX_REPEATS_PER_TURN:
+                undecidable += 1
+                continue
+            return self._action_decision(action, target, listed_count=len(listed))
+
+        return self._end_turn_decision(
+            end_turn,
+            reason=(
+                "no action this request lists is still usable this turn "
+                f"({len(listed_ids)} listed, {undecidable} without a target the request shows "
+                "or already repeated to this turn's bound)"
+            ),
+        )
+
+    def _sync_turn(self, step_index: int) -> None:
+        """Reset the per-turn memory when *step_index* says a new turn (or attempt) has begun.
+
+        ``run/decision_loop.py`` starts every turn attempt at ``step_index = 1`` and increments
+        from there, so a step index that is 1, or that has gone backwards, is exactly the
+        harness's own turn boundary -- read from the request rather than assumed from call count,
+        which keeps a retried call from being mistaken for a new turn.
+        """
+        if self._last_step_index is None or step_index <= 1 or step_index < self._last_step_index:
+            self._actions_this_turn = 0
+            self._pair_counts_turn = {}
+            self._refused_ids_turn = set()
+        self._last_step_index = step_index
+
+    def _weighted_pick(self, pool: Sequence[_ListedAction]) -> _ListedAction:
+        """Uniform over *pool*, modulated by the two documented biases only."""
+        weights = [
+            (REFUSED_ACTION_WEIGHT if action.declaration_id in self._refused_ids_turn else 1.0)
+            * (ALREADY_CHOSEN_WEIGHT if action.declaration_id in self._chosen_ids_run else 1.0)
+            for action in pool
+        ]
+        return self._rng.choices(list(pool), weights=weights, k=1)[0]
+
+    @staticmethod
+    def _pair_key(declaration_id: str, target: Any | None) -> tuple[str, str]:
+        return declaration_id, json.dumps(target, sort_keys=True, default=str)
+
+    def _pair_count(self, declaration_id: str, target: Any | None) -> int:
+        return self._pair_counts_turn.get(self._pair_key(declaration_id, target), 0)
+
+    def _end_turn_action(self, listed: Sequence[_ListedAction]) -> _ListedAction | None:
+        """Whichever listed action the request itself presents as the end turn.
+
+        Matched first by :data:`END_TURN_DECLARATION_ID` and otherwise by the summary's own
+        wording, so a catalog that renames the declaration still ends its turns.
+        """
+        for action in listed:
+            if action.declaration_id == str(END_TURN_DECLARATION_ID):
+                return action
+        for action in listed:
+            if "end the current turn" in action.summary.lower():
+                return action
+        return None
+
+    def _action_decision(
+        self, action: _ListedAction, target: Any | None, *, listed_count: int
+    ) -> RawDecision:
+        self._actions_this_turn += 1
+        self._chosen_ids_run.add(action.declaration_id)
+        key = self._pair_key(action.declaration_id, target)
+        self._pair_counts_turn[key] = self._pair_counts_turn.get(key, 0) + 1
+        parameters: dict[str, Any] = {} if target is None else {"target": target}
+        target_note = (
+            "the request shows this action takes no target"
+            if target is None
+            else f"target sampled from what the request shows: {json.dumps(target, default=str)}"
+        )
+        return RawDecision(
+            action_declaration_id=DeclarationId(action.declaration_id),
+            reasoning=(
+                f"stochastic provider (seed={self.seed}): sampled {action.declaration_id} "
+                f"uniformly from the {listed_count} action(s) this request lists as available "
+                f"right now; {target_note}. No model was consulted and no information outside "
+                "this request was read."
+            ),
+            parameters=parameters,
+            is_end_turn=False,
+        )
+
+    def _end_turn_decision(self, action: _ListedAction | None, *, reason: str) -> RawDecision:
+        declaration_id = (
+            DeclarationId(action.declaration_id) if action is not None else END_TURN_DECLARATION_ID
+        )
+        self._chosen_ids_run.add(str(declaration_id))
+        key = self._pair_key(str(declaration_id), None)
+        self._pair_counts_turn[key] = self._pair_counts_turn.get(key, 0) + 1
+        return RawDecision(
+            action_declaration_id=declaration_id,
+            reasoning=(
+                f"stochastic provider (seed={self.seed}): ending the turn because {reason}. "
+                "No model was consulted and no information outside this request was read."
+            ),
+            parameters={},
+            is_end_turn=True,
+        )
+
+
+__all__ = [
+    "ALREADY_CHOSEN_WEIGHT",
+    "DEFAULT_MAX_ACTIONS_PER_TURN",
+    "END_TURN_DECLARATION_ID",
+    "MAX_REPEATS_PER_TURN",
+    "REFUSED_ACTION_WEIGHT",
+    "STOCHASTIC_MODEL_NAME",
+    "STOCHASTIC_MODEL_REF",
+    "STOCHASTIC_PROVIDER_NAME",
+    "ZERO_COST",
+    "StochasticModelProvider",
+]

@@ -125,6 +125,10 @@ from civsim_harness.provider.port import (
     ModelProvider,
 )
 from civsim_harness.provider.preflight import preflight_chain
+from civsim_harness.provider.stochastic import (
+    DEFAULT_MAX_ACTIONS_PER_TURN,
+    StochasticModelProvider,
+)
 from civsim_harness.resilience.detector import DetectionAggregator
 from civsim_harness.resilience.heartbeat_monitor import HeartbeatMonitor
 from civsim_harness.resilience.liveness import ProcessLivenessMonitor
@@ -1160,6 +1164,42 @@ async def _fail_preparation(
     return PreparedRun(run=failed_run, stop_condition=stop_condition)
 
 
+# --------------------------------------------------------------------------
+# T261 -- naming a provider, so `--provider <name>` resolves through production code
+# --------------------------------------------------------------------------
+
+#: Every provider a caller may select **by name** through :func:`build_provider`, and therefore
+#: every value a `--provider` flag in front of this composition root may accept. `fake`
+#: (``tests/fakes/fake_provider.py``) is deliberately absent: it is a test double that lives in
+#: `tests/`, and production code must not be able to reach for it.
+PROVIDER_NAMES: tuple[str, ...] = ("openrouter", "stochastic")
+
+
+def build_provider(
+    name: str,
+    *,
+    seed: int = 0,
+    max_actions_per_turn: int = DEFAULT_MAX_ACTIONS_PER_TURN,
+) -> ModelProvider:
+    """Resolve a provider *name* to the adapter :func:`build_runner_dependencies` should be handed.
+
+    ``"openrouter"`` is the production adapter and the default everything had before this
+    function existed; ``"stochastic"`` is ``provider/stochastic.py``'s seeded uniform sampler,
+    which serves every decision locally at zero cost and records itself as ``provider=stochastic``
+    in the store (T261). *seed* fixes that sampler's stream so a run is reproducible, and
+    *max_actions_per_turn* is how many non-end-turn actions it takes before ending a turn; both
+    are ignored by every other provider, which has no such knobs.
+
+    Raises ``ValueError`` naming :data:`PROVIDER_NAMES` for anything else -- a misspelt provider
+    must refuse before a run is prepared, not fall back to spending money on OpenRouter.
+    """
+    if name == "openrouter":
+        return OpenRouterProvider()
+    if name == "stochastic":
+        return StochasticModelProvider(seed=seed, max_actions_per_turn=max_actions_per_turn)
+    raise ValueError(f"unknown provider {name!r}; expected one of {', '.join(PROVIDER_NAMES)}")
+
+
 def build_runner_dependencies(
     *,
     store: MatchStore,
@@ -1197,7 +1237,9 @@ def build_runner_dependencies(
     port=4318` -- `nexus/client.py`'s own defaults), mirroring `operator/doctor.py`'s identical
     convention. *provider* defaults to a real `OpenRouterProvider()`; credentials resolve inside it
     at call time only (`config/secrets.py`, via `require_secret` -- see that adapter's own
-    docstring), never here.
+    docstring), never here. A caller selecting a provider *by name* (a `--provider` flag) builds
+    it with :func:`build_provider` and passes the result here -- that function, not this
+    parameter, is where `openrouter` and `stochastic` are enumerated (T261).
 
     *support_probe* defaults to the real R19 per-platform probe
     (:func:`~civsim_harness.host.detect.probe_host_support`, T212), run against *host* and
@@ -1538,5 +1580,7 @@ __all__ = [
     "DEFAULT_WORST_CASE_CONTEXT_TOKENS",
     "GAME_OUTCOME_DECLARATION_ID",
     "NexusClientFactory",
+    "PROVIDER_NAMES",
+    "build_provider",
     "build_runner_dependencies",
 ]

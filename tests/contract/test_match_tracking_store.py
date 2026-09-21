@@ -363,6 +363,34 @@ def test_us2_ac4_r5_capture_image_answers_all_four_ways(store: SqliteMatchStore)
     assert store.get_capture_image("nope").status is CaptureImageStatus.NO_SUCH_CAPTURE
 
 
+def test_us2_r5_list_captures_enumerates_one_run_s_records_without_reading_a_blob(
+    store: SqliteMatchStore,
+) -> None:
+    """`list_captures` answers "what did this run capture, and what happened to each frame"
+    from the records alone -- including for a run whose blobs are gone from disk, which
+    `export_run` (the only other enumeration) refuses outright.
+    """
+    _new_run(store, "r")
+    _new_run(store, "other")
+    kept, blob = make_capture("c-kept", "r", 1, "s1", blob=b"\x89PNG-frame")
+    store.write_capture(kept, blob)
+    withheld, _ = make_capture(
+        "c-wh", "r", 2, "s2", blob=None, withheld_reason="provenance_failure"
+    )
+    store.write_capture(withheld, None)
+    elsewhere, other_blob = make_capture("c-other", "other", 1, "s1", blob=b"not-ours")
+    store.write_capture(elsewhere, other_blob)
+    assert kept.blob_ref is not None
+    store._blob_path(kept.blob_ref).unlink()  # noqa: SLF001 -- a store copied without its blobs
+
+    captures = store.list_captures("r")
+    assert [capture.capture_id for capture in captures] == ["c-kept", "c-wh"]
+    assert captures[0] == kept and captures[1] == withheld
+    assert captures[0].shown_to_agent is True
+    assert captures[1].withheld_reason is not None and captures[1].blob_ref is None
+    assert store.list_captures("no-such-run") == []
+
+
 def test_us2_ac5_e5_a_configuration_is_resolved_by_run_id_and_nothing_else(
     store: SqliteMatchStore,
 ) -> None:

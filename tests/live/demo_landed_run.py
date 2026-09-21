@@ -9,6 +9,7 @@ production `capture_window()` path, so the artifact is window-scoped by construc
 
     python3 -m tests.live.demo_landed_run OUT_DIR --provider fake --turns 3 --bring-up
     python3 -m tests.live.demo_landed_run OUT_DIR --provider openrouter --turns 3
+    python3 -m tests.live.demo_landed_run OUT_DIR --provider stochastic --provider-seed 7
 
 **What is NOT production, stated plainly (ruling: demos record landed code only):**
 
@@ -26,6 +27,12 @@ production `capture_window()` path, so the artifact is window-scoped by construc
   **ZERO model calls.** This is a harness demo, not an agent playing Civilization.
 - `--provider openrouter`: the production `OpenRouterProvider` with the real key; real model
   calls; spend is recorded in the store's `model_calls` table and in `results.json`.
+- `--provider stochastic`: the production `StochasticModelProvider` (`provider/stochastic.py`,
+  resolved through the composition root's own `build_provider`). **ZERO model calls, $0.** Every
+  decision is sampled uniformly from the actions the decision request itself lists, with a target
+  taken from what that same request shows -- so this is the harness's *action surface* being
+  exercised, still not an agent playing Civilization. `--provider-seed` fixes the stream
+  (distinct from `--seed`, which is the map seed the bring-up types into the client).
 
 Everything the script asserts is read back from the far side (the game, the store), never
 inferred from the recording.
@@ -66,7 +73,10 @@ from civsim_harness.models.run import LifecycleState  # noqa: E402
 from civsim_harness.nexus.client import NexusClient  # noqa: E402
 from civsim_harness.nexus.sentinels import LUA_JSON_PRELUDE, lua_print_json  # noqa: E402
 from civsim_harness.provider.port import ModelCapabilities, RawDecision  # noqa: E402
-from civsim_harness.run.composition import build_runner_dependencies  # noqa: E402
+from civsim_harness.run.composition import (  # noqa: E402
+    build_provider,
+    build_runner_dependencies,
+)
 from civsim_harness.run.preparation import LuaGameSetupReader  # noqa: E402
 from civsim_harness.run.runner import Runner, RunPreparationFailed  # noqa: E402
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore  # noqa: E402
@@ -528,11 +538,28 @@ def store_counts(db: Path, run_id: str) -> dict[str, Any]:
     }
 
 
+def resolve_provider(name: str, *, seed: int) -> Any:
+    """The provider `--provider NAME` selects.
+
+    `openrouter` is left to `build_runner_dependencies`' own default (`None` here) so this script
+    never constructs the production adapter itself; `stochastic` goes through the composition
+    root's own `build_provider`, so the flag resolves the same way any other caller's would; and
+    `fake` is the one name that cannot come from production code -- it is a test double under
+    `tests/fakes/`, built here.
+    """
+    if name == "fake":
+        return fake_provider()
+    if name == "openrouter":
+        return None
+    return build_provider(name, seed=seed)
+
+
 def run_it(
     out: Path,
     config_path: Path,
     *,
     provider: str,
+    provider_seed: int,
     rec: Recorder,
     store_path: Path,
     host: HostPlatform,
@@ -542,12 +569,12 @@ def run_it(
         store=store,
         host=host,
         catalog_root=REPO / "catalogs",
-        provider=fake_provider() if provider == "fake" else None,
+        provider=resolve_provider(provider, seed=provider_seed),
     )
     runner = Runner(deps)
     rec.note(
         f"PRODUCTION: Runner.start({config_path.name}) via build_runner_dependencies "
-        f"[provider={provider}]"
+        f"[provider={provider} provider_seed={provider_seed}]"
     )
     t0 = time.perf_counter()
     try:
@@ -587,7 +614,9 @@ def run_it(
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
-    ap.add_argument("--provider", choices=("fake", "openrouter"), default="fake")
+    ap.add_argument("--provider", choices=("fake", "openrouter", "stochastic"), default="fake")
+    # Distinct from `--seed` below, which is the MAP seed the bring-up types into the client.
+    ap.add_argument("--provider-seed", type=int, default=0)
     ap.add_argument("--turns", type=int, default=3)
     ap.add_argument("--bring-up", action="store_true")
     ap.add_argument("--no-seed-set", action="store_true")
@@ -603,6 +632,7 @@ def main() -> int:
     rec.note("recording started: every frame via production capture_window() (window-scoped)")
     results: dict[str, Any] = {
         "provider": args.provider,
+        "provider_seed": args.provider_seed,
         "turns_requested": args.turns,
         "bring_up": args.bring_up,
         "started_at": datetime.now(UTC).isoformat(),
@@ -632,6 +662,7 @@ def main() -> int:
             out,
             config_path,
             provider=args.provider,
+            provider_seed=args.provider_seed,
             rec=rec,
             store_path=Path(args.store),
             host=host,

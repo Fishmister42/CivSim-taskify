@@ -19,6 +19,10 @@ Since `specs/003-match-tracking-store` this package **is** the store, not an int
 - :mod:`civsim_harness.store.sqlite_adapter` -- `SqliteMatchStore`: the writes (D1-D6, A1-A4,
   W1-W5) on top of `SqliteReadBase`.
 - :mod:`civsim_harness.store.trends` -- pure metric / fingerprint / exclusion derivations.
+- :mod:`civsim_harness.store.coverage` -- the live-coverage scorecard behind ``civsim store
+  coverage``: the claimed harness surface (the catalog, through its own loader, plus
+  ``lua/ingame/screens.lua``'s screen-identity tables) scored against what this store's records
+  actually attest was demonstrated on a live client. Reads only.
 - :mod:`civsim_harness.store.bundle` -- `RunRecordSet` to and from a bundle directory or
   `.tar.gz` (V5, V6), over the contract only.
 - :mod:`civsim_harness.store.completeness` -- the completeness rules (002 T158); the adapter

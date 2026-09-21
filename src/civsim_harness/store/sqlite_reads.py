@@ -584,6 +584,18 @@ class SqliteReadBase:
     def get_capture_image(self, capture_id: CaptureId) -> CaptureImage:
         return self._with_lock(lambda conn: self._capture_image_body(conn, capture_id))
 
+    def list_captures(self, run_id: RunId) -> list[ScreenCapture]:
+        """Every capture record for one run, ordered by ``capture_id``; no blob is touched."""
+
+        def body(conn: sqlite3.Connection) -> list[ScreenCapture]:
+            rows = conn.execute(
+                "SELECT capture_json FROM captures WHERE run_id = ? ORDER BY capture_id ASC",
+                (run_id,),
+            ).fetchall()
+            return [ScreenCapture.model_validate_json(row[0]) for row in rows]
+
+        return self._with_lock(body)
+
     def list_model_calls(
         self, run_id: RunId, *, turn: int | None = None, step: int | None = None
     ) -> list[ModelCallRow]:

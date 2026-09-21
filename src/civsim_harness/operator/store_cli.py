@@ -1,16 +1,18 @@
 """``civsim store …`` -- the operator's window onto the match-tracking store itself (003 T036).
 
-Six commands, all over the published contract and nothing else (FR-017):
+Seven commands, all over the published contract and nothing else (FR-017):
 
 - ``info``      schema version, identity, counts, migrations, dangling parents
 - ``migrate``   bring a 1.0 file to 1.1 (copy first); ``--dry-run`` says what would change
 - ``runs``      the catalog, paged and filtered in the store (FR-011)
 - ``model-calls`` a run's model-call rows and totals (FR-015)
+- ``coverage``  the claimed harness surface versus what the store says was demonstrated live
 - ``export``    a run as a bundle directory, ``--archive`` for the ``.tar.gz`` (FR-027)
 - ``import``    a bundle directory or archive into this store (FR-027)
 
-``info``, ``runs``, ``model-calls`` and ``export`` open the store **read-only** -- an operator
-inspecting a store never migrates it by accident. ``migrate`` and ``import`` are the two writers.
+``info``, ``runs``, ``model-calls``, ``coverage`` and ``export`` open the store **read-only** --
+an operator inspecting a store never migrates it by accident. ``migrate`` and ``import`` are the
+two writers.
 Exit code 2 carries a `StoreSchemaError` / `StoreReadError` / `BundleError` message, so a script
 can tell "the store refused" from "the command was misused" (exit 1, Typer's own).
 
@@ -21,17 +23,30 @@ The store path resolves exactly as the rest of the CLI resolves it (``--store``,
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import typer
 
-from civsim_harness.errors import BundleError, HarnessError, StoreReadError, StoreSchemaError
+from civsim_harness.errors import (
+    BundleError,
+    CatalogError,
+    HarnessError,
+    StoreReadError,
+    StoreSchemaError,
+)
 from civsim_harness.models.common import RunId
 from civsim_harness.models.run import ComparabilityStatus, LifecycleState, RecordCompletenessStatus
 from civsim_harness.store import schema as store_schema
 from civsim_harness.store.bundle import read_bundle, write_bundle
 from civsim_harness.store.contract import RunQuery, RunSort
+from civsim_harness.store.coverage import (
+    compute_coverage,
+    load_claimed_surface,
+    render_json,
+    render_markdown,
+)
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
 
 store_app = typer.Typer(
@@ -67,6 +82,19 @@ _TurnOption = typer.Option(None, "--turn", help="Only calls at this turn.")
 _StepOption = typer.Option(None, "--step", help="Only calls at this step index.")
 _OutOption = typer.Option(..., "--out", help="Directory to write the bundle into.")
 _ArchiveOption = typer.Option(False, "--archive", help="Also write the .tar.gz of the bundle.")
+_RunOption = typer.Option(None, "--run", help="Only this run (repeatable).")
+_SinceOption = typer.Option(
+    None, "--since", help="This run and every run started at or after it (a block's delta)."
+)
+_CatalogRootOption = typer.Option(
+    Path("catalogs"), "--catalog-root", help="The catalog the claimed surface is loaded from."
+)
+_ScreensLuaOption = typer.Option(
+    None,
+    "--screens-lua",
+    help="lua/ingame/screens.lua (default: a sibling of the catalog root).",
+)
+_FormatOption = typer.Option("md", "--format", help="md or json.")
 
 
 def _resolve(store_path: Path | None) -> Path:
@@ -289,6 +317,57 @@ def store_model_calls(
         f"total_tokens={totals.total_tokens} latency_ms={totals.latency_ms_total} "
         f"fallbacks={totals.fallback_count} retries={totals.retry_count}"
     )
+
+
+# --------------------------------------------------------------------------
+# coverage
+# --------------------------------------------------------------------------
+
+
+@store_app.command("coverage")
+def store_coverage(
+    store_path: Path | None = _StoreOption,
+    run: list[str] | None = _RunOption,
+    since: str | None = _SinceOption,
+    catalog_root: Path = _CatalogRootOption,
+    screens_lua: Path | None = _ScreensLuaOption,
+    output_format: str = _FormatOption,
+) -> None:
+    """Claimed harness surface versus what the store says was demonstrated on a live client.
+
+    The claimed surface comes from the catalog (through its own loader) and from
+    ``lua/ingame/screens.lua``; the demonstrated surface comes from this store's records and
+    nothing else. Markdown by default, ready to paste into an issue; ``--format json`` carries
+    the same content. ``--run`` and ``--since`` narrow the window to one block of live work.
+    """
+    if output_format not in {"md", "json"}:
+        typer.echo("store coverage: --format must be md or json", err=True)
+        raise typer.Exit(code=1)
+    try:
+        claimed = load_claimed_surface(catalog_root, screens_lua=screens_lua)
+    except CatalogError as exc:
+        raise _refuse(exc, what="store coverage") from exc
+
+    path = _resolve(store_path)
+    store = _open(path, read_only=True)
+    try:
+        try:
+            scorecard = compute_coverage(
+                store,
+                claimed,
+                run_ids=tuple(run or ()),
+                since_run_id=since,
+                store_path=path,
+            )
+        except StoreReadError as exc:
+            raise _refuse(exc, what="store coverage") from exc
+    finally:
+        store.close()
+
+    if output_format == "json":
+        typer.echo(json.dumps(render_json(scorecard), indent=2, sort_keys=False))
+    else:
+        typer.echo(render_markdown(scorecard))
 
 
 # --------------------------------------------------------------------------

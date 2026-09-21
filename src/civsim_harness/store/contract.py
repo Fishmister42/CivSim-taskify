@@ -480,6 +480,20 @@ class MatchTrackingStore(MatchStore, Protocol):
         """available / withheld / missing / no_such_capture, tagged (R5, FR-014)."""
         ...
 
+    def list_captures(self, run_id: RunId) -> list[ScreenCapture]:
+        """Every capture *record* this run produced, by ``capture_id``; no blob is read.
+
+        ``get_capture`` answers for one already-known ``capture_id``, and ``export_run`` is the
+        only enumeration the contract had -- but that one loads every kept image into memory and
+        refuses the whole run when one blob is missing from disk, which makes it useless for
+        simply asking "what did this run capture, and what happened to each frame". This read
+        answers exactly that, from the ``captures`` rows alone: the screening status, the
+        withheld reason, ``shown_to_agent`` and the ``view_declaration_id`` are all on the
+        record, so a caller can account for the capture/image path without touching a byte of
+        image data. Read-only, like every other method here but ``import_run``.
+        """
+        ...
+
     def list_model_calls(
         self, run_id: RunId, *, turn: int | None = None, step: int | None = None
     ) -> list[ModelCallRow]:
