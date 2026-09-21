@@ -922,3 +922,20 @@ deadlock on a prompt that blocks saving.** Content gate: block 10's withholds we
 cleared. Coverage: actions 8 of 38 applied, images delivered 80 of 351 steps.
 Commits: c052c39 98c71bb a58d4b0 56444cf 7b7eb04 e406ba3 05766af. Entry 4 posted on #3. Suite: 1989 passed / 9 skipped / 0 failed at 7b7eb04 (3:14 unloaded; a 12-minute contended run showed 10 wiring failures caused by a Lua comment that named the save call -- the test fake routes bodies by that substring -- reworded).
 VERIFIED LIVE, block 19 (run-08566ab0, $0, 31 s): the era card acknowledged through the production executor's scaled click, then the turn ended by the agent and game-confirmed. Entries 4, 5, 6 on #3. Client on exit:
+
+### Live S3 — 2026-09-21 (14:24 → 16:10 EDT)
+
+Deadlock fix landed `c795039`: a save-blocking prompt is answered through the ordinary decision
+path *before* the turn-start quicksave (probe → prompt answer as a recorded step → quicksave →
+rest of turn; save still precedes every non-prompt action; a save still refused pauses with the
+error recorded). 3 new fake-driven tests, 2 existing adjusted; targeted run 15 passed; full suite
+not completed on this head (background run truncated at ~40 % with 4 unnamed F marks — unverified
+whether mine). **Block 20** (`run-5bd1a86b`, Sonnet 5, $1.27): game 49 → 53, 40/40 images to the
+model, 0 applied — the Classical Era **dedication chooser** is an unmapped context; the model
+read it from the frame alone and chose Free Inquiry ×40, refused each time (probe: `world`);
+every turn ended on the backstop, each game-confirmed. `city.available_productions` is always
+`[]` (body never fills it) so `cities.set_production` can never be available — recorded, not
+fixed. No first meeting; deadlock fix not live-verified. **Stall:** 14:48 → 15:58 idle waiting
+on background notifications that never arrived; caught by the hypervisor. Entry 7 on #3.
+Coverage: actions 9/38 applied, 23 attempted; images 128/399 (32.1 %). Day spend $5.64.
+Client on exit: InGame, game turn 53, dedication chooser up, tuner free, no lock, no runner.
