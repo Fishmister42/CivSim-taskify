@@ -113,12 +113,25 @@ class CapturePath(StrEnum):
 
 
 class ModRef(BaseModel):
-    """A mod reference: id + version. Immutable by convention (mods are pinned, not mutated)."""
+    """A mod reference: id + version. Immutable by convention (mods are pinned, not mutated).
+
+    ``id`` is the mod's GUID as the client reports it. GUIDs are case-insensitive by definition
+    and the live client reports them in **mixed** case -- ``Modding.GetActiveMods()`` on Linux
+    returns lower-case ids for workshop mods and upper-case ids for official content in the same
+    list (T251, measured 2026-09-20) -- so every comparison normalises on ``id.lower()``
+    (``run/preparation.py``'s ``canonical_mod_set``, ``config/seed_set.py``'s ``_mod_set_key``).
+
+    ``version`` is ``None`` for a mod that reports no version. Official Firaxis content
+    (expansions, DLC and persona packs) carries no ``Version`` property at all, while workshop mods
+    do -- read through ``Modding.GetModProperty(handle, "Version")``, never off the
+    ``GetActiveMods()`` entry, which has no such field (T251). A ``None`` pin means "pinned on id
+    only"; it is not a wildcard against a mod that *does* report a version, which is compared.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    version: str
+    version: str | None = None
 
 
 class ModelRef(BaseModel):

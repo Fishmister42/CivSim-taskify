@@ -173,15 +173,23 @@ def test_civsim_default_mod_set_has_22_entries_pinned_on_id_and_version() -> Non
     genuinely loads with 22 mods active (see the seed set file's own comments). Pinned on
     `id`/`version` only: `ModRef` carries no title field at all, so there is no way for the
     known-broken bracket-matched title parsing (one live title is literally
-    `[ENDCOLOR]TopPanel Extension [COLOR:ResGoldLabelCS]Pro[ENDCOLOR]`) to have leaked in here."""
+    `[ENDCOLOR]TopPanel Extension [COLOR:ResGoldLabelCS]Pro[ENDCOLOR]`) to have leaked in here.
+
+    T251 (measured live, `spikes/t251-mod-set-identity-linux.md`): only the three workshop mods
+    report a version through `Modding.GetModProperty(handle, "Version")`; every official pack
+    answers nil, so those are pinned on id only (`version: None`). The earlier `"v1"` on all 22
+    was a placeholder that could never have matched a live read-back."""
     seed_set = load_seed_set_yaml(CIVSIM_DEFAULT_SEED_SET_PATH.read_text(encoding="utf-8"))
 
     assert len(seed_set.mod_set) == 22
     ids = [mod.id for mod in seed_set.mod_set]
     assert len(ids) == len(set(ids))  # no duplicate ids
-    for mod in seed_set.mod_set:
-        assert mod.id
-        assert mod.version == "v1"
+    assert ids == [mod_id.lower() for mod_id in ids]  # canonical case, as compared
+    versions = {mod.id: mod.version for mod in seed_set.mod_set}
+    assert versions["619ac86e-d99d-4bf3-b8f0-8c5b8c402567"] == "179"  # Multiplayer Helper 1.7.9
+    assert versions["c88cba8b-8311-4d35-90c3-51a4a5d66542"] == "1.39.5"  # Better Balanced Map
+    assert versions["cb84075d-5007-4207-b662-c35a5f7be260"] == "70500"  # Better Balanced Game
+    assert sum(version is None for version in versions.values()) == 19  # official packs
 
 
 def test_v3_empty_mod_set_against_civsim_default_is_rejected() -> None:

@@ -60,20 +60,27 @@
     },
     "ModRef": {
       "additionalProperties": false,
-      "description": "A mod reference: id + version. Immutable by convention (mods are pinned, not mutated).",
+      "description": "A mod reference: id + version. Immutable by convention (mods are pinned, not mutated).\n\n``id`` is the mod's GUID as the client reports it. GUIDs are case-insensitive by definition\nand the live client reports them in **mixed** case -- ``Modding.GetActiveMods()`` on Linux\nreturns lower-case ids for workshop mods and upper-case ids for official content in the same\nlist (T251, measured 2026-09-20) -- so every comparison normalises on ``id.lower()``\n(``run/preparation.py``'s ``canonical_mod_set``, ``config/seed_set.py``'s ``_mod_set_key``).\n\n``version`` is ``None`` for a mod that reports no version. Official Firaxis content\n(expansions, DLC and persona packs) carries no ``Version`` property at all, while workshop mods\ndo -- read through ``Modding.GetModProperty(handle, \"Version\")``, never off the\n``GetActiveMods()`` entry, which has no such field (T251). A ``None`` pin means \"pinned on id\nonly\"; it is not a wildcard against a mod that *does* report a version, which is compared.",
       "properties": {
         "id": {
           "title": "Id",
           "type": "string"
         },
         "version": {
-          "title": "Version",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
         }
       },
       "required": [
-        "id",
-        "version"
+        "id"
       ],
       "title": "ModRef",
       "type": "object"

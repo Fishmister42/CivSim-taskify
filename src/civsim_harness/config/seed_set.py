@@ -138,12 +138,15 @@ def check_seed_set_agreement(config: RunConfiguration, seed_set: SeedSet) -> Non
         )
 
 
-def _mod_set_key(mod_set: list[ModRef]) -> frozenset[tuple[str, str]]:
+def _mod_set_key(mod_set: list[ModRef]) -> frozenset[tuple[str, str | None]]:
     """``mod_set`` agreement is an exact-set comparison, order-independent --
     an empty list is meaningful ("no mods") and compares equal only to
-    another empty list, never to an absent/unset value.
+    another empty list, never to an absent/unset value. Ids compare
+    case-insensitively (T251: a GUID's case is not identity, and the live
+    client reports them mixed); a ``None`` version is a pin on id only and
+    agrees only with another ``None``.
     """
-    return frozenset((mod.id, mod.version) for mod in mod_set)
+    return frozenset((mod.id.lower(), mod.version) for mod in mod_set)
 
 
 def _jsonable(value: Any) -> Any:

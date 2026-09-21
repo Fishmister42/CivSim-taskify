@@ -107,7 +107,7 @@ seam pattern already used throughout this codebase (``HostPlatform``,
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -222,6 +222,62 @@ def build_pin_preflight(seed_set: SeedSet, actual_build: str) -> BuildPinResult:
 # --------------------------------------------------------------------------
 
 
+def canonical_mod_set(mods: Iterable[Any]) -> list[dict[str, str | None]]:
+    """T251: the one comparable shape for a mod set -- each entry ``{"id", "version"}`` with the
+    id lower-cased and ``version`` ``None`` when unknown, sorted by id.
+
+    Accepts :class:`~civsim_harness.models.common.ModRef` instances (the configured side) or the
+    ``{"id": ..., "version"?: ...}`` dicts the live getter prints. Neither order nor id case is
+    identity: the client reports mods in load order with mixed-case GUIDs (measured on Linux,
+    T251), and a pin written alphabetically in lower case is the same set. An entry whose
+    ``version`` key is missing (the live getter omits it when the client reports none) and one
+    whose ``version`` is ``None`` (a configured pin on id only) are the same claim.
+    """
+    canonical: list[dict[str, str | None]] = []
+    for mod in mods:
+        if isinstance(mod, Mapping):
+            raw_id, raw_version = mod.get("id"), mod.get("version")
+        else:
+            raw_id, raw_version = mod.id, getattr(mod, "version", None)
+        canonical.append(
+            {
+                "id": str(raw_id).lower(),
+                "version": None if raw_version is None else str(raw_version),
+            }
+        )
+    canonical.sort(key=lambda entry: entry["id"] or "")
+    return canonical
+
+
+def reconcile_mod_set_versions(
+    live: Sequence[Mapping[str, Any]], configured: Sequence[Mapping[str, Any]]
+) -> tuple[list[dict[str, str | None]], list[str]]:
+    """T251: fold a mod version the client cannot report into the V2 comparison honestly.
+
+    Official Firaxis content reports no version at all (``Modding.GetModProperty`` answers nil
+    for it, measured), so a configured pin on such a mod can never be *verified* -- but a pin
+    that names the right id is not a *mismatch* either. For every live entry whose version is
+    unknown while the configuration pins one, the configured version is substituted so the id
+    still compares, and the field ``mod_set[<id>].version`` is returned as accepted-unverified
+    for the run record (the same marker ``map_settings.resources`` carries, T250). A live entry
+    that *does* report a version is compared as read; an id the client does not report at all,
+    or reports unpinned, still mismatches -- nothing here makes an absent mod look present.
+
+    Returns ``(comparable_live, unverified_field_names)``.
+    """
+    pinned = {entry["id"]: entry["version"] for entry in canonical_mod_set(configured)}
+    comparable: list[dict[str, str | None]] = []
+    unverified: list[str] = []
+    for entry in canonical_mod_set(live):
+        mod_id, version = entry["id"], entry["version"]
+        if version is None and mod_id in pinned and pinned[mod_id] is not None:
+            unverified.append(f"mod_set[{mod_id}].version")
+            comparable.append({"id": mod_id, "version": pinned[mod_id]})
+        else:
+            comparable.append(entry)
+    return comparable, unverified
+
+
 def configured_fields(config: RunConfiguration) -> dict[str, Any]:
     """Flatten the configured elements T076 names -- seed, civilization,
     leader, ruleset, mod set, map settings, game settings, difficulty, and
@@ -230,13 +286,17 @@ def configured_fields(config: RunConfiguration) -> dict[str, Any]:
     ``RunConfiguration``; each of their own keys becomes its own dotted field
     here, so a mismatch names exactly the sub-setting that disagreed rather
     than the whole nested object).
+
+    ``mod_set`` is emitted in its canonical comparable form (:func:`canonical_mod_set`, T251):
+    lower-cased ids sorted by id, so the live read-back -- printed in load order with mixed-case
+    GUIDs -- compares against the pin as a set of identities rather than a list of strings.
     """
     fields: dict[str, Any] = {
         "map_seed": config.map_seed,
         "civilization": config.civilization,
         "leader": config.leader,
         "ruleset": config.ruleset,
-        "mod_set": [mod.model_dump() for mod in config.mod_set],
+        "mod_set": canonical_mod_set(config.mod_set),
         "difficulty": config.difficulty,
     }
     for key, value in config.map_settings.items():
@@ -1286,16 +1346,27 @@ _SETTING_GETTERS: Mapping[str, SettingGetter] = {
     # IN-GAME ONLY (T250/T218): `Modding.GetActiveMods()` resolves in both phases but answers
     # with 0 entries at the front end vs the real 22 in-game -- the worst shape, because a
     # front-end read on two differently-modded hosts records 0 on both and V2 falsely judges
-    # them COMPARABLE (Principle IV). The call itself is now live-verified in-game (22 entries,
-    # `Id` + `Name`; key on `Id` -- names are partly unlocalised). The `{id, version}` shape
-    # below still reads `m.Version`, which the spike did not capture, so the accessor stays
-    # UNVERIFIED as a whole and fails closed to "unread" if that field does not exist.
+    # them COMPARABLE (Principle IV). VERIFIED live (T251, Linux 1.0.12.9, 22 entries): an
+    # entry carries `Id`, `Name`, `Handle`, `Enabled`, `Official`, `Source`, `SourceFileName`,
+    # `SubscriptionId`, `Teaser` -- and NO `Version`, so the earlier `tostring(m.Version)` read
+    # printed the string "nil" for every mod and could never match a pin. The version lives
+    # behind `Modding.GetModProperty(m.Handle, "Version")` (integer handle, not the id string):
+    # workshop mods answer ("179", "1.39.5", "70500" measured), official content answers nil.
+    # Ids are lower-cased here because the client reports them in mixed case in one list and a
+    # GUID's case is not identity; `canonical_mod_set` applies the same rule to the configured
+    # side. A nil version is omitted from the entry (never printed as "nil") so Python sees it
+    # as absent and `reconcile_mod_set_versions` can record it as unobservable for that mod.
     "mod_set": SettingGetter(
         "(function() local out = {}; "
         "for _, m in ipairs(Modding.GetActiveMods() or {}) do "
-        'out[#out + 1] = { ["id"] = tostring(m.Id), ["version"] = tostring(m.Version) } end; '
+        "local ok, v = pcall(function() "
+        'return Modding.GetModProperty(m.Handle, "Version") end); '
+        "if not ok then v = nil end; "
+        'local entry = { ["id"] = string.lower(tostring(m.Id)) }; '
+        'if v ~= nil then entry["version"] = tostring(v) end; '
+        "out[#out + 1] = entry end; "
         "return out end)()",
-        False,
+        True,
         SettingReadPhase.IN_GAME,
     ),
     # `game_settings.victory_types` (T242): load-bearing for FR-005 `game_outcome` stops -- a run

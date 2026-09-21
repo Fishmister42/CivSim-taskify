@@ -144,6 +144,7 @@ from civsim_harness.run.preparation import (
     catalog_preflight,
     configured_fields,
     debug_menu_preflight,
+    reconcile_mod_set_versions,
     turn_timer_preflight,
     verify_configuration,
 )
@@ -988,6 +989,17 @@ async def _prepare_connected_run(
         # fails closed -- a deferred comparison that never runs must fail the run, never pass
         # it vacuously.
         value = snapshot.read_setting(name)
+        if name == "mod_set" and not isinstance(value, UnreadSetting):
+            # T251: the client reports ids in mixed case and load order, and no version at all
+            # for official content (`Modding.GetModProperty(handle, "Version")` is nil there,
+            # measured on Linux). Compare identities canonically, and record -- never silently
+            # accept -- each pinned version the client could not report, as
+            # `mod_set[<id>].version` on the same transition event `map_settings.resources`
+            # rides (T250). A mod the client does not list still mismatches.
+            value, unverified_versions = reconcile_mod_set_versions(
+                value, configured_fields(config)["mod_set"]
+            )
+            v2_unobservable_fields.extend(unverified_versions)
         if isinstance(value, UnreadSetting) and value.reason == _NO_READ_PATH_REASON:
             # A narrow, named exception -- not a reversion of `GameSetupSnapshot`'s own "unread
             # is never treated as matching" rule (see `run/preparation.py`'s own module docstring

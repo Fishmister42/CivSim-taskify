@@ -651,3 +651,73 @@ landed on live/linux (merge or already merged); read issue #1 from marker file f
 landed-code demo; Windows Steam may be used again ONLY per handoff protocol (check the board for
 who holds the account); the model-driven run attempt is the standing next Windows live goal --
 transport, images, record integrity, and provider are all verified ready; $80 budget untouched.
+
+---
+
+## LINUX OVERNIGHT — 2026-09-20 22:40 → (Linux hypervisor holds main work; Windows offline)
+
+Read order honoured: issue #1 night handoff → this log → constitution. Both branches pulled
+(`live/linux` `2f1a16d`, `002` `db16e41`, already merged). Steam up, account unambiguously Linux's.
+
+**T248 LIVE-VERIFIED, 22:45 EDT.** `tests/live/test_production_save_loader.py` re-run UNMODIFIED
+against the landed loader: ATTEMPT 1 (production loader as shipped, no external help) **PASS
+38.4 s** — the line that read `FAILED after 160.4s` before the patch. ATTEMPT 2 PASS 34.6 s. Third
+solo run read the loader's own counters back: `intro_dismiss_presses = 1`,
+`intro_dismiss_skipped = None` — `focus_window` (EWMH `_NET_ACTIVE_WINDOW`, first production use)
+returned `ok` live on X11/Cinnamon with a browser and terminal open on the same desktop; one Escape
+landed; the retry loop stopped the instant the port answered. Recorded: spike doc "Re-verified",
+`validation-results.md` T248 section, `tasks.md` T248 `[X]`. Windows/macOS `focus_window` halves
+remain `unavailable` → Windows morning item, unchanged.
+
+**Headless:** `uv sync --group civsim_web` was needed here first (jinja2 absent → the web
+foundation test could not collect; environment, not code). Suite: **1635 passed / 8 skipped / 0 failed (every skip a Windows/macOS-only path; 6 new T251 tests)**.
+
+**🔑 Provider key provisioned on Linux** (owner-supplied, gitignored `secrets.yaml`; doctor
+`present`; `auth/key` limit 80 / remaining 80, paid). The cap is pre-spent per the standing ruling.
+"No model-driven run possible on either host" is no longer true on this side.
+
+**Finding → proposed T252 (composition.py, Windows lane):** `doctor` reports tier SUPPORTED and
+`capture path : none` on the one host whose R6 spike PASSED, because
+`run/composition.py:1240` calls `probe_host_support(...)` without `compositing_verified`, while
+the T249 seam `check_capture_preconditions()` (Linux half checks `_NET_WM_CM_Sn`) is exactly that
+verification and is already called per-capture in `observe/capture.py`. Until wired, the T238 R6
+gate keeps images off the agent on Linux — a model-driven run here is text-only. Reported, not
+fixed: outside the Linux lane and outside T248's grant.
+
+**Suite hang FOUND and FIXED (tests/unit/test_nexus_client.py).** The full suite hung at 74% twice,
+indefinitely, in `test_live_defect_1_handshake_consumes_the_app_reply_before_the_state_list` and
+its two siblings: their fake handlers `return` on EOF without `writer.close()`, and from Python
+3.12.1 `asyncio.Server.wait_closed()` waits for every accepted connection -- the server side sat in
+CLOSE-WAIT forever (reproduced standalone with a task-stack dump; the faulthandler dump shows no
+test frames because a suspended coroutine has none). One `writer.close()` in each handler. Not a
+harness defect; it does mean the "1637 green" baseline was never runnable on 3.12.3 unmodified.
+
+**FakeHostPlatform lacked `focus_window`** (2f1a16d added the port method, not the fake), so
+`tests/fakes/test_fakes.py::test_fake_host_satisfies_the_host_platform_protocol` failed --
+the 57 "targeted" tests last night did not include it. Added, with `set_focus_result` so a
+scenario can prove the loader refuses to press at an unfocusable window.
+
+**T251 LANDED, measured first (spike `t251-mod-set-identity-linux.md`).** Reading V2's own
+snapshot off the live client before writing a demo configuration found that **`mod_set` could not
+pass V2 on any modded host**: `GetActiveMods()` entries have no `Version` (the getter printed the
+string "nil" ×22), ids are mixed-case in load order, and official content has no version at all.
+Landed: version via `Modding.GetModProperty(m.Handle, "Version")` (integer handle -- the id-string
+form errors), ids lower-cased, `canonical_mod_set` (sorted, case-folded) on both sides,
+`ModRef.version: str | None` (a pin on id only is the only honest pin for DLC),
+`reconcile_mod_set_versions` recording each unreportable pinned version as
+`mod_set[<id>].version` in `v2_unobservable_fields` (never silently accepted, never fabricated),
+V3/branch keys case-folded, seed set rewritten with the three measured workshop versions
+(MPH 179, BBM 1.39.5, BBG 70500) and `null` for the 19 official packs, schemas regenerated.
+Also observed, not chased: `civsim_resolve(..., "TurnTimerTypes", "TurnTimerType")` returns nil
+for hash -1525060181 (= TURNTIMER_NONE per the seed set), so the turn-timer preflight records
+UNVERIFIED on this build rather than the verified name. Does not refuse; the "VERIFIED" note on
+`_TURN_TIMER_NAME_LUA` overstates what a snapshot shows.
+
+**Pre-existing on Linux, not touched:** `mypy --strict` reports `ctypes.WinDLL` twice in
+`host/windows/adapter.py` (Windows-only attribute); ruff reports import-order/line-length in
+older `tests/live/*` spike scripts.
+
+**Owner (mid-session, going to bed):** finish 002 with docs, document 001 and make it visible,
+then move into deliverable 3; at each stage let a model-driven agent actually play ("step 2.5 /
+3.5"); delegate. Provider key is on this host now, so the model-driven run is the next live item
+after the landed-code demo.

@@ -246,7 +246,8 @@ def _mod_set_key(mod_set: Any) -> Any:
     differently".
     """
     if isinstance(mod_set, list):
-        return frozenset((mod.id, mod.version) for mod in mod_set)
+        # T251: a GUID's case is not identity (the client reports them mixed).
+        return frozenset((mod.id.lower(), mod.version) for mod in mod_set)
     return mod_set
 
 
