@@ -763,3 +763,105 @@ model calls as rows; trends only from gap-free records by the store's own rule; 
 bundles + migration from the 2026-09-21 file; archival never touches the record), 29 FRs, 9
 measurable SCs, quality checklist passed, no clarification markers. Next: `/speckit-plan` (bundle
 format directory-vs-archive is the one thing worth asking the owner). Not implemented tonight.
+
+---
+
+## LINUX SPEC-LOOP HYPERVISOR — 2026-09-21 08:10 EDT → (owner-directed; Windows offline)
+
+Owner's instruction (08:07 EDT): orchestrate TASKS.md completion across all specs via the speckit
+loop (analyze → implement → converge), executive-only, subagents do the work. Start state:
+001 65/65 [X]; 002 232/251 (19 open, mostly live/other-platform); 003 spec only. Civ6 down, tuner
+port closed, locks clear, Steam up. **Client not launched — owner's OK required for the account.**
+pwsh absent: speckit helper JSON hand-derived. Three lanes on `live/linux`, path-scoped commits:
+A = 003 plan→tasks→implement (fork); B = 002 residual audit + converge, headless (fork);
+C = 001 analyze + converge (Opus). Lanes append their own sections below via `cat >>` only.
+
+### Lane C — 001 convergence check (2026-09-21)
+
+**Verdict: NOT converged on arrival; converged now.** analyze found 0 CRITICAL / 0 HIGH against the
+artifacts (37 FRs, all with code; 65/65 tasks `[X]`); converge found **9 gaps in the code**, appended
+as Phase 9 (T066–T074), all implemented and `[X]`. Severity: 4 HIGH, 4 MEDIUM, 1 LOW. No constitution
+MUST violated, no Principle I leak.
+One shape ran through all nine: **four audits iterated less than their own docstrings claimed, and two
+correct behaviours had no guard at all** — the third instance of the self-comparing-check defect after
+002's `_read_setting` and `doctor`'s literal `0`. Every fix is revert-confirmed.
+Two were real defects: **FR-030** — `/healthz` rendered a store's `ping()` exception verbatim (DSN and
+all) on the unauthenticated LAN page, and its view models sat in `app.py`, outside *both* FR-030 audits;
+**FR-036** — the turn route read 200 capture records to render 50 steps. Also: `ParityDeclaration` was
+outside the SC-005 coverage scan entirely (167 → 179 fields), and `poll.js`'s four couplings to the live
+page were asserted by nothing.
+Suite 1773 passed / 9 skipped / 0 failed (baseline 1650/8 — other lanes added ~110 tests, Lane C ~13).
+Commits: `9113b1c` (converge phase), `6562a33` (implementation). Both pushed.
+Not fixed, reported only: `tests/contract/test_match_tracking_store.py` has 6 ruff errors (Lane A's file).
+
+### Lane A — 003 match-tracking store (2026-09-21)
+
+Plan → tasks → implement → converge in one attempt, headless, `live/linux`. Fork could not spawn
+subagents (fork hard rule), so the lane coded directly. Design: the 002 reference adapter is
+widened behind `MatchTrackingStore(MatchStore)` (`store/contract.py`); 002's port, the harness
+call sites and `civsim_web` are untouched (FR-016). Store file schema 1.0 → **1.1** (additive;
+`store/schema.py`), copy-first migration via SQLite backup API to `<db>.v1.0.bak-<UTC>`; model
+calls become rows **inside** `write_turn_cycle`'s transaction (the 2026-09-21 file had 0 rows for
+97 steps — the harness only ever wrote failed calls); completeness re-derived in every write that
+can change it; `list_runs`/`get_capture_blob`/`get_turn_cycle_attempt` under the web's probed
+names; paged `query_runs`; tagged `get_capture_image`; `model_call_totals`; `metric_series` +
+`divergence` with the exclusion rule owned by the store (visually-degraded opt-in recorded on the
+response — every run to date is degraded); `export_run`/`import_run` + `store/bundle.py` (dir
+canonical, `.tar.gz` transport); `civsim store info|migrate|runs|model-calls|export|import`.
+Measured: SC-001 **354** injected interruptions + one SIGKILL; SC-002 30k steps 3.3 s / 0.6 s;
+SC-008 slowest listing 1.7 ms; SC-004 the five model-driven runs sum to **$1.424694** ≈ $1.42;
+Scenario 6 on a copy of the real file: 10 runs, 97 calls derived, backup beside it. Suite
+**1773 / 9 skipped / 0 failed** (whole tree). NOT run: Scenario 8 (model plays through the new
+store — needs client + account, ~$0.30) and the Windows half of SC-006. Cross-spec follow-ups
+reported to the hypervisor: 002 contract doc should point at 003; 002 records no per-turn yields
+(`compute_yields` no-op, no `player.yields` declaration) so science/culture series are honestly
+empty; 001 may retire its three probe Protocols. Owner-reviewable: bundle format, degraded opt-in,
+schema numbering, ten-not-nine runs.
+
+### Lane B — 002 residuals, headless (2026-09-21)
+
+Linux node, no client, no Steam touched. Attempts: audit (0) → analyze+converge+implement (1) →
+coordinator items + T256 + final converge (2). Ledger: 19 open / 232 done → **16 open / 244 done**.
+Every remaining open task is other-platform (T050, T051, T099, T224), client-gated (T177,
+T191–T194, T198–T201, T260), other-session (T257) or owner-adjacent+client-gated (T237); each is
+annotated in tasks.md with what it needs, wall-clock and $. Headless scope converged.
+
+Landed, each with a full green suite (final: 1816 passed / 11 skipped / 0 failed):
+d88038f audit + T202 record; 27ed7d4 T252 (probe consults the T249 seam; raw frames → PNG);
+76218f1 T253 (tech/civic + boost popups acknowledgeable; Lua executed in tests via `--with lupa`);
+585c72e T254 (turn-timer forward DB.MakeHash fallback); 8bdb5e8 T255 (cities.selection overlay
+→ city.is_selected); 61d135d T258/T259 (player.yields from the top bar → TurnCycle.yields,
+Constitution III; store port names its 003 implementer); 1b7e8ce T256 (target_kind rendered
+per action). Catalog 2026.09.2 → 2026.09.3, 53 → 57 declarations, 24 → 26 capabilities.
+Also: five raw NULs in tasks.md (Phase 12) replaced with `\x00` — they had made grep treat the
+file as binary and hid T218/T224/T226/T237/T249 from the first audit; T218/T226/T249 closed on
+existing evidence, T224/T237 annotated.
+
+UNVERIFIED LIVE (all client-gated, all said so in code): `UIManager:DequeuePopup` from InGame,
+`UI.GetHeadSelectedCity()`, the top-bar accessors, the forward-hash match on -1525060181, and
+whether the rendered target example ends the id-for-plot confusion. T260 carries the camera
+look-at lead (`UI.GetMapLookAtWorldTarget` + `UI.GetPlotCoordFromWorld`). Owner-reviewable:
+T256's alternative (`subject`/`target` split); T237's production wiring; T201's $ shape.
+
+### Executive close-out — 2026-09-21 (Linux spec-loop hypervisor)
+
+Loop result: every spec converged for everything observable on this host, one pass each
+(A: 1 attempt, B: 2, C: 1). **001** 65 → 75 `[X]`, 0 open — converge found nine gaps behind a
+green suite, including an unauthenticated `/healthz` rendering a store exception with its DSN, and
+`/runs` missing SC-008 five-fold at 55 runs × 320 turns (10.7 s → 0.13 s, T075). **002** 232/251 →
+244/260, 16 open and every one annotated with what it needs: other-platform (T050 T051 T099 T199
+T224), client-gated (T177 T191–T194 T198 T200 T201 T260), owner-adjacent (T237 production
+bring-up wiring), other-session (T257 Wayland portal). **003** 0 → 46/46: `MatchTrackingStore`
+extends 002's port unchanged; file schema 1.0 → 1.1 with a copy-first backup; model calls as rows
+in the turn-cycle transaction; trends with the store-owned exclusion rule; directory bundle +
+`.tar.gz` transport; `civsim store info|migrate|runs|model-calls|export|import`. Cross-spec landed:
+T258 `player.yields` from the top bar (Principle III — series were empty for every run), T259
+points 002's port contract at 003. Integrated head `a1e73b8`: suite **1816 passed / 11 skipped / 0 failed**. 13 commits,
+all pushed to `origin/live/linux`. Lane C's section above predates T075.
+Client never launched (owner's OK pending), Steam untouched, $0 model spend today.
+Owner-reviewable: bundle format; strict trend exclusion with `include_visually_degraded` opt-in
+(every run to date is degraded); T256 `target_kind`/`target_hint` vs a `subject`/`target` split;
+T201 soak shape ($0 fake vs ≈ $40–45 model-driven); T237 wiring.
+Next live items, in order: T253 popup acknowledge on the exact popup the client sat on; 003
+quickstart Scenario 8 (three model turns ≈ $0.30); T177/T191–T194/T198/T200 (5–15 min each,
+T200 ≈ 2 h); T201 last (5–12 h exclusive client).
