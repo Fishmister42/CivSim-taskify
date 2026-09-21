@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 19:08 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 19:22 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -41,20 +41,21 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| goal-runs (Opus, resumed) | unblock `use_a_builder` now that `units.build_improvement` exists; re-check its predicate against the real unit fields; update the chain test | `tests/live/goals/use_a_builder.yaml`, `tests/live/goal_run.py`, `tests/unit/test_goal_runs.py` | 18:57 |
-| builder charge (Opus, resumed) | fix pre-existing `units.promote` bug (promotion name lands in `unitId` → always `unit_not_found`) with the move_to normalisation guard | `act/executor`, unit Lua, `tests/unit/test_promote_dispatch.py` | 18:58 |
-| game-over detection (Opus) | `IsAlive`/end-screen read before the turn-start save → `stop_resolution` defeat/victory; RunEvent schema; Phase 13 task line; spike note incl. the post-defeat `Network.LoadGame` refusal | `run/game_over.py`, `lua/ingame/game_over.lua`, `run/turn_cycle.py`, `run/runner.py`, `run/composition.py`, `models/records.py`, schemas, `data-model.md` | 18:52 |
-| Live S4 (Fable fork) | after the t59 defeat the post-game main menu refused `Network.LoadGame`; relaunching the client (fallback) to load the ~t42 quicksave via the T248 path; then build_a_builder → Settler → found_second_city → use_a_builder; entries 8+ on #3; wind down 20:45 | client; `spikes/gameplay-2026-09-21/` | 18:00 |
+| productions (Opus, resumed) | live: the production LIST works but `cities.set_production` issues BUILD and the queue stays `[]` (9 of 9 rejected); diagnose against `productionpanel.lua`'s exact parameter table (insert mode suspected), bounded queue re-read, operation's own reason | `lua/ingame/city_orders.lua`, `act/verify.py`, tests | 19:18 |
+| game-over detection (Opus) | `IsAlive`/end-screen read before the turn-start save → `stop_resolution` defeat/victory; RunEvent schema; Phase 13 task; spike note incl. post-defeat `Network.LoadGame` refusal | `run/game_over.py`, `lua/ingame/game_over.lua`, `run/turn_cycle.py`, `run/runner.py`, `run/composition.py`, `models/records.py`, schemas, `data-model.md`, `tasks.md` | 18:52 |
+| accessor audit (Opus) | every Lua body's accessors checked against Firaxis' shipped UI Lua; phantoms replaced with the panel's own accessor or `<field>_reason`; checked-in cited allowlist + CI test | `lua/**`, `lua/ACCESSORS.txt`, spike `lua-accessor-audit-2026-09-21.md`, tests | 19:17 |
+| Live S4 (Fable fork) | recovered from the t59 defeat by relaunch (17 min; fresh-menu load 38 s); goal runs from the worktree; builder chain blocked on set_production; running change_research / send_delegation / save_named_game; one labelled probe of the panel's own BUILD call; entry 9 due; wind down 20:45 | client; `spikes/gameplay-2026-09-21/` | 18:00 |
 
-**Landed 18:16–18:56:** availability rendering + coverage policy (3aad0c8, 307a630); goal driver + 13
-goals (fc16b0c), `--provider-policy` forwarded + signature drift guards (ed4c793); scorecard honesty
-(88923e9); suite hang fixed + pytest timeouts (70dacae); production list fixed (1d0b372) and VERIFIED
-LIVE (8 items incl. UNIT_BUILDER/UNIT_SETTLER); production goals unblocked (cfc6cee); popup mappings —
-dedication chooser, congress intro/vote, "Goodbye" → CloseSession (764b768); **first charge-spending
-action** `units.build_improvement` + `unit.available_builds` (720e30d). **Suite green at head: 2187
-passed / 9 skipped / 0 failed, no hang. Live worktree at 720e30d.** Observed live: first game over
-(defeat, t59) recorded as a save error (fix in flight); post-defeat main menu refuses Lua loads
-(relaunch needed — loader follow-up). Still blocked: autoplay (owner permission).
+**Landed 18:16–19:15:** availability rendering + coverage policy (3aad0c8, 307a630); goal driver + 13
+goals (fc16b0c, ed4c793), all unblocked (cfc6cee, ba9ac6e); scorecard honesty (88923e9); suite hang
+fixed + pytest timeouts (70dacae); production list (1d0b372, VERIFIED LIVE); popup mappings
+(764b768) — `prompts.era_transition` and `prompts.era_dedication` **VERIFIED LIVE** (the model answered
+both in run-26d265f6); `units.build_improvement` + `unit.available_builds` (720e30d); `units.promote`
+fixed + `available_promotions` real (6606d4b). **Live worktree at 6606d4b.** Systemic finding: three
+bodies called methods Civ VI does not have behind guards that returned silent `[]` (productions,
+promotions, a production param key) — audit in flight. Observed live: defeat at t59 recorded as a
+save error (fix in flight); post-defeat menu refuses Lua loads and its exit modal ignores synthetic
+input (loader/host follow-ups). Still blocked: autoplay (owner permission).
 
 ## Queue, in order
 1. Suite green (gate). 2. Goal runs live on the milestone saves until ~20:45, Sonnet 5, back to
