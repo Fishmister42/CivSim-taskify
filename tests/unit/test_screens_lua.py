@@ -51,6 +51,8 @@ local CLOSE_CONTROLS = {
     GreatWorkShowcase = "ModalScreenClose",
     NaturalDisasterPopup = "Close",
     EraReviewPopup = "Continue",
+    -- worldcongressintro.xml:13 -- the one button on the "Begin Voting" welcome card.
+    WorldCongressIntro = "AcceptButton",
 }
 
 local function make_control(name, hidden)
@@ -93,6 +95,10 @@ function M.reset(open_states, hidden_states)
     M.callback_errors = false
     M.diplomacy_closes = true
     M.rect_errors = false
+    M.fail_close_session = false
+    M.commemorations_allowed = 1
+    M.session_by_player = {}
+    M.closed_sessions = {}
     M.controls = {}
     for _, s in ipairs(open_states) do M.controls["/InGame/" .. s] = make_control(s, false) end
     for _, s in ipairs(hidden_states) do M.controls["/InGame/" .. s] = make_control(s, true) end
@@ -165,7 +171,118 @@ function M.drop_close_controls()
     end
 end
 
+-- The two Forge accessors the real-click path reads, on an arbitrary control.
+local function attach_rect(control, x, y, w, h)
+    function control:GetScreenOffset()
+        if M.rect_errors then error("stubbed GetScreenOffset failure") end
+        return x, y
+    end
+    function control:GetSizeVal()
+        if M.rect_errors then error("stubbed GetSizeVal failure") end
+        return w, h
+    end
+    return control
+end
+
+-- The Gathering Storm dedication chooser's tree, exactly as dedicationpopup.xml:37-50 declares a
+-- `Commemoration` instance: the instance's ROOT control is the `SelectCheck` GridButton (the
+-- instance manager is declared over that control name, dedicationpopup.lua:25), the icon sits in
+-- an image frame inside it, and the `MomentCategory` label a human reads as the commemoration's
+-- name sits two levels down, inside an unnamed `Stack`.
+local DEDICATION = "/InGame/DedicationPopup"
+
+function M.set_dedication(labels, selected, disabled, hidden, confirm_disabled)
+    local stack = make_control("CommemorationsStack", false)
+    local kids = {}
+    for _, label in ipairs(labels) do
+        local category = make_control("MomentCategory", false)
+        category.text = label
+        local bonuses = make_control("MomentBonuses", false)
+        bonuses.text = "+2 to something, for this age."
+        local details = make_control("CommemorationDetails", false)
+        details.children = { category, bonuses }
+        local icon = make_control("CommemorationIcon", false)
+        local iconFrame = make_control("CommemorationIconFrame", false)
+        iconFrame.children = { icon }
+        local check = make_control("SelectCheck", contains(hidden, label))
+        check.disabled = contains(disabled, label)
+        check.selected = contains(selected, label)
+        function check:IsSelected() return self.selected == true end
+        check.children = { iconFrame, details }
+        attach_rect(check, 300, 200 + #kids * 140, 640, 136)
+        kids[#kids + 1] = check
+    end
+    stack.children = kids
+    M.controls[DEDICATION .. "/CommemorationsStack"] = stack
+
+    local confirm = make_control("Confirm", false)
+    confirm.disabled = (confirm_disabled == true)
+    attach_rect(confirm, 412, 700, 200, 41)
+    M.controls[DEDICATION .. "/Confirm"] = confirm
+end
+
+-- The congress's phase buttons (worldcongresspopup.xml:119-123). `UpdateNavButtons`
+-- (worldcongresspopup.lua:380-425) is what shows, hides and greys each one; the probe reads
+-- exactly that.
+local CONGRESS = "/InGame/WorldCongressPopup"
+local CONGRESS_BUTTONS = { "NextButton", "AcceptButton", "PassButton" }
+
+function M.set_congress_phase(live, greyed)
+    for index, name in ipairs(CONGRESS_BUTTONS) do
+        local visible = contains(live, name) or contains(greyed, name)
+        local control = make_control(name, not visible)
+        control.disabled = contains(greyed, name)
+        attach_rect(control, 300 + index * 210, 720, 200, 41)
+        M.controls[CONGRESS .. "/" .. name] = control
+    end
+end
+
 Mouse = { eLClick = 1 }
+
+-- `Game.GetEras():GetPlayerNumAllowedCommemorations(localPlayer)` -- the same call
+-- dedicationpopup.lua:65/:162/:201 makes to decide when Confirm may light up.
+M.commemorations_allowed = 1
+Game = {}
+function Game.GetLocalPlayer() return 0 end
+function Game.GetEras()
+    return {
+        GetPlayerNumAllowedCommemorations = function(self, playerID)
+            if M.commemorations_allowed == nil then error("stubbed GetEras failure") end
+            return M.commemorations_allowed
+        end,
+    }
+end
+
+-- The game's own text for the conversation's exit choice. Every shipped `CHOICE_EXIT` selection
+-- carries this one tag (base/assets/gameplay/data/diplomacystatements_*.xml), rendered "Goodbye"
+-- in en_US (base/assets/text/en_us/diplomacystatements_common_text.xml:107-109).
+M.locale = { LOC_DIPLO_CHOICE_EXIT = "Goodbye" }
+Locale = {}
+function Locale.Lookup(tag)
+    if M.locale[tag] ~= nil then return M.locale[tag] end
+    return tag
+end
+
+-- Open diplomacy sessions, found the way base/assets/ui/civ6common.lua:688-698 finds them.
+Players = {}
+M.session_by_player = {}
+M.closed_sessions = {}
+function M.set_open_session(playerIndex, sessionID)
+    M.session_by_player[playerIndex] = sessionID
+    Players[playerIndex] = { GetID = function(self) return playerIndex end }
+end
+
+DiplomacyManager = {}
+function DiplomacyManager.FindOpenSessionID(localID, otherID)
+    return M.session_by_player[otherID]
+end
+function DiplomacyManager.CloseSession(sessionID)
+    if M.fail_close_session then error("stubbed CloseSession failure") end
+    M.closed_sessions[#M.closed_sessions + 1] = sessionID
+    -- The scene fades out: the conversation container stops being visible.
+    local container = M.controls[DIPLO .. "/ConversationContainer"]
+    if container ~= nil then container.hidden = true end
+end
 
 ContextPtr = {}
 function ContextPtr:LookUpControl(path) return M.controls[path] end
@@ -638,3 +755,431 @@ def test_an_unknown_prompt_family_is_refused_before_anything_is_called(
     result = dict(runtime.globals()["CivSim_Screens"]["respond"]("prompt.does_not_exist", "x"))
     assert result["ok"] is False
     assert result["reason"] == "unknown_prompt"
+
+
+# ---------------------------------------------------------------------------
+# The Gathering Storm era dedication chooser (`prompt.era_dedication`)
+# ---------------------------------------------------------------------------
+
+_COMMEMORATIONS = ["FREE INQUIRY", "MONUMENTALITY", "PEN, BRUSH AND VOICE"]
+
+
+def _dedication(
+    runtime: Any,
+    stubs: Any,
+    *,
+    labels: list[str] = _COMMEMORATIONS,
+    selected: list[str] = (),
+    disabled: list[str] = (),
+    hidden: list[str] = (),
+    confirm_disabled: bool = True,
+    allowed: int = 1,
+    also_open: list[str] = (),
+) -> None:
+    """Open `DedicationPopup` with a fake commemoration stack in the shipped shape."""
+    stubs.reset(runtime.table("DedicationPopup", *also_open), runtime.table())
+    stubs.commemorations_allowed = allowed
+    stubs.set_dedication(
+        runtime.table(*labels),
+        runtime.table(*selected),
+        runtime.table(*disabled),
+        runtime.table(*hidden),
+        confirm_disabled,
+    )
+
+
+def _probe(runtime: Any) -> dict[str, Any]:
+    result = runtime.globals()["CivSim_Screens"]["probe"]()
+    return {
+        k: (list(v.values()) if k in ("prompt_options", "prompt_selected_options") else v)
+        for k, v in result.items()
+    }
+
+
+def test_the_dedication_chooser_is_a_blocking_prompt_offering_the_commemoration_labels(
+    lua: tuple[Any, Any],
+) -> None:
+    """MEASURED 2026-09-21 (gameplay block 20, Classical era): the chooser was on screen for 41
+    harness steps while the probe answered `world`, and the model -- reading the delivered frame --
+    asked to answer it at 40 of them, refused every time because no id covered it. The options are
+    the cards' own `MomentCategory` labels, which is what a human reads."""
+    runtime, stubs = lua
+    _dedication(runtime, stubs)
+    state = _probe(runtime)
+    assert state["screen"] == "prompt.era_dedication"
+    assert state["raw_screen_id"] == "DedicationPopup"
+    assert state["recognized"] is True
+    assert state["has_blocking_prompt"] is True
+    assert state["prompt_options"] == _COMMEMORATIONS
+
+
+def test_the_chooser_reports_how_many_dedications_it_wants_and_which_are_ticked(
+    lua: tuple[Any, Any],
+) -> None:
+    """A Golden or Heroic age allows more than one, and the popup keeps Confirm greyed out until
+    exactly that many are ticked (dedicationpopup.lua:200-203). Reporting the count is what lets
+    the agent tell a half-made choice from a finished one."""
+    runtime, stubs = lua
+    _dedication(runtime, stubs, selected=["MONUMENTALITY"], allowed=2)
+    state = _probe(runtime)
+    assert state["prompt_selections_allowed"] == 2
+    assert state["prompt_selections_made"] == 1
+    assert state["prompt_selected_options"] == ["MONUMENTALITY"]
+
+
+def test_a_client_that_cannot_answer_the_allowance_still_reports_the_chooser(
+    lua: tuple[Any, Any],
+) -> None:
+    """The allowance is informational -- what actually governs is Confirm's own disabled state,
+    which is what the human goes by. An unavailable call must not cost the prompt its id."""
+    runtime, stubs = lua
+    _dedication(runtime, stubs)
+    stubs.commemorations_allowed = None
+    state = _probe(runtime)
+    assert state["screen"] == "prompt.era_dedication"
+    assert "prompt_selections_allowed" not in state
+    assert state["prompt_selections_made"] == 0
+
+
+def test_cards_a_human_cannot_click_are_never_offered_as_commemorations(
+    lua: tuple[Any, Any],
+) -> None:
+    """A hidden card is a recycled instance-manager slot and a greyed one cannot be clicked;
+    offering either would be a superset of what the human can do."""
+    runtime, stubs = lua
+    _dedication(
+        runtime,
+        stubs,
+        labels=[*_COMMEMORATIONS, "A RECYCLED SLOT", "A GREYED CARD"],
+        hidden=["A RECYCLED SLOT"],
+        disabled=["A GREYED CARD"],
+    )
+    assert _probe(runtime)["prompt_options"] == _COMMEMORATIONS
+
+
+def test_answering_the_chooser_first_clicks_the_named_cards_own_rect(lua: tuple[Any, Any]) -> None:
+    """One click per step, as a human does: the card first. Nothing is dequeued -- the popup is
+    left standing so the next probe sees whether the tick took."""
+    runtime, stubs = lua
+    _dedication(runtime, stubs)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.era_dedication", "MONUMENTALITY")
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "requires_host_click"
+    assert result["mechanism"] == "host_click_at_control_rect"
+    assert result["step"] == "select_option"
+    assert dict(result["click"]) == {"x": 300, "y": 340, "w": 640, "h": 136}
+    assert dict(result["ui_screen"]) == {"w": 1024, "h": 768}
+    assert list(stubs.dequeued.values()) == []
+
+
+def test_answering_again_once_the_card_is_ticked_clicks_confirm(lua: tuple[Any, Any]) -> None:
+    """`Confirm` runs `OnConfirm` (dedicationpopup.lua:206-217): close, then one
+    `PlayerOperations.COMMEMORATE` per selection. It is only clicked when the popup itself says it
+    is clickable."""
+    runtime, stubs = lua
+    _dedication(runtime, stubs, selected=["MONUMENTALITY"], confirm_disabled=False)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.era_dedication", "MONUMENTALITY")
+    )
+    assert result["reason"] == "requires_host_click"
+    assert result["step"] == "confirm"
+    assert result["control"] == "Confirm"
+    assert dict(result["click"]) == {"x": 412, "y": 700, "w": 200, "h": 41}
+    assert list(stubs.dequeued.values()) == []
+
+
+def test_a_ticked_card_with_confirm_still_greyed_asks_for_the_rest_rather_than_forcing_it(
+    lua: tuple[Any, Any],
+) -> None:
+    """Two allowed, one ticked: the human could not click Confirm either. The Lua says how many
+    more the dedication wants and what is still on the table, and stops -- it never picks a second
+    commemoration on the agent's behalf and never dequeues."""
+    runtime, stubs = lua
+    _dedication(
+        runtime, stubs, selected=["MONUMENTALITY"], confirm_disabled=True, allowed=2
+    )
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.era_dedication", "MONUMENTALITY")
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "more_selections_required"
+    assert result["selections_allowed"] == 2
+    assert result["selections_made"] == 1
+    assert list(result["selected_options"].values()) == ["MONUMENTALITY"]
+    assert list(result["remaining_options"].values()) == ["FREE INQUIRY", "PEN, BRUSH AND VOICE"]
+    assert list(stubs.dequeued.values()) == []
+
+
+def test_a_commemoration_that_is_not_offered_is_refused_and_says_what_was(
+    lua: tuple[Any, Any],
+) -> None:
+    runtime, stubs = lua
+    _dedication(runtime, stubs)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.era_dedication", "EXODUS")
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "option_not_offered"
+    assert list(result["offered"].values()) == _COMMEMORATIONS
+    assert list(stubs.dequeued.values()) == []
+
+
+def test_only_a_build_with_no_readable_rect_falls_back_to_the_choosers_own_x(
+    lua: tuple[Any, Any],
+) -> None:
+    """The X dedicates NOTHING (dedicationpopup.lua:225-227). A human may do that, so it is the
+    fallback of last resort -- and the result has to say that nothing was dedicated."""
+    runtime, stubs = lua
+    _dedication(runtime, stubs)
+    stubs.rect_errors = True
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.era_dedication", "MONUMENTALITY")
+    )
+    assert result["ok"] is True
+    assert result["mechanism"] == "UIManager:DequeuePopup"
+    assert result["fallback_reason"] == "option_control_rect_unreadable"
+    assert result["dedication_made"] is False
+    assert result["hidden_after"] is True
+    assert list(stubs.dequeued.values()) == ["DedicationPopup"]
+
+
+def test_the_chooser_outranks_the_era_card_if_both_are_somehow_open(lua: tuple[Any, Any]) -> None:
+    """`erareviewpopup.lua`'s Continue dequeues the card before raising
+    `EraReviewPopup_MakeDedication` (:241-247), so in practice only one is up. The watchlist order
+    makes the outcome deterministic rather than an accident of table iteration."""
+    runtime, stubs = lua
+    _dedication(runtime, stubs, also_open=["EraReviewPopup"])
+    assert _probe(runtime)["screen"] == "prompt.era_dedication"
+
+
+def test_a_dedication_answer_with_the_popup_closed_touches_nothing(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    stubs.reset(runtime.table(), runtime.table("DedicationPopup"))
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.era_dedication", "MONUMENTALITY")
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "popup_not_open"
+    assert list(stubs.dequeued.values()) == []
+
+
+# ---------------------------------------------------------------------------
+# The World Congress: the welcome card, and the session's own phase controls
+# ---------------------------------------------------------------------------
+
+
+def test_the_congress_welcome_card_is_a_blocking_prompt_offering_accept(
+    lua: tuple[Any, Any],
+) -> None:
+    """MEASURED 2026-09-21 (live stage, game turn 57): the "Begin Voting" card came up over the
+    era review and stalled the run as `UnknownScreenEncountered` -- the state was watched but
+    mapped to no id. Its option is `accept`, not `continue`: the card is the door into the
+    session, not a report to acknowledge."""
+    runtime, stubs = lua
+    state = _state(runtime, stubs, open=["WorldCongressIntro"], hidden=["CityPanel"])
+    assert state["screen"] == "prompt.congress_intro"
+    assert state["raw_screen_id"] == "WorldCongressIntro"
+    assert state["has_blocking_prompt"] is True
+    assert state["prompt_options"] == ["accept"]
+
+
+def test_accepting_the_welcome_card_clicks_its_own_begin_voting_button(
+    lua: tuple[Any, Any],
+) -> None:
+    """`OnClose` (worldcongressintro.lua:26-29) dequeues the card AND raises
+    `WorldCongressIntro_ShowWorldCongress`, which is what opens the congress. Only a real click
+    runs both halves."""
+    runtime, stubs = lua
+    stubs.reset(runtime.table("WorldCongressIntro"), runtime.table())
+    result = dict(runtime.globals()["CivSim_Screens"]["respond"]("prompt.congress_intro", "accept"))
+    assert result["reason"] == "requires_host_click"
+    assert result["close_control"] == "AcceptButton"
+    assert list(stubs.dequeued.values()) == []
+
+
+def test_the_welcome_card_refuses_the_acknowledge_only_continue_option(
+    lua: tuple[Any, Any],
+) -> None:
+    runtime, stubs = lua
+    stubs.reset(runtime.table("WorldCongressIntro"), runtime.table())
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.congress_intro", "continue")
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "unknown_option"
+    assert list(stubs.dequeued.values()) == []
+
+
+def test_the_welcome_card_outranks_the_session_it_is_about_to_open(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    stubs.reset(runtime.table("WorldCongressIntro", "WorldCongressPopup"), runtime.table())
+    stubs.set_congress_phase(runtime.table("NextButton"), runtime.table())
+    assert _probe(runtime)["screen"] == "prompt.congress_intro"
+
+
+def _congress(
+    runtime: Any, stubs: Any, *, live: list[str] = (), greyed: list[str] = ()
+) -> dict[str, Any]:
+    stubs.reset(runtime.table("WorldCongressPopup"), runtime.table())
+    stubs.set_congress_phase(runtime.table(*live), runtime.table(*greyed))
+    return _probe(runtime)
+
+
+def test_a_congress_page_with_a_live_navigation_button_is_a_blocking_prompt(
+    lua: tuple[Any, Any],
+) -> None:
+    """The stage is not read from `m_CurrentStage` (private to that context's own Lua state) but
+    from what `UpdateNavButtons` does with the buttons a human sees
+    (worldcongresspopup.lua:380-425)."""
+    runtime, stubs = lua
+    state = _congress(runtime, stubs, live=["NextButton", "AcceptButton"])
+    assert state["screen"] == "prompt.congress_vote"
+    assert state["raw_screen_id"] == "WorldCongressPopup"
+    assert state["has_blocking_prompt"] is True
+    assert state["prompt_options"] == ["next", "accept"]
+
+
+def test_a_congress_session_with_nothing_live_is_the_ordinary_screen_and_does_not_block(
+    lua: tuple[Any, Any],
+) -> None:
+    """MEASURED 2026-09-21 (game turns 56-57): with the session on screen, its Next button
+    visible but greyed out and Submit not yet shown, an end turn advanced 56 -> 57. An open
+    session is not by itself a blocking prompt, and must not be reported as one."""
+    runtime, stubs = lua
+    state = _congress(runtime, stubs, greyed=["NextButton"])
+    assert state["screen"] == "congress"
+    assert state["has_blocking_prompt"] is False
+    assert state["prompt_options"] == []
+
+
+def test_the_special_session_pass_button_is_offered_only_when_it_is_shown(
+    lua: tuple[Any, Any],
+) -> None:
+    runtime, stubs = lua
+    assert _congress(runtime, stubs, live=["PassButton", "AcceptButton"])["prompt_options"] == [
+        "accept",
+        "pass",
+    ]
+
+
+def test_answering_the_congress_clicks_the_named_buttons_own_rect(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    _congress(runtime, stubs, live=["NextButton", "AcceptButton"])
+    result = dict(runtime.globals()["CivSim_Screens"]["respond"]("prompt.congress_vote", "accept"))
+    assert result["reason"] == "requires_host_click"
+    assert result["mechanism"] == "host_click_at_control_rect"
+    assert result["state"] == "WorldCongressPopup"
+    assert dict(result["click"]) == {"x": 720, "y": 720, "w": 200, "h": 41}
+
+
+def test_a_congress_option_that_is_not_live_is_refused_and_says_what_was(
+    lua: tuple[Any, Any],
+) -> None:
+    runtime, stubs = lua
+    _congress(runtime, stubs, live=["NextButton"], greyed=["AcceptButton"])
+    result = dict(runtime.globals()["CivSim_Screens"]["respond"]("prompt.congress_vote", "accept"))
+    assert result["ok"] is False
+    assert result["reason"] == "option_not_offered"
+    assert list(result["offered"].values()) == ["next"]
+
+
+def test_the_congress_answer_has_no_close_fallback(lua: tuple[Any, Any]) -> None:
+    """`OnAccept` submits the player's votes and `OnPass` dismisses a special-session notification
+    (worldcongresspopup.lua:2222, :2523); closing the popup instead would abandon the session
+    without answering it. A click that cannot be built fails, recorded."""
+    runtime, stubs = lua
+    _congress(runtime, stubs, live=["NextButton"])
+    stubs.rect_errors = True
+    result = dict(runtime.globals()["CivSim_Screens"]["respond"]("prompt.congress_vote", "next"))
+    assert result["ok"] is False
+    assert result["reason"] == "control_rect_unreadable"
+    assert list(stubs.dequeued.values()) == []
+    assert list(stubs.set_hidden.values()) == []
+
+
+# ---------------------------------------------------------------------------
+# The conversation's exit choice ("Goodbye")
+# ---------------------------------------------------------------------------
+
+_GOODBYE = "Goodbye"
+
+
+def test_the_conversations_exit_choice_closes_the_session_rather_than_answering_it(
+    lua: tuple[Any, Any],
+) -> None:
+    """MEASURED 2026-09-21 (live stage, game turn 58): a conversation offered exactly one choice,
+    "Goodbye", the model chose it 16 times and the scene was still up after every one. It is the
+    EXIT: `OnSelectConversationDiplomacyStatement` branches `CHOICE_EXIT` off before every
+    statement case and runs `ExitConversationMode()` -> `DiplomacyManager.CloseSession`
+    (diplomacyactionview.lua:488-493, :310-330)."""
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=[*_GREETING, _GOODBYE])
+    stubs.set_open_session(3, 4242)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GOODBYE)
+    )
+    assert result["ok"] is True
+    assert result["path"] == "close_session"
+    assert result["mechanism"] == "DiplomacyManager.CloseSession"
+    assert result["session_id"] == 4242
+    assert result["still_in_conversation"] is False
+    assert list(stubs.closed_sessions.values()) == [4242]
+
+
+def test_a_statement_choice_still_goes_through_the_click_and_says_so(lua: tuple[Any, Any]) -> None:
+    """Only the exit gets the CloseSession route: reconstructing a statement from its label could
+    answer something other than what the agent chose."""
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=[*_GREETING, _GOODBYE])
+    stubs.set_open_session(3, 4242)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GREETING[0])
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "requires_host_click"
+    assert result["path"] == "host_click"
+    assert list(stubs.closed_sessions.values()) == []
+
+
+def test_the_exit_choice_falls_back_to_the_click_when_no_session_can_be_proved(
+    lua: tuple[Any, Any],
+) -> None:
+    """With no open session found, which one is on screen is not provable from InGame, so the
+    button a human clicks is used instead and the reason is recorded rather than swallowed."""
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=[_GOODBYE])
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GOODBYE)
+    )
+    assert result["reason"] == "requires_host_click"
+    assert result["path"] == "host_click"
+    assert result["exit_fallback_reason"] == "no_open_session_found"
+    assert list(stubs.closed_sessions.values()) == []
+
+
+def test_several_open_sessions_are_never_guessed_between(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=[_GOODBYE])
+    stubs.set_open_session(3, 4242)
+    stubs.set_open_session(5, 4343)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GOODBYE)
+    )
+    assert result["exit_fallback_reason"] == "several_open_sessions"
+    assert result["open_session_count"] == 2
+    assert list(stubs.closed_sessions.values()) == []
+
+
+def test_a_failing_close_session_is_returned_as_itself(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=[_GOODBYE])
+    stubs.set_open_session(3, 4242)
+    stubs.fail_close_session = True
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GOODBYE)
+    )
+    assert result["ok"] is False
+    assert result["path"] == "close_session"
+    assert "stubbed CloseSession failure" in result["error"]

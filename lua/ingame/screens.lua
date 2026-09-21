@@ -114,7 +114,8 @@ local CIVSIM_KNOWN_SCREENS = {
     "world", "strategic", "city_screen", "diplomacy", "congress",
     "prompt.unit_promotion", "prompt.pantheon_selection",
     "prompt.great_person_selection", "prompt.diplomatic_approach", "prompt.declare_war_response",
-    "prompt.congress_vote", "prompt.era_transition",
+    "prompt.congress_intro", "prompt.congress_vote", "prompt.era_transition",
+    "prompt.era_dedication",
     "prompt.tech_civic_completed", "prompt.boost_unlocked", "prompt.great_work_created",
     "prompt.natural_disaster",
 }
@@ -215,8 +216,41 @@ local CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS = {
         close_control = "Continue",
         fallback = "dequeue_popup",
     },
+    -- MEASURED 2026-09-21 (live stage, game turn 57): the World Congress "Begin Voting" welcome
+    -- card came up over the Classical era review and the run paused `UnknownScreenEncountered` --
+    -- `WorldCongressIntro` was already on the watchlist below but mapped to no catalog id, so the
+    -- probe correctly refused to name it (FR-049) and play stopped. It is a one-button welcome:
+    -- `worldcongressintro.xml:13` declares a single `AcceptButton` (String
+    -- `LOC_WORLD_CONGRESS_INTRO_ACCEPT` = "Begin Voting"), and `worldcongressintro.lua:153` binds
+    -- it to `OnClose` (:26-29), which is `UIManager:DequeuePopup(ContextPtr)` FOLLOWED BY
+    -- `LuaEvents.WorldCongressIntro_ShowWorldCongress()` -- the event that actually opens the
+    -- congress (`worldcongresspopup.lua:2632` subscribes to it).
+    --
+    -- So the fallback here is weaker than the real click in a way that must be recorded, not
+    -- hidden: `UIManager:DequeuePopup` alone closes the welcome card and does NOT open the
+    -- congress, because the second half of that handler is a LuaEvent raised inside the intro's
+    -- own state. The real click through the host input port runs both halves. The Lua reports
+    -- which mechanism ran, and `prompts.congress_intro`'s verification predicate (the intro is no
+    -- longer the current screen) is what decides `applied`.
+    --
+    -- Its option is "accept", not "continue": the button a human reads says Begin Voting, and
+    -- accepting the congress is a different act from acknowledging a card that only reports.
+    ["prompt.congress_intro"] = {
+        state = "WorldCongressIntro",
+        close_control = "AcceptButton",
+        fallback = "dequeue_popup",
+        option = "accept",
+    },
 }
 local CIVSIM_ACKNOWLEDGE_OPTION = "continue"
+
+-- The single option an acknowledge-only popup offers. "continue" for the cards that only report
+-- something; a popup whose one button does something a human would not call "continue" names its
+-- own (see `prompt.congress_intro`).
+local function CivSim_AcknowledgeOption(descriptor)
+    if type(descriptor.option) == "string" then return descriptor.option end
+    return CIVSIM_ACKNOWLEDGE_OPTION
+end
 
 local function CivSim_ScreenIsKnown(screenId)
     for _, known in ipairs(CIVSIM_KNOWN_SCREENS) do
@@ -247,14 +281,25 @@ end
 -- `Options`, `SaveGameMenu` and `LoadGameMenu` are Lua states but are NOT `<LuaContext>` children
 -- of InGame in any shipped ingame.xml, so `/InGame/<name>` cannot reach them; they are kept only
 -- as documentation of what a future per-state dispatcher would enumerate.
+--
+-- ORDER IS NOW LOAD-BEARING (2026-09-21). The prompt that names the screen is the FIRST open
+-- state in this list that maps to a `prompt.*` id (see CivSim_Screens_State) -- it used to be the
+-- last, which was an arbitrary artefact of the loop rather than a decision. Two pairs of states
+-- can now legitimately be open at once, and in each pair the modal card that covers the other
+-- must win, so each is listed before the screen it covers:
+--   * `WorldCongressIntro` before `WorldCongressPopup` -- the welcome card is modal over the
+--     congress it is about to open (`worldcongressintro.lua:26-29`).
+--   * `DedicationPopup` before `EraReviewPopup` -- the era card's own Continue dequeues itself
+--     before raising `EraReviewPopup_MakeDedication` (`erareviewpopup.lua:241-247`), so in
+--     practice only one is up; the order makes the outcome deterministic if both ever are.
 local CIVSIM_SCREEN_WATCHLIST = {
     "CityPanel", "ProductionPanel", "TechTree", "CivicsTree", "GovernmentScreen", "ReligionScreen",
     "DiplomacyActionView", "DiplomacyDealView", "DeclareWarPopup", "UnitPromotionPopup",
-    "PantheonChooser", "GreatPeoplePopup", "GreatWorkShowcase", "WorldCongressPopup",
-    "WorldCongressBetweenTurns", "WorldCongressIntro", "EventPopup", "EraCompletePopup",
+    "PantheonChooser", "GreatPeoplePopup", "GreatWorkShowcase", "WorldCongressIntro",
+    "WorldCongressPopup", "WorldCongressBetweenTurns", "EventPopup", "EraCompletePopup",
     "NaturalWonderPopup", "LeaderScene", "TechCivicCompletedPopup", "BoostUnlockedPopup",
     "Civilopedia", "InGamePopup", "TopOptionsMenu", "PausePanel", "Options", "SaveGameMenu",
-    "LoadGameMenu", "NaturalDisasterPopup", "EraReviewPopup",
+    "LoadGameMenu", "NaturalDisasterPopup", "DedicationPopup", "EraReviewPopup",
 }
 
 -- VERIFIED (P2, screen_identity.md) that each named state exists; UNVERIFIED that
@@ -282,6 +327,10 @@ local CIVSIM_SCREEN_WATCHLIST = {
 --     forced-vote moment is `m_CurrentStage`/`m_CurrentPhase` inside that context's own private
 --     Lua state, which `IsHidden()` cannot see, and `congress` already maps to that state —
 --     mapping the prompt id here would both fabricate a distinction and shadow `congress`.
+--     RESOLVED 2026-09-21 the same way `prompt.diplomatic_approach` was, and for the same reason:
+--     not by reading the private stage variable but by reading the PHASE CONTROLS' own
+--     visibility, which is how the stage is expressed on screen (see CIVSIM_CONGRESS_STATE
+--     below). The id is answered directly and must stay out of this table.
 --   * `prompt.diplomatic_approach` — an AI-initiated approach is `Events.DiplomacyStatement` ->
 --     `OnDiplomacyStatement` (diplomacyactionview.lua:2741), which shows the SAME
 --     `DiplomacyActionView` context in CONVERSATION_MODE/CINEMA_MODE that `diplomacy` already maps
@@ -312,6 +361,31 @@ local CIVSIM_SCREEN_ID_BY_STATE = {
     -- MEASURED 2026-09-21: `/InGame/NaturalDisasterPopup` hidden=false while the eruption
     -- cinematic was up (see CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS).
     ["prompt.natural_disaster"] = "NaturalDisasterPopup",
+    -- MEASURED 2026-09-21 (live stage, game turn 57): the congress welcome card blocked play and
+    -- the probe answered `unknown` -- the state was watched but unmapped. Unlike
+    -- `WorldCongressPopup`, `WorldCongressIntro` is a single-purpose context: it exists only to be
+    -- the "Begin Voting" card and is hidden at every other moment
+    -- (`worldcongressintro.lua:139` `ContextPtr:SetHide(true) -- PRODUCTION`, shown only from
+    -- `OnOpen` -> `UIManager:QueuePopup`, :43), so `IsHidden()==false` on it means exactly that
+    -- card is up. That is why it CAN carry a state mapping where `prompt.congress_vote` cannot.
+    ["prompt.congress_intro"] = "WorldCongressIntro",
+    -- MEASURED 2026-09-21 (gameplay block 20): Gathering Storm's Classical-era dedication chooser
+    -- was on screen for 41 steps while the probe answered `world`, and Sonnet 5 -- reading the
+    -- delivered frame alone -- asked to answer it at 40 of them; every request was refused because
+    -- no screen id covered it. The state is `DedicationPopup`
+    -- (`dlc/expansion2/ui/additions/dedicationpopup.lua`, added to the InGame context tree by
+    -- `dlc/expansion2/expansion2.modinfo:302-306`'s `<AddUserInterfaces>` with
+    -- `<Context>InGame</Context>`, which is why it appears in no shipped `ingame.xml`). Like the
+    -- intro above it is single-purpose: `Initialize` hides it (`dedicationpopup.lua:283`) and the
+    -- only thing that shows it is `ShowPopup` -> `UIManager:QueuePopup` (:220-222) from
+    -- `LuaEvents.EraReviewPopup_MakeDedication` (:293).
+    --
+    -- MEASURED 2026-09-21 (autoplay spike, `specs/002-civ-playing-harness/spikes/
+    -- autoplay-fast-forward-linux.md`): `ContextPtr:LookUpControl("/InGame/DedicationPopup")`
+    -- resolves from InGame and the context reported `hidden_after = true` once dequeued -- the
+    -- path and the read are both live-measured. What is UNVERIFIED LIVE is everything below it:
+    -- the per-instance label read and the two clicks.
+    ["prompt.era_dedication"] = "DedicationPopup",
 }
 
 -- MEASURED 2026-09-21 (gameplay day, block 7, game turn 35): play stalled for five harness turns
@@ -355,18 +429,79 @@ local CIVSIM_DIPLOMACY_STATE = "DiplomacyActionView"
 local CIVSIM_DIPLOMACY_CONVERSATION_CONTAINER = "ConversationContainer"
 local CIVSIM_DIPLOMACY_SELECTION_STACK = "ConversationSelectionStack"
 
--- The visible text of one choice button: its own text if it carries one, else the first non-empty
--- text among its children (the `SelectionText` label lives inside the `SelectionButton`).
-local function CivSim_ControlText(control)
+-- MEASURED 2026-09-21 (live stage, game turn 58): an AI-initiated conversation offered exactly one
+-- choice, "Goodbye". The model chose it 16 times and the scene was still up after every one.
+-- "Goodbye" is not a statement response at all -- it is the conversation's EXIT. In the popup's own
+-- handler `OnSelectConversationDiplomacyStatement` (diplomacyactionview.lua:488-493) the key
+-- `CHOICE_EXIT` is branched off BEFORE every `DiplomacyManager.AddStatement` /
+-- `AddResponse` case and runs `ExitConversationMode()` (:310-330), whose whole effect is
+-- `DiplomacyManager.CloseSession(ms_ActiveSessionID)` (:323). So the session has to be closed; no
+-- statement can answer it.
+--
+-- The key itself is private to that context, but the LABEL is not, and the exit choice's label is
+-- not guessed at here: every `CHOICE_EXIT` selection in every shipped statement file carries the
+-- one text tag `LOC_DIPLO_CHOICE_EXIT` (base/assets/gameplay/data/diplomacystatements_firstmeet.xml
+-- :200-201, _delegation.xml:218-219, _warning.xml:947-948, and so on -- grep 2026-09-21 finds no
+-- other text on that key), rendered "Goodbye" in en_US
+-- (base/assets/text/en_us/diplomacystatements_common_text.xml:107-109). `Locale.Lookup` of that
+-- same tag from InGame returns the same string the game put on the button, in whatever language
+-- the client is running, so the comparison is against the game's own text rather than a literal.
+--
+-- `ms_ActiveSessionID` is private too, so the session is found the way Firaxis's own shared code
+-- finds it: loop the player slots and ask `DiplomacyManager.FindOpenSessionID(localPlayer, other)`
+-- (base/assets/ui/civ6common.lua:688-698, the identical loop). Exactly one open session is the
+-- unambiguous case and the only one this closes; with none or several it falls back to the click,
+-- recording why, rather than closing a session it cannot prove is the one on screen.
+--
+-- UNVERIFIED LIVE: the CloseSession route. `path` in the answer's result says which one ran.
+local CIVSIM_DIPLOMACY_EXIT_TEXT_KEY = "LOC_DIPLO_CHOICE_EXIT"
+
+local function CivSim_DiplomacyExitLabel()
+    local ok, text = pcall(function() return Locale.Lookup(CIVSIM_DIPLOMACY_EXIT_TEXT_KEY) end)
+    if ok and type(text) == "string" and text ~= "" then return text end
+    return nil
+end
+
+local function CivSim_DiplomacyOpenSessionIds()
+    local ids = {}
+    local okL, localPlayerID = pcall(function() return Game.GetLocalPlayer() end)
+    if not okL or type(localPlayerID) ~= "number" then return ids end
+    for i = 0, 63 do
+        local ok, sessionID = pcall(function()
+            local other = Players[i]
+            if other == nil then return nil end
+            local otherID = other:GetID()
+            if otherID == localPlayerID then return nil end
+            return DiplomacyManager.FindOpenSessionID(localPlayerID, otherID)
+        end)
+        if ok and type(sessionID) == "number" then ids[#ids + 1] = sessionID end
+    end
+    return ids
+end
+
+-- The visible text of one control: its own text if it carries one, else the first non-empty text
+-- found walking its children depth-first, at most `depth` levels down. Depth 1 is the diplomacy
+-- case (the `SelectionText` label lives directly inside the `SelectionButton`). The dedication
+-- chooser needs depth 3: the instance's root control is the `SelectCheck` GridButton, whose
+-- `MomentCategory` label sits inside an unnamed `Stack` inside it (dedicationpopup.xml:38-49).
+-- Depth-first order is what makes the FIRST label found the one a human reads as the option's
+-- name -- `MomentCategory` ("Free Inquiry", "Monumentality", ...) is declared before
+-- `MomentBonuses` in that stack (dedicationpopup.xml:46-47).
+local function CivSim_ControlTextDeep(control, depth)
     local okT, text = pcall(function() return control:GetText() end)
     if okT and type(text) == "string" and text ~= "" then return text end
+    if depth <= 0 then return nil end
     local okC, children = pcall(function() return control:GetChildren() end)
     if not okC or children == nil then return nil end
     for _, child in ipairs(children) do
-        local okCT, childText = pcall(function() return child:GetText() end)
-        if okCT and type(childText) == "string" and childText ~= "" then return childText end
+        local childText = CivSim_ControlTextDeep(child, depth - 1)
+        if childText ~= nil then return childText end
     end
     return nil
+end
+
+local function CivSim_ControlText(control)
+    return CivSim_ControlTextDeep(control, 1)
 end
 
 local function CivSim_DiplomacyLookUp(controlName)
@@ -397,6 +532,166 @@ local function CivSim_DiplomacyStatementChoices()
         if okCh and childHidden == false and not (okD and disabled == true) then
             local text = CivSim_ControlText(child)
             if text ~= nil then choices[#choices + 1] = { control = child, text = text } end
+        end
+    end
+    return choices
+end
+
+-- ---------------------------------------------------------------------------
+-- The Gathering Storm era dedication chooser (`prompt.era_dedication`)
+-- ---------------------------------------------------------------------------
+--
+-- MEASURED 2026-09-21 (gameplay block 20, Classical era): the chooser was on screen for 41 steps
+-- while the text probe answered `world`. Sonnet 5 described the card from the delivered frame and
+-- asked to answer it at 40 of 41 steps; all 40 were refused, because an id the catalog does not
+-- know is exactly what FR-049 makes the harness stall on. The picture was right and the text was
+-- blind -- this section closes that hole.
+--
+-- What a human sees and clicks (`dlc/expansion2/ui/additions/dedicationpopup.lua` / `.xml`):
+--   * a card titled "Make your Dedication for the <Era> Era" (lua:57, `LOC_ERA_COMMEMORATION_
+--     POPUP_DEDICATION_SUBHEADER`) over an age banner;
+--   * one big button per offered commemoration, stacked in `CommemorationsStack` (xml:23). Each is
+--     a `Commemoration` instance whose ROOT control is the `SelectCheck` GridButton (xml:38; the
+--     instance manager is declared over exactly that control name, lua:25), carrying an icon, a
+--     `MomentCategory` label -- the commemoration's name, uppercased by `Locale.ToUpper`
+--     (lua:121) -- and a `MomentBonuses` label describing what it does;
+--   * a `Confirm` button (xml:33), DISABLED until exactly
+--     `Game.GetEras():GetPlayerNumAllowedCommemorations(localPlayer)` of them are selected
+--     (`UpdateConfirmButton`, lua:200-203), and a `CloseButton` X (xml:30).
+-- Clicking an option toggles its `SelectCheck` selected state (`OnCommemorationSelected`,
+-- lua:160-197); at capacity a further click clears the previous picks and starts over
+-- (lua:181-194). `Confirm` runs `OnConfirm` (lua:206-217): close, then one
+-- `UI.RequestPlayerOperation(localPlayer, PlayerOperations.COMMEMORATE, {PARAM_COMMEMORATION_TYPE
+-- = <type>})` per selection. `CloseButton` runs `OnClose` (lua:225-227), a bare
+-- `UIManager:DequeuePopup(ContextPtr)` -- a human MAY dedicate nothing that way.
+--
+-- Parity: the options reported are the visible, enabled instances' own labels -- exactly the
+-- buttons a human could click, never a superset. Hidden instances are recycled instance-manager
+-- slots (the same convention documented for the diplomacy stack above) and are skipped. Nothing
+-- reads which commemoration is "best": the bonus text on the card is the human's own information.
+--
+-- UNVERIFIED LIVE: the per-instance label read and both clicks. `/InGame/DedicationPopup` itself
+-- resolving from InGame, and `UIManager:DequeuePopup` on it reporting `hidden_after = true`, WERE
+-- measured (spikes/autoplay-fast-forward-linux.md).
+local CIVSIM_DEDICATION_STATE = "DedicationPopup"
+local CIVSIM_DEDICATION_STACK = "CommemorationsStack"
+local CIVSIM_DEDICATION_CONFIRM = "Confirm"
+local CIVSIM_DEDICATION_LABEL_DEPTH = 3
+
+local function CivSim_LookUp(stateName, controlName)
+    local path = "/InGame/" .. stateName
+    if controlName ~= nil then path = path .. "/" .. controlName end
+    local ok, control = pcall(function() return ContextPtr:LookUpControl(path) end)
+    if not ok then return nil end
+    return control
+end
+
+local function CivSim_IsVisible(control)
+    local ok, hidden = pcall(function() return control:IsHidden() end)
+    return ok and hidden == false
+end
+
+local function CivSim_IsDisabled(control)
+    local ok, disabled = pcall(function() return control:IsDisabled() end)
+    return ok and disabled == true
+end
+
+-- Every commemoration a human could click right now, as {control, text, selected} records, or nil
+-- when the chooser is not open at all. An empty list means the chooser is open with nothing
+-- clickable in it, which is not an answerable prompt either.
+local function CivSim_DedicationChoices()
+    local ctx = CivSim_LookUp(CIVSIM_DEDICATION_STATE, nil)
+    if ctx == nil or not CivSim_IsVisible(ctx) then return nil end
+    local stack = CivSim_LookUp(CIVSIM_DEDICATION_STATE, CIVSIM_DEDICATION_STACK)
+    if stack == nil then return {} end
+    local okC, children = pcall(function() return stack:GetChildren() end)
+    if not okC or children == nil then return {} end
+    local choices = {}
+    for _, child in ipairs(children) do
+        if CivSim_IsVisible(child) and not CivSim_IsDisabled(child) then
+            local text = CivSim_ControlTextDeep(child, CIVSIM_DEDICATION_LABEL_DEPTH)
+            if text ~= nil then
+                local okS, selected = pcall(function() return child:IsSelected() end)
+                choices[#choices + 1] = {
+                    control = child, text = text, selected = (okS and selected == true),
+                }
+            end
+        end
+    end
+    return choices
+end
+
+-- How many commemorations this dedication allows, read the same way the popup itself reads it
+-- (`dedicationpopup.lua:65`, :162, :201). The local player's own allowance, which the human learns
+-- by watching Confirm stay greyed out until that many are picked -- never another player's. nil
+-- when the call is unavailable, in which case `Confirm`'s own disabled state (which IS what the
+-- human reads) still drives the answer.
+local function CivSim_DedicationSelectionsAllowed()
+    local ok, allowed = pcall(function()
+        return Game.GetEras():GetPlayerNumAllowedCommemorations(Game.GetLocalPlayer())
+    end)
+    if ok and type(allowed) == "number" then return allowed end
+    return nil
+end
+
+-- ---------------------------------------------------------------------------
+-- The World Congress phase controls (`prompt.congress_vote`)
+-- ---------------------------------------------------------------------------
+--
+-- MEASURED 2026-09-21 (live stage, game turn 57): the congress opened over the era review and the
+-- run had to be cleared by hand -- Accept on the welcome card, Next through the proposal pages,
+-- then Accept with no votes, which is the sequence a human uses to abstain.
+--
+-- `WorldCongressPopup` is one context for every stage of a congress, and which stage is up lives
+-- in `m_CurrentStage`/`m_CurrentPhase`, private to that context's own Lua state -- the documented
+-- gap. This does NOT read that variable. It reads what the stage is expressed AS on screen: the
+-- navigation buttons' own visibility and disabled state, set by `UpdateNavButtons`
+-- (worldcongresspopup.lua:380-425) and declared as direct, named children of the popup in
+-- `ButtonStack` (worldcongresspopup.xml:117-124):
+--   * `NextButton` -- shown unless the last phase is reached (`SetHide(m_CurrentStage >= 3 or
+--     m_CurrentPhase == PHASE_STEP_MAX)`, :391) and disabled unless every proposal on the page has
+--     been answered (`SetDisabled(not canNextPhase)`, :392, over `CanMoveToNextPhase`, :310-330).
+--     Its handler is `OnNext` -> `SetPhase(m_CurrentPhase + 1)` (:2319-2323).
+--   * `AcceptButton` -- shown at the last phase (`SetShow(m_CurrentPhase == PHASE_STEP_MAX)`,
+--     :409), disabled per `CanSubmit()` (:414-415), which returns true outright for the ordinary
+--     session stages (:347) -- this is the abstain path: submitting with no votes cast is
+--     something the game lets a human do. Its handler is `OnAccept` (:2222), which issues the
+--     player's votes through `UI.RequestPlayerOperation`.
+--   * `PassButton` -- shown only for a special-session emergency proposal (:399); `OnPass`
+--     (:2523-2526) closes the popup and dismisses that notification.
+-- `PrevButton` and `ReturnButton` exist too and are deliberately NOT offered: they navigate
+-- backwards / return to a review tab rather than answer the moment, so the offered set stays a
+-- strict subset of what the human is being asked for.
+--
+-- SCOPE, said plainly: this answers the congress's NAVIGATION, not its content. Casting actual
+-- votes -- choosing a resolution's option, spending favor, upvoting or downvoting a proposal --
+-- runs through per-instance pulldowns and vote steppers inside the popup and is NOT mapped here;
+-- an agent using this action abstains. `catalogs/actions/congress.yaml`'s `congress.cast_vote`
+-- remains the separate, unmapped claim for casting a vote.
+--
+-- Deliberately not in CIVSIM_SCREEN_ID_BY_STATE, for the reason the diplomatic approach is not:
+-- `congress` already maps to this state, and mapping the prompt id there would report a blocking
+-- prompt for any open congress screen, including browsing last session's results.
+--
+-- UNVERIFIED LIVE: every step here. Each is pcall'd, and a failure degrades to `congress`
+-- (non-blocking) rather than inventing a prompt.
+local CIVSIM_CONGRESS_STATE = "WorldCongressPopup"
+local CIVSIM_CONGRESS_PHASE_CONTROLS = {
+    { option = "next", control = "NextButton" },
+    { option = "accept", control = "AcceptButton" },
+    { option = "pass", control = "PassButton" },
+}
+
+-- Every navigation control the human could click right now, as {option, control} records, or nil
+-- when the congress popup is not open at all.
+local function CivSim_CongressPhaseChoices()
+    local ctx = CivSim_LookUp(CIVSIM_CONGRESS_STATE, nil)
+    if ctx == nil or not CivSim_IsVisible(ctx) then return nil end
+    local choices = {}
+    for _, entry in ipairs(CIVSIM_CONGRESS_PHASE_CONTROLS) do
+        local control = CivSim_LookUp(CIVSIM_CONGRESS_STATE, entry.control)
+        if control ~= nil and CivSim_IsVisible(control) and not CivSim_IsDisabled(control) then
+            choices[#choices + 1] = { option = entry.option, control = control }
         end
     end
     return choices
@@ -446,23 +741,40 @@ local function CivSim_Screens_State()
             has_blocking_prompt = false, prompt_options = {},
         }
     end
-    -- A leader statement awaiting a choice is a blocking prompt even though it shares its state
-    -- with the ordinary `diplomacy` screen -- it is a mode of that context, not a state of its
-    -- own (block 7, game turn 35; see CIVSIM_DIPLOMACY_STATE above).
+    -- Three prompts are MODES of a context that is also an ordinary screen, so they are read from
+    -- the context's own controls rather than from its state name (block 7, game turn 35 for the
+    -- leader statement; game turn 57 for the congress). Each reader answers nil when its context
+    -- is not open at all, so the cost here is one lookup per open candidate, not per watchlist
+    -- entry.
     local diplomacyChoices = nil
+    local congressChoices = nil
+    local dedicationChoices = nil
     for _, name in ipairs(open) do
         if name == CIVSIM_DIPLOMACY_STATE then
             diplomacyChoices = CivSim_DiplomacyStatementChoices()
+        elseif name == CIVSIM_CONGRESS_STATE then
+            congressChoices = CivSim_CongressPhaseChoices()
+        elseif name == CIVSIM_DEDICATION_STATE then
+            dedicationChoices = CivSim_DedicationChoices()
         end
     end
 
     -- A recognised prompt outranks anything else that is open (it is what blocks the player);
     -- otherwise the first open watchlist screen names the view.
+    --
+    -- CORRECTED 2026-09-21: the FIRST open state that maps to a prompt id wins, in watchlist
+    -- order, and the search stops there. It used to be the last one found, which was an accident
+    -- of the loop rather than a decision -- and now that two modal cards can each cover a screen
+    -- that is itself mapped (see CIVSIM_SCREEN_WATCHLIST's ordering note), which one is reported
+    -- has to be a decision.
     local raw, screen = nil, nil
     for _, name in ipairs(open) do
         for id, state in pairs(CIVSIM_SCREEN_ID_BY_STATE) do
-            if state == name and string.sub(id, 1, 7) == "prompt." then raw, screen = name, id end
+            if state == name and string.sub(id, 1, 7) == "prompt." and raw == nil then
+                raw, screen = name, id
+            end
         end
+        if raw ~= nil then break end
     end
     if raw == nil and diplomacyChoices ~= nil and #diplomacyChoices > 0 then
         raw = CIVSIM_DIPLOMACY_STATE
@@ -471,6 +783,14 @@ local function CivSim_Screens_State()
         -- screen in any mode would report a blocking prompt), and `civsim store coverage` reads
         -- these literals to know the id is reachable at all.
         screen = "prompt.diplomatic_approach"
+    end
+    if raw == nil and congressChoices ~= nil and #congressChoices > 0 then
+        raw = CIVSIM_CONGRESS_STATE
+        -- The same shape, and a literal for the same two reasons: `congress` already maps to this
+        -- state, so the id must stay out of CIVSIM_SCREEN_ID_BY_STATE, and coverage reads these
+        -- literals. A congress popup open with no navigation control offered (browsing last
+        -- session's results, say) falls through to the ordinary `congress` screen below.
+        screen = "prompt.congress_vote"
     end
     if raw == nil then
         raw = open[1]
@@ -489,15 +809,37 @@ local function CivSim_Screens_State()
     -- of catalogs/actions/prompts.yaml says so), which keeps those actions unavailable rather than
     -- guessed at.
     local options = {}
-    if CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS[screen] ~= nil then
-        options = { CIVSIM_ACKNOWLEDGE_OPTION }
+    local extra = nil
+    local acknowledge = CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS[screen]
+    if acknowledge ~= nil then
+        options = { CivSim_AcknowledgeOption(acknowledge) }
     elseif screen == "prompt.diplomatic_approach" and diplomacyChoices ~= nil then
         for _, choice in ipairs(diplomacyChoices) do options[#options + 1] = choice.text end
+    elseif screen == "prompt.congress_vote" and congressChoices ~= nil then
+        for _, choice in ipairs(congressChoices) do options[#options + 1] = choice.option end
+    elseif screen == "prompt.era_dedication" and dedicationChoices ~= nil then
+        -- The commemoration labels a human reads on the cards, plus how many of them this
+        -- dedication takes and which are already ticked -- the three things that are on the
+        -- screen and that decide whether Confirm is clickable yet.
+        local selected = {}
+        for _, choice in ipairs(dedicationChoices) do
+            options[#options + 1] = choice.text
+            if choice.selected then selected[#selected + 1] = choice.text end
+        end
+        extra = {
+            prompt_selections_allowed = CivSim_DedicationSelectionsAllowed(),
+            prompt_selections_made = #selected,
+            prompt_selected_options = selected,
+        }
     end
-    return {
+    local result = {
         screen = screen, raw_screen_id = raw, recognized = true,
         has_blocking_prompt = (string.sub(screen, 1, 7) == "prompt."), prompt_options = options,
     }
+    if extra ~= nil then
+        for k, v in pairs(extra) do result[k] = v end
+    end
+    return result
 end
 
 -- Dispatched from InGame by the production executor (game.screen_state): the aggregate. The
@@ -565,7 +907,7 @@ local function CivSim_Screens_HostClickRequest(control)
 end
 
 local function CivSim_Screens_AcknowledgePopup(promptType, descriptor, optionId)
-    if optionId ~= CIVSIM_ACKNOWLEDGE_OPTION then
+    if optionId ~= CivSim_AcknowledgeOption(descriptor) then
         return { ok = false, reason = "unknown_option", prompt = promptType, option = optionId }
     end
     local stateName = descriptor.state
@@ -634,9 +976,13 @@ end
 -- the key -> statement mapping is a 200-line switch in that handler, and reproducing it here would
 -- be guessing at which statement a visible label means.
 --
--- There is deliberately NO fallback. If the button cannot be clicked, the answer fails and is
--- recorded as a failure, so the run stalls honestly rather than firing a reconstructed
--- `DiplomacyManager` call that might answer something other than what the agent chose.
+-- There is deliberately NO fallback for a STATEMENT choice. If the button cannot be clicked, the
+-- answer fails and is recorded as a failure, so the run stalls honestly rather than firing a
+-- reconstructed `DiplomacyManager.AddStatement` call that might answer something other than what
+-- the agent chose. The conversation's EXIT choice is the one exception, and it is not a
+-- reconstruction: its own handler's entire effect is `DiplomacyManager.CloseSession` -- see
+-- CIVSIM_DIPLOMACY_EXIT_TEXT_KEY above and the turn-58 measurement that forced it. The result's
+-- `path` says which route ran (`close_session` or `host_click`).
 --
 -- MEASURED LIVE 2026-09-21 (gameplay blocks 13 and 14, game turn 42, Georgia's greeting):
 -- `control:CallCallback(Mouse.eLClick)` returned without error and did nothing -- the offered
@@ -662,8 +1008,34 @@ local function CivSim_Screens_AnswerDiplomaticApproach(promptType, optionId)
     end
     local offered = {}
     for _, choice in ipairs(choices) do offered[#offered + 1] = choice.text end
+    local exitLabel = CivSim_DiplomacyExitLabel()
     for _, choice in ipairs(choices) do
         if choice.text == optionId then
+            -- The conversation's Exit ("Goodbye") is not a statement and cannot be answered as
+            -- one -- see CIVSIM_DIPLOMACY_EXIT_TEXT_KEY above for the turn-58 measurement. It
+            -- closes the session, which is exactly what its own handler does.
+            if exitLabel ~= nil and choice.text == exitLabel then
+                local sessions = CivSim_DiplomacyOpenSessionIds()
+                if #sessions == 1 then
+                    local okC, err = pcall(function()
+                        DiplomacyManager.CloseSession(sessions[1])
+                    end)
+                    local remaining = CivSim_DiplomacyStatementChoices()
+                    return {
+                        ok = okC, path = "close_session",
+                        mechanism = "DiplomacyManager.CloseSession",
+                        prompt = promptType, option = optionId, session_id = sessions[1],
+                        still_in_conversation = (remaining ~= nil and #remaining > 0),
+                        error = (not okC) and tostring(err) or nil,
+                    }
+                end
+                -- Zero or several open sessions: which one is on screen is not provable from
+                -- here, so fall through to the button a human clicks, saying why.
+                exitLabel = nil
+                choice.exit_fallback_reason = (#sessions == 0)
+                    and "no_open_session_found" or "several_open_sessions"
+                choice.open_session_count = #sessions
+            end
             -- MEASURED LIVE 2026-09-21 (game turn 42, Georgia's greeting): a click at the
             -- unscaled position hit empty scene; one at the position scaled by the UI's own
             -- screen size answered the greeting (see CivSim_Screens_HostClickRequest).
@@ -677,6 +1049,136 @@ local function CivSim_Screens_AnswerDiplomaticApproach(promptType, optionId)
             end
             request.prompt = promptType
             request.option = optionId
+            request.path = "host_click"
+            request.exit_fallback_reason = choice.exit_fallback_reason
+            request.open_session_count = choice.open_session_count
+            return request
+        end
+    end
+    return { ok = false, reason = "option_not_offered", prompt = promptType, option = optionId,
+             offered = offered }
+end
+
+-- Answer the era dedication chooser by clicking what a human clicks, ONE click per dispatch --
+-- the option's own card, and then Confirm once the popup itself says Confirm is clickable. That
+-- is the human's flow (pick, watch Confirm light up, confirm), and it is also the only flow this
+-- harness can perform honestly: `CivSim_Screens_HostClickRequest` hands the executor one
+-- rectangle, and the executor performs one click (capability/executor.py,
+-- `_perform_host_click_if_requested`). Between the two dispatches the probe re-reads the popup, so
+-- what decides the second click is the popup's own state, not a remembered intention here.
+--
+-- With more than one commemoration allowed (a Golden or Heroic age), the agent names one label per
+-- step: each call selects that one and then reports `more_selections_required` with the counts and
+-- the labels still available, until the popup enables Confirm. Nothing here picks a second
+-- commemoration on the agent's behalf.
+--
+-- The fallback is the popup's own X (`CloseButton` -> `OnClose` -> `UIManager:DequeuePopup`,
+-- dedicationpopup.lua:225-227, :288), and it is taken ONLY when no rectangle can be read at all,
+-- because it dedicates NOTHING -- something a human may do, but never what was asked for. It is
+-- recorded as itself: `mechanism`, `fallback_reason`, and `dedication_made = false`. A click
+-- request is never followed by a dequeue: the popup is left standing so the next probe can see it.
+local function CivSim_Screens_AnswerEraDedication(promptType, optionId)
+    local ctx = CivSim_LookUp(CIVSIM_DEDICATION_STATE, nil)
+    if ctx == nil then
+        return { ok = false, reason = "popup_state_absent", prompt = promptType, option = optionId }
+    end
+    local choices = CivSim_DedicationChoices()
+    if choices == nil then
+        return { ok = false, reason = "popup_not_open", prompt = promptType, option = optionId }
+    end
+
+    local offered, selected, chosen = {}, {}, nil
+    for _, choice in ipairs(choices) do
+        offered[#offered + 1] = choice.text
+        if choice.selected then selected[#selected + 1] = choice.text end
+        if choice.text == optionId then chosen = choice end
+    end
+    if chosen == nil then
+        return { ok = false, reason = "option_not_offered", prompt = promptType, option = optionId,
+                 offered = offered }
+    end
+
+    local result = { prompt = promptType, option = optionId, state = CIVSIM_DEDICATION_STATE,
+                     selections_made = #selected,
+                     selections_allowed = CivSim_DedicationSelectionsAllowed() }
+
+    -- 1. Not ticked yet: click its card. `OnCommemorationSelected` runs inside the popup's own
+    --    state and is the only thing that can tick it (dedicationpopup.lua:156, :160-197).
+    if not chosen.selected then
+        local request = CivSim_Screens_HostClickRequest(chosen.control)
+        if request ~= nil then
+            for k, v in pairs(request) do result[k] = v end
+            result.step = "select_option"
+            return result
+        end
+        result.fallback_reason = "option_control_rect_unreadable"
+    else
+        -- 2. Already ticked: Confirm, but only if the popup says it is clickable. `Confirm` is
+        --    disabled until exactly the allowed number are ticked (UpdateConfirmButton,
+        --    dedicationpopup.lua:200-203), which is precisely the greyed-out button a human sees.
+        local confirm = CivSim_LookUp(CIVSIM_DEDICATION_STATE, CIVSIM_DEDICATION_CONFIRM)
+        if confirm == nil then
+            result.fallback_reason = "confirm_control_absent"
+        elseif not CivSim_IsVisible(confirm) then
+            result.fallback_reason = "confirm_control_hidden"
+        elseif CivSim_IsDisabled(confirm) then
+            -- Not a failure and not a fallback: the human could not click Confirm either. Say how
+            -- many more the dedication wants and what is still on the table, and stop.
+            local remaining = {}
+            for _, choice in ipairs(choices) do
+                if not choice.selected then remaining[#remaining + 1] = choice.text end
+            end
+            result.ok = false
+            result.reason = "more_selections_required"
+            result.selected_options = selected
+            result.remaining_options = remaining
+            return result
+        else
+            local request = CivSim_Screens_HostClickRequest(confirm)
+            if request ~= nil then
+                for k, v in pairs(request) do result[k] = v end
+                result.step = "confirm"
+                result.control = CIVSIM_DEDICATION_CONFIRM
+                return result
+            end
+            result.fallback_reason = "confirm_control_rect_unreadable"
+        end
+    end
+
+    -- 3. No rectangle anywhere: the popup's own X, which dedicates nothing. Recorded as that.
+    result.mechanism = "UIManager:DequeuePopup"
+    result.dedication_made = false
+    local okD, err = pcall(function() UIManager:DequeuePopup(ctx) end)
+    local okA, hiddenAfter = pcall(function() return ctx:IsHidden() end)
+    result.ok = okD
+    result.hidden_after = (okA and hiddenAfter == true)
+    result.error = (not okD) and tostring(err) or nil
+    return result
+end
+
+-- Answer the World Congress by clicking one of its navigation buttons. Same shape as the
+-- diplomatic approach, and deliberately with NO fallback: `OnAccept` submits the player's votes
+-- and `OnPass` dismisses a special-session notification (worldcongresspopup.lua:2222, :2523), so
+-- there is no InGame-reachable primitive that means the same thing as either. Closing the popup
+-- instead would abandon the session without answering it, which is not what any of these buttons
+-- does. A click that cannot be built fails, recorded, and the run stalls honestly.
+local function CivSim_Screens_AnswerCongressPhase(promptType, optionId)
+    local choices = CivSim_CongressPhaseChoices()
+    if choices == nil then
+        return { ok = false, reason = "popup_not_open", prompt = promptType, option = optionId }
+    end
+    local offered = {}
+    for _, choice in ipairs(choices) do offered[#offered + 1] = choice.option end
+    for _, choice in ipairs(choices) do
+        if choice.option == optionId then
+            local request = CivSim_Screens_HostClickRequest(choice.control)
+            if request == nil then
+                return { ok = false, reason = "control_rect_unreadable", prompt = promptType,
+                         option = optionId, state = CIVSIM_CONGRESS_STATE }
+            end
+            request.prompt = promptType
+            request.option = optionId
+            request.state = CIVSIM_CONGRESS_STATE
             return request
         end
     end
@@ -694,6 +1196,12 @@ local function CivSim_Screens_RespondToPrompt(promptType, optionId)
     end
     if promptType == "prompt.diplomatic_approach" then
         return CivSim_Screens_AnswerDiplomaticApproach(promptType, optionId)
+    end
+    if promptType == "prompt.era_dedication" then
+        return CivSim_Screens_AnswerEraDedication(promptType, optionId)
+    end
+    if promptType == "prompt.congress_vote" then
+        return CivSim_Screens_AnswerCongressPhase(promptType, optionId)
     end
     local ok, result = pcall(function()
         return UI.RespondToPrompt(promptType, optionId) -- UNVERIFIED

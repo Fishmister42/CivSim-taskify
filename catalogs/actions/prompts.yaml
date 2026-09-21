@@ -4,19 +4,31 @@
 # is a `prompt_response` decision (data-model.md §9's `trigger` field), answered at its own
 # decision step, per FR-010 and research R13.
 #
-# Dependency note: each availability_predicate below checks `target in prompt.options`, but
-# lua/ingame/screens.lua's current CivSim_Screens_Probe() returns an empty prompt_options list as
-# an explicitly flagged placeholder (per-prompt option enumeration is not yet implemented). These
-# predicates are written for the completed probe, not the current stub — evaluating them today
-# would make every prompt action unavailable until that gap is closed. This is the honest
-# state of things, not a hidden inconsistency: see lua/ingame/screens.lua's header.
+# Dependency note: each availability_predicate below checks `target in prompt.options`, and
+# lua/ingame/screens.lua enumerates those options per prompt FAMILY, not for every family at once.
+# As of catalog 2026.09.8 the families that report options are: the acknowledge-only popups (one
+# option each — `continue`, or `accept` for the congress welcome card), the diplomatic approach
+# (the visible, enabled statement buttons' own labels), the congress page (`next` / `accept` /
+# `pass`, whichever is live) and the era dedication chooser (the visible commemoration labels).
+# The rest still report an empty list, which keeps those actions unavailable rather than guessed
+# at — the honest state of things, not a hidden inconsistency. See lua/ingame/screens.lua's
+# CivSim_Screens_State.
 #
 # "AI diplomatic approach" and "declaration of war" are both diplomacy-initiated modal prompts but
 # distinct moments (the AI announcing its posture vs. the AI declaring war on the local player),
 # so they get separate declarations. "World Congress vote" here (prompts.congress_vote) is the
-# modal, forced-response vote moment; catalogs/actions/congress.yaml's congress.cast_vote is the
-# separate, proactive vote a player may cast while a session is open but not yet forcing a
-# response — the two are deliberately not merged.
+# open congress page's own navigation -- Next / Submit / Pass -- which a human must answer to get
+# out of the session; catalogs/actions/congress.yaml's congress.cast_vote is the separate,
+# proactive vote a player may cast on a particular resolution, and it is NOT satisfied by this.
+# The two are deliberately not merged. `prompts.congress_intro` is the welcome card that opens a
+# session, a third and distinct moment.
+#
+# MEASURED 2026-09-21 (live stage, game turns 56-57): once the welcome card is gone, the congress
+# session popup itself does NOT block the turn -- an end turn advanced 56 -> 57 with the session
+# on screen, its Next button visible but greyed out and Submit not yet shown. That is why the
+# probe reports the plain `congress` screen for an open session and only reports
+# `prompt.congress_vote` when one of the navigation controls is actually visible AND enabled: a
+# blocking prompt has to be something the human can, and must, act on.
 
 - declaration_id: prompts.unit_promotion
   kind: action
@@ -81,12 +93,25 @@
     one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
+# MEASURED live 2026-09-21 (live stage, game turn 58): a conversation offered exactly one choice,
+# "Goodbye", the model chose it 16 times, and the leader scene was still up after every one.
+# "Goodbye" is the conversation's EXIT, not a statement: `OnSelectConversationDiplomacyStatement`
+# branches `CHOICE_EXIT` off before every statement case and runs `ExitConversationMode()`, whose
+# whole effect is `DiplomacyManager.CloseSession` (diplomacyactionview.lua:488-493, :310-330).
+# The answer now recognises that choice by the game's own text for it (`LOC_DIPLO_CHOICE_EXIT`,
+# the single text tag every shipped `CHOICE_EXIT` selection carries) and closes the session;
+# every other choice is still answered by clicking its own button. The result records which
+# route ran. It remains one answer per step: a leader replies and the session stays open until
+# the conversation's own Exit is taken, so the probe reports the prompt again with the new
+# options (measured 2026-09-21, block 9).
+
 - declaration_id: prompts.ai_diplomatic_approach
   kind: action
   summary: Respond to an AI civilization's diplomatic-approach prompt.
   parity_basis: >
     An AI leader's diplomatic-approach prompt appears when they open a diplomatic conversation;
-    pick a response in that prompt.
+    pick a response in that prompt. The conversation's own "Goodbye" choice is offered too --
+    it is a button a human can click, and taking it leaves the conversation.
   context: InGame
   capability_id: prompts.orders
   availability_predicate: >
@@ -127,31 +152,46 @@
 # ("`prompt.city_state_quest` — unmappable, and the catalog claim is wrong"); recorded in
 # catalogs/README.md §6.
 
-# DOCUMENTED GAP, 2026-09-21 (specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md,
-# "`prompt.congress_vote` — unmappable"). The claim below is kept -- the forced vote is a real
-# moment a human answers -- but the probe cannot currently report it, and this action can
-# therefore never become available. `WorldCongressPopup`
-# (dlc/expansion2/ui/replacements/ingame.xml:121) is ONE context for every stage of a congress:
+# GAP CLOSED 2026-09-21 (measured live, game turn 57). The write-up
+# specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md called this id unmappable,
+# and for the mechanism it examined it was: `WorldCongressPopup`
+# (dlc/expansion2/ui/replacements/ingame.xml:121) is ONE context for every stage of a congress --
 # proposals, the vote itself (`OnVoteResolution`/`OnVoteProposal`, worldcongresspopup.lua:983,
-# :1452) and results (`OnWorldCongressResults`, :2347). Which stage is up lives in
+# :1452) and results (`OnWorldCongressResults`, :2347) -- and which stage is up lives in
 # `m_CurrentStage`/`m_CurrentPhase`, private to that context's own Lua state, so
-# `ContextPtr:IsHidden()` cannot tell the forced vote from browsing the session. `congress`
-# already maps to that state; mapping `prompt.congress_vote` to it too would fabricate a
-# distinction the client does not expose AND shadow `congress` (the probe prefers a `prompt.*` id
-# when several ids name one open state), trading an attestable id for a fabricated one. Until a
-# per-state dispatcher can read that stage, the honest state is: claimed, unreportable.
+# `ContextPtr:IsHidden()` can never tell the forced vote from browsing the session. Mapping the id
+# to that state would fabricate a distinction AND shadow `congress`, so it still is not mapped
+# there.
+#
+# What changed is the same thing that changed for `prompt.diplomatic_approach` (commit 7efb1d7):
+# the stage is not only a private variable, it is also something the screen SHOWS. `UpdateNavButtons`
+# (worldcongresspopup.lua:380-425) expresses the stage as the visibility and disabled state of
+# three named buttons declared directly in the popup's own `ButtonStack`
+# (worldcongresspopup.xml:117-124) -- `NextButton`, `AcceptButton`, `PassButton` -- and those ARE
+# readable from InGame through `ContextPtr:LookUpControl`. The probe reports
+# `prompt.congress_vote` when the popup is open and at least one of them is visible and enabled,
+# and the ordinary `congress` screen otherwise. See lua/ingame/screens.lua's CIVSIM_CONGRESS_STATE.
+#
+# SCOPE: this answers the congress's navigation, not its content. Casting an actual vote --
+# picking a resolution's option, spending favor, upvoting or downvoting a proposal -- lives in
+# per-instance pulldowns and vote steppers inside the popup and is deliberately NOT mapped; an
+# agent using this action abstains, which is a thing a human may do (`CanSubmit` returns true for
+# the ordinary session stages, worldcongresspopup.lua:347, so Submit is clickable with no votes
+# cast). catalogs/actions/congress.yaml's `congress.cast_vote` remains the separate claim for
+# casting a vote, and it is not satisfied by this.
 
 - declaration_id: prompts.congress_vote
   kind: action
   summary: >
-    Respond to a forced World Congress vote prompt. DOCUMENTED GAP: the screen-identity probe
-    cannot currently report `prompt.congress_vote`, because the congress stage that distinguishes
-    a forced vote from browsing the session is private to `WorldCongressPopup`'s own Lua state --
-    see the comment above and the 2026-09-21 write-up. This action is claimed but not yet
-    reachable.
+    Answer the open World Congress page by clicking one of its own navigation buttons
+    ({"target": "next"} / {"target": "accept"} / {"target": "pass"}) -- move to the next page of
+    proposals, submit the page as it stands (with no votes cast, this abstains), or pass on a
+    special-session proposal. It does not cast votes.
   parity_basis: >
-    A World Congress vote prompt forces a response on the currently proposed resolution before
-    the session can proceed; cast a vote in that prompt.
+    The World Congress popup shows the proposals of the current page with Next, Submit and Pass
+    buttons along its bottom edge; a human clicks Next to page through them and Submit to send
+    the page as it stands. Only the buttons that are visible and not greyed out are offered --
+    Prev and Return, which navigate backwards rather than answer, are never offered.
   context: InGame
   capability_id: prompts.orders
   availability_predicate: >
@@ -161,8 +201,39 @@
     game.current_screen != "prompt.congress_vote"
   target_kind: option
   target_hint: >
-    one of the open prompt's offered options (prompt_options)
+    one of the open prompt's offered options (prompt_options): "next", "accept" or "pass"
   introduced_in_version: "2026.09.1"
+
+# MEASURED live 2026-09-21 (live stage, game turn 57): the World Congress "Begin Voting" welcome
+# card came up over the Classical-era review and the run paused `UnknownScreenEncountered` -- the
+# `WorldCongressIntro` state was on lua/ingame/screens.lua's watchlist but mapped to no catalog id,
+# so the probe correctly refused to name it and play stopped. It is a one-button card
+# (worldcongressintro.xml:13, `AcceptButton`, String `LOC_WORLD_CONGRESS_INTRO_ACCEPT` = "Begin
+# Voting"), and that button is what opens the congress: `OnClose` (worldcongressintro.lua:26-29)
+# dequeues the card AND raises `LuaEvents.WorldCongressIntro_ShowWorldCongress()`. Its option is
+# "accept", not "continue" -- the card is not a report to acknowledge, it is the door into the
+# session.
+
+- declaration_id: prompts.congress_intro
+  kind: action
+  summary: >
+    Accept the World Congress welcome card ({"target": "accept"}); it appears when a World
+    Congress session opens and blocks play until its Begin Voting button is clicked.
+  parity_basis: >
+    The welcome card fills the screen with the congress's title and a short explanation, and a
+    single "Begin Voting" button at the bottom; a human clicks that button (or presses Escape or
+    Return) to open the congress itself.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.congress_intro"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.congress_intro"
+  target_kind: option
+  target_hint: >
+    "accept" -- the card offers nothing else
+  introduced_in_version: "2026.09.8"
 
 - declaration_id: prompts.era_transition
   kind: action
@@ -181,6 +252,54 @@
   target_hint: >
     one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
+
+# MEASURED live 2026-09-21 (gameplay block 20, Classical era): the era card's Continue leads
+# straight here. `erareviewpopup.lua`'s `OnContinue` (:241-247) dequeues the card and then raises
+# `LuaEvents.EraReviewPopup_MakeDedication`, which `dedicationpopup.lua:293` answers by building
+# and showing the chooser -- so `prompt.era_transition` is followed by `prompt.era_dedication`,
+# never overlapped by it. The chooser was up for 41 harness steps with the text probe answering
+# `world`; Sonnet 5 read it off the delivered frame and asked to answer it at 40 of them, and all
+# 40 were refused. Nothing was wrong with the picture -- the id simply did not exist.
+#
+# The action is ONE CLICK PER STEP, which is also what a human does: name a commemoration and the
+# harness clicks that card; name it again once it is ticked and the harness clicks Confirm, which
+# the popup keeps greyed out until exactly `GetPlayerNumAllowedCommemorations` cards are ticked
+# (dedicationpopup.lua:200-203). In a Golden or Heroic age, where more than one is allowed, each
+# step names one more; the Lua answers `more_selections_required` with the counts and the labels
+# still on the table until the popup itself enables Confirm. `prompt_options` are the visible,
+# enabled cards' own `MomentCategory` labels ("Free Inquiry", "Monumentality", ...), and the
+# probe reports `prompt_selections_allowed`, `prompt_selections_made` and
+# `prompt_selected_options` alongside them -- the three things the card shows.
+#
+# The popup's X (`CloseButton` -> `UIManager:DequeuePopup`, dedicationpopup.lua:225-227) dedicates
+# NOTHING. A human may do that, so it is kept, but only as a recorded fallback for a build where
+# no control rectangle can be read at all, and the result then carries `dedication_made = false`.
+
+- declaration_id: prompts.era_dedication
+  kind: action
+  summary: >
+    Choose a dedication (commemoration) in the era dedication chooser
+    ({"target": "MONUMENTALITY"}); it appears after the era-review card at every era change in
+    Gathering Storm and blocks play until confirmed or dismissed. One click per step: the first
+    call selects the named commemoration, the next confirms it.
+  parity_basis: >
+    The chooser fills the screen with "Make your Dedication for the <Era> Era" and one card per
+    offered commemoration -- its name, its icon, and what it does for this age -- plus a Confirm
+    button that stays greyed out until the allowed number of cards are ticked, and an X in the
+    corner. A human clicks a card, sees Confirm light up, and clicks Confirm. Only the cards
+    that are visible and not greyed out are offered.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.era_dedication"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen != "prompt.era_dedication"
+  target_kind: option
+  target_hint: >
+    one commemoration's label exactly as prompt_options lists it; repeat the same target once it
+    is ticked to confirm, and name a further label first when the age allows more than one
+  introduced_in_version: "2026.09.8"
 
 # T253 (2026-09-21). The two acknowledge-only popups. MEASURED live (attempt 5 of the first
 # model-driven runs): the civic "Code of Laws" completed, `TechCivicCompletedPopup` came up, and

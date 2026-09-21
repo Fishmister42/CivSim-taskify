@@ -42,7 +42,13 @@ CATALOGS_ROOT = _REPO_ROOT / "catalogs"
 # See catalogs/README.md §6 and
 # specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md. The capability count is
 # unchanged: `prompts.orders` still backs the ten remaining prompt actions.
-EXPECTED_DECLARATION_COUNT = 59
+#
+# 59 -> 61, 2026-09-21 (catalog `2026.09.8`): `prompts.era_dedication` (Gathering Storm's era
+# dedication chooser, measured blocking play for 41 steps in gameplay block 20) and
+# `prompts.congress_intro` (the World Congress "Begin Voting" welcome card, measured stalling a
+# run as `UnknownScreenEncountered` at game turn 57). Both are backed by the existing
+# `prompts.orders` capability, so the capability count is unchanged.
+EXPECTED_DECLARATION_COUNT = 61
 EXPECTED_CAPABILITY_COUNT = 27
 
 

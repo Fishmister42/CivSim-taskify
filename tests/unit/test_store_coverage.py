@@ -870,18 +870,51 @@ def test_the_great_work_showcase_is_mapped_and_watched() -> None:
     "screen_id",
     [
         "strategic",
-        "prompt.congress_vote",
     ],
 )
 def test_the_documented_unmappable_screen_ids_stay_unmapped(screen_id: str) -> None:
-    """Neither has a UI state of its own in the shipped Civ VI UI -- see
-    `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md`. The interaction each
+    """`strategic` has no UI state of its own in the shipped Civ VI UI -- see
+    `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md`. The interaction it
     names is real, so the claim stays and `civsim store coverage` flagging it is correct; a future
-    mapping here would be a fabrication, so the gap is pinned rather than papered over."""
+    mapping here would be a fabrication, so the gap is pinned rather than papered over.
+
+    `prompt.congress_vote` used to be pinned here too. Its gap CLOSED on 2026-09-21 (catalog
+    `2026.09.8`) -- see the next test."""
     surface = load_screen_surface(REPO_ROOT / "lua" / "ingame" / "screens.lua")
     assert screen_id in surface.screen_ids, "still a claimed id, so the coverage flag is honest"
     assert screen_id not in surface.state_by_screen_id
     assert screen_id not in surface.direct_screen_ids
+
+
+def test_the_congress_vote_is_reachable_without_a_state_mapping() -> None:
+    """MEASURED 2026-09-21 (live stage, game turn 57): the congress's stage is also expressed as
+    the visibility and disabled state of its own `NextButton`/`AcceptButton`/`PassButton`
+    (worldcongresspopup.lua:380-425), which InGame can read -- the same shape that made
+    `prompt.diplomatic_approach` reachable. It must stay OUT of the state map: `congress` already
+    maps to `WorldCongressPopup`, and mapping the prompt id there would report a blocking prompt
+    for any open congress screen, including browsing last session's results."""
+    surface = load_screen_surface(REPO_ROOT / "lua" / "ingame" / "screens.lua")
+    assert "prompt.congress_vote" in surface.direct_screen_ids
+    assert "prompt.congress_vote" not in surface.state_by_screen_id
+    assert surface.state_by_screen_id["congress"] == "WorldCongressPopup"
+
+
+@pytest.mark.parametrize(
+    ("screen_id", "state_name"),
+    [
+        # 2026-09-21: both blocked live play while the probe could not name them.
+        ("prompt.era_dedication", "DedicationPopup"),
+        ("prompt.congress_intro", "WorldCongressIntro"),
+    ],
+)
+def test_the_two_single_purpose_popups_mapped_on_2026_09_21_are_watched(
+    screen_id: str, state_name: str
+) -> None:
+    """Unlike `WorldCongressPopup`, each of these contexts exists only to be its one card, so
+    `IsHidden() == false` on it means exactly that card is up and a state mapping is honest."""
+    surface = load_screen_surface(REPO_ROOT / "lua" / "ingame" / "screens.lua")
+    assert surface.state_by_screen_id[screen_id] == state_name
+    assert state_name in surface.watched_states
 
 
 @pytest.mark.parametrize(

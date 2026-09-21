@@ -125,12 +125,25 @@ spy.is_available` rather than needing a separate existence check bolted on.
     state, because a mapping would be a fabrication. See
     `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md` ("`strategic` —
     unmappable").
-  - `prompt.congress_vote` — **documented gap, 2026-09-21**: the probe cannot currently report it.
+  - `prompt.congress_vote` — **gap closed 2026-09-21** (`2026.09.8`). It was a documented gap:
     `WorldCongressPopup` is one context for every stage of a congress and the stage
     (`m_CurrentStage`/`m_CurrentPhase`) is private to that context's own Lua state, so
-    `IsHidden()` cannot distinguish the forced vote from browsing the session; `congress` already
-    maps to that state. See the same write-up ("`prompt.congress_vote` — unmappable") and the
-    comment above `prompts.congress_vote` in `catalogs/actions/prompts.yaml`.
+    `IsHidden()` cannot distinguish the vote from browsing the session, and `congress` already
+    maps to that state — so the id is still **not** in the Lua's state map. It is answered
+    directly instead, the way `prompt.diplomatic_approach` is: the stage is also expressed as the
+    visibility and disabled state of the popup's own `NextButton` / `AcceptButton` / `PassButton`
+    (`worldcongresspopup.lua:380-425`, `worldcongresspopup.xml:117-124`), which InGame can read.
+    Reported only when one of those is visible **and** enabled; an open session with none of them
+    live is the ordinary `congress` screen and does not block the turn (measured: an end turn
+    advanced 56 → 57 with the session on screen). Casting an actual vote stays out of scope — see
+    the comment above `prompts.congress_vote` in `catalogs/actions/prompts.yaml`.
+  - `prompt.congress_intro` — the World Congress "Begin Voting" welcome card
+    (`WorldCongressIntro`), added `2026.09.8` after it stalled a run as
+    `UnknownScreenEncountered` at game turn 57. One option, `accept`.
+  - `prompt.era_dedication` — Gathering Storm's era dedication chooser (`DedicationPopup`), added
+    `2026.09.8` after it blocked play for 41 steps in gameplay block 20 while the probe answered
+    `world`. Its options are the visible commemoration labels; the probe also reports
+    `prompt_selections_allowed`, `prompt_selections_made` and `prompt_selected_options`.
 - `game.is_waiting_for_other_players` (boolean)
 
 `player.*` (the local human player only — never an opponent's)
@@ -163,16 +176,25 @@ spy.is_available` rather than needing a separate existence check bolted on.
 - `unit.can_found_city` (boolean)
 - `unit.available_promotions` (list<string>)
 - `unit.charges_remaining` (number or null)
+- `unit.available_builds` (list<string>) — the improvements the unit panel is offering on the
+  tile this unit is standing on, with a live (not greyed-out) button; reported for the selected
+  unit only, because that is the only unit whose panel a human is looking at
+  (`units.state`, 2026-09-21). The panel's full build row, greyed entries included, is
+  `units.state`'s `build_options` (improvement_type, name, disabled, is_recommended), which the
+  agent reads but which has no predicate symbol — the same split `city.available_productions` and
+  `cities.state`'s `production_options` already use
 
 `city.*` (subject city of a city action)
 - `city.exists` (boolean)
 - `city.is_selected` (boolean) — produced by overlaying `cities.selection` (InGame,
-  `UI.GetHeadSelectedCity()`) onto the `cities.state` entry, since `cities.state` runs in
-  GameCore_Tuner where `UI` does not exist (T255, 2026-09-21); `unit.is_selected` needs no
-  overlay because `units.state` runs InGame and reports it itself
+  `UI.GetHeadSelectedCity()`) onto the `cities.state` entry (T255, 2026-09-21);
+  `unit.is_selected` needs no overlay because `units.state` reports it itself
 - `city.owner_is_local_player` (boolean)
-- `city.production_queue` (list<string>)
-- `city.available_productions` (list<string>)
+- `city.production_queue` (list<string>) — the item in production, then the queued ones
+- `city.available_productions` (list<string>) — the production panel's rows whose button is live
+  and needs no further plot click; the panel's full list, greyed rows included, is
+  `cities.state`'s `production_options` (name, kind, production_required, turns, disabled), which is
+  read by the agent but has no predicate symbol
 - `city.can_buy_with_gold` (boolean)
 - `city.can_buy_with_faith` (boolean)
 - `city.purchasable_with_gold` (list<string>)
@@ -218,8 +240,11 @@ spy.is_available` rather than needing a separate existence check bolted on.
   executed, available only to `verification_predicate`s that need a before/after comparison. Named
   `observed_<flattened field>`, e.g. `observed_turn_number` for `game.turn_number`. Only the
   snapshots an actual predicate in this catalog uses need exist; this catalog uses
-  `observed_turn_number` (`catalogs/actions/turn.yaml`) and `observed_diplomatic_favor` for
-  `player.diplomatic_favor` (`catalogs/actions/congress.yaml`).
+  `observed_turn_number` (`catalogs/actions/turn.yaml`), `observed_diplomatic_favor` for
+  `player.diplomatic_favor` (`catalogs/actions/congress.yaml`), and `observed_charges_remaining`
+  for `unit.charges_remaining` (`units.build_improvement`, `catalogs/actions/units.yaml`). The
+  snapshot's `unit` namespace is bound with no `target`, so it is the selected unit's counter —
+  the same unit the order acts on.
 
 This vocabulary is deliberately small. A predicate that needs a symbol not listed here is a sign
 the declaration belongs to a different observation, not a reason to widen the evaluator ad hoc.
@@ -244,9 +269,14 @@ why. Retiring a claim is a catalog change like any other — bump `catalogs/VERS
 | 2026-09-21 (`2026.09.5`) | action `prompts.city_state_quest`, screen id `prompt.city_state_quest` | **The claim was wrong.** There is no city-state quest popup in the shipped UI at all: quests arrive as notifications (`NotificationTypes.CITYSTATE_QUEST_COMPLETED`, `base/assets/ui/panels/notificationpanel.lua:134`, `:253`) and are read in the browsable `CityStates` partial screen (`base/assets/ui/partialscreens/citystates.lua`, `<LuaContext ID="CityStates"/>` at `base/assets/ui/ingame.xml:50`), and nothing in Civ VI accepts or declines a quest. "Accept or decline it in that prompt" described an interaction that does not exist. |
 | 2026-09-21 (`2026.09.5`) | action `prompts.religion_selection`, screen id `prompt.religion_selection` | **Duplicate overclaim.** Founding a religion is a notification that fires `LuaEvents.NotificationPanel_OpenReligionPanel()` (`base/assets/ui/panels/notificationpanel.lua:1322`) and opens the *same* `ReligionScreen` the launch bar opens for browsing (`base/assets/ui/religionscreen.lua:1426-1455`, `:1606-1609`; `base/assets/ui/launchbar.lua:142`). An open screen is not a blocking prompt, and the real interactions are already claimed as `religion.found_religion` / `religion.select_belief` / `religion.select_pantheon` in `catalogs/actions/religion.yaml`. |
 | 2026-09-21 (`2026.09.6`) | action `prompts.natural_disaster`, screen id `prompt.natural_disaster` | **Added, measured live.** Gathering Storm's natural-disaster cinematic (`dlc/expansion2/ui/additions/naturaldisasterpopup.xml`, `/InGame/NaturalDisasterPopup`) blocked play and made the game refuse every save at game turn 42 while the probe reported `world`; a human dismisses it with its header `Close` button. Acknowledged through that button (real click at its own rectangle). |
+| 2026-09-21 (`2026.09.8`) | action `prompts.era_dedication`, screen id `prompt.era_dedication` | **Added, measured live.** Gathering Storm's era dedication chooser (`dlc/expansion2/ui/additions/dedicationpopup.lua`, `/InGame/DedicationPopup`, reached through `<AddUserInterfaces>` at `dlc/expansion2/expansion2.modinfo:302-306`, which is why it appears in no shipped `ingame.xml`) blocked play for 41 steps in gameplay block 20 while the probe reported `world`; the model read it off the delivered frame and was refused at 40 of those steps. Answered by clicking a commemoration card and then `Confirm`, which the popup keeps disabled until the allowed number are ticked (`dedicationpopup.lua:200-203`, `:206-217`). Its X dequeues without dedicating anything (`:225-227`) and is a recorded fallback only. |
+| 2026-09-21 (`2026.09.8`) | action `prompts.congress_intro`, screen id `prompt.congress_intro` | **Added, measured live.** The World Congress "Begin Voting" welcome card (`dlc/expansion2/ui/additions/worldcongressintro.xml:13`, `/InGame/WorldCongressIntro`) came up over the Classical-era review at game turn 57 and stalled the run as `UnknownScreenEncountered` — the state was watched but mapped to no id. Its one button runs `OnClose` (`worldcongressintro.lua:26-29`), which dequeues the card **and** raises `WorldCongressIntro_ShowWorldCongress` to open the session; the `DequeuePopup` fallback only does the first half, and says so. |
 
 Both retirements are evidenced, with file:line citations into Firaxis's shipped UI Lua, by
 `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md`. The same write-up examined
-`strategic` and `prompt.congress_vote`: those two are **kept** as claims and annotated as
-documented gaps (§4's `game.current_screen` entry), because the interactions are real and only the
-probe's reach is missing — retiring them would hide a gap the harness still owes.
+`strategic` and `prompt.congress_vote`, and kept both as claims annotated as documented gaps.
+`prompt.congress_vote`'s gap **closed** on 2026-09-21 (`2026.09.8`): live play showed the stage is
+readable as the phase buttons' own visibility, without touching the private stage variable the
+write-up had (correctly) ruled out — see §4's `game.current_screen` entry. `strategic` remains a
+documented gap, because the interaction is real and only the probe's reach is missing; retiring it
+would hide a gap the harness still owes.

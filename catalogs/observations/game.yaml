@@ -47,6 +47,20 @@
       prompt_options:
         type: array
         items: { type: string }
+      # 2026.09.8. A prompt that asks for a FIXED NUMBER of picks rather than one answer needs
+      # that number reported, or the agent cannot tell a half-made choice from a finished one.
+      # Only the era dedication chooser reports these today (lua/ingame/screens.lua,
+      # `prompt.era_dedication`): the chooser's Confirm button stays greyed out until exactly
+      # `prompt_selections_allowed` of its cards are ticked, which is what a human reads off the
+      # screen, so the same three facts are reported here rather than left implicit.
+      # `prompt_selections_allowed` is absent when the client could not answer it, in which case
+      # the Confirm button's own enabled state -- what the human actually goes by -- still
+      # governs. Every other prompt family omits all three.
+      prompt_selections_allowed: { type: integer, minimum: 0 }
+      prompt_selections_made: { type: integer, minimum: 0 }
+      prompt_selected_options:
+        type: array
+        items: { type: string }
   introduced_in_version: "2026.09.1"
 
 - declaration_id: game.turn_state
