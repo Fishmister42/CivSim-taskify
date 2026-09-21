@@ -939,3 +939,21 @@ fixed. No first meeting; deadlock fix not live-verified. **Stall:** 14:48 → 15
 on background notifications that never arrived; caught by the hypervisor. Entry 7 on #3.
 Coverage: actions 9/38 applied, 23 attempted; images 128/399 (32.1 %). Day spend $5.64.
 Client on exit: InGame, game turn 53, dedication chooser up, tuner free, no lock, no runner.
+
+### Executive close-out, live day — 2026-09-21 16:15 EDT
+
+Owner redirect at 10:45: the soak is parked; the deliverable is visible gameplay, documented and
+posted, breadth over quality. Result: issue #3 holds seven entries plus two scorecards; game turn
+17 → 53 across 20 blocks (Sonnet 5 and the $0 stochastic sampler alternating); actions demonstrated
+live 3 → 9 of 38, attempted 5 → 23, screens 2 → 6 of 16, images delivered 0 → 128 of 399 steps, all
+from `civsim store coverage`, none by hand. Eighteen defects found by play and fixed on the branch
+(list in the #3 day summary). The two findings that matter most: the strict response schema had
+made every decision target-less since the catalog was written (`86a92db`), and in blocks 18 and 20
+the model read two unmapped contexts (era card, dedication chooser) off the picture alone while the
+text probe said `world`. Spend $5.64 of the cap. Three operator interventions, all recorded.
+Orchestration failure, owned here: Stage 3 idled 14:48 → 15:58 waiting on background-task
+notifications that never woke it (feedback drafted); the next stage polls a detached run's stdout
+on a timer instead. Client left up at game turn 53 on the dedication chooser; Linux holds Steam.
+Suite on head `5361afe`: **not green** — the full suite hangs at about 40 % on head `5361afe` (two independent runs, 14:39 and 16:06, both stuck at the same point with four failure marks showing); the last green full run was 1989 passed / 9 skipped / 0 failed at `7b7eb04`, so the hang entered with `05766af` or `c795039`; diagnosis running, result to #1.
+Next: full-suite gate; map the dedication chooser; fill `city.available_productions`; verify the
+greeting click and the pre-save clearance live; T177/T191–T194/T198/T200 remain client-gated.
