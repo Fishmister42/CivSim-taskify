@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 19:38 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 19:53 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -41,22 +41,19 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| productions (Opus, resumed) | generalise the bounded verification re-read (~2 s, backstop shape) to every action so a lagging read is never recorded as a refusal | `run/turn_cycle.py`, `run/decision_loop.py`, tests | 19:35 |
-| accessor audit (Opus) | every Lua body's accessors checked against Firaxis' shipped UI Lua; phantoms replaced with the panel's own accessor or `<field>_reason`; cited allowlist + CI test | `lua/**`, `lua/ACCESSORS.txt`, spike, tests | 19:17 |
-| Live S4 (Fable fork) | builder chain `--goal use_a_builder` (build → use) from 59af4a2 as the priority; then Settler + second city if time; entry 9 posted 19:32; wind down 20:45 | client; `spikes/gameplay-2026-09-21/` | 18:00 |
+| diplomacy fix (Opus, resumed) | live negative: the first-meeting STATEMENT answer never confirms (16/16, run-d0933ca8); diagnose from the store whether options changed after an answer (verifier too strict: a correct statement leaves the conversation open with the exit next) or the response never lands (needs the real click); record path/reason on the statement branch | diplomacy answer Lua, `act/verify.py` predicate for the prompt, tests | 19:50 |
+| productions (Opus, resumed) | generalise the bounded verification re-read (~2 s) to every action so a lagging read is never a refusal | `act/verify.py`, `run/turn_cycle.py`, `run/decision_loop.py`, `tests/unit/test_verify_confirm.py` | 19:35 |
+| accessor audit (Opus) | report landed (a606729: 28 phantom names, 10 fields permanently `[]`, 14 of 38 actions could never work — posted to #3); fixes in file-scoped commits: congress, government, great_people, religion bodies + `empire_orders.lua`, then the allowlist + CI test | `lua/**`, `catalogs/observations/*.yaml`, `lua/ACCESSORS.txt`, tests | 19:17 |
+| Live S4 (Fable fork) | builder chain `--goal use_a_builder` running from 59af4a2 (polling in the foreground); entry 10 on its result; Settler + second city if time; end save `civsim-gameplay-2026-09-21-end` and client InGame by 20:55 | client; `spikes/gameplay-2026-09-21/` | 18:00 |
 
-**Landed 18:16–19:34:** availability rendering + coverage policy; goal driver + 13 goals, all unblocked;
-scorecard honesty; suite hang fixed + pytest timeouts; production list (VERIFIED LIVE); popup mappings —
-`prompts.era_transition` + `prompts.era_dedication` VERIFIED LIVE; `units.build_improvement`;
-`units.promote` fixed; **game-over detection** (f31fb5b: defeat/victory as `stop_resolution`, no save,
-no gap); **`cities.set_production` fixed** (59af4a2: `VALUE_EXCLUSIVE`, CanStartOperation first, queue
-head read back; a live probe confirmed the game accepts the table and the queue lags the read).
-**Live worktree at 59af4a2.** Suite green at head (2237 / 9 / 0).
-**Live negative to route:** the "Goodbye" → CloseSession fix (764b768) did NOT work in play — three goal
-runs stuck 16/16 on the Goodbye-only conversation on a worktree that carried it; outcome detail
-requested from S4. Systemic: three bodies called methods Civ VI lacks behind silent guards — audit in
-flight. Loader/host follow-ups: post-defeat menu refuses `Network.LoadGame`; its exit modal ignores
-synthetic input (relaunch = 17 min recovery). Still blocked: autoplay (owner permission).
+**Landed 18:16–19:44:** availability rendering + coverage policy; goal driver + 13 goals, all unblocked;
+scorecard honesty; suite hang fixed + pytest timeouts; production list (VERIFIED LIVE) and
+`cities.set_production` (59af4a2; live probe confirmed the game accepts the table); popup mappings —
+era card + dedication chooser VERIFIED LIVE; `units.build_improvement`; `units.promote` fixed;
+game-over detection (f31fb5b); accessor audit report (a606729). **Live worktree at 59af4a2.**
+Coverage (S4, 19:37): actions applied live 10 of 41, attempted while available 17, images delivered
+220 of 499 steps. Loader/host follow-ups: post-defeat menu refuses `Network.LoadGame`; its exit modal
+ignores synthetic input (relaunch = 17 min recovery). Still blocked: autoplay (owner permission).
 
 ## Queue, in order
 1. Suite green (gate). 2. Goal runs live on the milestone saves until ~20:45, Sonnet 5, back to
