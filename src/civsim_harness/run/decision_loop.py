@@ -201,6 +201,10 @@ class ActionExecutor(Protocol):
 #: client confirms after the AI turns (measured 2026-09-21; see the decision loop body).
 END_TURN_CONFIRM_TIMEOUT_S = 45.0
 END_TURN_CONFIRM_POLL_S = 2.0
+#: The bounded re-read for every other order (see the decision step's verification below): a
+#: unit move landed at +1 s when the +0 s read still showed the old plot (measured 2026-09-21).
+ACTION_CONFIRM_TIMEOUT_S = 4.0
+ACTION_CONFIRM_POLL_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -793,18 +797,34 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
                 target=raw_decision.parameters.get("target"),
                 verified_at=ctx.clock(),
             )
-            if raw_decision.is_end_turn and verification.execution.outcome is not (
-                ExecutionOutcome.APPLIED
-            ):
+            if verification.execution.outcome is not ExecutionOutcome.APPLIED:
                 # MEASURED (2026-09-21, model-driven attempt 4): the client confirms an end turn
                 # only after the AI players' turns, so the fresh read taken the instant the
                 # dispatch returned recorded the agent's own end turn as `verification_failed`
                 # while the turn had in fact ended (game 14 -> 15 on read-back). Same bounded
                 # re-read the backstop uses (turn_cycle.py); an unconfirmed end turn within the
                 # bound is still recorded as such, never assumed.
-                deadline = time.monotonic() + END_TURN_CONFIRM_TIMEOUT_S
+                #
+                # MEASURED again (2026-09-21, gameplay block 2, run-d2184c44): the same shape for
+                # every other order. `units.move_to` was dispatched, `RequestOperation` accepted
+                # it, and the read taken at +0 s still showed the warrior on its old plot -- the
+                # unit was on the destination at +1 s (probed live, turn 25). Four of seven moves
+                # were recorded `verification_failed` for that reason alone. So every action gets
+                # the bounded re-read, with a short bound for an in-turn order and the long one
+                # for the end turn; an effect not confirmed within its bound stays unconfirmed.
+                if raw_decision.is_end_turn:
+                    confirm_timeout_s, confirm_poll_s = (
+                        END_TURN_CONFIRM_TIMEOUT_S,
+                        END_TURN_CONFIRM_POLL_S,
+                    )
+                else:
+                    confirm_timeout_s, confirm_poll_s = (
+                        ACTION_CONFIRM_TIMEOUT_S,
+                        ACTION_CONFIRM_POLL_S,
+                    )
+                deadline = time.monotonic() + confirm_timeout_s
                 while time.monotonic() < deadline:
-                    await asyncio.sleep(END_TURN_CONFIRM_POLL_S)
+                    await asyncio.sleep(confirm_poll_s)
                     next_fresh = await _observe_or_wrap(
                         ctx,
                         step_id=next_step_id,

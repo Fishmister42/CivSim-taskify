@@ -3,6 +3,28 @@
 # units.state (lua/gamecore/units.lua) after execution. See catalogs/README.md §4 for the `unit.*`
 # and `target` predicate symbols used below.
 
+# Gameplay day (2026-09-21): the one order that changes which unit the others act on. Backed by
+# lua/ingame/selection_orders.lua (capability_id: selection.orders). With a single unit the game's
+# own auto-selection hid the gap; with two the model could only ever order the one the game had
+# picked. `target` here is the unit's own id (the subject and the target are the same thing,
+# exactly as for units.found_city with an explicit target).
+- declaration_id: units.select
+  kind: action
+  summary: >
+    Select one of your units so the following unit orders act on it. parameters: {"target": <that unit's unit_id from units.state>}.
+  parity_basis: >
+    Click the unit on the map (or its flag); the game selects it and shows its orders.
+  context: InGame
+  capability_id: selection.orders
+  availability_predicate: >
+    unit.exists and unit.owner_is_local_player
+  verification_predicate: >
+    unit.is_selected
+  target_kind: unit_id
+  target_hint: >
+    the unit_id of one of your own units from units.state; then issue its orders
+  introduced_in_version: "2026.09.4"
+
 - declaration_id: units.move_to
   kind: action
   summary: >

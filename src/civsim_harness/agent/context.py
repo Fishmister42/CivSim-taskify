@@ -126,7 +126,9 @@ def assemble_action_catalog_text(declarations: Iterable[ParityDeclaration]) -> s
         "great person or a spy by its id. Unit and city orders act on the unit or city the game "
         "currently shows as selected (is_selected: true), so a unit order's target is the plot "
         "or promotion, not the unit; to act on a different unit, name its unit_id as the target "
-        "of units.found_city or units.promote only when no target of another kind is needed.",
+        "of units.found_city or units.promote only when no target of another kind is needed. "
+        "To change which unit or city is selected, first issue units.select or cities.select "
+        "with that unit_id or city_id as the target (as a click on it would), then its orders.",
     ]
     for declaration in sorted(declarations, key=lambda d: str(d.declaration_id)):
         if declaration.kind is not DeclarationKind.ACTION:

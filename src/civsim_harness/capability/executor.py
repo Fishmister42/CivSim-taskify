@@ -168,6 +168,11 @@ _FUNCTION_KEY_OVERRIDES: Mapping[DeclarationId, str] = {
     # lua/ingame/empire_orders.lua names this accessor after what it sets (a *tech*:
     # set_research), not after this declaration's own domain prefix ("research").
     DeclarationId("research.set_tech"): "set_research",
+    # lua/ingame/selection_orders.lua's CivSim_SelectionOrders serves two domains (units.select,
+    # cities.select) from one table, so each names its subject: the last segment ("select") is
+    # the same for both and would collide.
+    DeclarationId("units.select"): "select_unit",
+    DeclarationId("cities.select"): "select_city",
 }
 
 # catalogs/actions/prompts.yaml's own header: every prompts.* declaration_id (nine of them) shares

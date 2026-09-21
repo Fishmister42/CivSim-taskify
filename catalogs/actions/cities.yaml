@@ -2,6 +2,30 @@
 # Backed by lua/ingame/city_orders.lua (capability_id: cities.orders). Verification re-reads
 # cities.state (lua/gamecore/cities.lua) after execution.
 
+# Gameplay day (2026-09-21): the one order that makes the rest of this file reachable. Every city
+# order below begins `city.is_selected and ...`; MEASURED in gameplay block 2 (run-d2184c44) that
+# nothing ever selected a city, so the model wrote "no city currently selected (so city actions
+# cannot act on it)" and no production was ever set. Backed by lua/ingame/selection_orders.lua
+# (capability_id: selection.orders): `UI.SelectCity`, the click on a city banner, which also opens
+# the city panel (measured live at game turn 25). Verified through cities.selection (T255).
+- declaration_id: cities.select
+  kind: action
+  summary: >
+    Select one of your cities (opens its panel) so the following city orders act on it. parameters: {"target": <that city's city_id from cities.state>}.
+  parity_basis: >
+    Click the city's banner on the map; the game selects it and opens the city panel with its
+    production choices.
+  context: InGame
+  capability_id: selection.orders
+  availability_predicate: >
+    city.exists and city.owner_is_local_player
+  verification_predicate: >
+    city.is_selected
+  target_kind: city_id
+  target_hint: >
+    the city_id of one of your own cities from cities.state; then set its production
+  introduced_in_version: "2026.09.4"
+
 - declaration_id: cities.set_production
   kind: action
   summary: >

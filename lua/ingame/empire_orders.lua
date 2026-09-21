@@ -59,29 +59,50 @@ local function CivSim_JsonEncode(value)
     end
 end
 
--- UNVERIFIED: Player:GetTechs():SetResearchingTech(techIndex) recalled by analogy with the
--- read-side GetResearchingTech(); the set-side method name is not confirmed.
+-- MEASURED (2026-09-21, gameplay block 2, run-d2184c44): eight `research.set_tech` orders with a
+-- valid target were dispatched through the previous body -- `Player:GetTechs():SetResearchingTech`,
+-- a set-side name recalled by analogy and never confirmed -- and research.state read back no
+-- current research after every one. The human's click in the Research chooser is not that call:
+-- Firaxis's researchchooser.lua (lines 259-261) and techtree.lua (243-245) issue
+-- `UI.RequestPlayerOperation(Game.GetLocalPlayer(), PlayerOperations.RESEARCH, {PARAM_TECH_TYPE =
+-- <hash>, PARAM_INSERT_MODE = VALUE_EXCLUSIVE})`. That is the parity path, so it is the body now.
+-- The request is asynchronous and answers nothing; the harness confirms it through
+-- research.state's own re-read, never from the `ok` here (which only says the call did not error).
 local function CivSim_EmpireOrders_SetResearch(techType)
-    local localPlayer = Game.GetLocalPlayer()
-    local techs = Players[localPlayer]:GetTechs()
     local row = GameInfo.Technologies[techType]
     if row == nil then
         return { ok = false, reason = "unknown_tech" }
     end
-    local ok, result = pcall(function() return techs:SetResearchingTech(row.Index) end) -- UNVERIFIED
-    return { ok = (ok and result ~= false), tech = techType }
+    local ok, err = pcall(function()
+        local tParameters = {}
+        tParameters[PlayerOperations.PARAM_TECH_TYPE] = row.Hash
+        tParameters[PlayerOperations.PARAM_INSERT_MODE] = PlayerOperations.VALUE_EXCLUSIVE
+        UI.RequestPlayerOperation(Game.GetLocalPlayer(), PlayerOperations.RESEARCH, tParameters)
+    end)
+    if not ok then
+        return { ok = false, reason = "UI.RequestPlayerOperation errored: " .. tostring(err), tech = techType }
+    end
+    return { ok = true, tech = techType, mechanism = "PlayerOperations.RESEARCH" }
 end
 
--- UNVERIFIED: Player:GetCulture():SetProgressingCivic(civicIndex), same pattern as above.
+-- The civic twin of the above: the Civics chooser's click is `PlayerOperations.PROGRESS_CIVIC`
+-- with `PARAM_CIVIC_TYPE` (civicschooser.lua / civicstree.lua). UNVERIFIED LIVE as of this edit;
+-- confirmed the same way, through research.state's `current_civic` re-read.
 local function CivSim_EmpireOrders_SetCivic(civicType)
-    local localPlayer = Game.GetLocalPlayer()
-    local culture = Players[localPlayer]:GetCulture()
     local row = GameInfo.Civics[civicType]
     if row == nil then
         return { ok = false, reason = "unknown_civic" }
     end
-    local ok, result = pcall(function() return culture:SetProgressingCivic(row.Index) end) -- UNVERIFIED
-    return { ok = (ok and result ~= false), civic = civicType }
+    local ok, err = pcall(function()
+        local tParameters = {}
+        tParameters[PlayerOperations.PARAM_CIVIC_TYPE] = row.Hash
+        tParameters[PlayerOperations.PARAM_INSERT_MODE] = PlayerOperations.VALUE_EXCLUSIVE
+        UI.RequestPlayerOperation(Game.GetLocalPlayer(), PlayerOperations.PROGRESS_CIVIC, tParameters)
+    end)
+    if not ok then
+        return { ok = false, reason = "UI.RequestPlayerOperation errored: " .. tostring(err), civic = civicType }
+    end
+    return { ok = true, civic = civicType, mechanism = "PlayerOperations.PROGRESS_CIVIC" }
 end
 
 -- UNVERIFIED: Player:GetCulture():SetPolicyActive(slotIndex, policyIndex) is the pattern recalled

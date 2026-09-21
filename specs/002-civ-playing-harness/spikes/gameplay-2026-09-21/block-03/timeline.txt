@@ -1,0 +1,12 @@
+t+000s  recording started: every frame via production capture_window() (window-scoped)
+t+000s  PRODUCTION: LuaGameSetupReader read-back of the live setup (V2's own path)
+t+000s  live setup: turn=25 civilization=CIVILIZATION_PERSIA leader=LEADER_CYRUS ruleset=RULESET_EXPANSION_2 difficulty=DIFFICULTY_EMPEROR game_speed=GAMESPEED_ONLINE starting_era=ERA_ANCIENT map_size=MAPSIZE_SMALL map_seed=1745156737 major_count=5
+t+000s  PRODUCTION: Runner.start(run-config.yaml) via build_runner_dependencies [provider=openrouter provider_seed=0]
+t+001s  run created: run-de13afc601b94579acdd121fc88ee4c7
+t+001s  status: playing turn=1 step=None
+t+200s  status: playing turn=2 step=None
+t+230s  status: playing turn=3 step=None
+t+275s  status: playing turn=4 step=None
+t+311s  status: playing turn=5 step=None
+t+345s  status: finished turn=5 step=None
+t+345s  run finished after 346s

@@ -43,6 +43,17 @@
   writes: []
   firetuner_gap: null
 
+# Gameplay day (2026-09-21). Every unit order acts on the selected unit and every city order needs
+# `city.is_selected`, and nothing in the catalog could change the selection -- a human clicks the
+# unit or the city banner. This is that click (`UI.SelectUnit` / `UI.SelectCity`, measured live
+# from the InGame tuner state). See lua/ingame/selection_orders.lua.
+- capability_id: selection.orders
+  path: firetuner
+  implementation_ref: lua/ingame/selection_orders.lua
+  reads: []
+  writes: [which unit or city is selected on screen]
+  firetuner_gap: null
+
 # T258 (2026-09-21), Constitution III: the top bar's yields, so every turn record can carry them.
 - capability_id: yields.read
   path: firetuner
