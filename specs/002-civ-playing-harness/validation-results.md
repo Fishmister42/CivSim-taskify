@@ -695,6 +695,50 @@ external presses being the test's, not the loader's) are in `spikes/t248-intro-d
 "Re-verified". Windows/macOS `focus_window` halves still report `unavailable` — the loader refuses
 to press there, loudly, until they are implemented.
 
+### T202 — per-run cost and duration under the one-call-per-step model (2026-09-21, Linux node)
+
+Every number below is read from `civsim-match-store.db`'s own step bundles (`model_call.cost`,
+`model_call.latency_ms`, `turn_cycles.started_at/ended_at`) with a read-only query, not from the
+spike narrative. Seven runs carry turn cycles: two fake-provider runs (zero-cost, the T213-era
+probe and the landed-code demo `run-9505f323`) and **five model-driven runs** through the
+production `OpenRouterProvider` (`anthropic/claude-sonnet-5`, text-only — no image reached the
+model in any of them, see T252). Every model-driven run is early game (game turns 5–17) and
+capped at 3 harness turns by the driver, so this is the *early-turn* cost of the accepted
+trade-off; the late-game measurement (hundreds of steps in one turn) is T201's, and is unmeasured.
+
+| run | outcome | harness turns | steps = calls | calls / turn | $ / turn | $ / call | tokens in / out | model time | wall-clock / turn |
+|---|---|---|---|---|---|---|---|---|---|
+| `run-e8cf4b9a` | paused (backstop readback) | 1 | 8 | 8.0 | $0.084 | $0.0105 | 26,744 / 3,091 | 54 s | 62 s |
+| `run-bba7a243` | finished | 3 | 24 | 8.0 | $0.080 | $0.0100 | 80,232 / 8,054 | 149 s | 56–60 s |
+| `run-ea014cb6` | finished | 3 | 24 | 8.0 | $0.132 | $0.0166 | 106,344 / 18,457 | 269 s | 70–112 s |
+| `run-d1d3e263` | finished, **city founded** | 3 | 21 | 7.0 | $0.136 | $0.0194 | 95,790 / 21,641 | 332 s | 75–146 s |
+| `run-8bc17e7e` | paused (unknown screen) | 2 | 16 | 8.0 | $0.147 | $0.0184 | 76,992 / 14,006 | 213 s | 99–126 s |
+| **all five** | | **12** | **93** | **7.8** | **$0.119** | **$0.0153** | 386,102 / 65,249 | 1,017 s | ~97 s |
+
+Observations, stated as measured:
+
+- **Calls per turn is the backstop, not the model.** 8 of the 12 turns hit exactly the
+  no-progress cap (8 steps) because the model's decisions were refused before dispatch; the one
+  turn where a decision landed (attempt 4, turn 1: `units.found_city` applied) took 9 steps, and
+  the turn after the city existed took 4. A turn where every decision lands will cost what the
+  model actually needs, which nothing here has yet measured.
+- **Per-call cost grew across the night, by design.** $0.010 → $0.019 per call as the observation
+  text gained the action catalog (attempt 3 on) and the model's reasoning got longer; input is
+  ~3.3–4.6 K tokens per step, all text.
+- **Model latency is ~85 % of wall-clock.** 1,017 s of the ~1,170 s the twelve turns spanned was
+  the provider; the fourteen-declaration Lua sweep, quicksave and end-turn confirmation are the
+  rest (~10–20 s per turn, consistent with the fake-provider demo's 2 s per turn plus the AI turns).
+- **Total: $1.425 for 93 calls over 12 harness turns**, matching the OpenRouter `auth/key` delta
+  the spike recorded ($1.42). `model_call.cost.amount_usd` and both token counts are populated on
+  every model-driven call — the store's own record is sufficient for this table without the key
+  endpoint. (The `model_calls` *table* is still empty: successful calls ride inside the step bundle
+  by design — `decision_loop.py` writes the table only for calls that produced no decision. Spec
+  003 re-specifies model calls as rows; not changed here.)
+- **Extrapolation, labelled as such:** at the measured ~$0.12–0.15 per early turn, a 300-turn
+  soak (T201) model-driven would be roughly $40–45 if late turns cost what early ones do — they
+  will not; late turns have more units, cities and steps. T201 should run with the fake provider
+  first and a bounded model-driven segment second.
+
 ## Defects found and fixed
 
 Real defects, found by live-client evidence or by the integration test tier, fixed before this
@@ -816,21 +860,23 @@ they are not lost between this audit and whichever future session runs `/speckit
 Stated plainly, gathered in one place rather than left scattered across the principle sections
 above:
 
-- **No live test has run against a real Civilization VI client.** Everything above from spike work is
-  real live-client evidence gathered by hand-written probe scripts deliberately independent of
-  `civsim_harness` (per `spikes/r5-save-path.md`: "these results are evidence about the game rather
-  than about our implementation"), not the harness's own live test suite against a client.
-
-  Partial exception, 2026-09-20: `tests/live/test_linux_xcomposite_capture.py` (5 tests) **has** run
-  green and does exercise the harness's own `capture_window`. It targets ordinary X11 windows rather
-  than Civ VI, so it proves the pixel pipeline, not the client integration.
+- **The harness's own `live`-marked test files for T177, T191–T194 and T198 do not exist yet.**
+  (Superseded wording, 2026-09-21: it is no longer true that no live test has run against a real
+  client — `tests/live/test_production_save_loader.py` passed unmodified against the real client
+  (T248, 38.4 s), `tests/live/probe_observation_bodies.py` passed 14/14 (T213), and the production
+  composition root played three turns with the fake provider and twelve with a real model
+  (`spikes/demo-evidence-linux-landed/`, `spikes/first-model-driven-runs-linux.md`). What remains
+  unevidenced is the specific per-task live assertions those six task ids name, each now annotated
+  in `tasks.md` with what it needs.)
 - **Capture pixel extraction is implemented on Linux/X11 only; Windows and macOS remain stubs.**
   The Linux `XComposite`/`NameWindowPixmap` path now returns real, correctly-ordered `BGRA8` pixels
   and is occlusion-immune through the harness's own code
-  (`spikes/r6-xcomposite-readback-linux.md`). **No platform has yet proven a real frame *of
-  Civilization VI* clears the parity screening gates through the harness's own code** — on Linux
-  because the client could not be launched (`spikes/steam-dependency-linux.md`), elsewhere because
-  the extraction is unwritten. Linux/Wayland also remains stubbed.
+  (`spikes/r6-xcomposite-readback-linux.md`), and the landed-code demo captured 12 real frames
+  *of Civilization VI* through it (`run-9505f323`). **No frame has yet been shown to the agent on
+  any platform**: on Linux every capture was withheld by the provenance gate (this build has no
+  camera look-at getter, so `target_revealed` cannot be confirmed) and, until T252 landed, the
+  probe never credited the X11 hygiene pass and the raw `BGRA8` frame had no wire media type;
+  elsewhere the extraction is unwritten. Linux/Wayland capture remains stubbed (T257).
 - **The Linux live node depends on Steam and is not available on demand.** Civ VI refuses to launch
   without a running, signed-in Steam client, and an account can be in a game on only one machine at
   a time — so live work is pre-empted whenever the owner is playing. Scheduling constraint, not a
