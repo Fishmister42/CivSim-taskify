@@ -1,0 +1,26 @@
+  [18:37:32] recording started: every frame via the production capture_window() (window-scoped)
+  [18:37:32] goal set_capital_production: objective written to goal-set_capital_production.md (objective text only)
+  [18:37:32] ABORTED: TypeError: resolve_provider() missing 1 required keyword-only argument: 'policy'
+{
+  "goal": "set_capital_production",
+  "chain": [
+    "set_capital_production"
+  ],
+  "provider": "openrouter",
+  "provider_seed": 0,
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-21T22:37:32.414441+00:00",
+  "parts": [],
+  "aborted": "TypeError: resolve_provider() missing 1 required keyword-only argument: 'policy'",
+  "recording": {
+    "frames": 1,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 151,
+    "keyframes": [
+      "keyframe_0_t000s.png"
+    ],
+    "capture_failures": 0
+  },
+  "finished_at": "2026-09-21T22:37:32.997211+00:00",
+  "reached": false
+}

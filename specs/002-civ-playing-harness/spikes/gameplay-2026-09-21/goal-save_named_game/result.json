@@ -1,0 +1,96 @@
+{
+  "goal": "save_named_game",
+  "chain": [
+    "save_named_game"
+  ],
+  "provider": "openrouter",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-21T23:28:14.205191+00:00",
+  "parts": [
+    {
+      "goal": "save_named_game",
+      "title": "Take a named save of the game",
+      "run_id": "run-1f36ee88e89e4445b4ddf81d710aeb96",
+      "turn_cap": 3,
+      "reached": false,
+      "reached_at_turn": null,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "game.is_local_player_turn",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "paused",
+      "elapsed_s": 195.6,
+      "success_predicate": "observed_applied_saves_save_game >= 1",
+      "success_check": {
+        "predicate": "observed_applied_saves_save_game >= 1",
+        "met": false,
+        "reason": null
+      },
+      "steps": 16,
+      "turns_recorded": [
+        1
+      ],
+      "actions": {
+        "prompts.ai_diplomatic_approach": {
+          "verification_failed": 16
+        }
+      },
+      "actions_applied": {},
+      "provider": "openrouter",
+      "provider_policy": "uniform",
+      "game_start_turn": 42,
+      "store": {
+        "run": {
+          "lifecycle_state": "paused",
+          "stop_resolution": null,
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "comparable",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 1,
+        "decision_steps": 16,
+        "save_points": 1,
+        "captures": 18,
+        "run_events": 5,
+        "model_calls": 16,
+        "turns_recorded": [
+          1
+        ],
+        "captures_shown_to_agent": 16,
+        "capture_screening": [
+          "screened_clean"
+        ],
+        "model_calls_served": [
+          "openrouter/anthropic/claude-sonnet-5"
+        ],
+        "model_cost_usd": 0.5293,
+        "model_input_tokens": 245504,
+        "model_output_tokens": 3825
+      }
+    }
+  ],
+  "recording": {
+    "frames": 182,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 112,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t065s.png",
+      "keyframe_2_t131s.png",
+      "keyframe_3_t197s.png"
+    ],
+    "capture_failures": 0
+  },
+  "finished_at": "2026-09-21T23:31:45.317558+00:00",
+  "reached": false
+}

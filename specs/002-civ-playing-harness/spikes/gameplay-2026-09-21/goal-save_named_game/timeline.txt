@@ -1,0 +1,9 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal save_named_game: objective written to goal-save_named_game.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=save_named_game provider=openrouter provider_policy=uniform turn_cap=3]
+t+002s  goal save_named_game: run run-1f36ee88e89e4445b4ddf81d710aeb96
+t+002s  goal save_named_game: playing turn=1 step=None
+t+197s  goal save_named_game: paused turn=1 step=None
+t+197s  goal save_named_game: run paused -- this part's terminal state
+t+197s  goal save_named_game: stale run-identity lock cleared (run-1f36ee88e89e4445b4ddf81d710aeb96.lock.json)
+t+197s  goal save_named_game not reached; the chain stops here (a later part starts from a state that never arrived)

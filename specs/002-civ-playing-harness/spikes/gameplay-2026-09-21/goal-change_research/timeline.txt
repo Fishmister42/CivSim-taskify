@@ -1,0 +1,10 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal change_research: objective written to goal-change_research.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=change_research provider=openrouter provider_policy=uniform turn_cap=3]
+t+001s  goal change_research: run run-d0933ca884b84be9a6d2d859bc2f94d9
+t+001s  goal change_research: playing turn=None step=None
+t+003s  goal change_research: playing turn=1 step=None
+t+192s  goal change_research: paused turn=1 step=None
+t+192s  goal change_research: run paused -- this part's terminal state
+t+192s  goal change_research: stale run-identity lock cleared (run-d0933ca884b84be9a6d2d859bc2f94d9.lock.json)
+t+192s  goal change_research not reached; the chain stops here (a later part starts from a state that never arrived)

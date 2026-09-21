@@ -1,0 +1,10 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal send_delegation: objective written to goal-send_delegation.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=send_delegation provider=openrouter provider_policy=uniform turn_cap=3]
+t+001s  goal send_delegation: run run-7907cc6c36604c20842b47f151bc8563
+t+001s  goal send_delegation: playing turn=None step=None
+t+003s  goal send_delegation: playing turn=1 step=None
+t+215s  goal send_delegation: paused turn=1 step=None
+t+215s  goal send_delegation: run paused -- this part's terminal state
+t+215s  goal send_delegation: stale run-identity lock cleared (run-7907cc6c36604c20842b47f151bc8563.lock.json)
+t+215s  goal send_delegation not reached; the chain stops here (a later part starts from a state that never arrived)

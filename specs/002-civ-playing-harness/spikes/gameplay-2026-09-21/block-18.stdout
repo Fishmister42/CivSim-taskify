@@ -1,0 +1,752 @@
+  [13:48:44] recording started: every frame via production capture_window() (window-scoped)
+  [13:48:44] PRODUCTION: LuaGameSetupReader read-back of the live setup (V2's own path)
+  [13:48:45] live setup: turn=43 civilization=CIVILIZATION_PERSIA leader=LEADER_CYRUS ruleset=RULESET_EXPANSION_2 difficulty=DIFFICULTY_EMPEROR game_speed=GAMESPEED_ONLINE starting_era=ERA_ANCIENT map_size=MAPSIZE_SMALL map_seed=1745156737 major_count=5
+  [13:48:45] PRODUCTION: Runner.start(run-config.yaml) via build_runner_dependencies [provider=openrouter provider_seed=0]
+  [13:48:46] run created: run-cf9d99e0672147919de7b8d89b63b333
+  [13:48:46] status: playing turn=1 step=None
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	43	30	0	true	false
+nexus: discarding unmatched output: OnGovernorChanged
+1	5
+OnGovernorChanged
+2	2
+OnGovernorChanged
+2	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+City CS property Detected
+table: 0x7d4c31859e60	trader to	6
+table: 0x7d4c31859e60	trader to	13
+Search Result	2
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+nexus: discarding unmatched output: OnGovernorChanged
+3	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+3	2
+OnGovernorChanged
+3	5
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+OnGovernorChanged
+4	2
+OnGovernorChanged
+4	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+nexus: discarding unmatched output: OnGovernorChanged
+5	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+5	2
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+City CS property Detected
+table: 0x7d4c30c4bdf0	trader to	12
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+OnTradeRouteActivityChanged	9	9	65536	3	327684
+9	9	65536	3	327684
+nexus: discarding unmatched output: OnGameTurnStarted: Turn	44	Local State:	49	2026-09-21 13:50:38
+nexus: discarding unmatched output: Resolving Buffered Parameters
+Shoud Terminate
+PlotInfo::OnCitySelectionChanged	0	65536	0	0	0	false	false
+  [13:50:41] status: playing turn=2 step=None
+nexus: discarding unmatched output: OnGovernorChanged
+1	5
+OnGovernorChanged
+2	2
+OnGovernorChanged
+2	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+City CS property Detected
+table: 0x7d4c31859e60	trader to	6
+table: 0x7d4c31859e60	trader to	13
+Search Result	2
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+nexus: discarding unmatched output: OnGovernorChanged
+3	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+3	2
+OnGovernorChanged
+3	5
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+OnGovernorChanged
+4	2
+OnGovernorChanged
+4	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+nexus: discarding unmatched output: OnGovernorChanged
+5	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+5	2
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+City CS property Detected
+table: 0x7d4c30c4bdf0	trader to	12
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+nexus: discarding unmatched output: OnGameTurnStarted: Turn	45	Local State:	60	2026-09-21 13:52:37
+nexus: discarding unmatched output: Resolving Buffered Parameters
+Shoud Terminate
+  [13:52:40] status: playing turn=3 step=None
+nexus: discarding unmatched output: OnGovernorChanged
+1	5
+OnGovernorChanged
+1	1
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+City CS property Detected
+table: 0x7d4c3124e6e0	trader to	7
+Search Result	1
+bTraderToAmani	nil
+trader control property assigned
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+OnGovernorChanged
+2	2
+OnGovernorChanged
+2	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+City CS property Detected
+table: 0x7d4c31c53730	trader to	6
+table: 0x7d4c31c53730	trader to	13
+Search Result	2
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+nexus: discarding unmatched output: OnGovernorChanged
+3	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+3	2
+OnGovernorChanged
+3	5
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+nexus: discarding unmatched output: OnGovernorChanged
+4	2
+OnGovernorChanged
+4	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+nexus: discarding unmatched output: OnGovernorChanged
+5	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+5	2
+nexus: discarding unmatched output: OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+City CS property Detected
+table: 0x7d4c31ac5f90	trader to	12
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+nexus: discarding unmatched output: OnGameTurnStarted: Turn	46	Local State:	45	2026-09-21 13:54:08
+nexus: discarding unmatched output: Resolving Buffered Parameters
+Shoud Terminate
+  [13:54:10] status: playing turn=4 step=None
+nexus: discarding unmatched output: OnGovernorChanged
+1	5
+OnGovernorChanged
+1	1
+amani removed -> recalculate amani yields and plot properties, player properties as well
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+City CS property Detected
+table: 0x7d4c3124e6e0	trader to	7
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+OnGovernorChanged
+2	2
+OnGovernorChanged
+2	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnTradeRouteActivityChanged	2	2	65536	6	65536
+2	2	65536	6	65536
+Recalculating plot properties
+Amani Trader Property Found => Is Trader to Amani Active Checks
+City Owner	6	bControl	false
+bControl Final	false
+Sending Remove trader req
+Player Turn Ended => Adding to buffer
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+City CS property Detected
+table: 0x7d4c31c53730	trader to	6
+table: 0x7d4c31c53730	trader to	13
+Search Result	2
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+nexus: discarding unmatched output: OnGovernorChanged
+3	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+3	2
+OnGovernorChanged
+3	5
+nexus: discarding unmatched output: OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+nexus: discarding unmatched output: OnGovernorChanged
+4	2
+OnGovernorChanged
+4	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+OnGovernorChanged
+5	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+5	2
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+City CS property Detected
+table: 0x7d4c31ac5f90	trader to	12
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+nexus: discarding unmatched output: OnGameTurnStarted: Turn	47	Local State:	77	2026-09-21 13:55:36
+Player	LEADER_CYRUS	 forgot to pick a civic: Adjust. Turn	47
+Resolving Buffered Parameters
+Buffered Parameters Detected
+OldIndex	1
+OnStart	GameplaySetCSTrader
+iOriginCityID	65536
+iTargetPlayerID	-6
+iOriginPlayerID	2
+  [13:55:37] status: playing turn=5 step=None
+nexus: discarding unmatched output: OnGovernorChanged
+1	5
+OnGovernorChanged
+1	1
+amani removed -> recalculate amani yields and plot properties, player properties as well
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+City CS property Detected
+table: 0x7d4c3124e6e0	trader to	7
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+nexus: discarding unmatched output: OnGovernorChanged
+2	2
+OnGovernorChanged
+2	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnTradeRouteActivityChanged	2	2	65536	3	262147
+2	2	65536	3	262147
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+City CS property Detected
+table: 0x7d4c31c53730	trader to	6
+table: 0x7d4c31c53730	trader to	13
+Search Result	2
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+nexus: discarding unmatched output: OnGovernorChanged
+3	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+3	2
+OnGovernorChanged
+3	5
+OnGovernorChanged
+3	2
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+nexus: discarding unmatched output: OnGovernorChanged
+4	2
+OnGovernorChanged
+4	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+nexus: discarding unmatched output: OnGovernorChanged
+5	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+5	2
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+City CS property Detected
+table: 0x7d4c31ac5f90	trader to	12
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+nexus: discarding unmatched output: OnGameTurnStarted: Turn	48	Local State:	47	2026-09-21 13:56:57
+Resolving Buffered Parameters
+Shoud Terminate
+  [13:57:00] status: finished turn=5 step=None
+  [13:57:00] run finished after 495s
+{
+  "provider": "openrouter",
+  "provider_seed": 0,
+  "turns_requested": 5,
+  "bring_up": false,
+  "started_at": "2026-09-21T17:48:44.804194+00:00",
+  "live_setup": {
+    "values": {
+      "civilization": "CIVILIZATION_PERSIA",
+      "leader": "LEADER_CYRUS",
+      "ruleset": "RULESET_EXPANSION_2",
+      "difficulty": "DIFFICULTY_EMPEROR",
+      "game_settings.game_speed": "GAMESPEED_ONLINE",
+      "game_settings.starting_era": "ERA_ANCIENT",
+      "map_settings.map_size": "MAPSIZE_SMALL",
+      "map_seed": "1745156737",
+      "opponents.major_count": 5,
+      "mod_set": [
+        {
+          "version": "179",
+          "id": "619ac86e-d99d-4bf3-b8f0-8c5b8c402567"
+        },
+        {
+          "version": "1.39.5",
+          "id": "c88cba8b-8311-4d35-90c3-51a4a5d66542"
+        },
+        {
+          "version": "70500",
+          "id": "cb84075d-5007-4207-b662-c35a5f7be260"
+        },
+        {
+          "id": "9e881f4f-017f-29f5-d849-04537424be3f"
+        },
+        {
+          "id": "382a187f-c8ba-4094-a6a7-0d5315661f33"
+        },
+        {
+          "id": "e3f53c61-371c-440b-96ce-077d318b36c0"
+        },
+        {
+          "id": "02a8bdde-67ea-4d38-9540-26e685e3156e"
+        },
+        {
+          "id": "8424840c-92ef-4426-a9b4-b4e0cb818049"
+        },
+        {
+          "id": "a1100fc4-70f2-4129-ac27-2a65a685ed08"
+        },
+        {
+          "id": "ce5876cd-6900-46d1-9c9c-8dba1f28872e"
+        },
+        {
+          "id": "1b394fe9-23dc-4868-8f0a-5220cb8fb427"
+        },
+        {
+          "id": "1b28771a-c749-434b-9053-d1380c553de9"
+        },
+        {
+          "id": "4873eb62-8ccc-4574-b784-dda455e74e68"
+        },
+        {
+          "id": "9de86512-de1a-400d-8c0a-ab46ebbf76b9"
+        },
+        {
+          "id": "1f367231-a040-4793-bdbb-088816853683"
+        },
+        {
+          "id": "a3f42cd4-6c3e-4f5a-bc81-be29e0c0b87c"
+        },
+        {
+          "id": "e2749e9a-8056-45cd-901b-c368c8e83deb"
+        },
+        {
+          "id": "643ea320-8e1a-4cf1-a01c-00d88ddd131a"
+        },
+        {
+          "id": "3809975f-263f-40a2-a747-8bfb171d821a"
+        },
+        {
+          "id": "ffdf4e79-dee2-47bb-919b-f5739106627a"
+        },
+        {
+          "id": "113d9459-0a3b-4fcb-a49c-483f40303575"
+        },
+        {
+          "id": "2f6e858a-28ef-46b3-beac-b985e52e9bc1"
+        }
+      ]
+    },
+    "unread": {},
+    "turn_timer_hash": -1525060181,
+    "turn_timer_type": "TURNTIMER_NONE",
+    "turn": 43
+  },
+  "start_turn": 43,
+  "config": "run-config.yaml",
+  "run": {
+    "started": true,
+    "run_id": "run-cf9d99e0672147919de7b8d89b63b333",
+    "final_state": "finished",
+    "elapsed_s": 494.9,
+    "last_error": null,
+    "store": {
+      "run": {
+        "lifecycle_state": "finished",
+        "stop_resolution": "turn_reached",
+        "host_support_tier": "validated",
+        "record_completeness_status": "complete",
+        "comparability_status": "comparable",
+        "game_build": "linux/1.0.12.9",
+        "capture_path": "xcomposite"
+      },
+      "turn_cycles": 5,
+      "decision_steps": 41,
+      "save_points": 5,
+      "captures": 46,
+      "run_events": 12,
+      "model_calls": 41,
+      "turns_recorded": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "captures_shown_to_agent": 41,
+      "capture_screening": [
+        "screened_clean"
+      ],
+      "model_calls_served": [
+        "openrouter/anthropic/claude-sonnet-5"
+      ],
+      "model_cost_usd": 1.1848,
+      "model_input_tokens": 563154,
+      "model_output_tokens": 5853
+    }
+  },
+  "recording": {
+    "frames": 457,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 91934,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t166s.png",
+      "keyframe_2_t332s.png",
+      "keyframe_3_t498s.png"
+    ],
+    "capture_failures": 0
+  },
+  "finished_at": "2026-09-21T17:57:35.864734+00:00"
+}

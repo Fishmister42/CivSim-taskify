@@ -1,0 +1,10 @@
+t+000s  recording started: every frame via production capture_window() (window-scoped)
+t+000s  PRODUCTION: LuaGameSetupReader read-back of the live setup (V2's own path)
+t+000s  live setup: turn=59 civilization=CIVILIZATION_PERSIA leader=LEADER_CYRUS ruleset=RULESET_EXPANSION_2 difficulty=DIFFICULTY_EMPEROR game_speed=GAMESPEED_ONLINE starting_era=ERA_ANCIENT map_size=MAPSIZE_SMALL map_seed=1745156737 major_count=4
+t+000s  PRODUCTION: Runner.start(run-config.yaml) via build_runner_dependencies [provider=stochastic provider_seed=25 provider_policy=coverage]
+t+000s  run created: run-729e62bc4a45468796e5e6023d766392
+t+000s  status: playing turn=1 step=None
+t+012s  status: paused turn=1 step=None last_error=type='SaveVerificationError' at=datetime.datetime(2026, 9, 21, 22, 43, 30, 596607, tzinfo=datetime.timezone.utc)
+t+012s  run paused: the driver treats a paused run as this block's terminal state
+t+012s  run paused after 13s
+t+015s  paused run: stale run-identity lock cleared by the driver (run-729e62bc4a45468796e5e6023d766392.lock.json)

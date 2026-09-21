@@ -1,0 +1,111 @@
+  [19:24:24] recording started: every frame via the production capture_window() (window-scoped)
+  [19:24:24] goal send_delegation: objective written to goal-send_delegation.md (objective text only)
+  [19:24:25] PRODUCTION: Runner.start(run-config.yaml) [goal=send_delegation provider=openrouter provider_policy=uniform turn_cap=3]
+  [19:24:26] goal send_delegation: run run-7907cc6c36604c20842b47f151bc8563
+  [19:24:26] goal send_delegation: playing turn=None step=None
+  [19:24:28] goal send_delegation: playing turn=1 step=None
+  [19:27:59] goal send_delegation: paused turn=1 step=None
+  [19:27:59] goal send_delegation: run paused -- this part's terminal state
+  [19:27:59] goal send_delegation: stale run-identity lock cleared (run-7907cc6c36604c20842b47f151bc8563.lock.json)
+  [19:27:59] goal send_delegation not reached; the chain stops here (a later part starts from a state that never arrived)
+{
+  "goal": "send_delegation",
+  "chain": [
+    "send_delegation"
+  ],
+  "provider": "openrouter",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-21T23:24:24.539546+00:00",
+  "parts": [
+    {
+      "goal": "send_delegation",
+      "title": "Send a delegation to a civilization you have met",
+      "run_id": "run-7907cc6c36604c20842b47f151bc8563",
+      "turn_cap": 3,
+      "reached": false,
+      "reached_at_turn": null,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "player.met_civ_count >= 1",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "player.gold >= 25",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "paused",
+      "elapsed_s": 213.7,
+      "success_predicate": "observed_applied_diplomacy_send_delegation >= 1 and player.delegation_count >= observed_start_delegation_count + 1",
+      "success_check": {
+        "predicate": "observed_applied_diplomacy_send_delegation >= 1 and player.delegation_count >= observed_start_delegation_count + 1",
+        "met": false,
+        "reason": null
+      },
+      "steps": 16,
+      "turns_recorded": [
+        1
+      ],
+      "actions": {
+        "prompts.ai_diplomatic_approach": {
+          "verification_failed": 16
+        }
+      },
+      "actions_applied": {},
+      "provider": "openrouter",
+      "provider_policy": "uniform",
+      "game_start_turn": 42,
+      "store": {
+        "run": {
+          "lifecycle_state": "paused",
+          "stop_resolution": null,
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "comparable",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 1,
+        "decision_steps": 16,
+        "save_points": 1,
+        "captures": 18,
+        "run_events": 5,
+        "model_calls": 16,
+        "turns_recorded": [
+          1
+        ],
+        "captures_shown_to_agent": 16,
+        "capture_screening": [
+          "screened_clean"
+        ],
+        "model_calls_served": [
+          "openrouter/anthropic/claude-sonnet-5"
+        ],
+        "model_cost_usd": 0.5345,
+        "model_input_tokens": 245792,
+        "model_output_tokens": 4294
+      }
+    }
+  ],
+  "recording": {
+    "frames": 199,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 112,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t071s.png",
+      "keyframe_2_t143s.png",
+      "keyframe_3_t214s.png"
+    ],
+    "capture_failures": 0
+  },
+  "finished_at": "2026-09-21T23:28:13.669767+00:00",
+  "reached": false
+}

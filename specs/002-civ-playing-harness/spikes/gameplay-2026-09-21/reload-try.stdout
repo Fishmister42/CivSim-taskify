@@ -1,0 +1,20 @@
+{
+  "save": "civsim__run-fd9c08a1df1d46d3b131e0ab5bffbad3__t0002",
+  "expected_turn": 42,
+  "load": "raised after 0.1s: HarnessError: Network.LoadGame returned false for save 'civsim__run-fd9c08a1df1d46d3b131e0ab5bffbad3__t0002' issued from the MainMenu state -- expected true, the verified front-end acceptance (spikes/t217-RESOLVED-frontend-loadgame.md). false is how the client refuses the call: either this state cannot issue loads after all, or the named save is not loadable from Location=LOCAL_STORAGE Type=SINGLE_PLAYER Directory=DEFAULT under exactly this name | detail={'save_name': 'civsim__run-fd9c08a1df1d46d3b131e0ab5bffbad3__t0002', 'save_point_id': 'sp-gameplay-load', 'result': {'issued': True, 'accepted': False, 'error': ''}}",
+  "detail": "{'save_name': 'civsim__run-fd9c08a1df1d46d3b131e0ab5bffbad3__t0002', 'save_point_id': 'sp-gameplay-load', 'result': {'issued': True, 'accepted': False, 'error': ''}}",
+  "intro_presses": 0,
+  "far_side": {
+    "in_game": false,
+    "states": [
+      "CityStatePicker",
+      "CivRoyaleIntro",
+      "ConfirmKick",
+      "CreditsScreen",
+      "CrossPlayLogin",
+      "DebugHotloadCache",
+      "EditHotseatPlayer",
+      "FrontEnd"
+    ]
+  }
+}

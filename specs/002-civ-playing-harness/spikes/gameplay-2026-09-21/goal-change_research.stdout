@@ -1,0 +1,106 @@
+  [19:20:59] recording started: every frame via the production capture_window() (window-scoped)
+  [19:20:59] goal change_research: objective written to goal-change_research.md (objective text only)
+  [19:20:59] PRODUCTION: Runner.start(run-config.yaml) [goal=change_research provider=openrouter provider_policy=uniform turn_cap=3]
+  [19:21:00] goal change_research: run run-d0933ca884b84be9a6d2d859bc2f94d9
+  [19:21:00] goal change_research: playing turn=None step=None
+  [19:21:02] goal change_research: playing turn=1 step=None
+  [19:24:12] goal change_research: paused turn=1 step=None
+  [19:24:12] goal change_research: run paused -- this part's terminal state
+  [19:24:12] goal change_research: stale run-identity lock cleared (run-d0933ca884b84be9a6d2d859bc2f94d9.lock.json)
+  [19:24:12] goal change_research not reached; the chain stops here (a later part starts from a state that never arrived)
+{
+  "goal": "change_research",
+  "chain": [
+    "change_research"
+  ],
+  "provider": "openrouter",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-21T23:20:59.090826+00:00",
+  "parts": [
+    {
+      "goal": "change_research",
+      "title": "Change the current research to a named technology",
+      "run_id": "run-d0933ca884b84be9a6d2d859bc2f94d9",
+      "turn_cap": 3,
+      "reached": false,
+      "reached_at_turn": null,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "player.researchable_techs != []",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "paused",
+      "elapsed_s": 191.6,
+      "success_predicate": "observed_applied_research_set_tech >= 1 and player.current_research != observed_start_current_research",
+      "success_check": {
+        "predicate": "observed_applied_research_set_tech >= 1 and player.current_research != observed_start_current_research",
+        "met": false,
+        "reason": null
+      },
+      "steps": 16,
+      "turns_recorded": [
+        1
+      ],
+      "actions": {
+        "prompts.ai_diplomatic_approach": {
+          "verification_failed": 16
+        }
+      },
+      "actions_applied": {},
+      "provider": "openrouter",
+      "provider_policy": "uniform",
+      "game_start_turn": 42,
+      "store": {
+        "run": {
+          "lifecycle_state": "paused",
+          "stop_resolution": null,
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "comparable",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 1,
+        "decision_steps": 16,
+        "save_points": 1,
+        "captures": 18,
+        "run_events": 5,
+        "model_calls": 16,
+        "turns_recorded": [
+          1
+        ],
+        "captures_shown_to_agent": 16,
+        "capture_screening": [
+          "screened_clean"
+        ],
+        "model_calls_served": [
+          "openrouter/anthropic/claude-sonnet-5"
+        ],
+        "model_cost_usd": 0.5299,
+        "model_input_tokens": 245744,
+        "model_output_tokens": 3846
+      }
+    }
+  ],
+  "recording": {
+    "frames": 178,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 112,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t064s.png",
+      "keyframe_2_t128s.png",
+      "keyframe_3_t192s.png"
+    ],
+    "capture_failures": 0
+  },
+  "finished_at": "2026-09-21T23:24:24.030234+00:00",
+  "reached": false
+}
