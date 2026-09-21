@@ -351,6 +351,33 @@ _CONGRESS_TOP_LEVEL_FIELDS = ("is_in_session",)
 
 _GAME_SCREEN_DECLARATION_ID = DeclarationId("game.screen_state")
 
+#: T255: the InGame declaration that says which city the game has selected. ``cities.state``
+#: runs in GameCore_Tuner, where ``UI`` does not exist, so its entries carry no ``is_selected``;
+#: this declaration's ``selected_city_id`` is overlaid onto the ``city`` namespace instead (and
+#: onto :func:`resolve_selected_subject_target`'s answer), which is what lets a city order's
+#: ``city.is_selected and ...`` predicate ever be true. Units need no overlay: ``units.state``
+#: already runs InGame and reports ``is_selected`` itself.
+_CITY_SELECTION_DECLARATION_ID = DeclarationId("cities.selection")
+
+
+def _selected_city_id(index: Mapping[DeclarationId, Any]) -> Any | None:
+    """The id ``cities.selection`` reports as selected, or ``None`` when there is no such entry,
+    it reports no selection, or the value is not a usable id -- never a guess."""
+    source = index.get(_CITY_SELECTION_DECLARATION_ID)
+    if not isinstance(source, Mapping) or source.get("has_selection") is not True:
+        return None
+    return source.get("selected_city_id")
+
+
+def _is_selected(item: Mapping[str, Any], *, id_field: str, selection_id: Any | None) -> bool:
+    """An entry is the selected subject when its own body says so (``is_selected: true``) or,
+    when its body does not carry the field at all, when the separate selection declaration names
+    its id. A body that carries ``is_selected: false`` is *not* overridden -- it answered."""
+    own = item.get("is_selected")
+    if own is not None:
+        return own is True
+    return selection_id is not None and item.get(id_field) == selection_id
+
 
 def observation_index(observation: Observation) -> dict[DeclarationId, Any]:
     """Map each entry's ``declaration_id`` to its raw value, for repeated lookups below."""
@@ -414,6 +441,7 @@ def build_predicate_bindings(
             id_field=id_field,
             target=target,
             extra_top_level_fields=extra,
+            selection_id=_selected_city_id(index) if namespace == "city" else None,
         )
 
     if observed_snapshot:
@@ -449,12 +477,16 @@ def resolve_selected_subject_target(
     if namespace is None:
         return None
     declaration_id, list_field, id_field = _SUBJECT_SOURCES[namespace]
-    source = observation_index(observation).get(declaration_id)
+    index = observation_index(observation)
+    source = index.get(declaration_id)
     items = source.get(list_field) if isinstance(source, Mapping) else None
     if not isinstance(items, list):
         return None
+    selection_id = _selected_city_id(index) if namespace == "city" else None
     for item in items:
-        if isinstance(item, Mapping) and item.get("is_selected") is True:
+        if isinstance(item, Mapping) and _is_selected(
+            item, id_field=id_field, selection_id=selection_id
+        ):
             return item.get(id_field)
     return None
 
@@ -493,6 +525,7 @@ def _bind_subject_namespace(
     id_field: str,
     target: Any,
     extra_top_level_fields: Sequence[str] = (),
+    selection_id: Any | None = None,
 ) -> dict[str, Any]:
     source = index.get(declaration_id)
     namespace: dict[str, Any] = {"exists": False}
@@ -506,12 +539,21 @@ def _bind_subject_namespace(
     items = source.get(list_field)
     if not isinstance(items, list):
         return namespace
+
+    def _bind(item: Mapping[str, Any]) -> dict[str, Any]:
+        namespace.update(item)
+        namespace["exists"] = True
+        # T255: a body that does not report its own selection (cities.state, GameCore_Tuner)
+        # gets it from the separate selection declaration, so `city.is_selected` is a real
+        # field on the bound subject rather than an absent one that resolves to None.
+        if "is_selected" not in item and selection_id is not None:
+            namespace["is_selected"] = item.get(id_field) == selection_id
+        return namespace
+
     if target is not None:
         for item in items:
             if isinstance(item, Mapping) and item.get(id_field) == target:
-                namespace.update(item)
-                namespace["exists"] = True
-                return namespace
+                return _bind(item)
     # README §4's parenthesis: "(or, for a unit/city action, the unit/city the human selected
     # before issuing it)". When `target` names no entry -- it is a plot for units.move_to, a
     # promotion for units.promote, a production item for a city order, or absent -- the subject
@@ -519,8 +561,8 @@ def _bind_subject_namespace(
     # its warrior to move by passing the unit's id as `target`; nothing here selects a subject
     # the game has not already selected.
     for item in items:
-        if isinstance(item, Mapping) and item.get("is_selected") is True:
-            namespace.update(item)
-            namespace["exists"] = True
-            return namespace
+        if isinstance(item, Mapping) and _is_selected(
+            item, id_field=id_field, selection_id=selection_id
+        ):
+            return _bind(item)
     return namespace

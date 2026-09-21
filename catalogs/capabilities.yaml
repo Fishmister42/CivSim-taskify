@@ -33,6 +33,16 @@
   writes: []
   firetuner_gap: null
 
+# T255 (2026-09-21): the InGame half of city selection. cities.read runs in GameCore_Tuner, where
+# `UI` does not exist, so `city.is_selected` -- the first term of every city order's availability
+# predicate -- had no producer and no city order was ever dispatchable. See lua/ingame/city_selection.lua.
+- capability_id: cities.selection
+  path: firetuner
+  implementation_ref: lua/ingame/city_selection.lua
+  reads: [which city, if any, the player currently has selected]
+  writes: []
+  firetuner_gap: null
+
 - capability_id: research.read
   path: firetuner
   implementation_ref: lua/gamecore/research.lua

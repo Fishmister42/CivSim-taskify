@@ -144,7 +144,10 @@ spy.is_available` rather than needing a separate existence check bolted on.
 
 `city.*` (subject city of a city action)
 - `city.exists` (boolean)
-- `city.is_selected` (boolean)
+- `city.is_selected` (boolean) — produced by overlaying `cities.selection` (InGame,
+  `UI.GetHeadSelectedCity()`) onto the `cities.state` entry, since `cities.state` runs in
+  GameCore_Tuner where `UI` does not exist (T255, 2026-09-21); `unit.is_selected` needs no
+  overlay because `units.state` runs InGame and reports it itself
 - `city.owner_is_local_player` (boolean)
 - `city.production_queue` (list<string>)
 - `city.available_productions` (list<string>)

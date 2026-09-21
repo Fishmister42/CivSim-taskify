@@ -474,3 +474,92 @@ def test_a_target_that_names_no_entry_binds_the_selected_subject() -> None:
     assert build_predicate_bindings(observation=none_selected, target={"x": 1, "y": 1})["unit"] == {
         "exists": False
     }
+
+
+# --------------------------------------------------------------------------
+# T255 -- city.is_selected is produced by overlaying cities.selection onto cities.state
+# --------------------------------------------------------------------------
+
+
+def _city_observation(
+    *, selection: dict[str, Any] | None, cities: list[dict[str, Any]]
+) -> Observation:
+    entries = [_entry("cities.state", {"cities": cities})]
+    if selection is not None:
+        entries.append(_entry("cities.selection", selection))
+    return _observation(entries)
+
+
+_CITY_ORDER_PREDICATE = (
+    "city.is_selected and city.owner_is_local_player and target in city.available_productions"
+)
+
+
+def test_the_selected_city_comes_from_the_ingame_selection_declaration() -> None:
+    """MEASURED 2026-09-21: `cities.state` runs in GameCore_Tuner, where `UI` does not exist, so
+    its entries never carried `is_selected` and every city order (`city.is_selected and ...`) was
+    structurally unavailable. The InGame `cities.selection` declaration now names the selected
+    city and the binder overlays it -- the entry's own fields stay exactly as cities.state read
+    them."""
+    from civsim_harness.act.predicates import resolve_selected_subject_target
+    from civsim_harness.models.common import DeclarationId
+
+    observation = _city_observation(
+        selection={"has_selection": True, "selected_city_id": 3, "owner_is_local_player": True},
+        cities=[
+            {"city_id": 1, "owner_is_local_player": True, "available_productions": ["X"]},
+            {
+                "city_id": 3,
+                "owner_is_local_player": True,
+                "available_productions": ["BUILDING_MONUMENT"],
+            },
+        ],
+    )
+
+    assert resolve_selected_subject_target(DeclarationId("cities.set_production"), observation) == 3
+
+    bindings = build_predicate_bindings(observation=observation, target="BUILDING_MONUMENT")
+    assert bindings["city"]["city_id"] == 3
+    assert bindings["city"]["is_selected"] is True
+    assert evaluate_predicate(_CITY_ORDER_PREDICATE, bindings) is True
+
+    by_id = build_predicate_bindings(observation=observation, target=1)
+    assert by_id["city"]["city_id"] == 1
+    assert by_id["city"]["is_selected"] is False
+
+
+def test_no_selection_binds_no_city_and_refuses_rather_than_guessing() -> None:
+    from civsim_harness.act.predicates import resolve_selected_subject_target
+    from civsim_harness.models.common import DeclarationId
+
+    for selection in (None, {"has_selection": False}, {"has_selection": False, "reason": "x"}):
+        observation = _city_observation(
+            selection=selection,
+            cities=[{"city_id": 3, "owner_is_local_player": True, "available_productions": ["A"]}],
+        )
+        assert (
+            resolve_selected_subject_target(DeclarationId("cities.set_production"), observation)
+            is None
+        )
+        bindings = build_predicate_bindings(observation=observation, target="A")
+        assert bindings["city"] == {"exists": False}
+        assert evaluate_predicate(_CITY_ORDER_PREDICATE, bindings) is False
+
+
+def test_an_entry_that_reports_its_own_selection_is_never_overridden_by_the_overlay() -> None:
+    """`units.state` reports `is_selected` itself; a body that answered is authoritative, and the
+    overlay applies only where the field is absent."""
+    from civsim_harness.act.predicates import resolve_selected_subject_target
+    from civsim_harness.models.common import DeclarationId
+
+    observation = _city_observation(
+        selection={"has_selection": True, "selected_city_id": 3},
+        cities=[{"city_id": 3, "owner_is_local_player": True, "is_selected": False}],
+    )
+    assert (
+        resolve_selected_subject_target(DeclarationId("cities.set_production"), observation) is None
+    )
+    bindings = build_predicate_bindings(observation=observation, target="A")
+    assert bindings["city"] == {"exists": False}  # nothing selected -> nothing bound, no guess
+    by_id = build_predicate_bindings(observation=observation, target=3)
+    assert by_id["city"]["is_selected"] is False

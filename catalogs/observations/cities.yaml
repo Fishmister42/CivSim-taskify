@@ -47,3 +47,30 @@
               type: array
               items: { type: string }
   introduced_in_version: "2026.09.1"
+
+# T255 (2026-09-21). The InGame half of city selection: cities.state above lists the cities from
+# GameCore_Tuner, where `UI` does not exist, so it cannot say which one the human has selected --
+# and every city order's availability predicate starts `city.is_selected and ...`. This
+# declaration reports the game's head-selected city (`UI.GetHeadSelectedCity()`, the city whose
+# panel is open); act/predicates.py overlays it onto the bound `city` namespace, so the two
+# bodies stay where each is verified to work. Unit selection is reported inside units.state
+# itself because that body already runs InGame.
+- declaration_id: cities.selection
+  kind: observation
+  summary: >
+    Which city, if any, the player currently has selected (the city whose panel is open).
+  parity_basis: >
+    Look at which city's panel is open on screen — the city the player clicked. Nothing about
+    the city's contents is read here; that is cities.state's job.
+  context: InGame
+  capability_id: cities.selection
+  output_schema:
+    type: object
+    required: [has_selection]
+    properties:
+      has_selection: { type: boolean }
+      selected_city_id: { type: integer }
+      owner_player_id: { type: integer }
+      owner_is_local_player: { type: boolean }
+      reason: { type: string }
+  introduced_in_version: "2026.09.3"
