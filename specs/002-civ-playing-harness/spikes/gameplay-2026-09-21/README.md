@@ -10,14 +10,26 @@ SUPPORTED (text-only to the agent: no image has reached the model on Linux yet �
 Model blocks: Claude Sonnet 5 via the production OpenRouter provider (fallback Opus 5).
 Store: repo-root `civsim-match-store.db` (schema 1.1 after the first write-mode open today).
 
-Resume a block: `uv run python -m tests.live.demo_landed_run specs/002-civ-playing-harness/spikes/gameplay-2026-09-21/block-NN --provider openrouter --turns 5`
-(client must be InGame; the driver writes the run configuration from the live V2 read-back).
+Resume a block (client must be InGame; the driver writes the run configuration from the live V2
+read-back; blocks alternate model / stochastic, a fresh `--provider-seed` per stochastic block):
+
+    uv run python -m tests.live.demo_landed_run specs/002-civ-playing-harness/spikes/gameplay-2026-09-21/block-NN --provider openrouter --turns 5
+    uv run python -m tests.live.demo_landed_run specs/002-civ-playing-harness/spikes/gameplay-2026-09-21/block-NN --provider stochastic --provider-seed <N> --turns 3
+
+After each block: `uv run python <this dir>/summarize_run.py <run_id>` (read-only, from the store),
+`uv run civsim store coverage --since <run_id> --format md` (delta) and `--format md` (whole store),
+convert `block-NN/keyframe_*.png` to JPEG (never commit the 60 MB GIF), add a row below, post to
+issue #3. A stalled run leaves `/tmp/civsim_harness/run_locks/<run_id>.lock.json` behind: kill the
+driver's *python* child (not just the shell wrapper) and remove the lock before the next block.
 
 | block | run_id | game turns | provider | actions (applied / refused) | stalls | frames | cost |
 |---|---|---|---|---|---|---|---|
 | 01 | run-809988bb | 17 → 20 (4 harness turns, all ended by the no-progress backstop) | Sonnet 5 | 0 / 32 (set_tech ×8, move_to ×16, tech_civic_completed ×8 — every one `parameters: {}`) | paused at turn 4: popup blocked the backstop end turn | 1 (popup, via snap.py; the driver was killed before it wrote its GIF) | $0.684 |
 | 02 | run-d2184c44 | 20 → 24 (5 turns, 4 ended by the agent) | Sonnet 5 | 9 / 12: tech_civic_completed ×2 applied, move_to 3 applied / 4 refused, end_turn ×4 applied, set_tech ×8 refused | turn 2 no-progress on set_tech (the setter never took) | 4 keyframes | $0.454 |
 | 03 | run-de13afc6 | 25 → 29 (5 turns, 4 ended by the agent) | Sonnet 5 | 5 / 13: tech_civic_completed ×1, end_turn ×4; set_tech ×8 and move_to ×5 refused (same two causes, fixed in 47dcfba after this block) | turn 1 no-progress on set_tech | 4 keyframes | $0.458 |
+| 04 | run-fd5fa128 | 30 → 30 (3 harness turns; the game never advanced) | stochastic, seed 7 | 2 / 21: `cities.select` ×2 applied (first city-level action ever); 12 distinct actions attempted at $0 | the whole block sat under a civic popup the sampler never acknowledged; every `turn.end_turn` refused, yet each turn record reads `ended_by_agent` | 4 keyframes | $0 |
+| 05 | run-41ef0b94 | 30 → 34 (5 turns, all ended by the agent) | Sonnet 5 | 13 / 1: tech_civic_completed ×2 (the replayed Code of Laws card, then Craftsmanship), `research.set_tech` Writing **applied and verified** (PlayerOperations.RESEARCH), `cities.select` ×4 (probe then reports `city_screen`), move_to 1 applied / 1 refused, end_turn ×5 | none | 4 keyframes | $0.330 |
+| 06 | run-26bf638a | 35 → 35 (3 harness turns under an unacknowledged popup; ran before dc67529) | stochastic, seed 11 | 2 / 19: `saves.save_game` applied (first named save by an agent), `units.select` applied; 11 distinct prompt/camera/diplomacy actions refused correctly | popup never drawn by the sampler; end_turn refused ×3 | 4 keyframes | $0 |
 
 ## Blocks 2 and 3 — the model plays; two orders never take
 
@@ -56,7 +68,6 @@ end turn was then blocked by the popup and the run paused honestly (`BackstopEnd
 Not observed: any applied action; any image reaching the model (36 captures withheld,
 `provenance_failure`: no revealed target plot — T260). Research shows Animal Husbandry with one
 turn left at turn 20; no harness action set it (all refused); who set it was not determined.
-| 04 | run-fd5fa128 | 30 → 30 (3 harness turns; the game never advanced) | stochastic, seed 7 | 2 / 21: `cities.select` ×2 applied (first city-level action ever); 12 distinct actions attempted at $0 | the whole block sat under a civic popup the sampler never acknowledged; every `turn.end_turn` refused, yet each turn record reads `ended_by_agent` | 4 keyframes | $0 |
 
 ## Block 4 — stochastic seed 7 — 11:51–11:53 — coverage at $0, and two integrity findings
 
