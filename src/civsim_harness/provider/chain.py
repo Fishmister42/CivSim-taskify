@@ -15,14 +15,32 @@ so it is never retried in place -- it moves straight to fallback (or exhaustion)
 contract's "OpenRouter adapter specifics" section describes. Fallback is decided **per call**
 (``complete_step`` always starts over at ``model_config.primary``), so a single turn may
 legitimately be served by more than one model across its steps -- this class carries no memory
-of a previous step's outcome, matching "Adapter obligations"'s "no state carried between calls".
+of a *previous step's* outcome, matching "Adapter obligations"'s "no state carried between
+calls". It does carry one thing about the step in front of it, and deliberately: that step's
+own :class:`StepAttemptBudget`, below.
 
-**P6 -- exhaustion has no escape hatch.** Once every model in the chain has failed,
-``complete_step`` records a ``model_chain_exhausted`` event and raises
+**The step's total spend is bounded, not just each request.** ``openrouter.py`` has always
+bounded how long one request may take; nothing bounded **how many** requests one decision step
+could cost, because the ladder's bound lived in a local variable that a second call to
+``complete_step`` for the same step reset to zero. :class:`StepAttemptBudget` moves that
+counter out of the call and onto the step, keyed by ``request.step_index`` in
+:attr:`ProviderChain._step_budgets`. There is no parameter to pass and no flag to set
+correctly -- the budget is minted on first sight of a step and there is no edge anywhere in
+this module that can mint a second one for the same step, so a re-drive necessarily spends the
+same counter rather than a fresh one. Its size is derived, not chosen: ``len(models) x
+RetryPolicy.max_attempts_per_model``, the ladder's own length.
+
+**P6 -- exhaustion has no escape hatch.** Once every model in the chain has failed -- or once
+the step's budget is gone, whichever comes first -- ``complete_step`` records a
+``model_chain_exhausted`` event and raises
 :class:`~civsim_harness.errors.ProviderChainExhausted`. There is no fabricate, skip, or
 default-move path anywhere in this module -- the run pausing in a recorded state is
 ``run/runner.py``'s job (a concurrent wave, T156's other half), reached only by letting this
-exception propagate uncaught.
+exception propagate uncaught. The event's ``exhaustion_kind`` says **which** of the two bounds
+was reached, and its ``attempts_*`` fields say what the step actually spent -- including
+``attempts_without_detail``, the count of earlier attempts this record cannot describe, so a
+re-driven step's record says "I do not know" out loud instead of presenting a short
+``failures`` list as the whole story.
 
 **P2 / T185 -- no image is ever dropped to make a call fit.** ``_assert_image_count`` runs after
 *every* ``provider.complete()`` call, success or failure, before any retry/fallback decision is
@@ -137,6 +155,61 @@ class RetryPolicy:
 
 
 # --------------------------------------------------------------------------
+# The per-step attempt budget
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class StepAttemptBudget:
+    """Every provider attempt one decision step may ever cost, across **all** re-drives.
+
+    The defect this closes is not that a request was unbounded -- ``openrouter.py``'s
+    ``DEFAULT_REQUEST_TIMEOUT_S`` has always bounded each one -- but that the *number* of
+    requests a single step could cost was bounded only **per invocation** of
+    :meth:`ProviderChain.complete_step`. That method used to open with a local
+    ``total_prior_attempts = 0``, so anything that called it a second time for the same step
+    got a complete, fresh ladder: ``len(models) x max_attempts_per_model`` more requests, with
+    no memory that the step had already spent that much. The ladder's bound was real and the
+    step's was absent.
+
+    This object is that missing bound, and it is deliberately *not* a parameter anybody has to
+    remember to pass. :class:`ProviderChain` mints one per ``step_index`` on first sight and
+    keeps it; there is **no code path that can hand a step a second budget**, because the only
+    constructor call site is the get-or-create in :meth:`ProviderChain._budget_for` and it
+    never replaces an existing entry. A step cannot be re-driven without decrementing the same
+    counter, because re-driving it *is* re-entering ``complete_step``, and ``complete_step``'s
+    first act is to look the counter up rather than create one.
+
+    ``budgeted`` carries no new number: it is ``len(chain models) x
+    RetryPolicy.max_attempts_per_model`` -- exactly the ladder's own already-reviewed length,
+    now spent once per step instead of once per call. Nothing to tune, nothing to measure, and
+    a chain whose retry policy or fallback list changes gets a budget that changes with it.
+    """
+
+    step_index: int
+    budgeted: int
+    spent: int = 0
+
+    def __post_init__(self) -> None:
+        if self.budgeted < 1:
+            raise ValueError("a decision step's attempt budget must be >= 1")
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.budgeted - self.spent)
+
+    @property
+    def exhausted(self) -> bool:
+        return self.spent >= self.budgeted
+
+    def spend(self) -> None:
+        """Charge one provider attempt to this step. Called *before* the attempt is made, so a
+        request that never returns is still charged -- a budget that only counts completed
+        attempts is blind to exactly the hang it exists to bound."""
+        self.spent += 1
+
+
+# --------------------------------------------------------------------------
 # The chain
 # --------------------------------------------------------------------------
 
@@ -173,11 +246,34 @@ class ProviderChain:
         self._sleep = sleep
         self._rand = rand
         self._clock = clock
+        #: One :class:`StepAttemptBudget` per ``step_index`` this chain has ever served, kept
+        #: for the life of the chain. `run/composition.py`'s `build_loop_context` builds one
+        #: chain per *turn attempt*, so this maps exactly the steps of one attempt and is
+        #: discarded with it; a replayed attempt gets a new chain and, correctly, new budgets.
+        #: Entries are never removed -- including after a step succeeds -- so that "a step's
+        #: budget is created once and only once" holds with no exception to reason about.
+        self._step_budgets: dict[int, StepAttemptBudget] = {}
 
     @property
     def models(self) -> list[ModelRef]:
         """The full chain in try-order: primary, then each fallback, in order."""
         return [self._model_config.primary, *self._model_config.fallbacks]
+
+    @property
+    def attempts_per_step(self) -> int:
+        """Every provider attempt one decision step may cost, across all re-drives.
+
+        Derived, never configured: the ladder's own length. See :class:`StepAttemptBudget`.
+        """
+        return len(self.models) * self._retry_policy.max_attempts_per_model
+
+    def _budget_for(self, step_index: int) -> StepAttemptBudget:
+        """This step's budget -- the same object every time, minted once on first sight."""
+        budget = self._step_budgets.get(step_index)
+        if budget is None:
+            budget = StepAttemptBudget(step_index=step_index, budgeted=self.attempts_per_step)
+            self._step_budgets[step_index] = budget
+        return budget
 
     def complete_step(
         self,
@@ -194,13 +290,25 @@ class ProviderChain:
         chain has failed -- both uncaught by anything in this method.
         """
         chain_models = self.models
-        total_prior_attempts = 0
+        budget = self._budget_for(request.step_index)
+        spent_before_this_call = budget.spent
         failures: list[dict[str, Any]] = []
+        #: True when this call stopped because the *step's* budget ran out rather than because
+        #: this call's own ladder ran to its end. On the first call for a step the two coincide
+        #: at the last rung; on a re-drive the budget is already gone and not one request is
+        #: made. That is the whole point: a step that can never succeed cannot be paid for twice.
+        budget_ran_out = False
 
         for model_position, model in enumerate(chain_models):
             is_last_model = model_position == len(chain_models) - 1
 
             for attempt in range(1, self._retry_policy.max_attempts_per_model + 1):
+                if budget.exhausted:
+                    budget_ran_out = True
+                    break
+                # Charged before the request leaves, not after it returns: an attempt that
+                # hangs, is killed, or raises has still been spent.
+                budget.spend()
                 call_request = replace(request, model=model)
                 response = self._provider.complete(call_request)
                 self._assert_image_count(request, response)
@@ -208,14 +316,20 @@ class ProviderChain:
                 if response.outcome == CallOutcome.DECISION_RETURNED:
                     return replace(
                         response,
-                        retry_count=total_prior_attempts,
+                        # Failed attempts for this *step*, across every re-drive -- which is
+                        # what this field has always claimed to mean ("everything this one
+                        # decision step actually cost"). For the single-call case, unchanged.
+                        retry_count=budget.spent - 1,
                         fallback_occurred=model_position > 0,
                     )
 
-                total_prior_attempts += 1
                 failure_detail: dict[str, Any] = {
                     "model": _model_name(model),
                     "attempt": attempt,
+                    # `attempt` counts rungs of *this* call's ladder and restarts at 1 for
+                    # every model; `step_attempt` counts this step's total spend and never
+                    # restarts, so a re-driven step's records cannot read like a fresh one.
+                    "step_attempt": budget.spent,
                     "outcome": response.outcome.value,
                     "step_index": request.step_index,
                 }
@@ -260,6 +374,12 @@ class ProviderChain:
                     self._sleep(delay_s)
                     # else: retries exhausted for this model; fall through to fallback.
 
+            if budget_ran_out:
+                # No fallback event: nothing fell back. This step has simply spent everything
+                # it will ever be allowed to spend, and the remaining models are not tried --
+                # trying them is precisely what made a re-driven step unbounded.
+                break
+
             if not is_last_model:
                 next_model = chain_models[model_position + 1]
                 self._record_event(
@@ -274,11 +394,36 @@ class ProviderChain:
                     },
                 )
 
+        # ABSENCE vs EXHAUSTION. A step that was never reached writes no `model_chain_exhausted`
+        # event at all; a step that gave up writes this one. That much was already true. What
+        # was NOT legible is *how much* a step gave up after, because `failures` only ever
+        # described the attempts of the call that happened to raise -- so a step re-driven three
+        # times reported the last three failures as if they were the whole story, and a reader
+        # could not tell "three attempts" from "three of eighteen".
+        #
+        # So the counts are recorded, not the list alone, and the gap is NAMED rather than left
+        # to be inferred from a short list (the `government_rows_without_hash` precedent,
+        # 882758e: when a body cannot answer, it says which part it could not answer, instead of
+        # returning a silent `[]`). `attempts_without_detail` is this record saying "I do not
+        # know what those attempts returned" -- it is only ever non-zero on a re-drive, and
+        # `failures_reason` appears only when it is.
+        attempts_this_call = budget.spent - spent_before_this_call
         exhaustion_detail: dict[str, Any] = {
             "step_index": request.step_index,
             "chain": [_model_name(model) for model in chain_models],
             "failures": failures,
+            # "model_chain": this call's ladder ran to its end (every model tried, every retry
+            # spent). "step_attempt_budget": the step had nothing left to spend, so this call
+            # stopped early -- and, on a pure re-drive, made no request at all.
+            "exhaustion_kind": ("step_attempt_budget" if budget_ran_out else "model_chain"),
+            "attempts_this_call": attempts_this_call,
+            "attempts_this_step": budget.spent,
+            "attempts_budgeted_for_step": budget.budgeted,
+            "attempts_remaining_for_step": budget.remaining,
+            "attempts_without_detail": spent_before_this_call,
         }
+        if spent_before_this_call:
+            exhaustion_detail["failures_reason"] = "attempts_from_earlier_calls_not_detailed"
         self._record_event(
             RunEventType.MODEL_CHAIN_EXHAUSTED,
             run_id=run_id,
@@ -286,6 +431,14 @@ class ProviderChain:
             step_index=request.step_index,
             detail=exhaustion_detail,
         )
+        if budget_ran_out:
+            raise ProviderChainExhausted(
+                "this decision step has spent every provider attempt it will ever be allowed "
+                f"({budget.spent} of {budget.budgeted}), counted across every re-drive of the "
+                "chain and not merely this one -- the step is given up on rather than paid for "
+                "again (FR-042, P6, SC-012); there is no fabricate, skip, or default-move path",
+                detail=exhaustion_detail,
+            )
         raise ProviderChainExhausted(
             "every model in the configured primary + fallback chain failed for this "
             "decision step (FR-042, P6, SC-012) -- there is no fabricate, skip, or "
@@ -338,4 +491,5 @@ __all__ = [
     "ProviderChain",
     "RetryPolicy",
     "RunEventSink",
+    "StepAttemptBudget",
 ]
