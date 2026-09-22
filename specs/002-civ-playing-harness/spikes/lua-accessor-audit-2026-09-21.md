@@ -26,7 +26,7 @@ exist at all?", asked of every accessor in `lua/**`.
 
 ### 1.1 The reference corpus
 
-Three independent oracles, built on this machine from the installed game
+Four independent oracles, built on this machine from the installed game
 (`~/.steam/debian-installation/steamapps/common/Sid Meier's Civilization VI/`):
 
 | Oracle | What it is | Size |
@@ -34,22 +34,40 @@ Three independent oracles, built on this machine from the installed game
 | **UI/script Lua** | every `*.lua` under `steamassets/` — `base/assets/ui/**`, `base/assets/maps/**`, `dlc/*/ui/**`, `dlc/*/scripts/**`, `ctp/`, `debug/`, `launchpad/` | 645 files; 1 676 distinct `:Method(` names, 19 405 distinct dotted names |
 | **Engine Lua-binding table** | `strings` over `Civ6`, `libGameCore_Base.so`, `libGameCore_XP1.so`, `libGameCore_XP2.so`, matching the engine's own registration symbol shape `GameCore::…::Lua::I<Interface>::l<Method>` | 1 861 bindings across 121 interfaces (`IUnit`, `ICityBuildQueue`, `IPlayerGovernors`, `IWorldCongress`, …) |
 | **Engine UI-binding names** | bare `l<Name>` strings in the same binaries (the UI-side `UI.*` registrations) | 4 731 names |
+| **Shipped linker maps** | `steamassets/dlc/expansion1/binaries/win64/gamecore_xp1_finalrelease.map` and `.../expansion2/binaries/win64/gamecore_xp2_finalrelease.map` — the Windows gamecore builds ship with their full MSVC map files, in which every Lua-callable method appears as a trampoline symbol `?l<Name>@I<Interface>@Lua@Cache@GameCore@@KAHPEAUlua_State@@@Z` in a `Cache_Lua_I<Interface>.obj` translation unit | 891 trampolines across 71 interfaces |
 
 `steamassets/base/assets/gameplay` contains no Lua on this build; the gameplay-side scripts live
 under `dlc/*/scripts/**` and are included in oracle 1, so the "a few engine methods are only used
 from gameplay scripts" caveat is covered.
 
-The binding-table oracle is what makes the negative results trustworthy rather than merely
+The two binary oracles are what make the negative results trustworthy rather than merely
 suggestive. `GameCore::Lua::ICityBuildQueue::lGetAvailableProductionTypes` is in the binary;
 `GetAvailableProduction` (the name `1d0b372` removed) is not, and neither is
 `GetAvailablePromotions` (the name `6606d4b` removed). Both known phantoms are reproduced by the
 method, which is the check that the method works.
 
+The linker maps are the sharpest of the four, because a trampoline is not evidence *about* the Lua
+API — it *is* the Lua API's registration, and it names the interface the method is bound on. That
+is what distinguishes "this name does not exist" from "this name exists on a different object",
+which four of the findings below turn on. For example
+`?lRequestPolicyChanges@IPlayerCulture@Lua@Cache@GameCore@@…` (xp2 map `:49591`, `:90962-90963`)
+settles both that `RequestPolicyChanges` is callable from Lua and that it lives on `IPlayerCulture`.
+
+**Presence of a trampoline is conclusive; absence is strong but not airtight.** Three names that
+Firaxis' own shipped Lua demonstrably calls have no trampoline symbol in either map or either
+`.so`: `pPlayer:GetFavor()` (`dlc/expansion2/ui/replacements/toppanel_expansion2.lua:169`),
+`culture:CanPolicyBeSlotted(hash)` and `culture:IsPolicyBanned(hash)`
+(`dlc/expansion2/ui/replacements/governmentscreen_expansion2.lua:9-10`) — most likely
+identical-code folding collapsing a trivial trampoline onto another. So **the usage citation is
+the primary basis for every entry in `lua/ACCESSORS.txt`, and the maps corroborate it**, never the
+other way round. Each of those three is called under its own `pcall` in the bodies below, with a
+`<field>_reason` if it does not answer.
+
 ### 1.2 The extraction
 
 Every `obj:Method(`, every `Namespace.Function(` and every `Table.CONSTANT` in `lua/**/*.lua`
 (27 files, 5 274 lines), with `file:line`. Comment-only lines excluded. A name is a **phantom** when
-it appears in none of the three oracles.
+it appears in none of the four oracles.
 
 Inline Lua inside `src/civsim_harness/**/*.py` was extracted the same way and is **clean**: the only
 absent name is `Modding.GetActiveGameVersion` (`src/civsim_harness/observe/game_build.py:158`),
@@ -60,8 +78,7 @@ fallback (`UI.GetAppVersion()` at `:174`). No new finding there.
 
 **160 distinct accessor names are used across `lua/**`. 28 of them exist nowhere** — not in a single
 one of 645 shipped Lua files, and not as a registered Lua binding in any of the four engine
-binaries. The remaining 132 all have a shipped-corpus citation, which is now checked in as
-`lua/ACCESSORS.txt`.
+binaries. The remaining 132 all have a shipped-corpus citation.
 
 On top of those 28 names, the audit found **4 enum/table keys**, **9 result-field names** and **4
 methods called on the wrong object or reachable only as a scenario-script setter**. The full list is
@@ -102,8 +119,8 @@ value instead of an error.
 
 | # | Site | Phantom | How it was masked | Replacement (`steamassets/`) |
 |---|---|---|---|---|
-| 20 | `lua/ingame/empire_orders.lua:117` | `culture:SetPolicyActive(slot, index)` | `pcall` -> `{ok=false}` every time (and `policies.slot_policy` was never *offered* anyway, because finding #1 kept `available_policies` empty) | `culture:RequestPolicyChanges(clearList, addList)` — one call carrying the whole loadout; `clearList` is an array of zero-based slot indices to empty, `addList` a sparse map slot -> policy **hash** — `base/assets/ui/screens/governmentscreen.lua:1549-1575` (the call at `:1570`; the "removals must ride along" reason at `:1555-1557`) |
-| 21 | `lua/ingame/empire_orders.lua:132` | `culture:SetCurrentGovernment(index)` | `pcall` -> `{ok=false}` | **Exists, but is a scenario-script god-setter** — its only appearance is `dlc/blackdeathscenario/scripts/blackdeathscenario.lua:187`, forcing a government on a player. The human's Confirm button calls `culture:RequestChangeGovernment(row.Hash)` — `governmentscreen.lua:912,929`. Using the setter would be an action no human can take (Principle I), not merely an unverified one |
+| 20 | `lua/ingame/empire_orders.lua:117` | `culture:SetPolicyActive(slot, index)` | `pcall` -> `{ok=false}` every time (and `policies.slot_policy` was never *offered* anyway, because finding #1 kept `available_policies` empty) | **Not callable from Lua.** The native method exists (`GameCore::Player::Culture::SetPolicyActive`, xp2 map `:17226`) but has no `?l…@…@Lua@Cache@GameCore@@` trampoline in either map or either `.so`, and no shipped Lua calls it — it is engine-internal. The screen's Confirm button calls `culture:RequestPolicyChanges(clearList, addList)`, one call carrying the whole loadout: `clearList` an array of zero-based slot indices to empty, `addList` a sparse map slot -> policy **hash** — `base/assets/ui/screens/governmentscreen.lua:1549-1575` (the call at `:1570`; the "removals must ride along" reason at `:1555-1557`) |
+| 21 | `lua/ingame/empire_orders.lua:132` | `culture:SetCurrentGovernment(index)` | `pcall` -> `{ok=false}` | **Callable, but a scenario-script god-setter.** It does have a trampoline (`IPlayerCulture::lSetCurrentGovernment`), so this one is a parity objection, not an existence one: its only appearance in shipped Lua is `dlc/blackdeathscenario/scripts/blackdeathscenario.lua:187`, forcing a government on a player, and it bypasses the anarchy/legality path the human's click goes through. The Confirm button calls `culture:RequestChangeGovernment(row.Hash)` — `governmentscreen.lua:912,929` |
 | 22 | `lua/ingame/empire_orders.lua:146` | `governors:AssignGovernor(type, cityId)` | `pcall` -> `{ok=false}` | `UI.RequestPlayerOperation(pid, PlayerOperations.ASSIGN_GOVERNOR, {PARAM_GOVERNOR_TYPE = <Governors row index>, PARAM_CITY_DEST = cityID})` — `dlc/expansion1/ui/additions/governorpanel.lua:556-564`; the cross-player form adds `PARAM_PLAYER_ONE` — `dlc/expansion1/ui/additions/governorassignmentchooser.lua:377-380` |
 | 23 | `lua/ingame/diplomacy.lua:66` | `GetDiplomaticAI():DeclareWar(id)` | `pcall` -> `{ok=false}` | `UI.RequestPlayerOperation(attacker, PlayerOperations.DIPLOMACY_DECLARE_WAR, {PARAM_PLAYER_ONE=attacker, PARAM_PLAYER_TWO=defender})` — `base/assets/ui/popups/declarewarpopup.lua:77-81`. (`GetDiplomaticAI()` is read-only opinion data — the only seven methods ever called on it are `GetDiplomaticStateIndex`, `GetDiplomaticScore`, `GetDiplomaticModifiers`, `GetThreatFrom/String`, `GetTrustFrom/String`.) |
 | 24 | `lua/ingame/diplomacy.lua:74` | `GetDiplomaticAI():MakePeace(id)` | `pcall` -> `{ok=false}` | `UI.RequestPlayerOperation(pid, PlayerOperations.DIPLOMACY_MAKE_PEACE, {PARAM_PLAYER_ONE, PARAM_PLAYER_TWO})` — `base/assets/ui/partialscreens/citystates.lua:815-818` |
@@ -172,8 +189,12 @@ way, and is corrected as part of this work.
 ## 4. Guarding against recurrence
 
 `lua/ACCESSORS.txt` is a checked-in allowlist: one line per accessor name used anywhere in
-`lua/**/*.lua`, each carrying the `steamassets/`-relative `file:line` where Firaxis' own code uses
-that name. It is generated from the shipped corpus, it contains only names the harness actually
+`lua/**/*.lua` -- 216 of them after the fixes, 99 object methods and 117 `Namespace.Name` globals --
+each carrying the `steamassets/`-relative `file:line` where Firaxis' own code uses that name. The
+globals are included because three of the findings above were *constants*
+(`UnitActivityType.ACTIVITY_OPERATION`, `UnitOperationTypes.SPY_MISSION`,
+`CityOperationTypes.PARAM_PRODUCTION_ITEM`), which is the same defect wearing different clothes: a
+nil key poisons the parameter table it is written into. It is generated from the shipped corpus, it contains only names the harness actually
 uses, and there is no wildcard.
 
 `tests/unit/test_lua_accessors.py` re-extracts every `obj:Method(` and every `Namespace.Function(`
@@ -204,6 +225,17 @@ reproducible from any machine with the game installed.
   operations take a **hash** (`pantheonchooser.lua:130`, `religionscreen.lua:906,916`),
   `IsGovernmentUnlocked`/`RequestChangeGovernment` take a **hash** while `GetCurrentGovernment`
   returns an **index** (`governmentscreen.lua:2250,2334,912`). Each body follows its own panel.
-- The engine-binary oracle can only prove **presence**; a name present there may still be bound on a
-  different object than the one the harness calls it on. Findings 17, 21, 29 and 30 are exactly that
-  case, and were caught by reading the caller rather than by the name check.
+- The engine-binary oracles can only prove **presence**; a name present there may still be bound on
+  a different object than the one the harness calls it on. Findings 17, 21, 29 and 30 are exactly
+  that case, and were caught by reading the caller rather than by the name check.
+- The converse also holds, in both directions, and neither is a licence to guess:
+  - **Zero usage is not nonexistence.** `culture:CanChangeGovernment(...)` has a real trampoline
+    (`IPlayerCulture::lCanChangeGovernment`) but no shipped panel calls it — the government screen
+    uses `CanChangeGovernmentAtAll()` at `governmentscreen.lua:866`. A name absent from the Lua
+    corpus but present in a binding table is *unused*, not *invented*.
+  - **No trampoline is not nonexistence either**, per §1.1's three ICF cases. The bodies call all
+    three under their own `pcall` and report a `<field>_reason` if they do not answer, which is the
+    only honest posture toward a name the oracles disagree about.
+- Neither map covers base-game gamecore; they are the XP1 and XP2 builds only. The `.so` binding
+  table covers all three, so the two together span the API, but a name found only in one should be
+  read as "registered in that build", not "registered everywhere".

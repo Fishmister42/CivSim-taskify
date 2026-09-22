@@ -16,5 +16,18 @@ prerequisites:
 
 notes: >
   Needs a unit that has actually earned a promotion, so it is feasible only from a save where
-  combat (or a policy) has produced one. `available_promotions` is [] for every unit on every
-  record in the store today, which is a game-state fact, not a body gap.
+  combat (or a policy) has produced one.
+
+  CORRECTED 2026-09-21: this note used to say that `available_promotions` being [] for every unit
+  on every record in the store was "a game-state fact, not a body gap". It was a body gap. The
+  observation body asked `unit:GetAvailablePromotions()`, a method that appears in none of
+  Firaxis' 645 shipped Lua files and in none of the engine's Lua binding tables, behind an
+  `if unit.GetAvailablePromotions then` guard that swallowed the absence -- so the list was [] no
+  matter what any unit had earned, and this goal's own prerequisite
+  (`player.units.promotions_available_count >= 1`) could never be satisfied. Fixed in 6606d4b,
+  which reads the list the way the unit panel does
+  (`UnitManager.CanStartCommand(pUnit, UnitCommandTypes.PROMOTE, true, true)` ->
+  `tResults[UnitCommandResults.PROMOTIONS]`, steamassets/base/assets/ui/panels/unitpanel.lua:435-446).
+  See specs/002-civ-playing-harness/spikes/lua-accessor-audit-2026-09-21.md for the 28 other
+  accessor names in the same state. Whether a promotion is actually available on a given save is,
+  now, a game-state fact.
