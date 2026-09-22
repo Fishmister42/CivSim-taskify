@@ -24,7 +24,13 @@ from pydantic import ValidationError
 from civsim_harness.capability.loader import Catalog
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.errors import CatalogError
-from civsim_harness.host.port import CaptureFrame, GameProcess, GameWindow, WindowRect
+from civsim_harness.host.port import (
+    CaptureFrame,
+    GameProcess,
+    GameWindow,
+    WindowRect,
+    window_text_tokens,
+)
 from civsim_harness.models.catalog import (
     CameraMode,
     CameraRequirements,
@@ -50,7 +56,13 @@ HEIGHT = 480
 def _build_registry(
     *,
     target_must_be_revealed: bool = True,
-    screening_profile: str = "default",
+    # T299: "platform", matching every shipped view (catalogs/observations/views.yaml). It used to
+    # be "default", which resolves the strictest *union* profile on every host -- the exact
+    # declaration T292 found screening Linux frames for Windows chrome. Since T299 that profile
+    # also has no measured capture scope and several categories with no establishable vocabulary,
+    # so it withholds for want of coverage and would make every gate test below assert the same
+    # single fact. The profile a real run resolves is the host's own.
+    screening_profile: str = "platform",
     hud_corners: tuple[HudCorner, ...] | None = None,
 ) -> CapabilityRegistry:
     capability = IntegrationCapability(
@@ -227,8 +239,9 @@ def _realistic_gameplay_frame() -> CaptureFrame:
             fill=(rng.randrange(60, 220), rng.randrange(60, 220), rng.randrange(60, 200)),
         )
     # Bottom-right: the unit panel and its action buttons.
-    draw.rectangle([LIVE_WIDTH - 340, LIVE_HEIGHT - 220, LIVE_WIDTH - 12, LIVE_HEIGHT - 12],
-                   fill=(22, 24, 30))
+    draw.rectangle(
+        [LIVE_WIDTH - 340, LIVE_HEIGHT - 220, LIVE_WIDTH - 12, LIVE_HEIGHT - 12], fill=(22, 24, 30)
+    )
     for index in range(10):
         left = LIVE_WIDTH - 326 + (index % 5) * 62
         top = LIVE_HEIGHT - 206 + (index // 5) * 70
@@ -248,11 +261,17 @@ _PROCESS = GameProcess(pid=1234, name="CivilizationVI")
 def _attempt(**overrides: Any) -> screening.CaptureAttempt:
     base: dict[str, Any] = dict(
         frame=_solid_frame(),
-        capture_path=CapturePath.WINDOWS_GRAPHICS_CAPTURE,
+        # T299: linux/XComposite, the one platform whose capture scope has been measured
+        # (spikes/r6-capture-hygiene-linux.md) and therefore the one whose profile is fully
+        # covered. The fixture used to say windows/WINDOWS_GRAPHICS_CAPTURE, which since T299
+        # withholds every frame for want of coverage -- correctly, and see
+        # ``test_the_platforms_with_no_measured_capture_scope_withhold_for_want_of_coverage``,
+        # where that is asserted on purpose instead of incidentally.
+        capture_path=CapturePath.XCOMPOSITE,
         window=_window(),
         view_declaration_id="views.world",
         camera_state={"mode": "world", "zoom": 0.5, "target_revealed": True},
-        platform="windows",
+        platform="linux",
         expected_process=_PROCESS,
         # An *empty* token set, not ``None``: this fixture models a caller whose text-evidence
         # source (window-title enumeration) ran and found nothing to report. ``None`` -- the
@@ -449,15 +468,50 @@ def test_provenance_gate_does_not_require_revealed_target_when_view_does_not_nee
 # --------------------------------------------------------------------------
 
 
-def test_content_gate_withholds_on_capture_border_artifact(registry, profiles) -> None:
-    outcome = screening.screen_capture(
-        _attempt(frame=_bordered_frame()), registry=registry, profiles=profiles
+def test_content_gate_withholds_on_capture_border_artifact(profiles) -> None:
+    """The border-ring technique, asserted through the detector rather than the whole gate (T299).
+
+    ``windows_capture_border`` only exists in the Windows and ``default`` profiles, and since
+    T299 both withhold *before* any technique runs: their capture scope is unproven and
+    ``firetuner_window``/``harness_owned_ui`` have no establishable vocabulary, so the gate never
+    reaches a finding. Driving the whole gate here would therefore assert the coverage failure,
+    not the border technique -- a green test about the wrong thing, which is this lane's recurring
+    defect. So the technique is exercised where it lives, against the real Windows reject set.
+    """
+    matched = screening.DEFAULT_CONTENT_DETECTOR.detect(
+        _bordered_frame(),
+        reject_categories=profiles.profiles["windows"].reject,
+        detected_text_tokens=frozenset(),
+        text_vocabulary=profiles.text_vocabulary,
     )
 
-    assert outcome.status is ScreeningStatus.WITHHELD
-    assert outcome.failed_gate is screening.ScreeningGate.CONTENT
-    assert outcome.withheld_reason is WithheldReason.NON_PLAYER_UI
-    assert "windows_capture_border" in (outcome.detail or "")
+    assert "windows_capture_border" in matched
+
+
+def test_the_platforms_with_no_measured_capture_scope_withhold_for_want_of_coverage(
+    profiles,
+) -> None:
+    """T299's release blocker, asserted as behaviour: Windows and macOS cannot certify a frame.
+
+    Neither has an R6-equivalent spike, so neither profile excludes anything structurally, and
+    ``firetuner_window`` and ``harness_owned_ui`` have no vocabulary any evidence source can
+    supply. Nothing screens them and nothing can, so the only honest outcome is a withhold naming
+    them. Note what this does NOT change in practice: image delivery is already closed on both
+    platforms because their ``list_window_titles`` is not implemented. What changes is the record
+    -- these categories were previously counted as screened.
+    """
+    for platform in ("windows", "macos"):
+        outcome = screening.screen_capture(
+            _attempt(platform=platform, detected_text_tokens=frozenset()),
+            registry=_build_registry(),
+            profiles=profiles,
+        )
+
+        assert outcome.status is ScreeningStatus.WITHHELD, platform
+        assert outcome.failed_gate is screening.ScreeningGate.CONTENT
+        assert "firetuner_window" in (outcome.detail or "")
+        assert "harness_owned_ui" in (outcome.detail or "")
+        assert "no available screening technique" in (outcome.detail or "")
 
 
 def test_content_gate_withholds_on_in_frame_overlay_general_finding(registry, profiles) -> None:
@@ -685,21 +739,50 @@ def test_a_single_declared_hud_corner_has_no_peers_and_falls_back_to_the_strict_
 
 
 def test_content_gate_withholds_on_declared_text_token_match(registry, profiles) -> None:
+    """The declared-text technique firing, on the one category whose vocabulary is real (T299).
+
+    This test used to pass ``{"firetuner", "window"}`` and assert ``firetuner_window`` matched.
+    It did match -- in the test. It could never match in production, because the token ``"window"``
+    is not something a window title supplies, and the whole of T299 is that the test's synthetic
+    token set was standing in for evidence no desktop produces. The category with a vocabulary a
+    real title demonstrably yields is ``developer_console``.
+    """
     outcome = screening.screen_capture(
-        _attempt(detected_text_tokens=frozenset({"firetuner", "window"})),
+        _attempt(detected_text_tokens=window_text_tokens("Developer Console")),
         registry=registry,
         profiles=profiles,
     )
 
     assert outcome.status is ScreeningStatus.WITHHELD
     assert outcome.failed_gate is screening.ScreeningGate.CONTENT
-    assert "firetuner_window" in (outcome.detail or "")
+    assert "developer_console" in (outcome.detail or "")
 
 
 def test_content_gate_ignores_partial_keyword_matches(registry, profiles) -> None:
     """A single stray token must not be enough -- avoids trivial false positives."""
     outcome = screening.screen_capture(
-        _attempt(detected_text_tokens=frozenset({"window"})),  # "firetuner" is missing
+        _attempt(detected_text_tokens=frozenset({"console"})),  # "developer" is missing
+        registry=registry,
+        profiles=profiles,
+    )
+
+    assert outcome.status is ScreeningStatus.SCREENED_CLEAN
+
+
+def test_a_categorys_own_name_tokens_are_not_evidence_of_it(registry, profiles) -> None:
+    """T299's defect, pinned as a test that would have been red this morning.
+
+    Feed the gate exactly the token set the old rule was built to match -- every reject id's own
+    name, split on underscores -- and nothing fires. That is correct: a desktop whose windows are
+    called "firetuner", "window", "harness", "linux" and "panel" is not a desktop with FireTuner
+    on it, and the old rule's only chance of firing was on a token set no desktop produces.
+    """
+    outcome = screening.screen_capture(
+        _attempt(
+            detected_text_tokens=frozenset(
+                {"firetuner", "window", "harness", "owned", "ui", "linux", "panel", "toast"}
+            )
+        ),
         registry=registry,
         profiles=profiles,
     )
@@ -727,11 +810,15 @@ def test_content_gate_fails_closed_when_frame_cannot_be_decoded(registry, profil
 def test_content_gate_withholds_when_no_text_evidence_source_ran(registry, profiles) -> None:
     """The live defect: ``detected_text_tokens=None`` means nothing enumerated windows.
 
-    Most reject categories (``firetuner_window``, ``developer_console``, ``harness_owned_ui``,
-    the per-platform taskbar/panel/dock ids) have exactly one technique -- declared-text
-    matching -- and it cannot run without evidence. Until this test existed the gate asked those
-    categories nothing, saw no match, and *passed the frame*. Passing an unexamined frame is the
-    one thing Principle I forbids, so the correct outcome is withheld.
+    ``developer_console`` has exactly one technique -- declared-text matching -- and it cannot run
+    without evidence. Until this test existed the gate asked that category nothing, saw no match,
+    and *passed the frame*. Passing an unexamined frame is the one thing Principle I forbids, so
+    the correct outcome is withheld.
+
+    T299 narrowed which category this test can name. It used to name ``firetuner_window`` as well,
+    which was true of the coverage map and false of reality: that category has no vocabulary any
+    evidence source can supply, so gathering evidence would not have addressed it either. It is
+    covered on Linux by the capture path's structure, not by this technique.
     """
     outcome = screening.screen_capture(
         _attempt(detected_text_tokens=None), registry=registry, profiles=profiles
@@ -740,7 +827,7 @@ def test_content_gate_withholds_when_no_text_evidence_source_ran(registry, profi
     assert outcome.status is ScreeningStatus.WITHHELD
     assert outcome.failed_gate is screening.ScreeningGate.CONTENT
     assert outcome.withheld_reason is WithheldReason.NON_PLAYER_UI
-    assert "firetuner_window" in (outcome.detail or "")
+    assert "developer_console" in (outcome.detail or "")
     assert "no available screening technique" in (outcome.detail or "")
 
 

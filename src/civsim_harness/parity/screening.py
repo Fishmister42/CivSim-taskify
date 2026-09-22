@@ -75,6 +75,20 @@ passed the frame -- a gate that failed open exactly where it was most needed.
 It now fails closed, which is the only outcome Principle I permits: a capture
 that cannot be proven clean is withheld.
 
+**And a technique that cannot match is not a technique (T299).** The fix above
+was satisfied by a lie one layer down: the declared-text technique derived its
+keywords by splitting the category id on ``"_"``, so ``firetuner_window``
+required the word ``"window"`` -- which no window title supplies -- and was
+*addressable* by a rule that could never fire. Coverage was complete, the
+frame was delivered, and the record said it had been screened. Keywords are
+now declared per category in ``screening_profiles.yaml`` and proved matchable
+at load against the evidence source's own tokeniser, so a category with no
+establishable vocabulary is visibly uncovered. Exactly one shipped category
+survives that check (``developer_console``); the rest are covered by an image
+technique, by :meth:`ScreeningProfiles.structurally_excluded` where the
+platform's capture path is measured, or by nothing at all -- which on Windows
+and macOS is the honest answer and the reason this is a release blocker there.
+
 **Profile resolution never falls back to a permissive default, and never
 resolves a value nobody declared.** :func:`resolve_screening_profile`
 implements ``screening_profiles.yaml``'s own resolution rule over a closed
@@ -107,7 +121,7 @@ from PIL import Image, ImageStat
 
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.errors import CatalogError
-from civsim_harness.host.port import CaptureFrame, GameProcess, GameWindow
+from civsim_harness.host.port import CaptureFrame, GameProcess, GameWindow, window_text_tokens
 from civsim_harness.models.catalog import (
     DeclarationKind,
     HudCorner,
@@ -133,13 +147,77 @@ DEFAULT_SCREENING_PROFILES_PATH: Final[Path] = _REPO_ROOT / "catalogs" / "screen
 DEFAULT_PROFILE_KEY: Final[str] = "default"
 
 
+class RejectOrigin(StrEnum):
+    """Where a reject category can appear, which decides whether structure can exclude it (T299).
+
+    ``SEPARATE_WINDOW`` is a top-level window of some other process, sitting on the desktop;
+    ``IN_FRAME`` is drawn inside the captured surface itself -- by the game, by a third party
+    compositing into the client's own window (the measured Steam FPS overlay), or by the capture
+    API (the Windows recording border). Only the first kind can be ruled out by a capture path
+    that reads the game window's own backing store, which is why the distinction is declared per
+    category rather than assumed.
+    """
+
+    SEPARATE_WINDOW = "separate_window"
+    IN_FRAME = "in_frame"
+
+
+@dataclass(frozen=True)
+class CaptureScopeRule:
+    """What one declared ``capture_scopes`` entry rules out (``screening_profiles.yaml``)."""
+
+    name: str
+    description: str
+    excludes_origin: frozenset[RejectOrigin]
+
+
+@dataclass(frozen=True)
+class RejectDefinition:
+    """One reject category: what it is, where it can appear, and what evidence proves it (T299).
+
+    ``keyword_groups`` is the declared-text vocabulary, as an *any-of groups, all-of words*
+    structure: a group matches when every word in it appears in the desktop evidence, and the
+    category matches when any group does. It is the whole point of this type. Before T299 the
+    vocabulary was the category id split on ``"_"``, which made "what this is called" and "what
+    proves it is here" the same string -- so ``firetuner_window`` required the word ``"window"``,
+    which no window title supplies, and was *addressable* by a technique that could never fire.
+
+    An **empty** ``keyword_groups`` is a declared, reasoned absence, never a silent one: the
+    loader requires ``text_unmatchable`` and ``text_settled_by`` in that case, and such a category
+    is not addressed by :attr:`ScreeningTechnique.DECLARED_TEXT` at all. That is the difference
+    between "this category has no vocabulary and the coverage map says so" and the old state,
+    where it had a vocabulary that happened to match nothing.
+
+    ``witnesses`` are exemplar strings from the evidence source. Every declared group must be
+    produced by at least one of them under the production tokeniser
+    (:func:`~civsim_harness.host.port.window_text_tokens`), or the catalog does not load -- that
+    check is *matchability*, as opposed to the mere addressability the guard used to assert.
+    """
+
+    category_id: str
+    description: str
+    origin: RejectOrigin
+    keyword_groups: tuple[frozenset[str], ...] = ()
+    witnesses: tuple[str, ...] = ()
+    text_basis: str = ""
+    text_unmatchable: str = ""
+    text_settled_by: str = ""
+
+    @property
+    def text_matchable(self) -> bool:
+        """Whether the evidence source can, in principle, supply this category's vocabulary."""
+        return bool(self.keyword_groups)
+
+
 @dataclass(frozen=True)
 class ScreeningProfile:
-    """One named profile's reject set (``catalogs/screening_profiles.yaml``)."""
+    """One named profile's reject set and capture scope (``catalogs/screening_profiles.yaml``)."""
 
     name: str
     description: str
     reject: frozenset[str]
+    capture_scope: CaptureScopeRule
+    capture_scope_basis: str
 
 
 @dataclass(frozen=True)
@@ -147,9 +225,53 @@ class ScreeningProfiles:
     """The fully loaded, structurally validated ``screening_profiles.yaml``."""
 
     schema_version: int
-    reject_definitions: Mapping[str, str]
+    reject_definitions: Mapping[str, RejectDefinition]
     universal_reject: frozenset[str]
     profiles: Mapping[str, ScreeningProfile]
+    capture_scopes: Mapping[str, CaptureScopeRule]
+
+    @property
+    def text_vocabulary(self) -> Mapping[str, tuple[frozenset[str], ...]]:
+        """The declared keyword vocabulary, as the content gate consumes it.
+
+        A category id missing from this mapping -- or present with an empty tuple -- is one the
+        declared-text technique cannot address. Both forms mean the same thing on purpose, so a
+        caller cannot accidentally get the old behaviour by passing a mapping that is merely
+        incomplete.
+        """
+        return MappingProxyType(
+            {
+                category_id: definition.keyword_groups
+                for category_id, definition in self.reject_definitions.items()
+                if definition.keyword_groups
+            }
+        )
+
+    def structurally_excluded(self, profile: ScreeningProfile) -> frozenset[str]:
+        """The reject categories *profile*'s capture path cannot contain, whatever techniques say.
+
+        This is the 2026-09-22 hypervisor ruling expressed where the coverage map can see it.
+        Linux image delivery is open on structural grounds -- the X11 path reads the game window's
+        own off-screen backing store with no screen-grab fallback, so another application's
+        top-level window cannot be in the frame -- and that reasoning used to live only in prose,
+        which meant the coverage map had to be satisfied by a technique instead. It was: by a
+        declared-text rule that could not match. Reading the exclusion from data lets the honest
+        answer ("nothing screens this, and nothing has to") be stated *and* keeps the platforms
+        with no such structure visibly uncovered, which is where the release blocker actually is.
+
+        A category is only excluded when its own declared :class:`RejectOrigin` is one the
+        profile's declared capture scope rules out; ``in_frame`` chrome is never excluded by any
+        scope, because every scope in this file still returns the client's own pixels.
+        """
+        excluded = profile.capture_scope.excludes_origin
+        if not excluded:
+            return frozenset()
+        return frozenset(
+            category
+            for category in profile.reject
+            if category in self.reject_definitions
+            and self.reject_definitions[category].origin in excluded
+        )
 
 
 def load_screening_profiles(
@@ -186,13 +308,19 @@ def load_screening_profiles(
             detail={"path": str(resolved_path)},
         )
 
+    capture_scopes = _validated_capture_scopes(data.get("capture_scopes"), path=resolved_path)
+
     reject_definitions_raw = data.get("reject_definitions")
     if not isinstance(reject_definitions_raw, Mapping) or not reject_definitions_raw:
         raise CatalogError(
             "screening_profiles.yaml is missing a non-empty reject_definitions mapping",
             detail={"path": str(resolved_path)},
         )
-    known_ids = frozenset(str(key) for key in reject_definitions_raw)
+    reject_definitions = {
+        str(key): _validated_reject_definition(str(key), body, path=resolved_path)
+        for key, body in reject_definitions_raw.items()
+    }
+    known_ids = frozenset(reject_definitions)
 
     universal_reject = _validated_reject_ids(
         data.get("universal_reject") or [],
@@ -220,10 +348,38 @@ def load_screening_profiles(
             path=resolved_path,
             field=f"profiles.{name}.reject",
         )
+        scope_key = body.get("capture_scope")
+        if not isinstance(scope_key, str) or scope_key not in capture_scopes:
+            raise CatalogError(
+                "a screening profile must declare a capture_scope defined under capture_scopes "
+                "(what this platform's capture path can structurally contain); a profile that "
+                "does not say cannot be given the benefit of the doubt",
+                detail={
+                    "path": str(resolved_path),
+                    "profile": str(name),
+                    "declared": scope_key,
+                    "defined": sorted(capture_scopes),
+                },
+            )
+        scope = capture_scopes[scope_key]
+        scope_basis = str(body.get("capture_scope_basis", "")).strip()
+        if scope.excludes_origin and not scope_basis:
+            raise CatalogError(
+                "a profile whose capture_scope excludes a category origin must record the "
+                "evidence for it in capture_scope_basis: a structural exemption with no basis "
+                "is the prose-only ruling this field exists to replace",
+                detail={
+                    "path": str(resolved_path),
+                    "profile": str(name),
+                    "capture_scope": scope_key,
+                },
+            )
         profiles[str(name)] = ScreeningProfile(
             name=str(name),
             description=str(body.get("description", "")),
             reject=reject,
+            capture_scope=scope,
+            capture_scope_basis=scope_basis,
         )
 
     if DEFAULT_PROFILE_KEY not in profiles:
@@ -266,12 +422,185 @@ def load_screening_profiles(
 
     return ScreeningProfiles(
         schema_version=schema_version,
-        reject_definitions=MappingProxyType(
-            {str(key): str(value) for key, value in reject_definitions_raw.items()}
-        ),
+        reject_definitions=MappingProxyType(reject_definitions),
         universal_reject=universal_reject,
         profiles=MappingProxyType(profiles),
+        capture_scopes=MappingProxyType(capture_scopes),
     )
+
+
+def _validated_capture_scopes(raw: Any, *, path: Path) -> dict[str, CaptureScopeRule]:
+    if not isinstance(raw, Mapping) or not raw:
+        raise CatalogError(
+            "screening_profiles.yaml is missing a non-empty capture_scopes mapping; every "
+            "profile must state what its platform's capture path can contain",
+            detail={"path": str(path)},
+        )
+    scopes: dict[str, CaptureScopeRule] = {}
+    for name, body in raw.items():
+        if not isinstance(body, Mapping):
+            raise CatalogError(
+                "a capture_scopes entry must be a mapping",
+                detail={"path": str(path), "capture_scope": str(name)},
+            )
+        excludes_raw = body.get("excludes_origin")
+        if excludes_raw is None or not isinstance(excludes_raw, list):
+            raise CatalogError(
+                "a capture_scopes entry must declare excludes_origin as a list (use [] for a "
+                "scope that excludes nothing); omitting it would make 'excludes nothing' and "
+                "'nobody said' the same thing",
+                detail={"path": str(path), "capture_scope": str(name)},
+            )
+        origins: set[RejectOrigin] = set()
+        for item in excludes_raw:
+            try:
+                origins.add(RejectOrigin(str(item)))
+            except ValueError as exc:
+                raise CatalogError(
+                    "capture_scopes excludes_origin names an unknown category origin",
+                    detail={
+                        "path": str(path),
+                        "capture_scope": str(name),
+                        "origin": str(item),
+                        "known": sorted(o.value for o in RejectOrigin),
+                    },
+                ) from exc
+        scopes[str(name)] = CaptureScopeRule(
+            name=str(name),
+            description=str(body.get("description", "")),
+            excludes_origin=frozenset(origins),
+        )
+    return scopes
+
+
+def _validated_reject_definition(category_id: str, raw: Any, *, path: Path) -> RejectDefinition:
+    """One ``reject_definitions`` entry, with its keyword vocabulary proved matchable (T299).
+
+    The load-time refusals here are the fix. A bare string -- the pre-T299 shape, where the entry
+    was only prose and the vocabulary was the id's own tokens -- does not load, because that
+    shape is exactly what made three shipped categories addressable and unmatchable. Neither does
+    a keyword group no declared witness can produce: that is the matchability check, run against
+    the *production* tokeniser rather than a copy of it, so a vocabulary that no evidence source
+    could ever supply is refused at the door instead of passing a coverage guard.
+    """
+    detail = {"path": str(path), "reject_id": category_id}
+    if isinstance(raw, str) or not isinstance(raw, Mapping):
+        raise CatalogError(
+            "a reject_definitions entry must be a mapping declaring at least description, "
+            "origin and text_keywords; a bare description is the pre-T299 shape in which a "
+            "category's keywords were its own name tokens, which is how three shipped "
+            "categories came to be addressable by a technique that could never match them",
+            detail=detail,
+        )
+
+    description = str(raw.get("description", "")).strip()
+    if not description:
+        raise CatalogError("a reject_definitions entry must carry a description", detail=detail)
+
+    try:
+        origin = RejectOrigin(str(raw.get("origin")))
+    except ValueError as exc:
+        raise CatalogError(
+            "a reject_definitions entry must declare an origin (where this category can appear), "
+            "because that is what decides whether a capture path's structure can exclude it",
+            detail={**detail, "known": sorted(o.value for o in RejectOrigin)},
+        ) from exc
+
+    if "text_keywords" not in raw:
+        raise CatalogError(
+            "a reject_definitions entry must declare text_keywords (use [] and say why in "
+            "text_unmatchable if no vocabulary can be established); silence here is the defect "
+            "T299 exists to remove -- a category that matches nothing while looking addressed",
+            detail=detail,
+        )
+
+    groups = _validated_keyword_groups(raw.get("text_keywords"), detail=detail)
+    witnesses = tuple(str(item) for item in (raw.get("text_witnesses") or []))
+
+    if not groups:
+        unmatchable = str(raw.get("text_unmatchable", "")).strip()
+        settled_by = str(raw.get("text_settled_by", "")).strip()
+        if not unmatchable or not settled_by:
+            raise CatalogError(
+                "a reject category with an empty text_keywords must declare BOTH why no "
+                "vocabulary could be established (text_unmatchable) and what evidence would "
+                "settle it (text_settled_by); an unexplained absence is indistinguishable from "
+                "an oversight, and an oversight is what this catalog had",
+                detail=detail,
+            )
+        return RejectDefinition(
+            category_id=category_id,
+            description=description,
+            origin=origin,
+            witnesses=witnesses,
+            text_unmatchable=unmatchable,
+            text_settled_by=settled_by,
+        )
+
+    basis = str(raw.get("text_basis", "")).strip()
+    if not basis:
+        raise CatalogError(
+            "a reject category declaring text_keywords must record text_basis: where the "
+            "vocabulary comes from. A keyword list with no stated provenance is a guess, and a "
+            "guess that happens to match nothing is the defect this replaced",
+            detail=detail,
+        )
+    if not witnesses:
+        raise CatalogError(
+            "a reject category declaring text_keywords must declare text_witnesses: exemplar "
+            "strings the evidence source could actually produce. Without one, nothing "
+            "distinguishes a matchable vocabulary from an unmatchable one",
+            detail=detail,
+        )
+
+    witness_tokens = [window_text_tokens(witness) for witness in witnesses]
+    for group in groups:
+        if not any(group <= tokens for tokens in witness_tokens):
+            raise CatalogError(
+                "a declared keyword group is not produced by any declared witness, so no "
+                "evidence source is known to be able to supply it -- the category would be "
+                "addressable by the declared-text technique and unmatchable in practice, which "
+                "is precisely the state T299 was opened to end",
+                detail={
+                    **detail,
+                    "keyword_group": sorted(group),
+                    "witness_tokens": [sorted(tokens) for tokens in witness_tokens],
+                },
+            )
+
+    return RejectDefinition(
+        category_id=category_id,
+        description=description,
+        origin=origin,
+        keyword_groups=groups,
+        witnesses=witnesses,
+        text_basis=basis,
+    )
+
+
+def _validated_keyword_groups(raw: Any, *, detail: Mapping[str, str]) -> tuple[frozenset[str], ...]:
+    if not isinstance(raw, list):
+        raise CatalogError(
+            "text_keywords must be a YAML list of keyword groups", detail=dict(detail)
+        )
+    groups: list[frozenset[str]] = []
+    for group in raw:
+        if not isinstance(group, list) or not group:
+            raise CatalogError(
+                "each text_keywords entry must be a non-empty list of words, all of which must "
+                "be present for that group to match",
+                detail=dict(detail),
+            )
+        words = [str(word) for word in group]
+        for word in words:
+            if window_text_tokens(word) != frozenset({word}):
+                raise CatalogError(
+                    "a declared keyword is not a word the evidence source's tokeniser can "
+                    "produce (it must be lower-case and alphanumeric, with no separators)",
+                    detail={**dict(detail), "keyword": word},
+                )
+        groups.append(frozenset(words))
+    return tuple(groups)
 
 
 def _validated_reject_ids(
@@ -752,11 +1081,11 @@ class ScreeningTechnique(StrEnum):
     DECLARED_TEXT = "declared_text"
 
 
-#: Which category-id tokens each *image* technique addresses. The token vocabulary is
-#: ``catalogs/screening_profiles.yaml``'s own reject ids split on ``"_"`` (see
-#: :func:`_category_tokens`), so a new reject id built from the same words is covered without a
-#: code change -- and a new id built from words no technique names is *visibly* uncovered rather
-#: than silently passed.
+#: Which category-id tokens each *image* technique addresses. These two stay id-derived on
+#: purpose: they describe what the technique physically looks for (a flat ring at an edge, a busy
+#: corner patch), so a new reject id built from the same words is covered without a code change.
+#: The declared-text technique is the one that must NOT work this way -- see
+#: :func:`techniques_for_category`.
 _IMAGE_TECHNIQUE_TRIGGER_TOKENS: Final[Mapping[ScreeningTechnique, frozenset[str]]] = (
     MappingProxyType(
         {
@@ -766,13 +1095,36 @@ _IMAGE_TECHNIQUE_TRIGGER_TOKENS: Final[Mapping[ScreeningTechnique, frozenset[str
     )
 )
 
+#: A category's declared keyword vocabulary, as :func:`techniques_for_category` and the detector
+#: take it: category id -> the any-of groups of all-of words that indicate it. Obtained from
+#: :attr:`ScreeningProfiles.text_vocabulary`; an id absent from it has no declared vocabulary.
+TextVocabulary = Mapping[str, tuple[frozenset[str], ...]]
 
-def techniques_for_category(category_id: str) -> frozenset[ScreeningTechnique]:
+#: The fail-closed default for a caller that supplies no vocabulary at all: nothing is addressed
+#: by the declared-text technique. Deliberately not "fall back to the id's own tokens" -- that
+#: fallback IS the defect, and a silent one would restore it the first time a call site was
+#: written without the argument.
+NO_TEXT_VOCABULARY: Final[TextVocabulary] = MappingProxyType({})
+
+
+def techniques_for_category(
+    category_id: str, *, text_vocabulary: TextVocabulary = NO_TEXT_VOCABULARY
+) -> frozenset[ScreeningTechnique]:
     """Which techniques *could* address *category_id*, ignoring what evidence is on hand.
 
-    :attr:`ScreeningTechnique.DECLARED_TEXT` applies to every non-empty category id (its rule is
-    "are this id's own tokens all present in the text evidence?", which is well-defined for any
-    id); the image techniques apply only where the id's tokens name what they look for.
+    The image techniques apply where the id's tokens name what they look for. **The declared-text
+    technique applies only where the catalog declares a keyword vocabulary for the id** (T299).
+    It used to apply to every non-empty id, on the reasoning that "are this id's own tokens all
+    present in the evidence?" is well-defined for any id -- which is true, and useless: well
+    defined is not the same as satisfiable. ``firetuner_window`` required the word ``"window"``,
+    ``harness_owned_ui`` required ``"owned"`` and ``"ui"``, ``linux_panel`` required ``"linux"``,
+    and no window title supplies any of them, so three shipped categories were addressable in the
+    coverage map and unmatchable on the wire. The frame was delivered and the guard said it had
+    been screened.
+
+    Now the vocabulary is data, validated at load against the evidence source's own tokeniser
+    (:func:`_validated_reject_definition`), and a category with none is addressed by nothing here
+    -- which is the true answer, and makes the platforms that depend on it visibly uncovered.
     """
     tokens = _category_tokens(category_id)
     if not tokens:
@@ -782,7 +1134,8 @@ def techniques_for_category(category_id: str) -> frozenset[ScreeningTechnique]:
         for technique, triggers in _IMAGE_TECHNIQUE_TRIGGER_TOKENS.items()
         if tokens & triggers
     }
-    techniques.add(ScreeningTechnique.DECLARED_TEXT)
+    if text_vocabulary.get(category_id):
+        techniques.add(ScreeningTechnique.DECLARED_TEXT)
     return frozenset(techniques)
 
 
@@ -790,6 +1143,7 @@ def unaddressed_reject_categories(
     reject_categories: frozenset[str],
     *,
     available_techniques: frozenset[ScreeningTechnique],
+    text_vocabulary: TextVocabulary = NO_TEXT_VOCABULARY,
 ) -> frozenset[str]:
     """The reject categories *no available technique* can decide -- i.e. the unscreened ones.
 
@@ -798,11 +1152,19 @@ def unaddressed_reject_categories(
     proven clean is not shown). This is deliberately a function of what is *available on this
     attempt*, not of what the codebase can do in principle: a technique whose evidence the caller
     never gathered has not run, and a check that did not run cannot clear anything.
+
+    Since T299 it is also a function of what the catalog can actually match: a category whose
+    declared vocabulary is empty is not addressed by the declared-text technique however much
+    evidence the caller gathered. Structural exclusion (:meth:`ScreeningProfiles.
+    structurally_excluded`) is the separate, declared way such a category can still be covered.
     """
     return frozenset(
         category
         for category in reject_categories
-        if not (techniques_for_category(category) & available_techniques)
+        if not (
+            techniques_for_category(category, text_vocabulary=text_vocabulary)
+            & available_techniques
+        )
     )
 
 
@@ -828,12 +1190,15 @@ class ContentDetector(Protocol):
         *,
         reject_categories: frozenset[str],
         detected_text_tokens: frozenset[str],
+        text_vocabulary: TextVocabulary = NO_TEXT_VOCABULARY,
         hud_corners: frozenset[HudCorner] = frozenset(),
     ) -> frozenset[str]:
         """Return the subset of *reject_categories* this detector found evidence of in *frame*.
 
-        *hud_corners* is the view's own declaration of which frame corners hold the game's HUD
-        (T283). A detector is free to ignore it; an empty set is the strict reading.
+        *text_vocabulary* is the catalog's declared per-category keyword vocabulary (T299); a
+        detector must not derive keywords from the category id instead. *hud_corners* is the
+        view's own declaration of which frame corners hold the game's HUD (T283). A detector is
+        free to ignore either; the empty defaults are the strict reading of both.
         """
         ...
 
@@ -842,6 +1207,7 @@ class ContentDetector(Protocol):
         reject_categories: frozenset[str],
         *,
         text_evidence_available: bool,
+        text_vocabulary: TextVocabulary = NO_TEXT_VOCABULARY,
     ) -> frozenset[str]:
         """Return the subset of *reject_categories* this detector can actually decide."""
         ...
@@ -851,12 +1217,13 @@ class ContentDetector(Protocol):
 class DefaultContentDetector:
     """The built-in content detector: three general techniques, none hardcoded to a product.
 
-    Each technique maps its own finding onto whichever of the caller's
-    ``reject_categories`` its id *tokens* suggest it addresses (splitting the
-    category id on ``"_"`` -- e.g. ``windows_capture_border`` ->
-    ``{"windows", "capture", "border"}``), so this detector automatically
-    covers any future reject id built from the same vocabulary without a code
-    change, and never claims a category its techniques have no bearing on:
+    The two *image* techniques map their findings onto whichever of the
+    caller's ``reject_categories`` the id's own tokens suggest they address
+    (splitting on ``"_"`` -- e.g. ``windows_capture_border`` ->
+    ``{"windows", "capture", "border"}``), which is sound because those tokens
+    describe what the technique physically looks for. The *text* technique
+    does not, and must not: its keywords come from the catalog (T299), because
+    a category's name is not evidence that the category is present:
 
     1. **Border-ring uniformity** (:func:`_border_ring_is_suspect`) for any
        category whose tokens include ``"border"``.
@@ -864,13 +1231,16 @@ class DefaultContentDetector:
        any category whose tokens include ``"overlay"`` or ``"debug"`` -- this
        is the general technique for chrome drawn *inside* the client's own
        frame (see module docstring).
-    3. **Declared-text keyword matching** for any category whose full token
-       set is contained in the caller-supplied ``detected_text_tokens``
-       (e.g. from window-title enumeration or OCR upstream of this module).
-       This technique only *runs* when the caller states that a text-evidence
-       source actually ran (``CaptureAttempt.detected_text_tokens is not
-       None``); with no source, every category that depends on it is
-       unaddressed and the gate withholds rather than reporting no match.
+    3. **Declared-text keyword matching** for any category the catalog gives a
+       keyword vocabulary (``reject_definitions.<id>.text_keywords``), against
+       the caller-supplied ``detected_text_tokens`` (e.g. from window-title
+       enumeration or OCR upstream of this module). The vocabulary is data, not
+       the category's own name split on ``"_"`` -- T299, and the reason this
+       technique now *can* fail to address a category. It only *runs* when the
+       caller states that a text-evidence source actually ran
+       (``CaptureAttempt.detected_text_tokens is not None``); with no source,
+       every category that depends on it is unaddressed and the gate withholds
+       rather than reporting no match.
 
     Which of the three applies to which category is published as data --
     :func:`techniques_for_category`, built from
@@ -889,20 +1259,25 @@ class DefaultContentDetector:
         reject_categories: frozenset[str],
         *,
         text_evidence_available: bool,
+        text_vocabulary: TextVocabulary = NO_TEXT_VOCABULARY,
     ) -> frozenset[str]:
         """Which of *reject_categories* this detector can actually decide right now.
 
         The image techniques always run (there is always a frame). The
-        declared-text technique only counts when the caller gathered text
-        evidence; absent that, a category it is the sole technique for has not
+        declared-text technique counts only when the caller gathered text
+        evidence **and** the category has a declared vocabulary to match it
+        against; absent either, a category it is the sole technique for has not
         been checked by anything, and saying otherwise is how the gate came to
-        fail open.
+        fail open -- first by skipping the check (T264), then by claiming a
+        check whose keywords nothing could supply (T299).
         """
         available = frozenset(_IMAGE_TECHNIQUE_TRIGGER_TOKENS) | (
             {ScreeningTechnique.DECLARED_TEXT} if text_evidence_available else frozenset()
         )
         return reject_categories - unaddressed_reject_categories(
-            reject_categories, available_techniques=frozenset(available)
+            reject_categories,
+            available_techniques=frozenset(available),
+            text_vocabulary=text_vocabulary,
         )
 
     def detect(
@@ -911,6 +1286,7 @@ class DefaultContentDetector:
         *,
         reject_categories: frozenset[str],
         detected_text_tokens: frozenset[str],
+        text_vocabulary: TextVocabulary = NO_TEXT_VOCABULARY,
         hud_corners: frozenset[HudCorner] = frozenset(),
     ) -> frozenset[str]:
         if not reject_categories:
@@ -923,7 +1299,11 @@ class DefaultContentDetector:
         matches: set[str] = set()
 
         def _categories_for(technique: ScreeningTechnique) -> set[str]:
-            return {c for c in reject_categories if technique in techniques_for_category(c)}
+            return {
+                c
+                for c in reject_categories
+                if technique in techniques_for_category(c, text_vocabulary=text_vocabulary)
+            }
 
         border_categories = _categories_for(ScreeningTechnique.BORDER_RING)
         if border_categories and _border_ring_is_suspect(image):
@@ -934,7 +1314,10 @@ class DefaultContentDetector:
             matches.update(overlay_categories)
 
         for category in _categories_for(ScreeningTechnique.DECLARED_TEXT):
-            if _category_tokens(category) <= detected_text_tokens:
+            # T299: the words that indicate this category are declared in the catalog, not split
+            # out of the category's own name. Any one group matching is a match; every word in
+            # that group must be present, so a single stray token still cannot fire the gate.
+            if any(group <= detected_text_tokens for group in text_vocabulary[category]):
                 matches.add(category)
 
         return frozenset(matches)
@@ -970,27 +1353,37 @@ def _check_content(
     # frame is clean for the categories some technique actually examined; for any other category
     # it means nothing was looked at, and this gate used to return that silence as a pass. A
     # detector that cannot say what it covers is taken to cover nothing.
+    vocabulary = profiles.text_vocabulary
     declare_coverage = getattr(detector, "addressable_categories", None)
     covered: frozenset[str] = (
         declare_coverage(
-            profile.reject, text_evidence_available=attempt.detected_text_tokens is not None
+            profile.reject,
+            text_evidence_available=attempt.detected_text_tokens is not None,
+            text_vocabulary=vocabulary,
         )
         if callable(declare_coverage)
         else frozenset()
     )
-    unscreened = profile.reject - covered
+    # T299: a category the capture path cannot structurally contain is covered without a
+    # technique, and only where the catalog declares both the platform's capture scope and the
+    # category's origin. This is the one legitimate form of "nothing screens this": the frame
+    # cannot contain it at all. It is kept separate from technique coverage on purpose, so a
+    # withhold reason can never read as "screened" for a category nothing examined.
+    excluded = profiles.structurally_excluded(profile)
+    unscreened = profile.reject - covered - excluded
     if unscreened:
         noun = "category" if len(unscreened) == 1 else "categories"
         return (
             f"no available screening technique addresses reject {noun} {sorted(unscreened)} "
-            f"of profile {profile.name!r}; the frame cannot be certified against it "
-            "(withheld rather than passed unscreened)"
+            f"of profile {profile.name!r} (capture_scope {profile.capture_scope.name!r}); the "
+            "frame cannot be certified against it (withheld rather than passed unscreened)"
         )
 
     matches = detector.detect(
         attempt.frame,
         reject_categories=profile.reject,
         detected_text_tokens=attempt.detected_text_tokens or frozenset(),
+        text_vocabulary=vocabulary,
         # T283: the view's own statement of where the game keeps its HUD. Absent means nothing is
         # declared, which is the strict reading (every corner judged against the whole frame).
         hud_corners=frozenset(declaration.hud_corners or ()),

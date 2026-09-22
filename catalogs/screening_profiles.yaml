@@ -1,41 +1,260 @@
 # catalogs/screening_profiles.yaml
-# T100 (US2). Per-platform non-player-chrome screening profiles, referenced by a view's
-# `screening_profile` field (catalogs/observations/views.yaml) and read by the content gate
-# (T129, src/civsim_harness/parity/screening.py — not this assignment's scope). This file is
-# data only: it enumerates what the content gate must reject per platform; it contains no
-# detector logic (FR-025, FR-030, SC-009, SC-019).
+# T100 (US2), T299 (2026-09-22). Per-platform non-player-chrome screening profiles, referenced by a
+# view's `screening_profile` field (catalogs/observations/views.yaml) and read by the content gate
+# (src/civsim_harness/parity/screening.py). This file is data only: it enumerates what the content
+# gate must reject per platform, what evidence proves each category is present, and what each
+# platform's capture path can structurally contain. It contains no detector logic (FR-025, FR-030,
+# SC-009, SC-019).
 #
-# Resolution rule (must be enforced by whatever reads this file): a platform identifier with no
-# key under `profiles` below MUST resolve to `profiles.default` — the strictest profile — never
-# to an absent check or a permissive default. `profiles.default`'s reject list is deliberately
-# the union of every named platform's reject list plus the universal set, so it is always at
-# least as strict as any named profile, satisfying that rule structurally rather than by
-# convention.
+# Resolution rule (enforced by whatever reads this file): a platform identifier with no key under
+# `profiles` below MUST resolve to `profiles.default` — the strictest profile — never to an absent
+# check or a permissive default. `profiles.default`'s reject list is deliberately the union of every
+# named platform's reject list plus the universal set, so it is always at least as strict as any
+# named profile, satisfying that rule structurally rather than by convention.
+#
+# ---------------------------------------------------------------------------------------------
+# T299: WHY EACH CATEGORY NOW DECLARES ITS OWN KEYWORDS
+# ---------------------------------------------------------------------------------------------
+# The declared-text technique used to derive its keywords by splitting the reject id on "_". That
+# made "what this category is called" and "what evidence proves it is present" the same string, and
+# three shipped ids contained a word no window title ever supplies — `firetuner_window` needed
+# "window", `harness_owned_ui` needed "owned" and "ui", `linux_panel` needed "linux". Those
+# categories were *addressable* in the coverage map and *unmatchable* on the wire: the fail-closed
+# rule and the coverage guard both passed while nothing could ever fire. A guard satisfied by a
+# vocabulary mismatch is a guard that cannot fail in the way that matters.
+#
+# So each reject definition now declares `text_keywords` explicitly, and the loader refuses a
+# definition that declares neither a vocabulary nor a reason it has none. A keyword group is only
+# accepted when at least one declared `text_witnesses` string, run through the *production*
+# tokeniser (`host/port.py::window_text_tokens`, the same function the evidence source itself
+# uses), yields every word in the group. That is the matchability check: a vocabulary no evidence
+# source can produce does not load.
+#
+# WHAT WAS DELIBERATELY NOT DONE. Nothing here invents keywords to make a guard green. Where no
+# primary source establishes a vocabulary, `text_keywords` is empty and `text_unmatchable` says so
+# in full, with `text_settled_by` naming the evidence that would close it. A guessed vocabulary
+# that happens to match nothing is the same defect wearing the fix's clothes.
+#
+# ---------------------------------------------------------------------------------------------
+# `origin` AND `capture_scope`: THE HYPERVISOR RULING OF 2026-09-22, AS DATA
+# ---------------------------------------------------------------------------------------------
+# Linux image delivery stays open on *structural* grounds, not because the gate detects FireTuner:
+# the X11 path reads the game window's own off-screen backing pixmap (XComposite /
+# NameWindowPixmap) with no screen-grab fallback, so another application's top-level window cannot
+# be in the frame. That ruling used to live only in prose, where the coverage map could not see it.
+# It is now two declared facts — a category's `origin` (is this a separate window, or something
+# drawn inside the captured surface?) and a profile's `capture_scope` (can this platform's capture
+# path contain another window at all?) — so a category may count as covered by *structure* with its
+# basis recorded, and a platform with no such structure is visibly uncovered instead of silently
+# passing. `firetuner_window` is therefore never cited as screened anywhere: on Linux it is
+# structurally excluded, and on Windows/macOS/default it is uncovered and says so.
 
-schema_version: 1
+schema_version: 2
 
+# --------------------------------------------------------------------------------------------
+# What a capture path can contain. A profile declares one of these.
+# --------------------------------------------------------------------------------------------
+capture_scopes:
+  window_backing_store:
+    description: >
+      The host reads the game window's own off-screen backing store, and the adapter has no
+      screen-grab fallback on this path. Another application's top-level window therefore cannot
+      appear in the frame, whatever is stacked above it on the desktop.
+    excludes_origin:
+      - separate_window
+
+  unproven:
+    description: >
+      No spike has established what this platform's capture path can contain. Nothing is excluded
+      on structural grounds here — a category with no working technique is uncovered, and the
+      frame is withheld rather than certified.
+    excludes_origin: []
+
+# --------------------------------------------------------------------------------------------
+# The reject vocabulary. Each entry declares what it is, where it can appear, and what evidence
+# proves it is present.
+#
+#   origin          separate_window — a top-level window of some other process, on the desktop.
+#                   in_frame        — drawn inside the captured surface (by the game, by a
+#                                     compositing third party, or by the capture API itself).
+#   text_keywords   Groups of words. A group matches when EVERY word in it is present in the
+#                   desktop text evidence; the category matches when ANY group does. Empty means
+#                   no vocabulary could be established — `text_unmatchable` must then say why.
+#   text_witnesses  Exemplar strings from the evidence source. At least one must produce each
+#                   declared group under the production tokeniser, or the file does not load.
+# --------------------------------------------------------------------------------------------
 reject_definitions:
-  firetuner_window: >
-    The FireTuner window or any of its child dialogs. Universal — FireTuner runs identically on
-    every supported platform (contracts/nexus-protocol.md).
-  developer_console: >
-    Any developer/debug console window (including the game's own in-engine console). Universal.
-  debug_overlay: >
-    Any in-engine debug overlay — FPS counters, debug draw, entity/collision visualizers.
-    Universal.
-  harness_owned_ui: >
-    Any window, overlay, or control surface owned by this harness itself (e.g. an operator
-    dashboard rendered on the same desktop). Universal.
-  windows_taskbar: The Windows taskbar.
-  windows_capture_border: >
-    The Windows.Graphics.Capture yellow recording-indicator border drawn on captured visuals
-    (research R6); harness-caused, non-player UI.
-  macos_menu_bar: The macOS global menu bar.
-  macos_dock: The macOS Dock.
-  linux_panel: >
-    A Linux desktop-environment panel or taskbar (e.g. the GNOME top bar, a KDE Plasma panel, an
-    XFCE panel).
-  linux_notification_toast: A Linux desktop-environment notification toast/popup.
+  firetuner_window:
+    description: >
+      The FireTuner window or any of its child dialogs. Universal — FireTuner runs identically on
+      every supported platform (contracts/nexus-protocol.md).
+    origin: separate_window
+    text_keywords: []
+    text_unmatchable: >
+      No primary source in this repository records the FireTuner GUI's window title on any
+      platform, and nothing here has ever seen one: contracts/nexus-protocol.md states that the
+      Development Tools ship the FireTuner GUI for Windows only, that it does not run on macOS or
+      Linux, and that the harness speaks the Nexus protocol to the client directly and never opens
+      the GUI. Declaring the single word "firetuner" was considered and rejected on the recorded
+      reasoning in host/port.py::WindowTitleListing.text_tokens: the evidence source is
+      desktop-scoped, so that rule fires whenever a FireTuner window exists ANYWHERE on the
+      desktop, which is not the same claim as "FireTuner is in this frame" and would withhold
+      every frame on a capture path that structurally cannot contain another window. Until this
+      is closed, `firetuner_window` must not be cited as screened anywhere — on Linux the
+      protection is the capture path's structure (see profiles.linux.capture_scope), not this
+      gate.
+    text_settled_by: >
+      Either (a) an observed `_NET_WM_NAME`/`GetWindowText`/`kCGWindowName` string for a running
+      FireTuner GUI, recorded in a spike with the host and build that produced it — which would
+      make a desktop-scoped match at least truthful about what is on the desktop — or, far better,
+      (b) frame-scoped evidence: which windows overlap the captured rectangle and in what stacking
+      order. Only (b) answers the question the gate is actually asking, and it would also retire
+      the corner-variance and border-ring heuristics' guesswork.
+
+  developer_console:
+    description: >
+      Any developer/debug console window (including the game's own in-engine console). Universal.
+    origin: in_frame
+    text_keywords:
+      - [developer, console]
+    text_witnesses:
+      - "Developer Console"
+    text_basis: >
+      The one category whose id tokens are ordinary title words, and the only vocabulary in this
+      file that the evidence source demonstrably produces: the witness above tokenises to exactly
+      {developer, console} through host/port.py::window_text_tokens, and
+      tests/integration/test_image_attachment.py::
+      test_a_reject_category_named_on_the_desktop_withholds_the_frame drives the whole production
+      loop with a desktop carrying that window and watches the frame be withheld. RESIDUAL, stated
+      rather than rounded off: this is a naming convention plus the harness's own end-to-end
+      control, NOT an observed console window on a supported host — no spike records one. And
+      Civilization VI's own debug console is in-engine (spikes/principle-i-debugmenu-linux.md), so
+      it has no OS window title at all; this vocabulary addresses a separate console window over
+      the client, which is what FR-025 was written about, and not the in-engine one. The
+      in-engine case is `debug_overlay`'s corner-variance technique, or nothing.
+    origin_note: >
+      Deliberately `in_frame` rather than `separate_window`, although the matchable case IS a
+      separate window: the definition also covers the game's own in-engine console, which a
+      window-scoped capture cannot exclude. The conservative reading keeps this category needing a
+      real technique on every platform instead of being structurally excused on Linux.
+
+  debug_overlay:
+    description: >
+      Any in-engine debug overlay — FPS counters, debug draw, entity/collision visualizers.
+      Universal.
+    origin: in_frame
+    text_keywords: []
+    text_unmatchable: >
+      This is chrome composited INTO the client's own surface by the game or by a third party
+      (spikes/r6-capture-hygiene-linux.md measured exactly one: Steam's green "60 FPS" readout,
+      drawn inside the client's frame with no window of its own). It therefore has no window title
+      to enumerate, and desktop text evidence is the wrong instrument for it. It does not need
+      one: the corner-overlay variance technique addresses this category on every platform, which
+      is why an empty vocabulary here costs no coverage.
+    text_settled_by: >
+      Nothing about window titles would help. What would sharpen this category is OCR of the
+      frame itself, or the frame-scoped overlap evidence named under `firetuner_window`.
+
+  harness_owned_ui:
+    description: >
+      Any window, overlay, or control surface owned by this harness itself (e.g. an operator
+      dashboard rendered on the same desktop). Universal.
+    origin: separate_window
+    text_keywords: []
+    text_unmatchable: >
+      There is nothing to name. This repository ships no desktop window of its own: the operator
+      surface is an HTTP API (src/civsim_harness/operator/api.py, FastAPI on loopback), not a GUI,
+      and no module in src/ imports a windowing toolkit. A vocabulary invented for a window that
+      does not exist would be unfalsifiable — it could never match and could never be shown wrong.
+      The id's own tokens ("owned", "ui") are not words a title supplies, which is how this
+      category came to look addressed while matching nothing.
+    text_settled_by: >
+      This is the one category whose vocabulary the harness itself controls. If a harness-owned
+      window is ever shipped, its title is known at build time and belongs here as a literal, with
+      the module that sets it as the basis.
+
+  windows_taskbar:
+    description: The Windows taskbar.
+    origin: separate_window
+    text_keywords: []
+    text_unmatchable: >
+      No Windows host has ever run this code path: host/windows/adapter.py::list_window_titles is
+      explicitly NOT IMPLEMENTED and reports `available=False`, so no Windows desktop enumeration
+      exists to take a witness from. The shell taskbar is also not an ordinary titled top-level
+      window in the sense `EnumWindows` + `GetWindowText` would report for an application.
+    text_settled_by: >
+      A Windows host spike that implements the enumeration and records what, if anything, the
+      shell's taskbar reports as its window text — alongside the R6-equivalent capture-scope
+      spike that profiles.windows.capture_scope is waiting on.
+
+  windows_capture_border:
+    description: >
+      The Windows.Graphics.Capture yellow recording-indicator border drawn on captured visuals
+      (research R6); harness-caused, non-player UI.
+    origin: in_frame
+    text_keywords: []
+    text_unmatchable: >
+      Drawn by the capture API onto the returned visual itself. It exists only inside the frame
+      and never as a window on the desktop, so there is no title to enumerate. Addressed by the
+      border-ring uniformity technique, which is what this category was written for.
+    text_settled_by: >
+      Nothing about window titles would help; the border-ring technique is the right instrument.
+
+  macos_menu_bar:
+    description: The macOS global menu bar.
+    origin: separate_window
+    text_keywords: []
+    text_unmatchable: >
+      No macOS host has ever run this code path: host/macos/adapter.py::list_window_titles is
+      explicitly NOT IMPLEMENTED and reports `available=False`. `kCGWindowName` for the menu bar
+      is a system-owned window's name that nobody here has observed, and guessing it would be
+      exactly the invented vocabulary this task exists to remove.
+    text_settled_by: >
+      A macOS host spike that implements `CGWindowListCopyWindowInfo` enumeration and records the
+      `kCGWindowOwnerName`/`kCGWindowName` pairs the system's own surfaces report.
+
+  macos_dock:
+    description: The macOS Dock.
+    origin: separate_window
+    text_keywords: []
+    text_unmatchable: >
+      Same as `macos_menu_bar`: no macOS enumeration exists, so no witness exists.
+    text_settled_by: >
+      The same macOS host spike.
+
+  linux_panel:
+    description: >
+      A Linux desktop-environment panel or taskbar (e.g. the GNOME top bar, a KDE Plasma panel, an
+      XFCE panel).
+    origin: separate_window
+    text_keywords: []
+    text_unmatchable: >
+      The category spans every desktop environment, and a panel's window name is
+      DE-specific — gnome-shell, plasmashell, xfce4-panel and cinnamon each report something
+      different, and no spike in this repository records any of them. The id's own first token,
+      "linux", is a platform name no window title supplies, which is how this category came to
+      look addressed. There is also a structural doubt worth recording before anyone spends a day
+      on it: the Linux evidence source walks `_NET_CLIENT_LIST`
+      (host/linux/adapter.py::list_window_titles), and a panel that is override-redirect never
+      appears there at all — so window-title evidence may be incapable of this category on some
+      DEs no matter what vocabulary is declared.
+    text_settled_by: >
+      A recorded `_NET_CLIENT_LIST` + `_NET_WM_NAME` enumeration per supported DE, stating for
+      each whether the panel appears in the list at all. That same enumeration answers whether
+      the category is reachable by this evidence source before any keyword is chosen.
+
+  linux_notification_toast:
+    description: A Linux desktop-environment notification toast/popup.
+    origin: separate_window
+    text_keywords: []
+    text_unmatchable: >
+      Never tested: spikes/r6-capture-hygiene-linux.md says so in as many words ("Notification
+      toasts were not tested"). A toast is typically an override-redirect window, which the
+      `_NET_CLIENT_LIST` walk does not see, and its title — where it has one — is the notifying
+      application's, not the toast's, so a fixed vocabulary is unlikely to be the right shape
+      here even once one is observed.
+    text_settled_by: >
+      The same per-DE enumeration as `linux_panel`, taken while a notification is on screen.
 
 universal_reject:
   - firetuner_window
@@ -46,6 +265,16 @@ universal_reject:
 profiles:
   windows:
     description: Windows non-player chrome, plus the universal reject set.
+    capture_scope: unproven
+    capture_scope_basis: >
+      No R6-equivalent spike exists for Windows. `Windows.Graphics.Capture` and `PrintWindow` are
+      believed window-scoped, but "believed" is what this project keeps finding at the bottom of
+      its defects, and the yellow recording border (`windows_capture_border`) is standing proof
+      that this platform's capture API draws things of its own onto the visual. Until a spike
+      settles it, nothing is excluded here on structural grounds. Note that image delivery on
+      Windows is already closed for a separate reason —
+      host/windows/adapter.py::list_window_titles is not implemented — so this declaration
+      withholds nothing that was being shown.
     reject:
       - firetuner_window
       - developer_console
@@ -56,6 +285,12 @@ profiles:
 
   macos:
     description: macOS non-player chrome, plus the universal reject set.
+    capture_scope: unproven
+    capture_scope_basis: >
+      No R6-equivalent spike exists for macOS. `ScreenCaptureKit` and `CGWindowListCreateImage`
+      have window-scoped modes, but nothing here has verified which one the adapter takes or what
+      it returns when another window overlaps. As on Windows, image delivery is already closed
+      because host/macos/adapter.py::list_window_titles is not implemented.
     reject:
       - firetuner_window
       - developer_console
@@ -66,6 +301,21 @@ profiles:
 
   linux:
     description: Linux non-player chrome, plus the universal reject set.
+    capture_scope: window_backing_store
+    capture_scope_basis: >
+      MEASURED. spikes/r6-capture-hygiene-linux.md placed an `xmessage` dialog over the client,
+      confirmed with `wmctrl` that it was stacked inside the client's rectangle, and found no
+      trace of it in the window-scoped capture — while a root-scoped capture of the same
+      coordinates showed the dialog and a terminal full of harness command text. The mechanism is
+      the compositing WM redirecting windows to off-screen pixmaps, and
+      host/linux/adapter.py::capture_window checks for a compositor by `_NET_WM_CM_Sn` selection
+      ownership (never by `XDG_SESSION_TYPE`) and returns `unavailable` rather than falling back
+      to a root grab when none is running. Corroborated after the fact by
+      spikes/frame-retro-audit-2026-09-22.md, which re-read all 188 frames the harness had ever
+      shown a model and found no other application's window in any of them. CAVEAT, recorded in
+      the same spike: a compositor configured to unredirect fullscreen windows would defeat this,
+      which is why `capture_preconditions` reads that setting and warns on `true` *and* on
+      unknown.
     reject:
       - firetuner_window
       - developer_console
@@ -79,6 +329,12 @@ profiles:
       Strictest available profile: the union of every named platform's reject set plus the
       universal set. Used whenever a platform has no dedicated profile above, and never relaxed
       below any single named platform's requirements.
+    capture_scope: unproven
+    capture_scope_basis: >
+      This profile is what an unknown platform resolves to, and an unknown platform's capture path
+      is by definition unproven. Claiming a backing-store scope here would hand every future host
+      a structural exemption it has not earned — the precise shape of the defect this file's
+      T299 header describes.
     reject:
       - firetuner_window
       - developer_console

@@ -123,9 +123,7 @@ class CaptureResult:
                     f"CaptureResult.status is {self.status!r} but a frame was supplied"
                 )
             if not self.reason:
-                raise ValueError(
-                    f"CaptureResult.status is {self.status!r} but no reason was given"
-                )
+                raise ValueError(f"CaptureResult.status is {self.status!r} but no reason was given")
 
 
 @dataclass(frozen=True)
@@ -154,10 +152,28 @@ class CapturePreconditionResult:
 
 
 #: Everything that is not a letter or a digit separates one title word from the next. The
-#: vocabulary the content gate matches against is `catalogs/screening_profiles.yaml`'s own
-#: reject ids split on `"_"` (`parity/screening.py::_category_tokens`), so the token form here
-#: has to be the same shape: lower-cased, alphanumeric, unpunctuated.
+#: vocabulary the content gate matches against is declared per reject category in
+#: `catalogs/screening_profiles.yaml` (T299), and every declared keyword has to be a word THIS
+#: split can actually produce: lower-cased, alphanumeric, unpunctuated.
 _TITLE_WORD_SEPARATORS: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
+
+
+def window_text_tokens(text: str) -> frozenset[str]:
+    """Tokenise one window title the way the content gate's evidence source does (T299).
+
+    Published as a function so the screening lane can validate a declared keyword vocabulary
+    against the *production* tokenisation rather than a copy of it. Before this existed, the
+    only way to ask "could the evidence source ever supply this word?" was to re-implement the
+    split somewhere else, and a re-implementation that drifted would make the matchability
+    check agree with itself while disagreeing with reality -- which is the defect class T299
+    was opened for, one layer down.
+
+    Takes a single string rather than a listing on purpose: it carries no `available`/`None`
+    distinction and no association to a window, so it cannot be mistaken for the evidence
+    itself. :meth:`WindowTitleListing.text_tokens` remains the only way to obtain evidence from
+    a real desktop.
+    """
+    return frozenset(word for word in _TITLE_WORD_SEPARATORS.split(text.lower()) if word)
 
 
 @dataclass(frozen=True)
@@ -231,28 +247,26 @@ class WindowTitleListing:
         is in this frame", and a gate that cannot tell those apart is not
         screening, it is refusing.
 
-        KNOWN RESIDUAL, for the screening lane (T265, 2026-09-22): the
-        consequence of the above is that a reject id whose tokens include a
-        word no window title supplies -- `firetuner_window`'s `"window"`,
+        RESIDUAL AS OF T265, AND WHAT T299 DID WITH IT (2026-09-22): the
+        consequence of the above was that a reject id whose tokens included
+        a word no window title supplies -- `firetuner_window`'s `"window"`,
         `harness_owned_ui`'s `"owned"`/`"ui"`, `linux_panel`'s `"linux"` --
-        is *addressable* by this technique but will not match in practice.
-        The technique genuinely runs and genuinely fires (a window titled
-        "Developer Console" matches `developer_console`); its discriminating
-        power is bounded by the reject ids doubling as their own keyword
-        list. Fixing that needs either an explicit per-category keyword
-        vocabulary in `catalogs/screening_profiles.yaml`, or evidence that
-        is frame-scoped rather than desktop-scoped (which windows actually
-        overlap the captured rectangle, and in what stacking order). Both
-        are screening-lane decisions; neither is fixable from the host port.
+        was *addressable* by this technique and unmatchable in practice, so
+        the coverage guard passed on a vocabulary mismatch. T299 took the
+        first of the two options named here: reject categories now declare
+        their keywords as data in `catalogs/screening_profiles.yaml`, and a
+        declared group is only accepted when a declared witness string
+        produces it under :func:`window_text_tokens` -- so a category with
+        no establishable vocabulary is *uncovered*, loudly, rather than
+        nominally addressed. Exactly one category survives that check
+        (`developer_console`); the rest state why they have none. The second
+        option -- frame-scoped evidence: which windows actually overlap the
+        captured rectangle, and in what stacking order -- is still where
+        this is going, and is still not fixable from the host port.
         """
         if not self.available:
             return None
-        return frozenset(
-            word
-            for title in self.titles
-            for word in _TITLE_WORD_SEPARATORS.split(title.lower())
-            if word
-        )
+        return frozenset(word for title in self.titles for word in window_text_tokens(title))
 
 
 @dataclass(frozen=True)

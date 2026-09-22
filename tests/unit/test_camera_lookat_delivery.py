@@ -104,7 +104,11 @@ def _registry_with_view() -> CapabilityRegistry:
         camera_requirements=CameraRequirements(
             mode=CameraMode.WORLD, zoom_range=(0.0, 1.0), target_must_be_revealed=True
         ),
-        screening_profile="default",
+        # T299: "platform", as every shipped view declares (catalogs/observations/views.yaml).
+        # "default" resolves the strictest *union* profile on every host -- the declaration
+        # T292 found screening Linux frames for Windows chrome -- and since T299 that profile
+        # has no measured capture scope, so it withholds for want of coverage on any host.
+        screening_profile="platform",
         introduced_in_version="test",
     )
     catalog = Catalog(
