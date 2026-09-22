@@ -1173,3 +1173,93 @@ Cost $0.00 (stochastic provider, 16 calls, no OpenRouter spend). Artifacts:
 `specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/block-01/`. Client left alive, InGame,
 turn 56, tuner free — but with the greeting still up and the camera still at 0.05, so Stage 2 starts
 by reseting the camera and reading the prompt's real identity back from `InGame`.
+
+### Headless 002 — 2026-09-22, analyze + converge (attempt 2; NOT CONVERGED on arrival and on exit)
+
+Report: `specs/002-civ-playing-harness/analyze-2026-09-22.md`. Converge appended **Phase 14,
+T264–T291** (28 tasks). T261 and T262 were never allocated and stay unallocated. Baseline observed
+at `acd08bc`: **2148 passed / 18 skipped / 0 failed** (212.83 s). Commits: `acd08bc` (the handed-over
+`store_cli` docstring), `87b1293` (report + converge).
+
+**Three audits looked at different surfaces and returned the same shape.** Requirement coverage
+derived from code and tests, last night's five live findings, and cross-artifact consistency were
+not looking for the same thing. The report therefore leads with the pattern rather than a findings
+table:
+
+> **The unreached mechanism** — a mechanism that exists, is well built, is covered by passing
+> tests, and is never reached in the case it was written for, with the suite green throughout.
+
+Seven instances in one day. The content screening gate's declared-text technique is dead in
+production because `detected_text_tokens` defaults empty and **no production caller supplies it**,
+so five of six Linux reject categories — including `firetuner_window` itself, on a harness that
+requires FireTuner to run — have **no reachable technique at all**, and 287 frames went to a model
+through it. The source gate's process-identity check is unwired at the same call site, and
+`test_source_gate_skips_process_check_when_none_supplied` asserts the clean result for *exactly the
+production shape*. A correct prompt-key helper had zero callers in `src/` while a naive prefix-swap
+reimplementation wedged a whole game board. The catalog's bespoke validator fires only on
+`path: bespoke`, so it reads the very label it is meant to verify. The orphan sweep cannot reach an
+orphan. FR-011 has no check of any kind. And the end-turn guard's test passes a *fake* callable,
+proving the guard orders its own callable while the real `Game.EndTurn()` dispatch never goes
+through it — the cleanest instance, because the false claim sits two paragraphs above the code that
+contradicts it.
+
+**A second pattern, named separately because its countermeasure differs:** *a value whose name
+asserts something the value does not mean.* `turn_reached` counts harness cycles from 1, not game
+turns — already in the gotcha list, and it still bit twice today, the second time producing a false
+published claim that had to be chased. `dispatch_result` `{"ok": true}` means the call **returned**,
+not that it took effect (`UI.SetMapZoom(0.5, …)` measured returning cleanly while `UI.GetMapZoom()`
+still read 0.0499997). `shown_to_agent` records an intention while its docstring claims an outcome,
+with 13 live rows proving it. The fix for this family is to make the wrong reading impossible, not
+better documented — a fact that must be *remembered* to avoid a wrong conclusion will keep
+producing wrong conclusions.
+
+**Two CRITICALs.** (1) The screening gate fails **open**: a reject category no technique addresses
+passed the frame. Principle I is non-negotiable, so the ruling was fail closed first and push
+within minutes, accepting that Linux image delivery stops until the real fix lands. (2) A bespoke
+synthetic-input path ships declared `path: firetuner` with `firetuner_gap: null` while
+`composition.py:1099-1101` records a *measured* Firetuner gap in a Python comment and
+`capability/executor.py` issues real XTest clicks — and `plan.md:296-302` certifies "there is now
+no bespoke capability at all" with C1 discharged. Three layers assert it and all three read the
+same field.
+
+**The practice that overturned this pass's wrong answers, recorded as practice rather than
+anecdote.** The three most confident wrong statements made during it were each overturned by going
+to the primary artifact: "no frame has ever been shown to the agent" (the store rows said 300
+shown, 287 with images); "the headless lane took the stale run lock" (the lock file's own bytes
+named a pid from the live lane's own Stage 1 launch — the hypervisor retracted it); and "this
+structural check would have caught the gate defect" (it was implemented and run in three
+formulations, 24/32/43 hits, **C0 and C0b absent from all three**). That last one killed a check
+that had already been adopted: the real shape is not "a parameter nobody passes" — which describes
+good dependency injection as often as a defect — but "a parameter whose empty default makes a
+**safety gate** vacuous", and the signal lives in what the value feeds, not in the signature. The
+broad version would have shipped ~40 hits of which ~35 are legitimate, been allowlisted to nothing,
+and still missed the shape: this project's defining defect wearing the costume of its fix. It was
+replaced by a narrow semantic check over the screening gates' inputs, plus a separate
+unwired-public-helper arm, both **negative-control-first** — build the failing case, feed it the
+real defect shape, and refuse to ship the checker if it cannot flag it. That ordering is now
+standing practice for the swarm.
+
+**Corollary adopted swarm-wide after a false finding:** in a tree several agents are editing,
+anything asserted about *committed* state must be checked with `git show HEAD:<file>`, with
+`git status` consulted before calling a file clean. A subagent filed a confident finding about a
+`_decoy_revert_check()` command that existed only in another lane's transient working-tree state.
+
+**Also corrected here:** 003's B6 rated a missing **producer** as a missing **fixture** — four of
+FR-018's eight metrics have no producer at all, so their series can never be non-empty. Root cause
+of the mis-rating is a stale prose comment at `tests/unit/test_store_trends.py:32` asserting that
+`compute_yields` is a no-op, which is false and propagated into two separate audit reports.
+
+**Scope call raised to the hypervisor:** Principle VII's resilience half is *unimplementable*, not
+merely incomplete — `HostPlatform` has **no method to start, stop or restart the client on any
+platform**, so the post-defeat relaunch has nothing to be built from (T269).
+
+**Boundary note, stated at the width the evidence supports.** A run lock cleared by the live lane
+mid-stage was initially attributed to this lane and the attribution was retracted after the lock
+file was read. What this lane verified about its own agents is: six Typer `--help` invocations, two
+`python -c` calls into `load_catalog`/`doctor._probe_catalog`, one ImportError and four static YAML
+readers, with `SqliteMatchStore` construction confirmed to occur only inside `_open_store()`, the
+root Typer callback confirmed to do nothing but configure logging, and the runner factory assigned
+but never called. Entry points and named modules' import scope were checked, **not** the full
+transitive import graph — "essentially zero, not provably zero". The durable fix is T287: the
+safe/unsafe line was being inferred from a directory path rather than declared, since `pyproject.toml`
+registered `live` as its only marker and `--ignore=tests/live` as its only exclusion.
