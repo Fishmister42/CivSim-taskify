@@ -393,8 +393,21 @@ both records name the model that actually served each call.
   issued, the reasoning it gave, and the outcome that followed, together with the turn's resulting
   yields. A turn's record MUST preserve the order of its steps, so the sequence the agent actually
   saw and did can be reconstructed.
-- **FR-013**: The harness MUST NOT end a turn until that turn's complete record has been persisted to
-  the match-tracking store, and MUST halt the run rather than advance if persistence fails.
+- **FR-013**: The harness MUST NOT **advance past** a turn until that turn's complete record has been
+  persisted to the match-tracking store, and MUST halt the run rather than advance if persistence
+  fails.
+  *(Amended 2026-09-22, T279. Previously: "MUST NOT **end** a turn until that turn's complete record
+  has been persisted". **This is an alignment, not a relaxation, and it should not be read as one.**
+  The old wording contradicted FR-008 outright: FR-008 requires the agent's end-turn to be a declared
+  catalog entry recorded like any other decision and executed in-loop, and a turn's record cannot be
+  complete until that decision has executed — so FR-013 as written forbade exactly what FR-008
+  mandates, and only `ended_on_no_progress` ever satisfied it. It was also **stricter than the
+  principle it implements**: Constitution III requires each turn to be persisted "before the next
+  turn begins", which is "advance past", not "before the end-turn decision executes". The guarantee
+  that matters is unchanged and still held — a run never believes a turn is recorded when it is not,
+  and halts rather than advancing on a write failure. The window between the agent's own end-turn
+  dispatch and the commit is covered by the turn-start quicksave (FR-007) and abandoned-attempt
+  retention (FR-047).)*
 - **FR-014**: Each turn MUST be bounded by a no-progress backstop rather than by time: the harness
   MUST count consecutive decision steps whose decision was rejected or whose verification showed no
   change to game state, reset that count whenever a decision is verified as having changed game
