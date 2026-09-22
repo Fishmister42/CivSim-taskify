@@ -278,7 +278,7 @@ class ExclusionReason(StrEnum):
     HAS_GAPS = "has_gaps"
     #: The record contains turn cycles whose *game* turn never advanced -- an end turn dispatched
     #: and never confirmed (``end_turn_unconfirmed``), or two consecutive authoritative cycles
-    #: recorded at the same game turn (research R14, revised 2026-09-21; gameplay block 7).
+    #: recorded at the same game turn (research R6, revised 2026-09-21; gameplay block 7).
     GAME_TURN_DID_NOT_ADVANCE = "game_turn_did_not_advance"
     COMPLETENESS_UNKNOWN = "completeness_unknown"
     NOT_COMPARABLE = "not_comparable"
@@ -521,7 +521,7 @@ class MatchTrackingStore(MatchStore, Protocol):
 
         The same verdict :meth:`metric_series` applies internally, published so a listing can
         show eligibility without requesting a series. Covers a gapped record, an unjudgeable
-        one, comparability, and -- since 2026-09-21 (research R14) -- a record carrying game
+        one, comparability, and -- since 2026-09-21 (research R6) -- a record carrying game
         turns that never advanced.
         """
         ...
@@ -553,9 +553,53 @@ class MatchTrackingStore(MatchStore, Protocol):
         ...
 
 
+# --------------------------------------------------------------------------
+# FR-006: the mutating surface, published as data
+# --------------------------------------------------------------------------
+
+#: The store's entire mutating surface -- every operation, across the 002 ``MatchStore`` floor
+#: and this deliverable's own extension, that may durably change what is on disk. FR-006's
+#: second clause ("the store MUST expose no operation that deletes or edits a turn, step,
+#: capture, event or model call") is enforced by this being a **closed, exhaustive list**: every
+#: method on :class:`MatchTrackingStore` (and a conforming concrete adapter) that is *not* a
+#: member of this tuple is a read, and every member here durably records a new fact or
+#: transitions a status forward -- none of them deletes or edits an existing one
+#: (``mark_turn_superseded`` marks an attempt non-authoritative in place; it does not remove it,
+#: and the attempt remains retrievable through ``get_turn_cycle_attempt``/
+#: ``get_turn_cycle(authoritative_only=False)``).
+#:
+#: This is data, not prose, on purpose: a docstring claiming "there are nine writes plus
+#: ``import_run``" is a fact nobody re-checks when a tenth write is added. A tuple is a value
+#: ``tests/contract/test_store_boundary.py`` can diff against the real ``MatchTrackingStore`` and
+#: ``SqliteMatchStore`` surfaces on every test run, so a new mutating method landing here -- or,
+#: worse, landing *without* also landing here -- is caught mechanically instead of relying on a
+#: reviewer remembering to recount the surface by hand.
+#:
+#: Adding a name to this tuple is a deliberate act that must be reviewed against FR-006: does the
+#: new operation delete or edit an existing turn, step, capture, event or model call? If yes, it
+#: does not belong in this store at all -- FR-006 rules it out outright, not merely "unlisted
+#: here". If no -- it durably records a new fact or advances a status, like every member already
+#: on this list -- it belongs here, and only here.
+MUTATING_OPERATIONS: tuple[str, ...] = (
+    # inherited from MatchStore unchanged (002 floor, store/port.py) -- the nine writes
+    "create_run",
+    "update_run",
+    "write_turn_cycle",
+    "write_run_event",
+    "write_model_call",
+    "write_save_point",
+    "write_capture",
+    "mark_turn_superseded",
+    "archive_run",
+    # this deliverable's own addition -- the sole privileged verbatim write (W4)
+    "import_run",
+)
+
+
 __all__ = [
     "BUNDLE_FORMAT",
     "MAX_PAGE_SIZE",
+    "MUTATING_OPERATIONS",
     "BundleManifest",
     "CaptureImage",
     "CaptureImageStatus",

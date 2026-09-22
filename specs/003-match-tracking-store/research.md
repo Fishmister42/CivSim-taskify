@@ -120,6 +120,24 @@ validated one. **Owner-reviewable decision** (plan Complexity Tracking C3).
 (every trend read on this host answers "nothing", which is honest but makes deliverable 4 untestable
 until a validated host exists).
 
+**Revision (2026-09-21) — a fourth exclusion, `game_turn_did_not_advance`**: gameplay block 7
+(`run-480aa573`) recorded five consecutive turn cycles all at game turn 35 — every harness turn and
+every step present, so gap accounting alone calls the record `complete` — because each end turn was
+dispatched and then `verification_failed` after the bound: the harness's own turn counter advanced
+while the game's did not. A record like that is gap-free but not honest about what it played, so it
+is excluded the same way a gapped one is, under its own reason rather than folded into `has_gaps`.
+The check (`store/completeness.py::turns_whose_game_turn_did_not_advance`) reads two independent
+signals over a run's authoritative attempts in turn order, either sufficient alone: `TurnCycle.
+game_turn_advanced is False` (the writer's own statement, set when an attempt ends
+`end_turn_unconfirmed`), or two consecutive attempts recording the same game turn number from
+`game.turn_state.turn_number` in the last step's observation. The second signal is what covers
+records written before `game_turn_advanced` existed, like block 7 itself — no migration, no
+backfill, no rewrite of a historical record. `None` is never read as a stall: an attempt with
+neither the flag nor a recorded game turn contributes nothing, and the baseline carried into the
+next comparison is the last *known* game turn, not reset by a gap, since a run's authoritative game
+turns are treated as monotonic. **Owner-reviewable decision**, same footing as the visually-degraded
+default above.
+
 ## R7 — Bundle format
 
 **Decision (owner-reviewable, hypervisor default)**: a **directory** is the canonical bundle; a

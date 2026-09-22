@@ -13,7 +13,7 @@ an absent count is ``None``, never zero.
 
 **The exclusion rule is the store's** (FR-019). :func:`exclusion_for` is the one definition both
 reads apply. Since 2026-09-21 it excludes one more thing beside a gapped record: a run whose
-authoritative cycles contain game turns that never advanced (research R14, gameplay block 7) --
+authoritative cycles contain game turns that never advanced (research R6, gameplay block 7) --
 the rule itself lives in ``store/completeness.py`` and its verdict arrives here as
 *stalled_turns*.
 """

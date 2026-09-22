@@ -6,6 +6,27 @@ How to prove the store does what the spec says. Each scenario maps to a user sto
 Test and names the success criteria it discharges. Scenarios 1–7 run headless; scenario 8 needs a
 live client and the owner's account.
 
+## `civsim store` commands
+
+`src/civsim_harness/operator/store_cli.py` ships eight commands (`T036` named six; `coverage` and
+`repair` shipped later and are documented here for the first time). `info`, `runs`, `model-calls`,
+`coverage` and `export` open the store read-only; `migrate`, `import` and `repair` write.
+
+| Command | What it does |
+|---|---|
+| `info` | Schema version, store identity, per-table record counts, applied migrations, dangling parents |
+| `migrate` | Bring a 1.0 file to the current schema, copying it first; `--dry-run` reports the plan without writing |
+| `runs` | The run catalog, paged and filtered in the store (`--seed-set`, `--state`, `--page`, `--sort`, …) |
+| `model-calls` | One run's model-call rows and totals, without opening a decision step |
+| `coverage` *(2026-09-21, 002 lane)* | Claimed harness surface (catalog + `screens.lua`) versus what the store's own records show was demonstrated on a live client; `--format md\|json` |
+| `export` | A run as a bundle directory under `--out`, and with `--archive` its `.tar.gz` |
+| `import` | A bundle directory or archive into this store; an existing run id is refused |
+| `repair` *(2026-09-21, 002 lane)* | Pause runs whose driver is gone (`playing`/`preparing` with no live lock holder), recording the evidence on a `lifecycle_transition` event; `--dry-run` lists the same evidence and changes nothing |
+
+`coverage` and `repair` were authored by the 002 lane in this feature's files (`9f200d5` for the
+orphan-repair machinery `repair` calls); they are listed here for completeness, not claimed as this
+feature's work.
+
 ## Prerequisites
 
 | Requirement | Notes |

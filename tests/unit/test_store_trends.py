@@ -15,12 +15,50 @@ from store_support.builders import make_run, make_turn_cycle_record
 
 
 def test_turn_metrics_are_numeric_yields_plus_derived_counts_and_nothing_else() -> None:
+    """FR-018 names eight per-turn metrics: "science, culture, gold, faith, production and food
+    per turn, plus city and unit counts". ``turn_metrics`` is a generic pass-through of a turn's
+    ``yields`` numeric non-bool keys, so all six yield names work by construction -- but before
+    this fixture, ``gold``, ``production`` and ``food`` appeared in no test in this file or in
+    ``tests/contract/test_match_tracking_store.py`` at all, and ``faith`` appeared only once
+    there (``test_t2_a_metric_the_record_never_carries_is_unavailable_not_zero``), as the name of
+    a metric a fixture's ``yields`` deliberately *omits*, to prove an absent metric reports
+    unavailable rather than zero -- never as a populated value. This fixture carries all six
+    named yields with real values (plus a bool and a
+    string key, to prove those two are excluded -- a flag plotted as ``1.0`` would be a
+    fabricated measurement) alongside ``cities``/``units``, so the requirement's full eight-name
+    set is demonstrated here rather than only implied by the pass-through's genericity.
+
+    **Honest boundary**: this exercises FR-018's named set against a synthetic record only. It
+    does not show real data. 002's ``compute_yields`` is a no-op and no observation declares
+    per-turn yields, so the science/culture/gold/faith/production/food series are empty -- with a
+    stated reason -- on every run this project has actually recorded (research R4;
+    `specs/003-match-tracking-store/plan.md`'s "Cross-spec follow-ups"; `validation-results.md`'s
+    "Not verified here" section). That is a 002 follow-up, not something fixed by this test, and
+    this test fabricates no yield anywhere outside this fixture.
+    """
     record = make_turn_cycle_record(
-        "r", 3, yields={"science": 4, "culture": 2.5, "flag": True, "name": "x"}, cities=2, units=5
+        "r",
+        3,
+        yields={
+            "science": 4,
+            "culture": 2.5,
+            "gold": 12,
+            "faith": 3.5,
+            "production": 7,
+            "food": 1.5,
+            "flag": True,
+            "name": "x",
+        },
+        cities=2,
+        units=5,
     )
     assert turn_metrics(record) == {
         "science": 4.0,
         "culture": 2.5,
+        "gold": 12.0,
+        "faith": 3.5,
+        "production": 7.0,
+        "food": 1.5,
         "city_count": 2.0,
         "unit_count": 5.0,
     }

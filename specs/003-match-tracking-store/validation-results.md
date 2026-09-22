@@ -50,3 +50,57 @@ produced it and the machine it ran on (this box: Linux, Python 3.12.3, SQLite 3.
 - Science/culture/gold/faith/production/food series are **empty with a stated reason** on every run
   this project has recorded, because the harness records no per-turn yields yet (research R4; a
   002 follow-up). `city_count` and `unit_count` are served from the observations that exist.
+
+---
+
+## Addendum — convergence re-check, 2026-09-22 (Linux node, `live/linux`)
+
+Same rule: nothing below is a pass that was not observed.
+
+| What | Result |
+|---|---|
+| Full suite, `timeout 900 uv run pytest -q -p no:cacheprovider -o faulthandler_timeout=120` | **2147 passed / 18 skipped / 0 failed** in 205.27 s (baseline at `c7b5654` before this pass: 2138 / 19 / 0 in 203.89 s). The whole tree, including other lanes' in-flight work |
+| `uv run ruff check` on every file this pass touched | clean |
+| `uv run mypy --strict src/civsim_harness/store` | clean (11 files) |
+
+**The delta is the point: +9 tests and −1 skip.** The skip that disappeared is
+`test_the_real_pre_feature_file_migrates_and_reads_back`, which had been skipping at runtime on
+this host since 2026-09-21 (see below) and now runs.
+
+### What changed about the evidence in this file
+
+- **SC-004 is now asserted, not only recorded.** The $1.424694 figure the table above reports from
+  T045's hand computation is pinned by
+  `tests/unit/test_store_schema.py::test_the_real_pre_feature_file_s_priced_runs_reconcile_to_sc_004`:
+  five priced runs, cent-rounded to the spec's $1.42, plus the exact sum to `abs=1e-6`. Observed
+  passing on this host. The figure did not change; it acquired a guard.
+- **SC-005's evidence had stopped running, and the table above did not know.** The row says
+  "`tests/unit/test_store_schema.py::test_the_real_pre_feature_file_migrates_and_reads_back`
+  (runs on this host, skips elsewhere)". That was true when written and false within hours:
+  the test read `civsim-match-store.db`, and ordinary use of this host migrated that file to
+  schema 1.1 (it now holds 44 runs), after which the test hit its own
+  `pytest.skip("already at 1.1; nothing to migrate")` **on the only machine that has the file**.
+  Every assertion below the skip, `assert len(before) == 10` included, was dead code. Repointed at
+  `civsim-match-store.db.v1.0.bak-20260921T152108Z` — the frozen 1.0 backup the migration itself
+  took — and the skip is now an assertion. SC-005 is observed again.
+- **A correction to the SC-005 row's claim, found the moment the test ran.** "Ten runs read back
+  **equal** to their 1.0 JSON" is true of the migration and **false of a default write-mode open**.
+  The snapshot holds `run-54a3cefb5024425488cbf3a54286d670`, left `preparing` with no identity
+  lock; the open-time orphan sweep (contract W6, landed by the 002 lane in `9f200d5`) correctly
+  pauses it and writes a `lifecycle_transition` event. The test now asserts migration fidelity with
+  `orphan_sweep=False` and, separately, asserts W6 against this real file: the sweep pauses exactly
+  the lockless run and moves no other run's lifecycle state. **This is the first assertion of W6
+  against a real store file rather than a purpose-built fixture.**
+- **FR-006 acquired its first check of any kind.** `MUTATING_OPERATIONS` plus the partition and
+  vocabulary scans in `tests/contract/test_store_boundary.py`. Revert-confirmed: a temporary
+  `delete_turn_cycle` on `SqliteMatchStore` fails two tests by name; removed, eight pass.
+- **FR-018's six named yields** are exercised in one fixture (`tests/unit/test_store_trends.py`).
+  The honest residue below is unchanged and was not weakened: the harness still records no per-turn
+  yields, so every one of those series is empty on every run this project has actually recorded.
+
+### Still not verified here
+
+Everything in the original "honest residue" section stands. The Windows/macOS half of SC-006 is
+still owed, and quickstart Scenario 8 (a model-driven run through the new store) is still **not
+run** — it needs the live client, the owner's Steam account and the provider key, and nothing on
+this node launches the client.

@@ -21,6 +21,7 @@ class MatchTrackingStore(MatchStore, Protocol):
     def highest_recorded_turn(self, run_id: RunId) -> int: ...
     def list_turn_attempts(self, run_id: RunId, turn: int) -> list[TurnAttemptSummary]: ...
     def get_capture_image(self, capture_id: CaptureId) -> CaptureImage: ...
+    def list_captures(self, run_id: RunId) -> list[ScreenCapture]: ...
     def list_model_calls(self, run_id: RunId, *, turn: int | None = None, step: int | None = None) -> list[ModelCallRow]: ...
     def model_call_totals(self, run_id: RunId) -> ModelCallTotals: ...
 
@@ -28,6 +29,7 @@ class MatchTrackingStore(MatchStore, Protocol):
     def record_completeness(self, run_id: RunId) -> RecordCompletenessStatus: ...
 
     # --- cross-run reads for trending (US3) ---
+    def trend_exclusion(self, run_id: RunId, *, include_visually_degraded: bool = False) -> ExcludedRun | None: ...
     def metric_series(self, query: TrendQuery) -> TrendResponse: ...
     def divergence(self, run_a: RunId, run_b: RunId) -> DivergenceReport: ...
 
@@ -52,6 +54,7 @@ store's file layout (FR-017, FR-027).
 | **W3** | The store re-derives and persists `Run.record_completeness_status` inside every write that can change it, using the rules of `store/completeness.py`; a reader never computes completeness (FR-010) |
 | **W4** | `import_run` is the only write that may insert `archived_at`, an `eligible` save point, or a `run_archived` event verbatim; it is atomic, refuses an existing `run_id` naming the collision, and refuses a record set whose references do not close (FR-027) |
 | **W5** | A store opened `read_only=True` raises `StoreWriteError` on every write and never migrates (R10) |
+| **W6** | Every **write-mode** open runs `sweep_orphans` (`civsim_harness.run.orphans`, authored by the 002 lane in this feature's files, `9f200d5`) before returning: a run left in `preparing`/`playing` whose run-identity lock is absent, unreadable, or names a dead PID is transitioned to `paused` and recorded with a `lifecycle_transition` event carrying `reason: orphaned` and the evidence checked (lock path, PID and liveness, last activity and how stale it was); a run idle less than the grace window (`DEFAULT_ORPHAN_GRACE_SECONDS`, 120s) since its last recorded activity is left alone, so a run still inside its own preparation is never mistaken for orphaned. A run whose lock holder is alive is never touched, on any path. The sweep never raises and is skipped entirely for `read_only=True` (W5 holds unchanged); `orphan_sweep=False` opts a caller out of it for a store it wants opened and nothing else. `orphans_paused_on_open` reports what that opening paused |
 
 ### Reading
 
@@ -61,7 +64,7 @@ store's file layout (FR-017, FR-027).
 | **R2** | `query_runs` pages in the store (not in the caller), applies every filter the query names, and returns the **total** matching count; an archived run is filtered and sorted like any other (FR-011, SC-008) |
 | **R3** | `get_run_configuration` resolves `run_id` and nothing else — a `config_id` answers `None` (E5, FR-012) |
 | **R4** | `get_turn_cycle_attempt` returns exactly the attempt asked for, authoritative or not, or `None` if it was never recorded — never a substitute (FR-013). `list_turn_attempts` lists every attempt of a turn without loading steps |
-| **R5** | `get_capture_image` answers one of `available` (with bytes), `withheld` (with the reason, no bytes), `missing` (record intact, `blob_ref` unresolvable on disk), `no_such_capture`. `get_capture_blob` is the E4 form: bytes only when `available`, else `None` (FR-014) |
+| **R5** | `get_capture_image` answers one of `available` (with bytes), `withheld` (with the reason, no bytes), `missing` (record intact, `blob_ref` unresolvable on disk), `no_such_capture`. `get_capture_blob` is the E4 form: bytes only when `available`, else `None`. `list_captures(run_id)` enumerates every capture *record* the run produced, ordered by `capture_id`, from the `captures` rows alone — no blob is read, so a blob missing from disk neither withholds nor fails an entry the way `export_run` (the only other enumeration) refuses the whole run; an unknown `run_id` answers `[]` (FR-014) |
 | **R6** | `list_model_calls` and `model_call_totals` read `model_calls` rows only — never step bundles; totals equal the bundle-embedded sums by W1 (FR-015) |
 | **R7** | `highest_recorded_turn` is the highest turn with any attempt or save point for the run; `0` when none (FR-017 — the read the web derived by probing) |
 | **R8** | No read requires knowledge of the file layout; the blob directory is reachable only through `get_capture_image` / `get_capture_blob` (FR-017) |
@@ -70,7 +73,7 @@ store's file layout (FR-017, FR-027).
 
 | # | Requirement |
 |---|---|
-| **T1** | `metric_series` excludes, by the store's rule, any run whose record carries game turns that did not advance (`game_turn_did_not_advance`, added 2026-09-21 per research R14 — see data-model.md §3.5), whose completeness is `has_gaps`/`unknown`, whose comparability is `not_comparable`, or which is `visually_degraded` unless the query opted in; every excluded run is named with its reason and its gaps. `trend_exclusion(run_id)` publishes that same verdict for one run (FR-019, SC-007) |
+| **T1** | `metric_series` excludes, by the store's rule, any run whose record carries game turns that did not advance (`game_turn_did_not_advance`, added 2026-09-21 per research R6 — see data-model.md §3.5), whose completeness is `has_gaps`/`unknown`, whose comparability is `not_comparable`, or which is `visually_degraded` unless the query opted in; every excluded run is named with its reason and its gaps. `trend_exclusion(run_id, *, include_visually_degraded=False)` publishes that same verdict for one run without requesting a series, including `no_such_run` for an id the store does not hold (FR-019, SC-007) |
 | **T2** | Metrics are the numeric keys of each turn's recorded `yields` plus derived `city_count` and `unit_count`; a metric the record does not carry yields an empty series with `unavailable_reason` set — never a fabricated zero (FR-018, R4) |
 | **T3** | A non-terminal run's series carries `in_progress=True` (FR-021) |
 | **T4** | `divergence` compares fingerprints over turns both runs hold authoritatively and reports the first unequal turn with every unequal dimension; a run excluded for gaps, unknown completeness or `not_comparable` produces no comparison and is named. Visual degradation concerns images, not the actions compared, so `visually_degraded` runs are admitted to divergence (the report carries no series and needs no opt-in) (FR-020) |
@@ -99,3 +102,17 @@ assertions the 002 contract deferred to this feature. `tests/contract/test_match
 asserts W1–W5, R1–R8, T1–T4, V1–V6 against `SqliteMatchStore`. `tests/integration/
 test_web_against_tracking_store.py` runs the web interface's routes over the real store and asserts
 no degraded-capability path is taken (FR-016, SC-003).
+
+**W6 is asserted elsewhere, and that is worth saying rather than leaving to inference.** The
+open-time orphan sweep was authored by the 002 lane in this feature's files, and its tests went
+with it: `tests/unit/test_orphans.py` and `tests/integration/test_orphan_repair.py`. Nothing in
+`test_match_tracking_store.py` covers it. A reader auditing this contract rule by rule would
+otherwise find W6 in the table and no conformance test named for it, and reasonably conclude the
+rule was unasserted.
+
+**FR-006's second clause — "the store MUST expose no operation that deletes or edits" — is
+asserted structurally, not behaviourally.** `MUTATING_OPERATIONS` in `store/contract.py` publishes
+the closed mutating surface as data, and `tests/contract/test_store_boundary.py` partitions the
+public surface of both the Protocol and `SqliteMatchStore` against it and scans every public
+operation name against a delete/edit vocabulary. A requirement about what a type does *not* have
+cannot be tested by calling it; it has to be tested by looking at it.

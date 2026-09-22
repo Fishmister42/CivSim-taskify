@@ -129,7 +129,7 @@ that did not advance (below), or its store-derived completeness is `has_gaps` or
 in. Excluded runs never contribute a point. `MatchTrackingStore.trend_exclusion(run_id)` publishes
 the same verdict as its own read, so a listing can show eligibility without requesting a series.
 
-**Game turns that did not advance (added 2026-09-21, research R14; Constitution Principle III)**: a
+**Game turns that did not advance (added 2026-09-21, research R6; Constitution Principle III)**: a
 gap-free record is not automatically a trendable one. Gameplay block 7 (`run-480aa573`) recorded
 five turn cycles *all at game turn 35* — every turn and every step present — because each end turn
 was dispatched and then `verification_failed` after the bound, so the harness's turn ended and the

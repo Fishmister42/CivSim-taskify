@@ -40,7 +40,7 @@ that floor; :func:`record_completeness_status` and ``operator/audit.py``'s ``aud
 both apply it, so the rolled-up status and the audit's own gap enumeration cannot disagree about
 what a branch owes.
 
-**A turn the game never took is a gap in the record too (R14, revised 2026-09-21).**
+**A turn the game never took is a gap in the record too (R6, revised 2026-09-21).**
 ``record_completeness_status`` answers "is every turn and every step *present*"; it deliberately
 still does, unchanged. But Principle III's other half -- a run whose turn-by-turn record has gaps
 must not feed trending -- also covers a run whose record contains game turns that did not advance:
@@ -133,7 +133,7 @@ class CycleGameTurn:
 def turns_whose_game_turn_did_not_advance(
     cycles: Sequence[CycleGameTurn],
 ) -> tuple[int, ...]:
-    """The harness turns whose attempt did not move the game's own turn counter (R14, 2026-09-21).
+    """The harness turns whose attempt did not move the game's own turn counter (R6).
 
     Two independent signals, deliberately, because neither alone covers the record:
 

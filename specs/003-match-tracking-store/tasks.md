@@ -246,7 +246,7 @@ of the code that would break it.** A contract narrower than its Protocol is how 
 four probed capabilities; a requirement with no check is how `_read_setting` and `doctor`'s
 hard-coded `0` survived.
 
-- [ ] T047 **HIGH** Assert structurally that the store exposes no operation that deletes or edits a
+- [X] T047 **HIGH** Assert structurally that the store exposes no operation that deletes or edits a
   record, per FR-006 (missing). **The finding**: FR-006's second clause — "the store MUST expose no
   operation that deletes or edits a turn, step, capture, event or model call" — is satisfied today
   by omission and by nothing else. Every `def` on `MatchStore` (`store/port.py`),
@@ -265,7 +265,7 @@ hard-coded `0` survived.
   Protocol, and assert no other mutating operation exists on `MatchTrackingStore` or
   `SqliteMatchStore`. **Pair it with a negative control that is run and recorded** — a guard nobody
   has watched fail is the same defect again.
-- [ ] T048 **MEDIUM** Publish `list_captures` and `trend_exclusion` in the contract's Operations
+- [X] T048 **MEDIUM** Publish `list_captures` and `trend_exclusion` in the contract's Operations
   block, per `contracts/match-tracking-store.md` (contradicts). The block declares 17 operations;
   `MatchTrackingStore` in `store/contract.py` declares 19.
   `list_captures(run_id) -> list[ScreenCapture]` (contract.py:487) is called by
@@ -278,7 +278,7 @@ hard-coded `0` survived.
   all — not the contract, not `data-model.md`, not this file. Add both with their rule ids
   (`list_captures` under R5, `trend_exclusion` under T1). This is the same failure 001 spent four
   tasks absorbing, beginning again from the publishing side.
-- [ ] T049 **MEDIUM** Correct rule T1's research citation, per `contracts/match-tracking-store.md`
+- [X] T049 **MEDIUM** Correct rule T1's research citation, per `contracts/match-tracking-store.md`
   and `research.md` (contradicts). T1 attributes the `game_turn_did_not_advance` exclusion reason to
   "research R14". `research.md`'s R14 is **"Scale checks (SC-002, SC-008)"**, and the phrase appears
   nowhere in R1 – R14. The behaviour is real and well built
@@ -289,7 +289,7 @@ hard-coded `0` survived.
   should carry the decision and today carries nothing about it. Either extend R6 and point T1 at it,
   or drop the citation and let `data-model.md` be the reference. A citation to a research item that
   does not discuss the thing reads as due diligence that did not happen.
-- [ ] T050 **MEDIUM** Document the open-time orphan sweep and the shipped `civsim store` surface,
+- [X] T050 **MEDIUM** Document the open-time orphan sweep and the shipped `civsim store` surface,
   per `contracts/match-tracking-store.md` W1 – W5 and `quickstart.md` (partial).
   `SqliteMatchStore.__init__` (`store/sqlite_adapter.py:109-150`) now runs `sweep_orphans` on every
   **write-mode** open, pausing runs whose identity lock is absent or whose holder pid is dead and
@@ -302,7 +302,7 @@ hard-coded `0` survived.
   sweep, its write-mode-only scope, and its relationship to W5, and list the shipped CLI surface.
   **`coverage` and `repair` were authored by the 002 lane in this feature's files** (`9f200d5`): the
   job here is to document what ships, not to claim the commands or move them.
-- [ ] T051 **LOW** Assert SC-004's reconciliation instead of only recording it, per SC-004
+- [X] T051 **LOW** Assert SC-004's reconciliation instead of only recording it, per SC-004
   (partial). The `$1.424694` total over the five priced runs of 2026-09-21 exists only in
   `validation-results.md` as a manual T045 observation; `tests/` contains no hit for `1.42`,
   `1.424694` or `SC-004`. `tests/unit/test_store_schema.py::test_the_real_pre_feature_file_migrates_and_reads_back`
@@ -311,7 +311,7 @@ hard-coded `0` survived.
   mis-derived costs would pass. Add the total there; it stays skipped on any host without the file,
   which is the correct behaviour. The observation was honestly made and honestly recorded — this
   converts the project's own evidence into a check, it does not doubt it.
-- [ ] T052 **LOW** Exercise FR-018's four unused metric names, per FR-018 (partial). FR-018 names
+- [X] T052 **LOW** Exercise FR-018's four unused metric names, per FR-018 (partial). FR-018 names
   "science, culture, gold, faith, production and food per turn, plus city and unit counts".
   `store/trends.py::turn_metrics` is a generic pass-through of `TurnCycle.yields`' numeric non-bool
   keys, so all six work by construction — but `gold`, `faith`, `production` and `food` appear in no
@@ -320,3 +320,98 @@ hard-coded `0` survived.
   implied. **The real-data half stays blocked on 002** and stays recorded as such: 002's
   `compute_yields` is a no-op, so all six yield series are empty on every run this project has
   recorded (`validation-results.md`, plan.md Cross-spec follow-ups). Nothing here fabricates a yield.
+- [X] T053 **HIGH** Point the SC-005 real-file test at the file it is about, per SC-005 and
+  contract V3 (contradicts). **`tests/unit/test_store_schema.py::test_the_real_pre_feature_file_migrates_and_reads_back`
+  had stopped testing.** It copied `REAL_FILE` — `civsim-match-store.db` — and called
+  `pytest.skip("the real file is already at {version}; nothing to migrate")` whenever that file
+  was no longer at schema 1.0. Ordinary use of this host migrated it to 1.1 on 2026-09-21 and it
+  has since grown to 44 runs, so from that moment the test skipped at runtime **on the only
+  machine that has the file**, and everything below the skip — including `assert len(before) == 10`,
+  which is SC-005's entire claim — became dead code. A `skip` reads as "not applicable here",
+  which is how a guard stops guarding with nobody noticing. Fourth instance of this project's
+  recurring failure and the first where the check was not merely narrow but wholly inert.
+  The file it was always about is `civsim-match-store.db.v1.0.bak-20260921T152108Z`, the frozen
+  1.0 backup the migration itself took: ten runs, 97 decision steps, no `model_calls` rows.
+  Repoint it there, turn the `nothing to migrate` skip into an assertion, and keep the real file
+  copy-only.
+
+### Phase 9 notes — what closed, and the one that had stopped testing
+
+Written when T047–T053 landed. **All 53 tasks are now `[X]`.**
+
+**T047 gave FR-006 its first check.** `MUTATING_OPERATIONS` in `store/contract.py` publishes the
+closed mutating surface as data — the ten operations that exist and no others — and
+`tests/contract/test_store_boundary.py` partitions the public surface of both
+`MatchTrackingStore` and the concrete `SqliteMatchStore` against it, then scans every public
+operation name against a delete/edit vocabulary. The partition is the load-bearing half: the read
+set is pinned literally rather than derived as "not mutating", which would have made the check a
+tautology, and it walks the MRO, so a mutating method added to the SQLite read base is caught too.
+**Revert confirmation, run and recorded**: with `def delete_turn_cycle(self)` temporarily on
+`SqliteMatchStore`, two tests fail —
+`extra=['delete_turn_cycle'], missing=[]` from the partition, and
+`{'delete_turn_cycle': ['delete']}` from the vocabulary scan, each naming FR-006 — and with the
+method removed, eight pass. A requirement about what a type does *not* have cannot be tested by
+calling it; it has to be tested by looking at it.
+
+**T048–T050 brought the contract back level with the code.** `list_captures` and
+`trend_exclusion` are in the Operations block with their rules (R5 and T1); T1's citation now
+points at **R6**, which gained the decision it should always have carried — and R6 was the right
+home all along, since it is the trend-exclusion research item. The wrong `R14` citation had spread
+further than the contract: it was also in `store/contract.py` (twice), `store/completeness.py`
+(twice), `store/sqlite_reads.py`, `store/trends.py` and `data-model.md` §3.5. All seven now read
+R6. **W6** states the open-time orphan sweep — write-mode only, `paused` only, the event it
+writes, the grace window, the `orphan_sweep=False` opt-out, and that W5 is unaffected — and the
+Conformance section says plainly that W6's tests live in the 002 lane's files rather than leaving
+a reader to find a rule with no test named for it.
+
+**The CLI ships eight commands, not nine.** T050's own text says nine; it is wrong, and the count
+is corrected here rather than in the task, per the standing rule that a closed task's text records
+what the contributor actually hit. `info`, `migrate`, `runs`, `model-calls`, `coverage`, `export`,
+`import`, `repair`. Separately, `operator/store_cli.py`'s module docstring says "Seven commands"
+above a list of eight — **that file is outside this lane's permitted paths and was not edited**;
+the correction was reported to the hypervisor instead of taken unilaterally.
+
+**T053 is the one that matters, and it was not on the list when this phase was written.**
+
+`test_the_real_pre_feature_file_migrates_and_reads_back` had stopped testing. It copied
+`civsim-match-store.db` and called `pytest.skip("the real file is already at {version}; nothing
+to migrate")` whenever that file was no longer at 1.0. Ordinary use of this host migrated it on
+2026-09-21 — it is now 1.1 and holds 44 runs — so from that moment the test skipped at runtime on
+**the only machine that has the file**, and every assertion below the skip, including
+`assert len(before) == 10`, which is SC-005's entire claim, became dead code. Nothing was red.
+Nothing was even yellow in a way anyone reads: a skip says "not applicable here".
+
+This is the fourth time this project has found a check that was not checking — after 002's
+`_read_setting` comparing a value to itself, `doctor`'s hard-coded `0`, and the four narrow audits
+of 2026-09-21 — and it is the first where the check was not merely narrow but **wholly inert**.
+The three before it were written wrong. This one was written right and then *aged* out of being a
+test, because it was keyed to a file whose job is to change. That is a distinct failure mode and
+worth naming: **a fixture that the system under test keeps writing to is not a fixture.**
+
+The fix keys it to `civsim-match-store.db.v1.0.bak-20260921T152108Z`, the 1.0 backup the migration
+itself took — ten runs, 97 decision steps, no `model_calls` rows, and a timestamp in its name that
+guarantees nothing will move it — and turns the `nothing to migrate` skip into an assertion that
+says why it must not be softened back. The real file is still only ever copied; its mtime was
+checked before and after.
+
+**And the moment it ran again, it failed — correctly.** The snapshot contains
+`run-54a3cefb5024425488cbf3a54286d670`, left `preparing` on 2026-09-21 with no identity lock. A
+default write-mode open runs W6's sweep, which pauses it and writes a `lifecycle_transition` event
+with `reason: orphaned`. So the run no longer read back equal to its pre-migration `run_json`, and
+**SC-005's and V3's "every run reads back unchanged" is false under a default open** — true of the
+migration, not true of the open. Nobody knew, because the test had been skipping since the day the
+sweep landed.
+
+The resolution separates the two claims rather than relaxing either. Migration fidelity is asserted
+with `orphan_sweep=False`, so V3 still proves the migration rewrites nothing. Then the same
+migrated copy is re-opened at the default and **W6 is asserted on real data**: the sweep pauses
+exactly the runs that are genuinely nobody's, every one of them was `preparing`/`playing` before,
+and no other run's lifecycle state moves. `tests/unit/test_orphans.py` builds fixtures that are
+orphans; this file merely *is* one, which is the stronger evidence and the first of its kind here.
+
+**T051 and T052** closed as written. SC-004's $1.424694 is now asserted against the same frozen
+snapshot (five priced runs, cent-rounded to the spec's $1.42, plus the exact sum to 1e-6), and
+FR-018's six named yields plus the two derived counts are exercised in one fixture. **The
+real-data half of FR-018 stays blocked on 002** and stays recorded as such: `compute_yields` is a
+no-op, so every yield series is empty on every run this project has actually recorded. Nothing
+here fabricates a yield outside a test fixture.

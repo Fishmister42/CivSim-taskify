@@ -4,7 +4,12 @@
 
 **Created**: 2026-09-21
 
-**Status**: Draft
+**Status**: Implemented (2026-09-21)
+
+*The spec template (`.specify/templates/spec-template.md`) offers only `Draft` and has no status for
+a shipped feature, so `Implemented` is this project's own value. It records that all 46 tasks in
+[tasks.md](./tasks.md) are closed and that results are recorded in
+[validation-results.md](./validation-results.md) — not that the feature is frozen.*
 
 **Input**: User description: "Match-tracking data store (constitution deliverable 3, Principle III
 "Complete Match Telemetry"). Today the store exists only as an implementation detail inside spec 002

@@ -710,7 +710,7 @@ class SqliteReadBase:
         return [Run.model_validate_json(row[0]) for row in rows], excluded
 
     def _stalled_turns_body(self, conn: sqlite3.Connection, run: Run) -> tuple[int, ...]:
-        """``store/completeness.py``'s game-turn rule, on this connection (R14, 2026-09-21).
+        """``store/completeness.py``'s game-turn rule, on this connection (R6, revised 2026-09-21).
 
         One row per authoritative attempt from the run's owed floor, carrying the recorded flag
         (read out of the stored ``TurnCycle`` JSON -- no column, so a 002-era file answers
