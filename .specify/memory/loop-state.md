@@ -210,6 +210,14 @@ there was one partial lookup between them.
   correct work: the search was `log_event|logger`, the mechanism was `emit_confirm_liveness` in a
   dedicated `act/liveness.py`. A positive control for a search, same idea as a negative control for a
   check, and it dissolves all four.
+- **A POSITIVE TWIN ONLY PROTECTS YOU IF IT VARIES THE DIMENSION THE VALIDATOR CONSTRAINS.** On
+  2026-09-22 a validator for `implementation_ref` shipped with a positive case that varied the **path
+  shape** and never the **capability kind** — so nothing in the test set declared a Python
+  implementation, the twin could not fail, and the guard encoded the author's fixtures instead of the
+  contract. It took the whole suite down at collection. **The same author had rejected an over-strict
+  `lua/` prefix in that same validator hours earlier**, caught by six red tests; this one got through
+  because the fixtures varied the wrong axis. **Ask what dimension the rule constrains, then build the
+  twin along THAT axis.**
   **Worked example, three independent discoveries on 2026-09-22: counting running suites.**
   `grep -c "[p]ytest"` matches the **word** anywhere — other agents' monitor scripts whose text contains
   it, and the inspecting command itself. One lane polled ~15 min reporting 3–6 suites when one was
