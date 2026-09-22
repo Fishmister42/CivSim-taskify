@@ -321,7 +321,7 @@ def test_unregistered_declaration_id_is_refused(tmp_path: Path) -> None:
         registry.authorize("no.such.declaration", LuaContext.IN_GAME)
 
 
-def test_implementation_ref_must_be_a_resolvable_lua_path_not_prose() -> None:
+def test_implementation_ref_must_be_a_path_not_prose() -> None:
     """T314: a sentence in `implementation_ref` killed every run that met a prompt.
 
     `capability/executor.py::_load_dispatch_table` resolves this field with
@@ -343,7 +343,7 @@ def test_implementation_ref_must_be_a_resolvable_lua_path_not_prose() -> None:
     from civsim_harness.models.common import CapabilityId
 
     # The exact value that shipped, verbatim.
-    with pytest.raises(ValidationError, match="single relative Lua path"):
+    with pytest.raises(ValidationError, match="single relative source path"):
         IntegrationCapability(
             capability_id=CapabilityId("prompts.orders"),
             path="bespoke",
@@ -389,3 +389,50 @@ def test_every_shipped_implementation_ref_resolves_to_a_file_on_disk() -> None:
         if not (Path(".") / cap.implementation_ref).is_file()
     ]
     assert unresolved == [], f"implementation_ref does not resolve on disk: {unresolved}"
+
+
+def test_a_bespoke_capability_may_declare_a_python_implementation_ref() -> None:
+    """T314 follow-up: the positive twin whose absence broke the tree.
+
+    The first version of this validator required ``.lua`` for every capability. That is
+    true of a *firetuner* capability -- the executor resolves the ref and dispatches into
+    it -- and false of a *bespoke* one, whose ref nothing loads as Lua and which documents
+    where the implementation lives. `saves.save_game` declares
+    ``src/civsim_harness/saves/dialog_driver.py`` and is real, pre-existing and correct.
+
+    It got past the original test set because **nothing in it declared a Python
+    implementation**, so the positive twin could not fail. The validator encoded the
+    fixtures rather than the contract -- which is the same error the `lua/` prefix version
+    was rejected for, one variant over, and the reason this test exists.
+    """
+    from civsim_harness.models.catalog import IntegrationCapability
+    from civsim_harness.models.common import CapabilityId
+
+    cap = IntegrationCapability(
+        capability_id=CapabilityId("saves.save_game"),
+        path="bespoke",
+        implementation_ref="src/civsim_harness/saves/dialog_driver.py",
+        firetuner_gap="No save-to-named-file call is reachable from Lua.",
+    )
+    assert cap.implementation_ref.endswith(".py")
+
+
+def test_a_firetuner_capability_may_not_declare_a_python_implementation_ref() -> None:
+    """The other half: the kind rule is conditioned, not abandoned.
+
+    A ``firetuner`` ref is operational -- the executor dispatches into it -- so a Python
+    path there is the shape that would fail at dispatch time inside a live run, which is
+    exactly what T314 was about. Relaxing the rule for bespoke must not relax it here.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    from civsim_harness.models.catalog import IntegrationCapability
+    from civsim_harness.models.common import CapabilityId
+
+    with pytest.raises(ValidationError, match="must end in .lua"):
+        IntegrationCapability(
+            capability_id=CapabilityId("x.y"),
+            path="firetuner",
+            implementation_ref="src/civsim_harness/saves/dialog_driver.py",
+        )

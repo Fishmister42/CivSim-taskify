@@ -222,7 +222,7 @@ class CapabilityPath(StrEnum):
     BESPOKE = "bespoke"
 
 
-#: One relative Lua path, nothing else -- no whitespace, no separator, no sentence.
+#: A relative source path and nothing else -- no whitespace, no separator, no sentence.
 #: Module scope rather than a class attribute because pydantic claims leading-underscore
 #: class attributes as private attrs.
 #:
@@ -231,7 +231,12 @@ class CapabilityPath(StrEnum):
 #: the field -- encoding it here would have rejected the executor's own tests, which is how
 #: a validator starts describing one caller's convention instead of the contract. That the
 #: shipped refs resolve on disk is checked separately, over the real catalog.
-_IMPLEMENTATION_REF = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_/]*\.lua$")
+_IMPLEMENTATION_REF = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_/.-]*\.(?:lua|py)$")
+
+#: ...and for a ``firetuner`` capability it must additionally be the Lua file the executor
+#: loads. Split from the shape rule above because **the field is overloaded**: see
+#: :meth:`IntegrationCapability._implementation_ref_is_a_path_of_the_right_kind`.
+_IMPLEMENTATION_REF_LUA = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_/.-]*\.lua$")
 
 
 class IntegrationCapability(HarnessModel):
@@ -272,23 +277,43 @@ class IntegrationCapability(HarnessModel):
     #: disk``; runs that drew no ``prompts.*`` never touched it. **The harness could not
     #: answer any prompt at all**, and the board had to be cleared by hand.
     @model_validator(mode="after")
-    def _implementation_ref_is_a_resolvable_path(self) -> IntegrationCapability:
-        """One relative Lua path, never a sentence, never a list (T314).
+    def _implementation_ref_is_a_path_of_the_right_kind(self) -> IntegrationCapability:
+        """A relative source path, never a sentence, never a list (T314).
 
-        The composite that caused this must fail here rather than at dispatch time. A
-        capability that spans a Lua file and a Python mechanism says so in
-        ``firetuner_gap`` -- which is what ``prompts.orders`` already did, in full, while
-        *also* putting the Python path in this field, where nothing read it as anything
-        but a path.
+        **The field is overloaded, and that is the finding.** For a ``firetuner``
+        capability the ref is *operational*: ``executor._load_dispatch_table`` resolves
+        ``self._lua_root / implementation_ref`` and dispatches into it, so it must be the
+        ``.lua`` file. For a ``bespoke`` capability nothing loads it as Lua -- the ref is
+        *documentation of where the implementation lives*, and a Python path is the
+        correct answer (``saves.save_game`` declares
+        ``src/civsim_harness/saves/dialog_driver.py``).
+
+        So the rule is conditioned on ``path`` rather than universal. Both kinds still
+        reject prose -- whitespace, separators, sentences, empty.
+
+        Two shapes were explicitly declined:
+
+        * **Loosening to "anything with a slash".** That restores the defect this was
+          written for and would have gone green.
+        * **Moving a Python ref into ``firetuner_gap``.** That hides a real implementation
+          reference inside a documentation field -- the inverse of the defect fixed here.
+          An earlier version of this message *suggested* exactly that, which is how a
+          diagnostic starts recommending the wrong repair.
         """
         ref = self.implementation_ref
         if not _IMPLEMENTATION_REF.match(ref):
             raise ValueError(
-                "implementation_ref must be a single relative Lua path "
-                f"(e.g. lua/ingame/screens.lua) -- got {ref!r}. "
+                "implementation_ref must be a single relative source path with no "
+                f"whitespace or separators (e.g. lua/ingame/screens.lua) -- got {ref!r}. "
                 "It is resolved as a path at dispatch time, so prose here pauses a live "
-                "run instead of failing the load. Describe a bespoke mechanism in "
-                "firetuner_gap, not here."
+                "run instead of failing the load."
+            )
+        if self.path == CapabilityPath.FIRETUNER and not _IMPLEMENTATION_REF_LUA.match(ref):
+            raise ValueError(
+                "a firetuner capability's implementation_ref is the Lua file the executor "
+                f"dispatches into, so it must end in .lua -- got {ref!r}. A capability "
+                "implemented outside Lua declares path: bespoke (and, per FR-028, a "
+                "non-empty firetuner_gap saying why Firetuner could not do it)."
             )
         return self
 
