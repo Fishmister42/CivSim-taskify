@@ -122,6 +122,16 @@ there was one partial lookup between them.
   the chain-leg refusal tail needs no measurement if the legs **reuse the session** and never reconnect —
   correct whether the tail is 2 s or 90 s. A measurement only constrains fixes of the form "wait long
   enough" or "retry enough times". Say so in the brief, or the fix gets "improved" into a retry.
+- **An allowlist inverts its safety property depending on which way it is read.** Used to **permit**,
+  unknown means deny: the failure is a false refusal — visible and annoying. Used to **detect**, unknown
+  means "nothing there": the failure is a **false all-clear — invisible and confident.** Same data
+  structure, opposite failure mode, and nothing in the code distinguishes the two uses. Three instances
+  on 2026-09-22: the screen watchlist (an unlisted screen read as *no screen*, so the probe answered
+  `recognized=true, has_blocking_prompt=false` with a full-screen modal up); `lua/ACCESSORS.txt`
+  (answers "does this method exist", read as "is it safe to call here"); and the content screening gate,
+  **where the remedy is already precedent** — a category no technique addressed used to read as *clean*
+  and now **withholds**. **The mechanical test: could this check ever return "I do not know"?** If not,
+  it is an allowlist read as a detector and it will produce confident false all-clears.
 - **Grade every close-out claim by evidence tier, never present them flat**: applied-and-verified
   (store record + reproduction) / applied-but-resting-on-an-assumption / not demonstrated / in flight
   and unproven / **retracted**. A summary that gives them the same confidence is this project's own
@@ -129,6 +139,13 @@ there was one partial lookup between them.
   2026-09-22 two of three were *measurement errors that looked like product defects*, and that rate is
   itself a finding: it is the strongest argument for the readback sweep, and a summary of only the
   survivors would present the lane as more reliable than its own evidence supports.
+  **And name what HELD, not only what broke.** A finding feels like it needs recording and a success
+  feels like the baseline, so a ledger drifts to defects-only — the same sampling bias as the refused
+  column, applied to our own record. On 2026-09-22 a lane wrote up ten defects and zero successes
+  before being asked. A record composed only of mechanisms that failed teaches that checks do not work,
+  which is the opposite of the day's lesson. Write up a check that held with the same care as one that
+  did not — and its remaining risk beside it, since praise without the caveat is how a working check
+  gets broken.
 - **A reconciliation pass closes every lane-day**: before reporting, verify each task claimed complete
   against the **code**, not against the agent's report, and tick or leave open with a reason. Twice on
   2026-09-22 a task was reported complete and was not, and both times the gap was found by reading the
