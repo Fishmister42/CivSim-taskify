@@ -214,7 +214,23 @@ class ActionExecutor(Protocol):
 
 #: How long the agent's own end turn is re-read for its confirmation, and how often -- the
 #: client confirms after the AI turns (measured 2026-09-21; see the decision loop body).
-END_TURN_CONFIRM_TIMEOUT_S = 45.0
+#:
+#: MEASURED (2026-09-22, run-e9d52051ce7b458c9f06482ae2eabf16, gameplay block 02 -- the live
+#: incident this bound was raised for). Three consecutive turn cycles each dispatched
+#: `turn.end_turn`, polled genuinely-separate re-observations (14 attempts, ~47 s elapsed) against
+#: the OLD 45.0 s bound, and all three gave up unconfirmed -- yet the game's own turn number DID
+#: advance, just later: turn cycle 1 dispatched at 13:20:08.434Z, turn cycle 2 (a second, redundant
+#: `ACTION_ENDTURN` click, issued only because the harness's own turn had already moved on) at
+#: 13:21:15.633Z, and a harness read between 13:22:30.906Z and 13:22:43.292Z was the first to see
+#: the advance land -- 142.5-154.9 s after the FIRST dispatch, 75.3-87.7 s after the second. So the
+#: re-read mechanism itself was already sound (a real separate tuner command every poll, never the
+#: write's own command -- see `act.verify.confirm_execution`'s `reobserve` callback); the bound was
+#: just too short for what the live client actually takes. 200.0 s is chosen to clear the observed
+#: ~155 s with headroom, but it is still an ASSUMPTION pending a live measurement of a single,
+#: non-redundant end-turn dispatch (the three measured cycles here each re-dispatched before the
+#: prior one's effect could land, which is its own separate, not-yet-fixed hazard -- see the
+#: `end_turn_reached_the_game` comment below, which preserves the owner's liveness ruling).
+END_TURN_CONFIRM_TIMEOUT_S = 200.0
 END_TURN_CONFIRM_POLL_S = 2.0
 #: The bounded re-read for every other order (see the decision step's verification below): a
 #: unit move landed at +1 s when the +0 s read still showed the old plot (measured 2026-09-21).
@@ -1005,12 +1021,15 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
         if end_turn_reached_the_game:
             # MEASURED (2026-09-21, gameplay block 7, run-480aa573): five turn cycles, all at
             # game turn 35, each recorded `ended_by_agent` -- every one of them an end turn that
-            # was dispatched and then `verification_failed` after the 45 s bound above. The
-            # harness's turn had ended; the game's had not; and the record said the agent ended
-            # it. R14's old rule ("decision was end_turn => ended_by_agent, whatever verification
-            # said") was written to stop a slow AI round being split across two records, and the
-            # bounded re-read above already solves that case honestly -- so past the bound the
-            # right answer is not to assume, it is to say so.
+            # was dispatched and then `verification_failed` after `END_TURN_CONFIRM_TIMEOUT_S`
+            # above ran out (45 s at the time; see that constant's own comment for why it is now
+            # larger and for the 2026-09-22 measurement that made a genuinely-separate-command
+            # re-read still record unconfirmed at the old bound). The harness's turn had ended;
+            # the game's had not; and the record said the agent ended it. R14's old rule
+            # ("decision was end_turn => ended_by_agent, whatever verification said") was written
+            # to stop a slow AI round being split across two records, and the bounded re-read
+            # above already solves that case honestly -- so past the bound the right answer is
+            # not to assume, it is to say so.
             #
             # Owner's ruling (2026-09-21): record the truth and keep the liveness. An end turn
             # dispatched but unconfirmed is `end_turn_unconfirmed` with `game_turn_advanced=False`

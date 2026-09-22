@@ -64,6 +64,7 @@ from civsim_harness.parity.screening import load_screening_profiles
 from civsim_harness.provider.accounting import ImageCountAccountingMismatch
 from civsim_harness.provider.port import RawDecision
 from civsim_harness.resilience.recovery import RecoveryEngine
+import civsim_harness.run.decision_loop as decision_loop_module
 from civsim_harness.run.decision_loop import DecisionLoopContext
 from civsim_harness.run.turn_cycle import TurnCycleDependencies, run_turn_cycle
 from civsim_harness.store.port import MatchStore
@@ -74,7 +75,16 @@ from fakes.fake_provider import FakeModelProvider
 TICK_DECLARATION_ID = DeclarationId("test.tick")
 UNTICK_DECLARATION_ID = DeclarationId("test.untick")
 STUCK_DECLARATION_ID = DeclarationId("test.stuck")
+ASYNC_END_TURN_DECLARATION_ID = DeclarationId("test.async_end_turn")
 GAME_TURN_STATE_DECLARATION_ID = DeclarationId("game.turn_state")
+
+# Captured once, at collection time, before any test's autouse fixture below has a chance to
+# monkeypatch the module's own constant to 0.0 for its own speed -- so a test that wants the
+# real, currently-shipped bound (scaled down only for wall-clock speed, never replaced with an
+# independently-chosen stand-in) can still see it. See
+# ``test_end_turn_confirms_once_a_genuinely_delayed_async_advance_lands_within_the_bound``.
+_LIVE_END_TURN_CONFIRM_TIMEOUT_S = decision_loop_module.END_TURN_CONFIRM_TIMEOUT_S
+_LIVE_END_TURN_CONFIRM_POLL_S = decision_loop_module.END_TURN_CONFIRM_POLL_S
 
 
 def _build_registry() -> CapabilityRegistry:
@@ -130,6 +140,21 @@ def _build_registry() -> CapabilityRegistry:
         verification_predicate="game.turn_number == observed_turn_number + 1",
         introduced_in_version="test",
     )
+    # T289 (2026-09-22 measured regression): models the live client's own end-turn shape --
+    # dispatch returns at once, but the turn counter only moves on a later, separate read (see
+    # `_DelayedAdvanceFakeGame`). Same verification predicate shape as `turn.end_turn` itself.
+    async_end_turn = ParityDeclaration(
+        declaration_id=ASYNC_END_TURN_DECLARATION_ID,
+        kind=DeclarationKind.ACTION,
+        summary="Test-only action: always available; its effect on the counter is asynchronous, "
+        "landing only on a later, separate read -- never inside this dispatch's own call.",
+        parity_basis="Click the end-turn button; the game advances the turn asynchronously.",
+        context=LuaContext.IN_GAME,
+        capability_id=CapabilityId("test.turn_control"),
+        availability_predicate="true",
+        verification_predicate="game.turn_number == observed_turn_number + 1",
+        introduced_in_version="test",
+    )
     capability = IntegrationCapability(
         capability_id=CapabilityId("test.turn_control"),
         path=CatalogCapabilityPath.FIRETUNER,
@@ -153,7 +178,7 @@ def _build_registry() -> CapabilityRegistry:
         verification_predicate="camera.mode == target",
         introduced_in_version="test",
     )
-    declarations = (turn_state, tick, untick, stuck, set_view_mode)
+    declarations = (turn_state, tick, untick, stuck, set_view_mode, async_end_turn)
     catalog = Catalog(
         root=Path("."),
         version=CatalogVersion(
@@ -196,6 +221,41 @@ class _FakeGame:
         elif declaration_id == UNTICK_DECLARATION_ID:
             self.turn_number -= 1
         # test.stuck: deliberately does nothing.
+
+
+class _DelayedAdvanceFakeGame(_FakeGame):
+    """T289 (2026-09-22 measured regression, run-e9d52051ce7b458c9f06482ae2eabf16): the live
+    client's own end-turn shape -- ``UI.RequestAction(ACTION_ENDTURN)`` returns at once, but the
+    turn *number* only moves on a later, separate read, once real time has actually passed. Never
+    inside ``execute()``'s own call, and never on the very next read either unless enough of
+    *advance_delay_s* has genuinely elapsed -- so a caller that only re-reads once, or gives up
+    too soon, sees the pre-advance value, exactly as three consecutive live turn cycles did
+    against the old 45 s bound (14 separate re-reads each, ~47 s elapsed, still unconfirmed; the
+    real advance did not land until 75-155 s after the dispatches that caused it).
+
+    Every ``read()`` here is its own distinct call -- this is deliberately *not* a same-command
+    readback stand-in; the point under test is purely whether the bound is long enough to reach
+    the read that would have told the truth.
+    """
+
+    def __init__(self, *, advance_delay_s: float) -> None:
+        super().__init__()
+        self._advance_delay_s = advance_delay_s
+        self._pending_advance_at: float | None = None
+
+    async def execute(
+        self, declaration_id: DeclarationId, parameters: Mapping[str, Any], target: Any
+    ) -> None:
+        if declaration_id == ASYNC_END_TURN_DECLARATION_ID:
+            self._pending_advance_at = time.monotonic() + self._advance_delay_s
+            return
+        await super().execute(declaration_id, parameters, target)
+
+    async def read(self) -> tuple[Sequence[CapabilityResult], str]:
+        if self._pending_advance_at is not None and time.monotonic() >= self._pending_advance_at:
+            self.turn_number += 1
+            self._pending_advance_at = None
+        return await super().read()
 
 
 class _FakeSaveCapability:
@@ -593,6 +653,76 @@ async def test_an_end_turn_the_game_confirms_still_records_ended_by_agent(
         assert record is not None
         assert record.turn_cycle.outcome is TurnOutcome.ENDED_BY_AGENT
         assert record.turn_cycle.game_turn_advanced is True
+    finally:
+        store.close()
+
+
+async def test_end_turn_confirms_once_a_genuinely_delayed_async_advance_lands_within_the_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T289 -- regression for the 2026-09-22 live measurement (run-e9d52051ce7b458c9f06482ae2eabf16,
+    gameplay block 02): three consecutive turn cycles dispatched ``turn.end_turn``, each one polled
+    14 genuinely separate re-observations over ~47 s against the then ``END_TURN_CONFIRM_TIMEOUT_S``
+    of 45.0, and every one gave up ``end_turn_unconfirmed``/``game_turn_advanced=False`` -- yet the
+    game's own turn number really did move, just 75-155 s after the dispatches that caused it (see
+    that constant's own comment in ``run/decision_loop.py`` for the exact timestamps). The re-read
+    itself was never the bug -- each poll is its own call, never the dispatch's own return -- the
+    bound simply gave up before the read that would have told the truth.
+
+    This drives that exact shape through the real ``run_turn_cycle``/``confirm_execution`` path,
+    using :class:`_DelayedAdvanceFakeGame` so the counter only moves on a later, separate read once
+    real time has passed. Both the bound and the fake's delay are scaled down by the same factor
+    purely for test speed (the ratio to each other is what matters, not the absolute magnitude --
+    the production magnitude itself is stated as an assumption, per that same comment, pending a
+    live remeasurement). Critically, the scaled bound is derived from the *live* module constant
+    rather than a value chosen independently by this test: reverting the fix (``END_TURN_CONFIRM_
+    TIMEOUT_S = 45.0``) makes the scaled bound (0.45 s) shorter than the scaled delay (1.0 s) and
+    this test fails exactly as the live run did -- ``end_turn_unconfirmed``, not ``ended_by_agent``.
+    """
+    scale = 100.0
+    monkeypatch.setattr(
+        decision_loop_module, "END_TURN_CONFIRM_TIMEOUT_S", _LIVE_END_TURN_CONFIRM_TIMEOUT_S / scale
+    )
+    monkeypatch.setattr(
+        decision_loop_module, "END_TURN_CONFIRM_POLL_S", _LIVE_END_TURN_CONFIRM_POLL_S / scale
+    )
+
+    run_id = RunId("run-end-turn-delayed-async-advance")
+    run, config = _build_run_and_config(run_id)
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+
+    # 100 s of real-world-equivalent settle time: past the old, buggy 45 s bound, comfortably
+    # inside the fixed 200 s one -- scaled down by the same factor as the bound above.
+    game = _DelayedAdvanceFakeGame(advance_delay_s=100.0 / scale)
+    provider = FakeModelProvider()
+    provider.queue_decision(_plain_decision(ASYNC_END_TURN_DECLARATION_ID, is_end_turn=True))
+
+    try:
+        outcome = await run_turn_cycle(
+            _make_deps(
+                tmp_path=tmp_path,
+                run_id=run_id,
+                turn_number=1,
+                store=store,
+                game=game,
+                provider=provider,
+                no_progress_step_limit=5,
+            ),
+            run=run,
+        )
+
+        assert outcome.outcome is TurnOutcome.ENDED_BY_AGENT
+        record = store.get_turn_cycle(run_id, 1)
+        assert record is not None
+        assert record.turn_cycle.outcome is TurnOutcome.ENDED_BY_AGENT
+        assert record.turn_cycle.game_turn_advanced is True
+        assert game.turn_number == 2
+
+        # Proof this was a genuinely bounded, separately-commanded re-read catching a *later*
+        # read -- not a single same-command readback that happened to get lucky.
+        end_step = record.steps[-1]
+        assert end_step.decision.execution.verification["confirm_attempts"] > 1
     finally:
         store.close()
 

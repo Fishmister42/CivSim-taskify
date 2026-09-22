@@ -164,7 +164,14 @@ _END_TURN_DECLARATION_ID = DeclarationId("turn.end_turn")
 #: How long the no-progress backstop keeps re-reading the game for its end-turn confirmation, and
 #: how often (measured: the client confirms asynchronously, after the AI players' turns; see the
 #: backstop body). Bounded so an unconfirmed turn still fails closed.
-BACKSTOP_CONFIRM_TIMEOUT_S = 45.0
+#:
+#: Raised alongside `run.decision_loop.END_TURN_CONFIRM_TIMEOUT_S` (see that constant's own
+#: comment for the 2026-09-22 measurement): this backstop dispatch goes through the identical
+#: `act.dispatch`/`act.verify` re-read shape (a genuinely fresh `_fresh_observation()` call each
+#: poll, never the dispatch's own return), so the same too-short-bound defect applies here even
+#: though no live incident has yet hit this exact code path. 200.0 s is the same assumption,
+#: pending its own live measurement.
+BACKSTOP_CONFIRM_TIMEOUT_S = 200.0
 BACKSTOP_CONFIRM_POLL_S = 2.0
 
 #: How many times in a row this turn may be replayed (T152) after an attempt that completed no
