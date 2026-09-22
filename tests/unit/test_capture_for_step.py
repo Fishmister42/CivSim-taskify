@@ -131,6 +131,12 @@ def _capture(host: FakeHostPlatform, *, window: GameWindow | None = _WINDOW):
         captured_at=datetime(2026, 9, 20, tzinfo=UTC),
         registry=_registry_with_view(),
         profiles=load_screening_profiles(),
+        # The text-evidence source ran and found nothing (an *empty* set, not ``None``): most
+        # reject categories are screened only by matching their tokens against observed text, so
+        # without this the content gate correctly withholds every frame as uncertifiable. The
+        # production loop does not gather it yet -- see the ``text_evidence_plumbed`` fixture in
+        # tests/integration/test_image_attachment.py, which names that gap.
+        detected_text_tokens=frozenset(),
     )
 
 

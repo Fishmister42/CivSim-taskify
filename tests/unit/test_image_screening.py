@@ -171,6 +171,13 @@ def _attempt(**overrides: Any) -> screening.CaptureAttempt:
         camera_state={"mode": "world", "zoom": 0.5, "target_revealed": True},
         platform="windows",
         expected_process=_PROCESS,
+        # An *empty* token set, not ``None``: this fixture models a caller whose text-evidence
+        # source (window-title enumeration) ran and found nothing to report. ``None`` -- the
+        # dataclass default, and what production passed until this was fixed -- means no such
+        # source ran, which leaves most reject categories unexamined and must withhold. Every
+        # SCREENED_CLEAN assertion below therefore rests on evidence having been gathered, which
+        # is exactly the precondition the gate now enforces instead of assuming.
+        detected_text_tokens=frozenset(),
     )
     base.update(overrides)
     return screening.CaptureAttempt(**base)
@@ -407,6 +414,71 @@ def test_content_gate_fails_closed_when_frame_cannot_be_decoded(registry, profil
 
     outcome = screening.screen_capture(
         _attempt(frame=undecodable), registry=registry, profiles=profiles
+    )
+
+    assert outcome.status is ScreeningStatus.WITHHELD
+    assert outcome.failed_gate is screening.ScreeningGate.CONTENT
+
+
+def test_content_gate_withholds_when_no_text_evidence_source_ran(registry, profiles) -> None:
+    """The live defect: ``detected_text_tokens=None`` means nothing enumerated windows.
+
+    Most reject categories (``firetuner_window``, ``developer_console``, ``harness_owned_ui``,
+    the per-platform taskbar/panel/dock ids) have exactly one technique -- declared-text
+    matching -- and it cannot run without evidence. Until this test existed the gate asked those
+    categories nothing, saw no match, and *passed the frame*. Passing an unexamined frame is the
+    one thing Principle I forbids, so the correct outcome is withheld.
+    """
+    outcome = screening.screen_capture(
+        _attempt(detected_text_tokens=None), registry=registry, profiles=profiles
+    )
+
+    assert outcome.status is ScreeningStatus.WITHHELD
+    assert outcome.failed_gate is screening.ScreeningGate.CONTENT
+    assert outcome.withheld_reason is WithheldReason.NON_PLAYER_UI
+    assert "firetuner_window" in (outcome.detail or "")
+    assert "no available screening technique" in (outcome.detail or "")
+
+
+def test_the_dataclass_default_is_the_fail_closed_one(registry, profiles) -> None:
+    """A caller that simply does not mention text evidence must get the withholding behaviour.
+
+    The defect reached production through a permissive *default*, not through an explicit
+    decision: ``detected_text_tokens`` defaulted to an empty frozenset, which the gate read as
+    "enumerated, found nothing". Constructing an attempt without the argument at all is the
+    production shape, and it must fail closed.
+    """
+    bare = screening.CaptureAttempt(
+        frame=_solid_frame(),
+        capture_path=CapturePath.WINDOWS_GRAPHICS_CAPTURE,
+        window=_window(),
+        view_declaration_id="views.world",
+        camera_state={"mode": "world", "zoom": 0.5, "target_revealed": True},
+        platform="windows",
+        expected_process=_PROCESS,
+    )
+    assert bare.detected_text_tokens is None
+
+    outcome = screening.screen_capture(bare, registry=registry, profiles=profiles)
+
+    assert outcome.status is ScreeningStatus.WITHHELD
+    assert outcome.failed_gate is screening.ScreeningGate.CONTENT
+
+
+def test_content_gate_withholds_when_the_detector_cannot_declare_its_coverage(
+    registry, profiles
+) -> None:
+    """An injected detector that only reports findings has not said what it examined."""
+
+    class _FindingsOnlyDetector:
+        def detect(self, frame, *, reject_categories, detected_text_tokens) -> frozenset[str]:
+            return frozenset()
+
+    outcome = screening.screen_capture(
+        _attempt(),
+        registry=registry,
+        profiles=profiles,
+        detector=_FindingsOnlyDetector(),  # type: ignore[arg-type]
     )
 
     assert outcome.status is ScreeningStatus.WITHHELD

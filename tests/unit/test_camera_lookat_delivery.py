@@ -150,6 +150,12 @@ def _capture(camera_state: dict[str, Any], *, registry: CapabilityRegistry) -> S
         registry=registry,
         profiles=load_screening_profiles(),
         max_attempts=1,
+        # The text-evidence source ran and found nothing (an *empty* set, not ``None``): most
+        # reject categories are screened only by matching their tokens against observed text, so
+        # without this the content gate correctly withholds every frame as uncertifiable. The
+        # production loop does not gather it yet -- see the ``text_evidence_plumbed`` fixture in
+        # tests/integration/test_image_attachment.py, which names that gap.
+        detected_text_tokens=frozenset(),
     )
 
 

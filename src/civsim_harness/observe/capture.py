@@ -158,7 +158,7 @@ def _attempt_once(
     profiles: ScreeningProfiles,
     detector: ContentDetector | None,
     expected_process: GameProcess | None,
-    detected_text_tokens: frozenset[str],
+    detected_text_tokens: frozenset[str] | None,
 ) -> tuple[CapturePath, CaptureAttempt | None, ScreeningOutcome]:
     """One host-capture-then-screen attempt. Never raises: a precondition failure, a host failure
     and a screening failure all come back as a withheld
@@ -268,7 +268,7 @@ def capture_for_step(
     capture_id: CaptureId | None = None,
     detector: ContentDetector | None = None,
     expected_process: GameProcess | None = None,
-    detected_text_tokens: frozenset[str] = frozenset(),
+    detected_text_tokens: frozenset[str] | None = None,
     max_attempts: int = DEFAULT_MAX_CAPTURE_ATTEMPTS,
 ) -> StepCapture:
     """Produce exactly one capture record for this decision step (T129/T133/T157).

@@ -58,6 +58,20 @@ by this module) -- the same technique would catch a differently-worded
 counter, a debug HUD, or any other in-frame chrome the profile data assigns
 to a matching category id.
 
+**The content gate withholds what it cannot screen, not only what it catches.**
+A profile names reject categories; the detector implements techniques; the two
+are related by :func:`techniques_for_category`, published as data. Before any
+finding is consulted, :func:`_check_content` asks the detector which of the
+profile's categories it can actually decide *on this attempt*, and withholds if
+any is left over. This matters because the techniques are unequal: the
+image-based ones always run, but declared-text matching only runs when the
+caller gathered text evidence, and most categories (``firetuner_window``,
+``developer_console``, ``linux_panel``, ...) have no other technique. With no
+text evidence the old code asked those categories nothing, got no match, and
+passed the frame -- a gate that failed open exactly where it was most needed.
+It now fails closed, which is the only outcome Principle I permits: a capture
+that cannot be proven clean is withheld.
+
 **Profile resolution never falls back to a permissive default.**
 :func:`resolve_screening_profile` implements ``screening_profiles.yaml``'s
 own resolution rule exactly: a view's declared ``screening_profile`` of
@@ -294,10 +308,16 @@ class CaptureAttempt:
     CaptureResult`'s frame, the :class:`~civsim_harness.host.port.CapturePath`
     and :class:`~civsim_harness.host.port.GameWindow` that produced it, the
     view/camera-state pair the step requested, and the host platform
-    identifier for profile resolution. ``expected_process`` and
-    ``detected_text_tokens`` are optional deeper checks a caller may supply
-    once it has them, without which the corresponding check is skipped
-    rather than failing closed on missing plumbing.
+    identifier for profile resolution.
+
+    ``detected_text_tokens`` states what a text-evidence source (window-title
+    enumeration, OCR) found, and **``None`` means no such source ran** --
+    which is emphatically not the same as an empty set, and is the distinction
+    the gate needs to tell "checked, nothing there" from "never checked". With
+    ``None``, every reject category whose only technique is declared-text
+    matching is *unaddressed*, and the content gate withholds the frame
+    (:func:`unaddressed_reject_categories`). It does not skip the check and
+    pass; a check that did not run clears nothing.
 
     ``camera_state`` is expected to carry ``"mode"`` and ``"zoom"`` (as
     every view's ``output_schema`` in ``catalogs/observations/views.yaml``
@@ -315,7 +335,7 @@ class CaptureAttempt:
     camera_state: Mapping[str, Any]
     platform: str
     expected_process: GameProcess | None = None
-    detected_text_tokens: frozenset[str] = frozenset()
+    detected_text_tokens: frozenset[str] | None = None
     geometry_tolerance: float = 0.02
 
 
@@ -576,6 +596,78 @@ def _corner_overlay_is_suspect(image: Image.Image) -> bool:
     return False
 
 
+class ScreeningTechnique(StrEnum):
+    """The content gate's techniques, named so coverage can be asserted as data.
+
+    A reject category is only *screened* if at least one of these can actually
+    run against it on the attempt in hand. Before this enum existed the
+    category-to-technique relationship was implicit in
+    :meth:`DefaultContentDetector.detect`'s three ``if`` blocks, so a category
+    no technique addressed silently produced "no matches" -- indistinguishable
+    from "checked and clean". Publishing it as data is what lets
+    :func:`unaddressed_reject_categories` tell those two apart, and lets a test
+    assert the invariant over every shipped profile.
+    """
+
+    BORDER_RING = "border_ring"
+    CORNER_OVERLAY = "corner_overlay"
+    DECLARED_TEXT = "declared_text"
+
+
+#: Which category-id tokens each *image* technique addresses. The token vocabulary is
+#: ``catalogs/screening_profiles.yaml``'s own reject ids split on ``"_"`` (see
+#: :func:`_category_tokens`), so a new reject id built from the same words is covered without a
+#: code change -- and a new id built from words no technique names is *visibly* uncovered rather
+#: than silently passed.
+_IMAGE_TECHNIQUE_TRIGGER_TOKENS: Final[Mapping[ScreeningTechnique, frozenset[str]]] = (
+    MappingProxyType(
+        {
+            ScreeningTechnique.BORDER_RING: frozenset({"border"}),
+            ScreeningTechnique.CORNER_OVERLAY: frozenset({"overlay", "debug"}),
+        }
+    )
+)
+
+
+def techniques_for_category(category_id: str) -> frozenset[ScreeningTechnique]:
+    """Which techniques *could* address *category_id*, ignoring what evidence is on hand.
+
+    :attr:`ScreeningTechnique.DECLARED_TEXT` applies to every non-empty category id (its rule is
+    "are this id's own tokens all present in the text evidence?", which is well-defined for any
+    id); the image techniques apply only where the id's tokens name what they look for.
+    """
+    tokens = _category_tokens(category_id)
+    if not tokens:
+        return frozenset()
+    techniques = {
+        technique
+        for technique, triggers in _IMAGE_TECHNIQUE_TRIGGER_TOKENS.items()
+        if tokens & triggers
+    }
+    techniques.add(ScreeningTechnique.DECLARED_TEXT)
+    return frozenset(techniques)
+
+
+def unaddressed_reject_categories(
+    reject_categories: frozenset[str],
+    *,
+    available_techniques: frozenset[ScreeningTechnique],
+) -> frozenset[str]:
+    """The reject categories *no available technique* can decide -- i.e. the unscreened ones.
+
+    A non-empty result means the content gate has no way to certify this frame against part of
+    its own profile, which is a **withhold**, never a pass (Principle I: a capture that cannot be
+    proven clean is not shown). This is deliberately a function of what is *available on this
+    attempt*, not of what the codebase can do in principle: a technique whose evidence the caller
+    never gathered has not run, and a check that did not run cannot clear anything.
+    """
+    return frozenset(
+        category
+        for category in reject_categories
+        if not (techniques_for_category(category) & available_techniques)
+    )
+
+
 class ContentDetector(Protocol):
     """The pluggable interface the content gate runs (T129).
 
@@ -583,6 +675,13 @@ class ContentDetector(Protocol):
     implementation, once one exists) via :func:`screen_capture`'s ``detector``
     parameter; :class:`DefaultContentDetector` is the built-in, dependency-free
     implementation used when none is supplied.
+
+    A detector must declare its *coverage* as well as its findings: returning
+    an empty match set is not evidence of a clean frame unless the detector can
+    say it actually checked. A detector object that does not implement
+    :meth:`addressable_categories` is treated by :func:`_check_content` as
+    covering nothing at all, so every category withholds -- fail closed, never
+    on the assumption that an unknown detector probably looked.
     """
 
     def detect(
@@ -593,6 +692,15 @@ class ContentDetector(Protocol):
         detected_text_tokens: frozenset[str],
     ) -> frozenset[str]:
         """Return the subset of *reject_categories* this detector found evidence of in *frame*."""
+        ...
+
+    def addressable_categories(
+        self,
+        reject_categories: frozenset[str],
+        *,
+        text_evidence_available: bool,
+    ) -> frozenset[str]:
+        """Return the subset of *reject_categories* this detector can actually decide."""
         ...
 
 
@@ -615,13 +723,44 @@ class DefaultContentDetector:
        frame (see module docstring).
     3. **Declared-text keyword matching** for any category whose full token
        set is contained in the caller-supplied ``detected_text_tokens``
-       (e.g. from window-title enumeration or OCR upstream of this module;
-       empty unless a caller populates it).
+       (e.g. from window-title enumeration or OCR upstream of this module).
+       This technique only *runs* when the caller states that a text-evidence
+       source actually ran (``CaptureAttempt.detected_text_tokens is not
+       None``); with no source, every category that depends on it is
+       unaddressed and the gate withholds rather than reporting no match.
+
+    Which of the three applies to which category is published as data --
+    :func:`techniques_for_category`, built from
+    :data:`_IMAGE_TECHNIQUE_TRIGGER_TOKENS` -- and :meth:`detect` below
+    partitions the caller's categories with that same function, so the
+    coverage :meth:`addressable_categories` reports and the coverage
+    :meth:`detect` actually exercises cannot drift apart.
 
     If the frame cannot be decoded at all, every requested category is
     reported matched -- research R7: an image that cannot be proven clean is
     withheld, never passed on the assumption it is probably fine.
     """
+
+    def addressable_categories(
+        self,
+        reject_categories: frozenset[str],
+        *,
+        text_evidence_available: bool,
+    ) -> frozenset[str]:
+        """Which of *reject_categories* this detector can actually decide right now.
+
+        The image techniques always run (there is always a frame). The
+        declared-text technique only counts when the caller gathered text
+        evidence; absent that, a category it is the sole technique for has not
+        been checked by anything, and saying otherwise is how the gate came to
+        fail open.
+        """
+        available = frozenset(_IMAGE_TECHNIQUE_TRIGGER_TOKENS) | (
+            {ScreeningTechnique.DECLARED_TEXT} if text_evidence_available else frozenset()
+        )
+        return reject_categories - unaddressed_reject_categories(
+            reject_categories, available_techniques=frozenset(available)
+        )
 
     def detect(
         self,
@@ -639,19 +778,19 @@ class DefaultContentDetector:
 
         matches: set[str] = set()
 
-        border_categories = {c for c in reject_categories if "border" in _category_tokens(c)}
+        def _categories_for(technique: ScreeningTechnique) -> set[str]:
+            return {c for c in reject_categories if technique in techniques_for_category(c)}
+
+        border_categories = _categories_for(ScreeningTechnique.BORDER_RING)
         if border_categories and _border_ring_is_suspect(image):
             matches.update(border_categories)
 
-        overlay_categories = {
-            c for c in reject_categories if _category_tokens(c) & {"overlay", "debug"}
-        }
+        overlay_categories = _categories_for(ScreeningTechnique.CORNER_OVERLAY)
         if overlay_categories and _corner_overlay_is_suspect(image):
             matches.update(overlay_categories)
 
-        for category in reject_categories:
-            tokens = _category_tokens(category)
-            if tokens and tokens <= detected_text_tokens:
+        for category in _categories_for(ScreeningTechnique.DECLARED_TEXT):
+            if _category_tokens(category) <= detected_text_tokens:
                 matches.add(category)
 
         return frozenset(matches)
@@ -673,10 +812,32 @@ def _check_content(
     profile = resolve_screening_profile(
         profiles, declared_profile_key=declared_profile_key, platform=attempt.platform
     )
+
+    # Coverage BEFORE findings (Principle I). "No technique reported a match" only means the
+    # frame is clean for the categories some technique actually examined; for any other category
+    # it means nothing was looked at, and this gate used to return that silence as a pass. A
+    # detector that cannot say what it covers is taken to cover nothing.
+    declare_coverage = getattr(detector, "addressable_categories", None)
+    covered: frozenset[str] = (
+        declare_coverage(
+            profile.reject, text_evidence_available=attempt.detected_text_tokens is not None
+        )
+        if callable(declare_coverage)
+        else frozenset()
+    )
+    unscreened = profile.reject - covered
+    if unscreened:
+        noun = "category" if len(unscreened) == 1 else "categories"
+        return (
+            f"no available screening technique addresses reject {noun} {sorted(unscreened)} "
+            f"of profile {profile.name!r}; the frame cannot be certified against it "
+            "(withheld rather than passed unscreened)"
+        )
+
     matches = detector.detect(
         attempt.frame,
         reject_categories=profile.reject,
-        detected_text_tokens=attempt.detected_text_tokens,
+        detected_text_tokens=attempt.detected_text_tokens or frozenset(),
     )
     if matches:
         noun = "category" if len(matches) == 1 else "categories"

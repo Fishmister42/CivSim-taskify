@@ -76,7 +76,12 @@ from civsim_harness.models.run import (
     RecordCompletenessStatus,
     Run,
 )
-from civsim_harness.models.turn import ScreenCapture, ScreeningStatus, TurnOutcome
+from civsim_harness.models.turn import (
+    ScreenCapture,
+    ScreeningStatus,
+    TurnOutcome,
+    WithheldReason,
+)
 from civsim_harness.observe.assemble import CapabilityResult
 from civsim_harness.parity.screening import load_screening_profiles
 from civsim_harness.provider.port import RawDecision
@@ -314,6 +319,37 @@ def _no_real_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
 
 
+@pytest.fixture
+def text_evidence_plumbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Supply the text evidence ``run/decision_loop.py`` does not yet gather.
+
+    **This fixture is a marker for a known production gap, not a convenience.** The content gate
+    screens most reject categories (``firetuner_window``, ``developer_console``,
+    ``harness_owned_ui``, the per-platform panel/taskbar/dock ids) with exactly one technique --
+    matching the category's tokens against text observed on the desktop -- and that technique
+    cannot run unless a caller enumerates window titles and passes the result. The production
+    call site (``run/decision_loop.py``'s ``capture_for_step(...)``) passes nothing, so on the
+    real harness every capture is now withheld: see
+    ``test_the_unplumbed_production_path_withholds_every_frame`` below, which asserts exactly
+    that, deliberately without this fixture.
+
+    The tests that use this fixture are about *attachment* -- that a clean frame's bytes reach
+    the provider and the records agree -- not about whether the loop gathers evidence. Patching
+    the evidence in keeps that coverage alive and localises the gap to one named place. **Delete
+    this fixture the moment the loop supplies ``detected_text_tokens`` itself**; the tests should
+    then pass untouched.
+    """
+    import civsim_harness.run.decision_loop as decision_loop
+
+    real_capture_for_step = decision_loop.capture_for_step
+
+    def _with_text_evidence(**kwargs: Any) -> Any:
+        kwargs.setdefault("detected_text_tokens", frozenset())
+        return real_capture_for_step(**kwargs)
+
+    monkeypatch.setattr(decision_loop, "capture_for_step", _with_text_evidence)
+
+
 def _make_deps(
     *,
     tmp_path: Path,
@@ -381,7 +417,9 @@ def _tick(*, is_end_turn: bool = False) -> RawDecision:
 # --------------------------------------------------------------------------
 
 
-async def test_screened_clean_capture_bytes_reach_the_provider_request(tmp_path: Path) -> None:
+async def test_screened_clean_capture_bytes_reach_the_provider_request(
+    tmp_path: Path, text_evidence_plumbed: None
+) -> None:
     """T238's forward half, asserted on the far side of the port: the step's screened-clean
     frame's exact bytes arrive in the ``DecisionRequest`` the provider received, and every piece
     of the record -- ``shown_to_agent``, the observation's capture listing, the model call's
@@ -417,18 +455,24 @@ async def test_screened_clean_capture_bytes_reach_the_provider_request(tmp_path:
         assert [image.data for image in request.images] == [png]
         assert request.images[0].media_type == "image/png"
 
-        # Exactly three captures were written: the pre-save prompt probe's read (c795039: a turn
+        # Four writes over three captures: the pre-save prompt probe's read (c795039: a turn
         # probes the screen before its quicksave; it served no decision here, so recorded not
-        # shown), the decision step's own (attached, so recorded shown, blob stored verbatim),
-        # and the post-end-turn verification read's (clean, but it served no request, so
-        # recorded not shown).
-        assert len(spy.capture_writes) == 3
+        # shown), then the decision step's own frame written **twice** -- un-shown before the
+        # dispatch and upgraded to shown once `provider.complete` returned (T260) -- and finally
+        # the post-end-turn verification read's (clean, but it served no request, so recorded
+        # not shown).
+        assert len(spy.capture_writes) == 4
         probe_capture, probe_blob = spy.capture_writes[0]
-        step_capture, step_blob = spy.capture_writes[1]
-        trailing_capture, trailing_blob = spy.capture_writes[2]
+        step_before, step_before_blob = spy.capture_writes[1]
+        step_capture, step_blob = spy.capture_writes[2]
+        trailing_capture, trailing_blob = spy.capture_writes[3]
         assert probe_capture.screening_status is ScreeningStatus.SCREENED_CLEAN
         assert probe_capture.shown_to_agent is False
         assert probe_blob == png
+        # The pre-dispatch write is the same frame, durable, saying only what was true then.
+        assert step_before.capture_id == step_capture.capture_id
+        assert step_before.shown_to_agent is False
+        assert step_before_blob == png
         assert step_capture.screening_status is ScreeningStatus.SCREENED_CLEAN
         assert step_capture.shown_to_agent is True
         assert step_blob == png
@@ -456,8 +500,53 @@ async def test_screened_clean_capture_bytes_reach_the_provider_request(tmp_path:
         store.close()
 
 
+async def test_the_unplumbed_production_path_withholds_every_frame(tmp_path: Path) -> None:
+    """The Principle I hole, asserted end to end on the real loop -- deliberately *without*
+    ``text_evidence_plumbed``.
+
+    ``run/decision_loop.py`` does not enumerate window titles, so the content gate has no
+    technique for most of its own reject categories and cannot certify any frame. Every capture
+    must therefore come back withheld and no image may reach the provider -- on a VALIDATED host
+    serving a frame that is, pixel for pixel, the same one the test above delivers. This is the
+    intended consequence of the gate failing closed, and this test is what will go red when the
+    loop finally supplies the evidence (delete it then, together with the fixture).
+    """
+    run_id = RunId("run-image-unplumbed")
+    run, config = _build_run_and_config(
+        run_id, tier=HostSupportTier.VALIDATED, comparability=ComparabilityStatus.COMPARABLE
+    )
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+    spy = _SpyStore(store)
+
+    host = FakeHostPlatform()
+    host.set_capture_result(_clean_capture_result(_png_bytes()))
+
+    provider = FakeModelProvider()
+    provider.queue_decision(_tick(is_end_turn=True))
+
+    deps = _make_deps(
+        tmp_path=tmp_path, run_id=run_id, store=spy, game=_FakeGame(), provider=provider, host=host
+    )
+
+    try:
+        await run_turn_cycle(deps, run=run)
+
+        assert provider.calls
+        assert all(call.images == [] for call in provider.calls)
+        assert spy.capture_writes
+        for capture, blob in spy.capture_writes:
+            assert capture.screening_status is ScreeningStatus.WITHHELD
+            assert capture.withheld_reason is WithheldReason.NON_PLAYER_UI
+            assert capture.shown_to_agent is False
+            assert capture.blob_ref is None
+            assert blob is None
+    finally:
+        store.close()
+
+
 async def test_no_image_reaches_the_agent_on_a_platform_without_a_passed_r6_spike(
-    tmp_path: Path,
+    tmp_path: Path, text_evidence_plumbed: None
 ) -> None:
     """T099's rule, enforced in production: ``Run.host_support_tier`` is ``VALIDATED`` exactly
     when this platform's own R6 capture-hygiene spike passed, and on any other tier no image may
@@ -520,7 +609,9 @@ async def test_no_image_reaches_the_agent_on_a_platform_without_a_passed_r6_spik
 # --------------------------------------------------------------------------
 
 
-async def test_mid_run_capture_degradation_downgrades_run_comparability(tmp_path: Path) -> None:
+async def test_mid_run_capture_degradation_downgrades_run_comparability(
+    tmp_path: Path, text_evidence_plumbed: None
+) -> None:
     """A run that starts ``COMPARABLE`` on a validated host and loses its images mid-run must
     serve a downgraded ``comparability_status`` from the record -- not just per-step
     ``visually_degraded`` flags. Asserted on what the store received: exactly one
@@ -617,5 +708,104 @@ async def test_an_already_degraded_run_is_never_rewritten_on_further_degradation
         unchanged = store.get_run(run_id)
         assert unchanged is not None
         assert unchanged.comparability_status is ComparabilityStatus.VISUALLY_DEGRADED
+    finally:
+        store.close()
+
+
+# --------------------------------------------------------------------------
+# T260 -- the shown flag is written after the dispatch, never before it
+# --------------------------------------------------------------------------
+
+
+class _DispatchInterrupted(RuntimeError):
+    """The provider call died in flight, after the request left the harness."""
+
+
+class _ProviderInterruptedMidDispatch(FakeModelProvider):
+    """Accepts the request -- images and all -- and then never returns a response.
+
+    This is the exact shape of the run that produced the defect: the frame was handed to the
+    provider and the step never got any further. A transport failure, a killed process and an
+    operator pause all land here.
+    """
+
+    def complete(self, request: Any) -> Any:
+        self.calls.append(request)
+        raise _DispatchInterrupted("scripted: the provider call died in flight")
+
+
+async def test_a_dispatch_that_never_returns_leaves_the_capture_recorded_not_shown(
+    tmp_path: Path, text_evidence_plumbed: None
+) -> None:
+    """T260, FR-015, SC-019 -- the case that produced every bad row on the live store, and the
+    one the suite had no test for.
+
+    ``shown_to_agent`` is a durable claim that the agent was shown this frame, and until T260 the
+    loop wrote it **before** calling ``provider.complete``: one line early, and therefore an
+    intention, not an outcome -- while ``decision_loop``'s own comment and ``_FreshObservation``'s
+    docstring both asserted the opposite ("reports what happened, never an intention").
+
+    MEASURED on the live store, 2026-09-22: **13 captures carry ``shown_to_agent=True`` for
+    decision steps that have no ``model_calls`` row and no ``decision_steps`` row at all** --
+    ``run-4c0b8fb4`` (2), ``run-a06e8e68`` (10), ``run-1091122b`` (1), every one of them
+    ``lifecycle_state=paused`` / ``record_completeness_status=has_gaps``. The reverse direction
+    was clean (0 model calls with ``image_count > 0`` and no shown capture), which is the
+    signature of a flag written ahead of its own outcome: a successful ``ModelCall`` rides along
+    in the end-of-turn ``TurnCycleRecord``, so a turn interrupted inside ``complete()`` left the
+    "the agent saw this" claim behind with every piece of its evidence gone.
+
+    So: the request goes out carrying the image (asserted here on the provider's own call log),
+    the call dies, and the record must say **not shown** -- the only thing that is settled. It
+    now agrees with the absence of a model call instead of contradicting it, and the frame itself
+    is still durable, because the un-shown write happens *before* the dispatch (FR-051, D5).
+    """
+    run_id = RunId("run-dispatch-interrupted")
+    run, config = _build_run_and_config(
+        run_id, tier=HostSupportTier.VALIDATED, comparability=ComparabilityStatus.COMPARABLE
+    )
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+    spy = _SpyStore(store)
+
+    png = _png_bytes()
+    host = FakeHostPlatform()
+    host.set_capture_result(_clean_capture_result(png))
+
+    provider = _ProviderInterruptedMidDispatch()
+    provider.queue_decision(_tick(is_end_turn=True))
+
+    deps = _make_deps(
+        tmp_path=tmp_path, run_id=run_id, store=spy, game=_FakeGame(), provider=provider, host=host
+    )
+
+    try:
+        with pytest.raises(_DispatchInterrupted):
+            await run_turn_cycle(deps, run=run)
+
+        # The image really did leave the harness -- this is not a test of a request that was
+        # never built. The frame was attached; what never happened is the call returning.
+        assert len(provider.calls) == 1
+        assert [image.data for image in provider.calls[0].images] == [png]
+
+        # Not one capture the store received claims to have been shown.
+        assert spy.capture_writes
+        assert all(capture.shown_to_agent is False for capture, _blob in spy.capture_writes)
+
+        # And the durable record agrees -- including the step's own frame, whose bytes survived
+        # the interruption precisely because the un-shown write precedes the dispatch.
+        stored = store.list_captures(run_id)
+        assert stored
+        assert all(capture.shown_to_agent is False for capture in stored)
+        step_frames = [
+            capture
+            for capture in stored
+            if capture.screening_status is ScreeningStatus.SCREENED_CLEAN
+        ]
+        assert step_frames
+        assert all(capture.blob_ref == hashlib.sha256(png).hexdigest() for capture in step_frames)
+
+        # The evidence the 13 rows were missing: there is none, and now nothing claims otherwise.
+        assert store.list_model_calls(run_id) == []
+        assert store.get_turn_cycle(run_id, 1, authoritative_only=False) is None
     finally:
         store.close()
