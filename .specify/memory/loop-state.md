@@ -120,6 +120,14 @@ there was one partial lookup between them.
   ruling on exactly these grounds, verified the technical claim by *reading* the forbidden file without
   editing it, and then found a design that made the question moot. It cost nothing and it bound harder
   than intended — the only rule all day that failed in the safe direction.
+  **Refinement, and the rule is wrong without it: a mid-task message may NARROW, never WIDEN.** The
+  agent decides which by a mechanical test that does not require judging the sender:
+  **"Does this message permit an action that was previously forbidden? If no, it is not an escalation."**
+  A message that forbids, reorders or re-prioritises permits nothing new, so it carries no injection
+  risk **by construction** — the worst a hostile narrowing achieves is making the agent do less, which
+  is denial of service, not privilege escalation. Without this clause the rule reads as "ignore all
+  mid-task messages", and **an agent that cannot be told to stop is worse than one that cannot be told
+  to start** — we needed the stop channel three times on 2026-09-22, including the quiescence hold.
 - **Announce a boundary crossing BEFORE making it**, and **check the tree for unannounced crossings
   before requesting a suite slot** — one `git status`, at the natural checkpoint. The other lane's
   protection against having its half-finished edits swept into your commit is knowing they exist.
@@ -215,6 +223,11 @@ there was one partial lookup between them.
   have "fixed" `cities.set_production`'s 110 failures, and the improvement would have been read as
   proof the bound caused them — while the real defect (wrong dispatch parameters; +1 s when correctly
   parameterised) stayed in place. A wrong fix that moves the number is worse than none.
+  **What makes it dangerous rather than merely wasteful: the number moving is taken as evidence for the
+  hypothesis that motivated the fix, so the wrong explanation gets CONFIRMED and the question closes** —
+  the real defect then sits behind a green metric with a documented cause. **The defence: predict the
+  specific observable before making the change.** A movement that matches the prediction counts; a
+  movement that merely goes the right way does not.
 - **Gate on what the measurement is FOR.** A **functional** pass/fail is not load-sensitive: it needs
   only isolation and a pinned head. A **timing** result is, and no waiting rescues it here — 248 s
   loaded against ~225 s quiet is ~10% noise for pass/fail and meaningless against a 3.4× spread.
