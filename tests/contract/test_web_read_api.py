@@ -329,6 +329,55 @@ def test_capture_image_route_honours_the_same_gate(
     assert body["detail"]["unavailable_reason"] == expected_reason
 
 
+def test_a_store_without_the_blob_capability_names_the_port_gap(web_store_factory):
+    """T078: the `CaptureBlobReader` degraded path, which nothing exercised.
+
+    `store_client/port.py` says the three surviving probed capabilities stay
+    *because the probe is the graceful-degradation path*, and names the test
+    holding each one. That was true of `RunCatalogReader`
+    (`test_the_catalog_says_so_when_the_port_can_only_reach_active_runs`) and of
+    `TurnAttemptReader`
+    (`test_an_unaddressable_attempt_names_the_port_gap_rather_than_substituting`),
+    and false of `CaptureBlobReader`: the only mention of
+    `capture_blob_unreachable` anywhere under `tests/` asserted the branch was
+    **absent** (003's `test_web_against_tracking_store.py`, correctly — a real
+    store resolves blobs). Nothing asserted it fires.
+
+    So the 503 could have been deleted, or turned into a placeholder image, with
+    the whole suite green and `port.py` still claiming a test held it. That is
+    the shape this feature has now found four times, and here it was introduced
+    by the very edit that wrote the claim down.
+
+    The distinction the branch exists to draw: a **screened-clean** capture the
+    store cannot resolve is a *port* gap (503, naming it), not an unviewable
+    capture (404, `capture_unavailable`). Collapsing the two would tell a user
+    their screening withheld an image that screening passed.
+    """
+    from web_support.fixtures import make_client, published_port_only
+
+    capture_id = "cap-tc-run-1-t2-a0-s1"
+    store = published_port_only(web_store_factory())
+    with make_client(store) as client:
+        response = client.get(f"/captures/{capture_id}/image")
+
+    assert response.status_code == 503, (
+        "a screened-clean capture on a store with no blob read must name the "
+        "port gap, not 404 as if screening had withheld it"
+    )
+    body = response.json()
+    assert body["kind"] == "capture_blob_unreachable"
+    assert body["detail"]["capture_id"] == capture_id
+    assert "CaptureBlobReader" in body["message"]
+
+    # The control: the same capture on a store that *does* offer the capability
+    # serves bytes. Without this, the assertion above would also pass against a
+    # store whose capture was never clean in the first place.
+    with make_client(web_store_factory()) as client:
+        ok = client.get(f"/captures/{capture_id}/image")
+    assert ok.status_code == 200
+    assert ok.headers["content-type"].startswith("image/")
+
+
 def test_a_withheld_capture_still_renders_its_structured_panels(web_store_factory):
     """FR-034 / SC-015: the turn's panels render normally, capture marked absent."""
     from web_support.fixtures import make_client

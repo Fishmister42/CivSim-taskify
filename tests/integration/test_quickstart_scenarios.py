@@ -40,7 +40,18 @@ def test_setup_doctor_reports_all_green_in_the_documented_shape(capsys):
 
     The document shows five labelled lines. `doctor` is the operator's first
     contact with this feature, so the shape it prints is part of the contract
-    with them, not incidental formatting.
+    with them, not incidental formatting -- this test pins the shape (five
+    labels, four of them reporting `ok`, none `FAILED`) and the one number in
+    the coverage line that is this feature's own invariant: the last one, `0
+    unregistered fields reachable from a view model`, which is the claim
+    `doctor` exits non-zero on. It deliberately does NOT pin the coverage
+    line's other four counts (fields scanned, marked out-of-game, registered,
+    unregistered and unrendered) -- those track 002's `data-model.md` and move
+    whenever that deliverable adds, removes, or reclassifies a field,
+    independently of anything this feature does. Pinning a cross-deliverable
+    count here would fail this suite on every 002 field addition, which is how
+    a guard becomes something contributors edit to make green rather than a
+    check that catches a regression (see quickstart.md and tasks.md T076).
     """
     from civsim_web.cli import main
 
@@ -55,8 +66,25 @@ def test_setup_doctor_reports_all_green_in_the_documented_shape(capsys):
         "bind address(es)  :",
     ):
         assert label in printed, f"doctor no longer prints the {label.strip(' :')!r} line"
+    for ok_label in (
+        "store             :",
+        "panel registry    :",
+        "registry coverage :",
+        "routes            :",
+    ):
+        assert re.search(rf"^{re.escape(ok_label)} ok\b", printed, re.MULTILINE), (
+            f"{ok_label.strip(' :')!r} line does not report ok"
+        )
     assert "FAILED" not in printed
-    assert "0 unregistered fields reachable from a view model" in printed
+    # The four scanned/out-of-game/registered/unregistered counts are 002's,
+    # not this feature's, and are deliberately left as \d+: only the coverage
+    # line's last number -- this feature's own invariant -- is pinned to 0.
+    assert re.search(
+        r"registry coverage : ok \(\d+ fields scanned, \d+ marked out-of-game, "
+        r"\d+ registered, \d+ unregistered and unrendered, "
+        r"0 unregistered fields reachable from a view model\)",
+        printed,
+    ), "coverage line's final count must read '0 unregistered fields reachable from a view model'"
     # The freeze is the claim the same paragraph makes about rule P6.
     assert re.search(r"panel registry\s+: ok \(version \d+, \d+ panels, frozen\)", printed)
 

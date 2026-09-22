@@ -19,8 +19,8 @@ other.
 ``panels`` landed with US2 (T035, T038) and carries three paths, not two: the
 run- and turn-scoped shapes the contract's table names, plus the step-scoped
 one ``data-model.md`` SS12 describes and that table omits (see the module's own
-docstring -- twenty shipped panels are ``scope: step`` and would otherwise have
-no resolvable URL).
+docstring -- 22 of the 37 shipped panels are ``scope: step`` and would
+otherwise have no resolvable URL).
 
 ``catalog`` (``/runs``) and ``compare`` (``/compare``) landed with US4. Note
 that ``catalog`` is registered *after* ``live``: ``live`` owns ``/`` and

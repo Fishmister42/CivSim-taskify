@@ -29,7 +29,7 @@ uv run civsim-web doctor      # preflight: store reachable, Panel Registry loads
 ```text
 store             : ok (ping succeeded)
 panel registry    : ok (version 1, 37 panels, frozen)
-registry coverage : ok (167 fields scanned, 91 marked out-of-game, 27 registered, 49 unregistered and unrendered, 0 unregistered fields reachable from a view model)
+registry coverage : ok (180 fields scanned, 103 marked out-of-game, 27 registered, 50 unregistered and unrendered, 0 unregistered fields reachable from a view model)
 routes            : ok (13 registered, all 13 contract routes present)
 bind address(es)  : 192.168.1.42:8420, 127.0.0.1:8420   (LAN + loopback — no wildcard)
 ```
@@ -43,6 +43,13 @@ and this feature's view models and reports how many fields 002 records could ren
 permitting them. That number must be `0`; `doctor` exits non-zero if it is not. (Before T062 the line
 printed a literal `0`, which is the kind of self-confirming preflight this project has learned to
 distrust.)
+
+The first four numbers on the coverage line track 002's `data-model.md`: they move whenever that
+deliverable adds, removes, or reclassifies a field, independently of anything this feature does. The
+sample above is illustrative for that reason — treat the shape, not the digits, as what quickstart
+promises. The number this feature actually owns is the **last** one: `0` unregistered fields reachable
+from a view model. That is the only claim `doctor` enforces by exiting non-zero, and it is the one a
+reader should expect to still be `0` on any given day.
 
 **`frozen`** means `panels/VERSION.lock` exists and the shipped declarations still hash to what it
 records — registry rule P6 in force. If it says `NOT FROZEN`, a warning line follows and declarations

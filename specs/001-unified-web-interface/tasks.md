@@ -1489,7 +1489,7 @@ address (T072); all three unasserted clauses pinned (T073); both stale in-code c
 future contributor and that nothing can make wrong.** Both are load-bearing in the way a test is,
 and neither fails when it stops being true.
 
-- [ ] T076 **MEDIUM** Correct `quickstart.md`'s `civsim-web doctor` sample and guard it at the
+- [X] T076 **MEDIUM** Correct `quickstart.md`'s `civsim-web doctor` sample and guard it at the
   level it can actually hold, per T062 and `quickstart.md` (contradicts). **The finding**:
   `quickstart.md:32` documents `registry coverage : ok (167 fields scanned, 91 marked
   out-of-game, 27 registered, 49 unregistered and unrendered, 0 unregistered fields reachable
@@ -1509,7 +1509,7 @@ and neither fails when it stops being true.
   will move, and tighten the test to assert the part that is this feature's own invariant: five
   labelled lines, each `ok`, and **the coverage line's last number is `0`** — which is the claim
   `doctor` exits non-zero on and the only one of the five that means anything about parity.
-- [ ] T077 **MEDIUM** Replace the three probe docstrings' now-false instruction with the decision
+- [X] T077 **MEDIUM** Replace the three probe docstrings' now-false instruction with the decision
   that was actually taken, per Phase 9's "The three probed capabilities stay, now that 003 has
   landed" (contradicts). **The finding**: `src/civsim_web/store_client/port.py` declares
   `RunCatalogReader` (line 295), `CaptureBlobReader` (322) and `TurnAttemptReader` (353), and each
@@ -1531,6 +1531,21 @@ and neither fails when it stops being true.
   (`grep -c 'scope: step' panels/*.yaml`), which is what `contracts/web-read-api.md`'s own
   amendment says; the number was right when US2 wrote it and went stale when US3 added
   `history.yaml`.
+
+- [X] T078 **MEDIUM** Exercise the `CaptureBlobReader` degraded path, per FR-011/FR-034 and
+  `contracts/web-read-api.md`'s error table (missing). **Found by T077's own edit.** That task's
+  new docstrings say each surviving probe stays *because the probe is the graceful-degradation
+  path*, and name the test holding it. True for `RunCatalogReader`
+  (`test_the_catalog_says_so_when_the_port_can_only_reach_active_runs`) and for
+  `TurnAttemptReader` (`test_an_unaddressable_attempt_names_the_port_gap_rather_than_substituting`).
+  **False for `CaptureBlobReader`**: the only occurrence of `capture_blob_unreachable` anywhere
+  under `tests/` asserted the branch was *absent* (003's `test_web_against_tracking_store.py`,
+  correctly — a real store resolves blobs). Nothing asserted it fires, so the `503` in
+  `routes/captures.py` could have been deleted, or replaced with a placeholder image, with the
+  suite green and `port.py` claiming a test held it. Assert that a **screened-clean** capture on a
+  `published_port_only` store answers `503 capture_blob_unreachable` naming the port gap — not
+  `404 capture_unavailable`, which would tell a user screening withheld an image screening passed
+  — with the capability-present case as the control.
 
 ### Recorded, not tasked
 
@@ -1566,3 +1581,49 @@ spends the pass on something else.
   cookie or a session. Asserting "no route requires authentication" over a codebase containing no
   authentication code is a check that compares the absence of a thing to itself, which is the
   anti-pattern the Phase 9 notes name three times. Deliberately not written.
+
+### Phase 10 notes — what closed, and the finding the fix produced
+
+Written when T076–T078 landed. **All 78 tasks are now `[X]`.**
+
+**T076 corrected the sample and, deliberately, did not pin the number.** `quickstart.md` now
+records what `civsim-web doctor` prints — `180 fields scanned, 103 marked out-of-game, 27
+registered, 50 unregistered and unrendered, 0 unregistered fields reachable from a view model` —
+and says in the document that the first four counts track **002's** `data-model.md` and move
+whenever that deliverable adds a field. The test asserts the five labels, that each ok-bearing
+line reads `ok`, and that the coverage line's **final** count is literally `0`, with `\d+`
+wildcards for the four that are not this feature's to own. **Revert confirmation, run and
+recorded**: changing that trailing literal to `1` fails with
+`coverage line's final count must read '0 unregistered fields reachable from a view model'`, and
+restoring it passes (27 in the file). Pinning all five would have put a cross-deliverable count in
+this feature's CI and broken it on every 002 field addition — which is how a guard becomes
+something contributors edit to make green, rather than something that tells them anything.
+
+**T077 replaced three instructions with the decision they contradicted.** `RunCatalogReader`,
+`CaptureBlobReader` and `TurnAttemptReader` each now records that retirement was considered on
+2026-09-21 and declined, the two reasons (the probe *is* the graceful-degradation path, named test
+by test; and importing 003's contract is forbidden by `test_no_module_imports_the_harness`), what
+already answers the conformance question from 003's side, and what would have to change to
+re-open it — in the voice of the `RunConfigurationReader` retirement comment above them. The stale
+panel count was corrected in `routes/__init__.py` **and** in `routes/panels.py`, which carried the
+identical "Twenty" claim and which T077's own text had missed.
+
+**T078 exists because T077 wrote down a claim that was two-thirds true.** Saying "the probe is the
+graceful-degradation path, and here is the test that holds it" is only worth writing if it is
+true of all three. It was true of `RunCatalogReader` and `TurnAttemptReader`. For
+`CaptureBlobReader` the only occurrence of `capture_blob_unreachable` anywhere under `tests/`
+asserted the branch was **absent** — 003's own integration test, correctly, since a real store
+resolves blobs — so nothing asserted it ever fires. The `503` could have been deleted, or turned
+into the placeholder image `contracts/web-read-api.md` rules out by name, with the suite green and
+`port.py` claiming a test held it.
+
+That is worth sitting with for a moment: **the edit that documented the guarantee is what revealed
+the guarantee was unguarded.** Writing "this is held by X" forces the question of whether X exists,
+and here the answer was no. It is the cheapest audit this project has run all week.
+
+`test_a_store_without_the_blob_capability_names_the_port_gap` now asserts that a **screened-clean**
+capture on a `published_port_only` store answers `503 capture_blob_unreachable` naming the port
+gap — not `404 capture_unavailable`, which would tell a user screening withheld an image that
+screening passed — with the capability-present case as an in-test control so the assertion cannot
+pass against a capture that was never clean. **Revert confirmation, run and recorded**: dropping
+the `published_port_only` wrapper fails with `assert 200 == 503`, and restoring it passes.

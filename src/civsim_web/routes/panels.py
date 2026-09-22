@@ -25,7 +25,7 @@ Principle VI exists to forbid.
 notes recorded it as finding 4: ``data-model.md`` SS12 describes
 ``/steps/{step_index}`` being inserted into the panel path for a step-scoped
 panel, ``refs/reference.py`` parses that shape, and the route table in
-``contracts/web-read-api.md`` lists only the turn- and run-scoped shapes. Twenty
+``contracts/web-read-api.md`` lists only the turn- and run-scoped shapes. Twenty-two
 of the registry's shipped panels are ``scope: step``. Leaving the shape
 unrouted would mean a registered panel with no resolvable URL, which is UP-006
 failing quietly, so the route exists and the contract gap is recorded in

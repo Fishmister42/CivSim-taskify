@@ -309,9 +309,27 @@ class RunCatalogReader(Protocol):
     failure mode UP-005 exists to prevent and the one most likely to corrupt a
     trend conclusion (Principle III).
 
-    **This is a dependency to raise with deliverable 3, not a decision taken
-    here.** When the port publishes a catalog listing, delete this Protocol and
-    widen ``MatchStore`` to match.
+    **This stayed a probed capability once deliverable 3 landed** (considered
+    2026-09-21 and declined -- see tasks.md Phase 9, "The three probed
+    capabilities stay, now that 003 has landed"). ``match-tracking-store.md``
+    now publishes ``list_runs`` under this name, which makes retiring the
+    Protocol look free. It is not, for two independent reasons. First, it would
+    not be behaviour-preserving: the probe *is* the partial-catalog degradation
+    described above, and making the read mandatory deletes that path along with
+    the test that holds it, ``published_port_only``
+    (``test_the_catalog_says_so_when_the_port_can_only_reach_active_runs``).
+    Second, importing 003's contract to check for the capability directly is
+    forbidden here regardless of what it publishes:
+    ``tests/contract/test_web_parity_boundary.py::test_no_module_imports_the_harness``
+    fails on any ``civsim_harness`` import from ``src/civsim_web/**`` (plan.md
+    Constitution Check, Principle I). The amended port's E2 keeps structural
+    probing as the discovery mechanism for exactly this reason, so
+    ``civsim_web`` runs unmodified against the fake, 002's interim adapter, or
+    003's real store. Whether the probe still binds against a real store is a
+    003-side question, already answered by
+    ``tests/integration/test_web_against_tracking_store.py``, not this one.
+    Reopen this only if a future amendment removes structural probing as the
+    discovery mechanism.
     """
 
     def list_runs(self) -> list[RunLike]:
@@ -340,9 +358,27 @@ class CaptureBlobReader(Protocol):
     of the MatchStore port" constraint exists to prevent, and it would make this
     process's correctness depend on a path convention nobody published.
 
-    **This is a dependency to raise with deliverable 3, not a decision taken
-    here.** When the port publishes a blob read, this Protocol should be deleted
-    and ``MatchStore`` widened to match.
+    **This stayed a probed capability once deliverable 3 landed** (considered
+    2026-09-21 and declined -- see tasks.md Phase 9, "The three probed
+    capabilities stay, now that 003 has landed"). ``match-tracking-store.md``
+    now publishes ``get_capture_blob`` under this name, which makes retiring the
+    Protocol look free. It is not, for two independent reasons. First, it would
+    not be behaviour-preserving: the probe *is* the graceful degradation
+    described above -- the honest ``503`` naming the port gap -- and making the
+    read mandatory deletes that path along with ``published_port_only``, the
+    fixture built to exercise a store that offers only the published reads.
+    Second, importing 003's contract to check for the capability directly is
+    forbidden here regardless of what it publishes:
+    ``tests/contract/test_web_parity_boundary.py::test_no_module_imports_the_harness``
+    fails on any ``civsim_harness`` import from ``src/civsim_web/**`` (plan.md
+    Constitution Check, Principle I). The amended port's E2 keeps structural
+    probing as the discovery mechanism for exactly this reason, so
+    ``civsim_web`` runs unmodified against the fake, 002's interim adapter, or
+    003's real store. Whether the probe still binds against a real store is a
+    003-side question, already answered by
+    ``tests/integration/test_web_against_tracking_store.py``, not this one.
+    Reopen this only if a future amendment removes structural probing as the
+    discovery mechanism.
     """
 
     def get_capture_blob(self, capture_id: CaptureId) -> bytes | None:
@@ -374,10 +410,28 @@ class TurnAttemptReader(Protocol):
     never a silent substitution of the authoritative turn, which is the one
     outcome FR-009 rules out by name.
 
-    **This is a dependency to raise with deliverable 3, not a decision taken
-    here.** When the port publishes an attempt-addressed read (or documents
-    ``authoritative_only=False`` as returning every attempt), delete this
-    Protocol and widen ``MatchStore`` to match.
+    **This stayed a probed capability once deliverable 3 landed** (considered
+    2026-09-21 and declined -- see tasks.md Phase 9, "The three probed
+    capabilities stay, now that 003 has landed"). ``match-tracking-store.md``
+    now publishes ``get_turn_cycle_attempt`` under this name, which makes
+    retiring the Protocol look free. It is not, for two independent reasons.
+    First, it would not be behaviour-preserving: the probe *is* the honest
+    port-gap answer described above, and making the read mandatory deletes that
+    path along with the test that holds it,
+    ``make_store(attempt_reader=False)``
+    (``test_an_unaddressable_attempt_names_the_port_gap_rather_than_substituting``).
+    Second, importing 003's contract to check for the capability directly is
+    forbidden here regardless of what it publishes:
+    ``tests/contract/test_web_parity_boundary.py::test_no_module_imports_the_harness``
+    fails on any ``civsim_harness`` import from ``src/civsim_web/**`` (plan.md
+    Constitution Check, Principle I). The amended port's E2 keeps structural
+    probing as the discovery mechanism for exactly this reason, so
+    ``civsim_web`` runs unmodified against the fake, 002's interim adapter, or
+    003's real store. Whether the probe still binds against a real store is a
+    003-side question, already answered by
+    ``tests/integration/test_web_against_tracking_store.py``, not this one.
+    Reopen this only if a future amendment removes structural probing as the
+    discovery mechanism.
     """
 
     def get_turn_cycle_attempt(
