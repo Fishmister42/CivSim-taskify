@@ -232,6 +232,17 @@ there was one partial lookup between them.
   the real defect then sits behind a green metric with a documented cause. **The defence: predict the
   specific observable before making the change.** A movement that matches the prediction counts; a
   movement that merely goes the right way does not.
+- **AGREEMENT IS NOT INDEPENDENCE. Ask what each source MEASURES before counting it as corroboration.**
+  On 2026-09-22 four sources agreed the 4 s action-confirm bound was wrong by an order of magnitude —
+  and a sub-second probe reversed it. **They agreed because every one was a lower bound produced by
+  something giving up**, and one of them (the owner's "30–60 s per interaction") was measuring a
+  human-visible cycle dominated by 48.5 s model calls, not an action's settle time. Select and move
+  actually settle in **under 0.17 s, observed on poll #1** — the instrument's floor, not the game's
+  speed. Four numbers pointing one way *felt* like corroboration; sharing a failure mode is the one
+  thing that makes agreement worthless. **The reversal is scoped: do NOT raise `ACTION_CONFIRM_TIMEOUT_S`
+  uniformly — its classes differ by two orders of magnitude. It does NOT retire the 200 s end-turn
+  bounds**, which rest on measured regimes (11.5–16.9 s fast, 75–155 s slow) and a genuine wait on every
+  AI player. Someone reading "the bound work is suspended" would otherwise revert a supported change.
 - **Gate on what the measurement is FOR.** A **functional** pass/fail is not load-sensitive: it needs
   only isolation and a pinned head. A **timing** result is, and no waiting rescues it here — 248 s
   loaded against ~225 s quiet is ~10% noise for pass/fail and meaningless against a 3.4× spread.
