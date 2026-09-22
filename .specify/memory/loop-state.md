@@ -476,6 +476,37 @@ there was one partial lookup between them.
   **Do not fix it by defaulting the reason to a string.** A default would make the 131 look
   explained. Make the unknown explicit: a withhold with no determined cause must SAY it had no
   determined cause.
+- **✅ THE PRODUCTION CHAIN WORKS — `cities.select` then `cities.set_production` — demonstrated live
+  2026-09-22 (block 36, `run-8becab23…`, provider=scripted).** `cities.select(65536)` applied, then
+  `cities.set_production(UNIT_BUILDER)` applied, and the **next observation reads back
+  `production_queue: ['UNIT_BUILDER']`**. That chain had never been demonstrated and it blocks five of
+  thirteen goals. **Wording matters and is not optional: this proves THE CHAIN WORKS. It is a scripted
+  harness-capability test, recorded in its own tier, and it is NOT breadth — no agent chose it.**
+- **✅ Frame delivery is open, with the discriminating control inside one run.** Block 36a produced
+  20 captures: the **4 withheld are the steps taken BEFORE the camera moved, the 16 delivered are
+  after.** Same head, same run, same gate — **only the camera state changed.** That is what made it a
+  measurement rather than a coincidence.
+- **🛑 THIRD instance of the allowlist-as-detector false all-clear, and it is a class defect now.**
+  `screens.lua`'s `#open == 0` branch answers `screen: "world", recognized: TRUE,
+  has_blocking_prompt: false` whenever nothing on `CIVSIM_SCREEN_WATCHLIST` is open — so **a screen
+  absent from the list reads as NO SCREEN.** Instances: `WorldCongressIntro` (stalled a run),
+  `EndGameMenu` (full-screen DEFEAT modal), and **`HistoricMoments` / "Era Makes History", found
+  today — `turn.end_turn` would have been authorised against a full-screen card.**
+  **The watchlist names ~33 screens; the game exposes ~140 Lua contexts, so ~107 more can do this.**
+  Appending the newest offender each time treats the symptom. **The fix is loop-state's own named
+  move — remove the dependency: ask the engine which contexts are SHOWING rather than asking whether
+  one of ours is.** Positive control that proves the machinery is sound and the gap is the
+  fall-through specifically: the same probe on the same board minutes later **correctly** named
+  `TechCivicCompletedPopup`.
+- **The 200 s end-turn ceiling has now been exceeded by measurement: 203.256 s (block 36).**
+  `END_TURN_CONFIRM_TIMEOUT_S = 200.0` is labelled an ASSUMPTION in this file, and this is **the
+  first observed sample above it**. The turn advanced afterwards, so the bound is too tight rather
+  than the turn being stuck. **Do not raise it by guess** — this is one sample.
+- **✅ An explicit assumption discharged by measurement, which is how they should close.**
+  `catalogs/actions/camera.yaml`'s tolerance carried a stated assumption that **mid-range** zoom error
+  was unmeasured (every stored sample was a range endpoint). Measured today: a requested `0.5`
+  returned `0.50000047683716` — error **4.768e-07**, the same magnitude as the endpoint samples, well
+  inside the declared `0.001`. **The assumption is closed by a number, not by an argument.**
 - **A query that returns the same empty answer for your control as for your subject is broken, not
   conclusive.** A sweep read `outcome: None` for everything including the control, because the
   execution record nests under `decision` rather than beside it. **The control caught a broken query
