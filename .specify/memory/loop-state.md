@@ -59,6 +59,11 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
     bare → `CivSolver-verify/src/...`; with the overrides → `CivSolver/src/...`. The hypervisor and the
     live lane each fell into this an hour apart, and the hypervisor then broadcast a wrong "the rule is
     broken" correction after diagnosing an error message instead of running that one command.
+  - **A fresh worktree needs `uv sync --all-extras` before the suite means anything** — optional extras
+    (e.g. `jinja2`) are not installed by default and two web modules then fail collection, producing a
+    **false red** that looks like a defect at the committed hash. Third distinct way this check misfired
+    in one day; confirm the verifier itself (`civsim_harness.__file__` resolves into the worktree, and
+    an extras-only import succeeds) before trusting any result it gives.
   - **A clean worktree isolates the CODE; it does not isolate the MACHINE.** Treat a **timing or budget**
     failure as **inconclusive** until re-run on a quiet box; a **functional** failure is real immediately.
     At `c211605`: 3 failed / 2165 passed under a concurrent live model run and another lane's suite, all
