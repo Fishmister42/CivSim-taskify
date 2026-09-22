@@ -29,13 +29,26 @@ success: >
   or player.owned_improved_plot_count >= observed_start_owned_improved_plot_count + 1
 
 prerequisites:
-  # A Builder the player owns, with a charge left to spend. Deliberately NOT
-  # `player.units.selected_available_builds != []`: units.state reports the build buttons for the
-  # SELECTED unit only (they exist only on the open panel), and the Builder is not necessarily
-  # the selected unit in the run's first observation -- selecting it and walking it to a tile
-  # worth improving is the part of the item the agent is being asked to work out.
+  # A Builder the player owns, with a charge left to spend.
   - player.units.builder_count >= 1
   - player.units.builder_charges_total >= 1
+  # 2026-09-22 live defect: a board with real Builders and real charges can still be
+  # unreachable by construction -- confirmed live, 5 Builders / 15 charges, all standing on the
+  # capital's city-centre plot, where the game's own build panel returned seven `build_options`
+  # all `disabled: true` and `available_builds` empty. The two counts above cannot see that; this
+  # clause consults the game's own offered-builds list instead (units.state.available_builds,
+  # catalogs/observations/units.yaml), which is exactly the field that failure exposed as unread.
+  # Guarded on `selected_is_builder` rather than checked unconditionally: units.state reports
+  # `available_builds` for the SELECTED unit only (the panel is per-open-unit), and the Builder is
+  # not necessarily selected in the run's first observation -- selecting it and walking it to a
+  # tile worth improving is the part of the item the agent is being asked to work out. So this
+  # clause stays silent (vacuously true) until a Builder IS selected, and only then requires the
+  # game to have actually offered it something: `_reason == null` means the query was answered
+  # (not merely un-askable), so an answered-and-empty list is read as "not offered here", not
+  # papered over as "not asked yet".
+  - >-
+    not (player.units.selected_is_builder and player.units.selected_available_builds == []
+    and player.units.selected_available_builds_reason == null)
 
 notes: >
   Proves builder charge usage. The action is `units.build_improvement` (target: an

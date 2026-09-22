@@ -401,6 +401,19 @@ def derive_facts(entries: Iterable[Any]) -> dict[str, Any]:
                 "selected_unit_id": (
                     selected_unit.get("unit_id") if selected_unit is not None else None
                 ),
+                "selected_unit_type": (
+                    selected_unit.get("unit_type") if selected_unit is not None else None
+                ),
+                # 2026-09-22 goal-defect fix: whether the currently selected unit IS one
+                # of the player's Builders -- the same substring test `builder_count` above already
+                # uses, just asked of the one unit whose build buttons `available_builds` below can
+                # actually answer for (see that field's own comment: the panel is per-selected-unit
+                # only). Lets a goal ask "if a Builder is selected, is it being offered a build"
+                # without wrongly reading "nothing selected yet" as "no build offered anywhere".
+                "selected_is_builder": (
+                    selected_unit is not None
+                    and "BUILDER" in str(selected_unit.get("unit_type") or "")
+                ),
                 "selected_plot": (
                     selected_unit.get("plot") if selected_unit is not None else None
                 ),
@@ -487,6 +500,125 @@ _START_SNAPSHOT_FACTS: Mapping[str, tuple[str, ...]] = {
     "owned_plot_count": ("player", "owned_plot_count"),
     "owned_improved_plot_count": ("player", "owned_improved_plot_count"),
 }
+
+
+#: 2026-09-22 live defect: `use_a_builder` reported "unreached" for a board that was
+#: unreachable by construction -- 5 Builders with 15 charges, all on the capital's city-centre
+#: plot, where `available_builds` was empty and every `build_options` row was `disabled: true`).
+#: A completed enumeration of every shipped goal (tests/live/goals/*.yaml) found the same split
+#: every time: **does a goal's `prerequisites` block ask the game what it is offering right now,
+#: or does it only ask whether the ingredients exist?** A count of units, gold, or charges can be
+#: satisfied while the actual action stays refused for a reason no count captures (wrong tile,
+#: already sent, an empty policy slot) -- an offer field is the game's own answer, already
+#: computed, to the question a prerequisite exists to ask.
+#:
+#: This is the set of dotted fact names (`derive_facts`' own tree, exactly as
+#: `predicate_symbols` reads a predicate string) that count as such an offer field today. Each is
+#: a straight passthrough of one `catalogs/observations/*.yaml` field the client already computes
+#: as "what can be clicked right now" -- never a raw resource/ingredient count. Published as data
+#: (not a regex inside a test) so `tests/unit/test_goal_prerequisites_availability.py`'s ratchet
+#: and any future goal author read the same list.
+AVAILABILITY_FACT_NAMES: frozenset[str] = frozenset(
+    {
+        # cities.state.available_productions (catalogs/observations/cities.yaml) -- the city
+        # production panel's own live-button subset.
+        "player.cities.available_productions",
+        # religion.state.available_beliefs (catalogs/observations/religion.yaml).
+        "player.available_beliefs",
+        # research.state.researchable_techs (catalogs/observations/research.yaml).
+        "player.researchable_techs",
+        # units.state[].movement_remaining > 0, aggregated (catalogs/observations/units.yaml).
+        "player.units.movable_count",
+        # units.state[].available_promotions, aggregated (catalogs/observations/units.yaml).
+        "player.units.promotions_available_count",
+        # game.screen_state.prompt_options (catalogs/observations/game.yaml).
+        "game.prompt_options",
+        # government.state.available_policies (catalogs/observations/government.yaml).
+        "player.available_policies",
+        # units.state[].available_builds for the SELECTED unit (catalogs/observations/units.yaml)
+        # -- added by this fix for `use_a_builder`; see `selected_is_builder`'s own comment above
+        # for why this is guarded by which unit is selected rather than read unconditionally.
+        "player.units.selected_available_builds",
+    }
+)
+
+#: Goals whose `prerequisites` do not reference `AVAILABILITY_FACT_NAMES`, reviewed 2026-09-22 and
+#: kept out of the ratchet below deliberately, each for a stated, load-bearing reason rather than
+#: silently -- this dict IS the exception list, so growing it is a diff a reviewer sees, and
+#: `test_the_known_availability_exceptions_are_exactly_these_and_no_others` pins its keys so a new
+#: entry cannot be added by accident.
+KNOWN_AVAILABILITY_EXCEPTIONS: Mapping[str, str] = {
+    "select_city_then_unit": (
+        "cities.select / units.select have no availability gate beyond the thing existing "
+        "(catalogs/actions/cities.yaml, units.yaml: `unit.exists and unit.owner_is_local_player`, "
+        "no further clause) -- for THESE two actions, a bare count already IS the game's own "
+        "offer condition, not a proxy for it."
+    ),
+    "save_named_game": (
+        "saves.save_game's own availability_predicate is exactly `game.is_local_player_turn` "
+        "(catalogs/actions/saves.yaml) -- the prerequisite quotes that condition directly, so it "
+        "is the offer field, just not one in AVAILABILITY_FACT_NAMES's list-shaped idiom."
+    ),
+    "found_second_city": (
+        "REPORTED FINDING, 2026-09-22: no observation field reports whether a legal settle site "
+        "is REACHABLE from a unit's current position. `units.state[].can_found_city` "
+        "(catalogs/observations/units.yaml) reports only whether the unit's CURRENT plot is "
+        "legal right now -- gating the prerequisite on it would read as infeasible on nearly "
+        "every real run, since a fresh Settler essentially never starts already standing on a "
+        "legal site. `reachable_plots` carries coordinates only, no settle-legality flag. No "
+        "field in catalogs/observations/{units,map,cities}.yaml closes this gap; a harness-side "
+        "guess at legality from raw plot ownership would be exactly the un-consulted-game-state "
+        "pattern this fix exists to remove. Left as `settler_count >= 1` (an honest ingredient "
+        "check) rather than papered over with a field that would misclassify the goal."
+    ),
+    "send_delegation": (
+        "CONFIRMED broken (ingredients-only: player.met_civ_count and player.gold), same shape "
+        "as use_a_builder/found_second_city before this fix. Deliberately NOT fixed in this "
+        "change -- appended as a task in specs/002-civ-playing-harness/tasks.md instead, per the "
+        "live lane's do-not-touch-send_delegation directive."
+    ),
+}
+
+
+def goal_references_availability_field(goal: "Goal") -> bool:
+    """Does *goal* ask the game what it is offering, in at least one prerequisite?
+
+    Textual, not semantic: true iff some `prerequisites` predicate's dotted identifiers
+    (`predicate_symbols`) intersect `AVAILABILITY_FACT_NAMES`. This cannot tell a *sufficient*
+    check from an *insufficient* one (see `slot_policy` / `build_a_builder`'s own UNCERTAIN notes
+    in tasks.md) -- it only tells "ingredients-only" from "consults an offer field at all", which
+    is exactly the defect this function exists to catch.
+    """
+    return any(
+        predicate_symbols(predicate) & AVAILABILITY_FACT_NAMES for predicate in goal.prerequisites
+    )
+
+
+def assert_goal_prerequisites_reference_an_availability_field(goal: "Goal") -> None:
+    """Raise :class:`AssertionError` unless *goal* asks the game what it offers, not merely what
+    exists. The ratchet (``tests/unit/test_goal_prerequisites_availability.py``) calls this once
+    per non-exempt shipped goal; its own negative control calls it against a synthetic
+    ingredients-only goal to prove it can actually fail -- "a check nobody has proven can fail is
+    not a check".
+    """
+    if goal_references_availability_field(goal):
+        return
+    raise AssertionError(
+        f"{goal.goal_id}: prerequisites {list(goal.prerequisites)!r} reference none of "
+        f"AVAILABILITY_FACT_NAMES. Does the predicate ask the game what is offered, or ask "
+        f"whether the ingredients exist? A count of units, gold, or charges being satisfied is "
+        f"not the same as the game offering the action -- see use_a_builder's 2026-09-22 fix (5 "
+        f"Builders, 15 charges, unreachable by construction because none stood where a build was "
+        f"legal) for a confirmed live case where exactly that distinction was the whole bug. "
+        f"'unreached' and 'unreachable' are different claims: a run that plays out its turn cap "
+        f"without the success predicate firing is unreached, but a board that was infeasible from "
+        f"its first observation was unreachable, and use_a_builder's own run record said the "
+        f"first when the truth was the second -- an ingredients-only prerequisite cannot tell "
+        f"those two apart, which is exactly what this check exists to catch. If no offer field "
+        f"exists for what this goal needs, that is itself a finding: add the goal to "
+        f"KNOWN_AVAILABILITY_EXCEPTIONS with the reason, rather than leaving it unconsulted and "
+        f"silent."
+    )
 
 
 def _dig(facts: Mapping[str, Any], path: Sequence[str]) -> Any:

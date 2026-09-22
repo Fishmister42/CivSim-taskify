@@ -20,6 +20,23 @@ success: player.cities.count >= observed_start_cities_count + 1
 prerequisites:
   # `units.state` -> unit_type contains SETTLER. A settler that must first be produced cannot be
   # confirmed today: `city.available_productions` is [] on every record (see notes).
+  #
+  # 2026-09-22: REPORTED FINDING, not papered over. The enumeration that found
+  # `use_a_builder`'s ingredients-only defect asked the same question here: is there a
+  # game-computed field for "a legal settle site is reachable", the way `available_builds` answers
+  # the equivalent question for a Builder? There is not. `units.state[].can_found_city`
+  # (catalogs/observations/units.yaml) is the only related field, and it reports whether the
+  # unit's CURRENT plot is legal right now -- not whether one is reachable. Gating this
+  # prerequisite on it would read almost every real run as infeasible, since a fresh Settler
+  # essentially never starts already standing on a legal site (that is the whole point of the
+  # goal: several turns of deliberate movement are required first). `reachable_plots` carries
+  # coordinates only, with no settle-legality flag, and no observation in
+  # catalogs/observations/{units,map,cities}.yaml closes that gap. Computing legality ourselves
+  # from raw plot ownership in map.state would be a harness-side guess standing in for the game's
+  # own answer -- exactly the pattern this fix exists to remove, not a fix. So this stays an
+  # ingredient check (a Settler exists), honestly, rather than gaining a field that would make the
+  # goal spuriously unrunnable. Recorded as a reviewed ratchet exception in
+  # `live.goal_run.KNOWN_AVAILABILITY_EXCEPTIONS["found_second_city"]`.
   - player.units.settler_count >= 1
 
 notes: >
@@ -30,3 +47,5 @@ notes: >
   The "or can be produced" half of the prerequisite is deliberately NOT expressed: with
   `city.available_productions` empty on every record today there is no observation that could
   confirm it, and a prerequisite the harness cannot read must not be written as if it could.
+  Same rule applied again 2026-09-22 to "a legal settle site is reachable" -- see the prerequisite
+  comment above.
