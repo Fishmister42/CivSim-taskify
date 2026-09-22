@@ -122,6 +122,10 @@ assessment is a rule that returns the assessor's priors.
 - **Check a claim in the form the artifact actually uses.** A `grep` for a prose sentence returned zero
   because the sentence **wraps across two lines** — the false-claim passage was still there, verbatim,
   and read as fixed. A negative search result is evidence only if the search could have matched.
+  **Second half: a truncated search result is not evidence at all. Never pipe a confirming search
+  through `head`/`tail`.** A `head -3` returned only definition sites and made a module-scope call look
+  absent, nearly reversing a finding. Make it mechanical — the rule that says "notice when a count
+  looks too small" needs judgement and will not fire; "do not truncate" is a lookup and will.
 - **A closing counterpart is required for every action that opens a modal or full-screen view**, and
   its verification must confirm the view closed. The harness opened a diplomacy session it could not
   exit: `CloseSession()` answers `ok: true` and does nothing, `IsSessionActive()` does not exist on
