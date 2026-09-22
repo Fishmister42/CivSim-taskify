@@ -35,10 +35,36 @@ here with the same honesty this catalog's own Lua files use for their ``UNVERIFI
 
 **The one declaration-id-shaped exception: prompt responses.** Every ``prompts.*`` action shares one
 generic Lua function, ``lua/ingame/screens.lua``'s ``CivSim_Screens.respond(promptType, optionId)``
-(``catalogs/actions/prompts.yaml``'s own header) -- ``promptType`` is derived directly from the
-declaration_id (``prompts.unit_promotion`` -> ``prompt.unit_promotion``, matching
-``game.screen_state``'s own ``screen`` field naming, not guessed at), so it is supplied here rather
-than left to the generic parameter-marshaling rule above.
+(``catalogs/actions/prompts.yaml``'s own header) -- ``promptType`` is the screen id, matching
+``game.screen_state``'s own ``screen`` field naming, so it is supplied here rather than left to the
+generic parameter-marshaling rule above.
+
+MEASURED LIVE 2026-09-22 (Linux client, game turn 56, the board wedged on Cyrus's greeting): that
+derivation used to be an inline prefix swap here -- ``str(declaration_id).removeprefix("prompts.")``
+re-prefixed with ``"prompt."`` -- which is right for twelve of the thirteen prompt declarations and
+wrong for the thirteenth. ``prompts.ai_diplomatic_approach`` answers the screen
+``prompt.diplomatic_approach``: the catalog names the action for what the human does (answer an
+*AI's* approach) and the screen for what is on screen, and that one mismatch is already recorded,
+in both directions, in :data:`civsim_harness.act.prompts.PROMPT_ACTION_BY_SCREEN`. The inline swap
+did not consult it, so every answer to that prompt went out as ``prompt.ai_diplomatic_approach``,
+a key ``CIVSIM_KNOWN_SCREENS`` does not contain, and ``CivSim_Screens_RespondToPrompt``'s first
+guard rejected it. Proven on the live client, both directions, non-destructively::
+
+    respond("prompt.ai_diplomatic_approach", "Goodbye")
+        -> {"reason": "unknown_prompt", "ok": false}
+    respond("prompt.diplomatic_approach", "__not_an_option__")
+        -> {"ok": false, "reason": "option_not_offered", "offered": ["Goodbye"],
+            "prompt": "prompt.diplomatic_approach"}
+
+The second call is the proof that only the *key* was wrong: with the right one the guard passes and
+the real handler (``CivSim_Screens_AnswerDiplomaticApproach``, commit ``e0e82f0``) is reached and
+answers about the option instead. The cost of that one wrong key was total -- an unanswerable prompt
+keeps ``game.has_blocking_prompt`` true, so ``turn.end_turn`` is refused ``unavailable_to_human_now``
+and **no run on that board can advance a turn at all**. So the inverse mapping is no longer
+re-derived here: this module calls
+:func:`civsim_harness.act.prompts.prompt_screen_for_declaration_id`, the function that already owns
+the exception table, which is what makes the two directions incapable of disagreeing again. That
+helper existed and was tested when this bug shipped; it simply had no caller in ``src/``.
 """
 
 from __future__ import annotations
@@ -46,6 +72,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from civsim_harness.act.prompts import prompt_screen_for_declaration_id
 from civsim_harness.capability.executor import CapabilityExecutor
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.models.catalog import IntegrationCapability
@@ -55,12 +82,6 @@ from civsim_harness.models.common import CapabilityId, DeclarationId
 #: through a single, generic, declaration_id-parametrized Lua function rather than one function
 #: each (see module docstring).
 _PROMPT_CAPABILITY_ID = CapabilityId("prompts.orders")
-#: The declaration_id domain prefix every prompts.* declaration carries ("prompts.unit_promotion",
-#: ...) versus the screen-identity id lua/ingame/screens.lua's CIVSIM_KNOWN_SCREENS actually uses
-#: for the same prompt family ("prompt.unit_promotion", singular). Both are catalog-authoring
-#: conventions, not values either file states outright, so the mapping is spelled out here.
-_PROMPT_DECLARATION_PREFIX = "prompts."
-_PROMPT_SCREEN_PREFIX = "prompt."
 
 
 class ActionExecutor:
@@ -112,10 +133,10 @@ def _build_arguments(
     exception with a real, non-guessed shape (see below).
     """
     if capability.capability_id == _PROMPT_CAPABILITY_ID:
-        prompt_type = _PROMPT_SCREEN_PREFIX + str(declaration_id).removeprefix(
-            _PROMPT_DECLARATION_PREFIX
-        )
-        return (prompt_type, target)
+        # NOT a prefix swap: `act/prompts.py` owns the screen-id <-> declaration-id mapping in both
+        # directions, exception table included. Deriving it a second time here is what wedged the
+        # 2026-09-22 board -- see the module docstring's MEASURED LIVE note.
+        return (prompt_screen_for_declaration_id(declaration_id), target)
 
     extra = tuple(value for key, value in sorted(parameters.items()) if key != "target")
     if target is None:

@@ -15,6 +15,7 @@ game.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -298,3 +299,106 @@ def test_an_answer_that_changed_nothing_still_fails_verification(
     predicate must not lose that."""
     unchanged = _conversation([_GREETING_ACCEPT, _GREETING_DECLINE])
     assert _verifies(registry, target=_GREETING_ACCEPT, after=unchanged) is False
+
+
+# ---------------------------------------------------------------------------
+# The promptType the executor actually puts on the wire (MEASURED LIVE 2026-09-22)
+# ---------------------------------------------------------------------------
+#
+# Everything above this line checks the screen -> action direction. Nothing checked the direction
+# that is actually dispatched, action -> screen, and that is the direction that was wrong: the
+# production `ActionExecutor` re-derived it inline with a prefix swap instead of calling
+# `prompt_screen_for_declaration_id`, so `prompts.ai_diplomatic_approach` went out as the
+# nonexistent `prompt.ai_diplomatic_approach` and `lua/ingame/screens.lua`'s first guard answered
+# `{"reason": "unknown_prompt", "ok": false}`. The board could not clear the prompt, so
+# `game.has_blocking_prompt` stayed true, so no run on it could end a turn.
+#
+# The suite was green throughout. `tests/unit/test_executor_host_click.py` is the one unit test
+# that dispatches this declaration, and its Lua stub is
+# `function CivSim_Screens_RespondToPrompt(promptType, optionId) return { ok = false } end` --
+# it discards `promptType`, so any string at all passes. Hence the check below asserts on the
+# string itself, against `screens.lua`'s own list rather than against a copy of it: a list copied
+# into a test can drift with the thing it is meant to pin.
+
+_KNOWN_SCREENS_RE = re.compile(
+    r"CIVSIM_KNOWN_SCREENS\s*=\s*\{(.*?)\}", re.DOTALL
+)
+
+
+def _known_screens_from_lua() -> frozenset[str]:
+    """The `CIVSIM_KNOWN_SCREENS` list, read out of `lua/ingame/screens.lua` itself."""
+    source = (REPO_ROOT / "lua" / "ingame" / "screens.lua").read_text(encoding="utf-8")
+    match = _KNOWN_SCREENS_RE.search(source)
+    assert match is not None, "CIVSIM_KNOWN_SCREENS is not where this test expects it"
+    screens = frozenset(re.findall(r'"([^"]+)"', match.group(1)))
+    # A silently-empty parse would make every assertion below vacuously true.
+    assert "prompt.diplomatic_approach" in screens
+    return screens
+
+
+def _dispatched_prompt_type(registry: CapabilityRegistry, action: str) -> str:
+    """The first positional argument the production executor hands `CivSim_Screens.respond`."""
+    from civsim_harness.act.executor import _build_arguments
+
+    declaration_id = DeclarationId(action)
+    arguments = _build_arguments(
+        declaration_id=declaration_id,
+        capability=registry.capability_for(declaration_id),
+        parameters={},
+        target="an option",
+    )
+    assert len(arguments) == 2, "respond(promptType, optionId) takes exactly two arguments"
+    return str(arguments[0])
+
+
+def test_the_greeting_dispatches_the_screen_id_the_lua_knows_not_the_declarations_own_name(
+    registry: CapabilityRegistry,
+) -> None:
+    """The exact bug, pinned. `prompts.ai_diplomatic_approach` answers `prompt.diplomatic_approach`
+    -- the catalog names the action for what the human does and the screen for what is on screen,
+    and the prefix rule cannot bridge that. Before the fix this produced
+    `prompt.ai_diplomatic_approach`, which live returned `{"reason": "unknown_prompt", "ok": false}`
+    with no `prompt`/`option` echo -- the signature of `screens.lua`'s first guard, not of any
+    later branch."""
+    assert (
+        _dispatched_prompt_type(registry, "prompts.ai_diplomatic_approach")
+        == "prompt.diplomatic_approach"
+    )
+
+
+def test_every_prompt_action_dispatches_a_screen_id_screens_lua_actually_knows(
+    registry: CapabilityRegistry,
+) -> None:
+    """The general form, so the next declaration whose name does not match its screen is caught
+    when it is added rather than on a wedged live board. Asserted for every `prompts.*` action in
+    the real shipped catalog, against `screens.lua`'s own `CIVSIM_KNOWN_SCREENS`."""
+    known = _known_screens_from_lua()
+    catalog = load_catalog(CATALOG_ROOT)
+    actions = sorted(
+        str(declaration_id)
+        for declaration_id in catalog.declarations
+        if str(declaration_id).startswith("prompts.")
+    )
+    assert actions, "no prompts.* declarations found -- the catalog did not load"
+    unknown = {
+        action: dispatched
+        for action in actions
+        if (dispatched := _dispatched_prompt_type(registry, action)) not in known
+    }
+    assert unknown == {}, (
+        "these prompt actions dispatch a promptType lua/ingame/screens.lua does not know, so "
+        f"CivSim_Screens.respond would answer 'unknown_prompt': {unknown}"
+    )
+
+
+def test_the_dispatched_screen_id_round_trips_back_to_the_same_action(
+    registry: CapabilityRegistry,
+) -> None:
+    """The two directions must agree. They are one table now (`PROMPT_ACTION_BY_SCREEN`), and this
+    is what says so -- the executor no longer owns a second derivation that could drift from it."""
+    catalog = load_catalog(CATALOG_ROOT)
+    for declaration_id in sorted(str(d) for d in catalog.declarations):
+        if not declaration_id.startswith("prompts."):
+            continue
+        screen = _dispatched_prompt_type(registry, declaration_id)
+        assert str(prompt_declaration_id_for_screen(screen)) == declaration_id
