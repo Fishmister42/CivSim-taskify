@@ -26,6 +26,7 @@ from civsim_harness.act.availability import (
     availability_by_action,
     evaluate_action_availability,
 )
+from civsim_harness.act.predicates import build_predicate_bindings, evaluate_predicate
 from civsim_harness.agent.context import (
     AVAILABLE_GROUP_HEADER,
     UNAVAILABLE_GROUP_HEADER,
@@ -260,6 +261,44 @@ def test_an_empty_subject_list_says_the_board_shows_none() -> None:
     peace = _action("diplomacy.make_peace", MAKE_PEACE)
     row = evaluate_action_availability(peace, _observation([_relations()]))
     assert (row.available, row.reason) == (False, "the board is showing no other civilization")
+
+
+DECLARE_WAR = 'other_player.has_met and other_player.diplomatic_state != "war"'
+SEND_DELEGATION = "other_player.has_met and not other_player.has_delegation"
+
+
+@pytest.mark.parametrize("predicate", [DECLARE_WAR, MAKE_PEACE, SEND_DELEGATION])
+def test_a_target_outside_relations_scope_never_makes_a_diplomacy_action_true(
+    predicate: str,
+) -> None:
+    """The city-state scope finding (2026-09-22): `diplomacy.state.relations` never enumerates a
+    minor civilization (`relations_scope: "alive_major_civilizations"`,
+    `catalogs/observations/diplomacy.yaml`), so a city-state's player_id names no entry -- exactly
+    the binding an agent gets by naming any id `diplomacy.state` has never reported. `other_player`
+    then binds `{"exists": False}` and every attribute this evaluator reads off it resolves `None`
+    (`civsim_harness.act.predicates._resolve_attribute`). Every diplomacy action predicate leads
+    with `other_player.has_met`, which is `None` here -- falsy -- so the whole `and`-chain
+    short-circuits False under Python's own truthiness, never True. Confirmed, not assumed: this
+    is the safe polarity (an out-of-scope target under-reports -- refused, recoverable -- rather
+    than fabricating availability), and it holds even with an in-scope, met, not-at-war,
+    no-delegation major also on the board (player 3), so the False here is about the *target*
+    named, not an empty board."""
+    board = _observation(
+        [
+            _relations(
+                {
+                    "player_id": 3,
+                    "has_met": True,
+                    "diplomatic_state": "peace",
+                    "has_delegation": False,
+                }
+            )
+        ]
+    )
+    # 999: a player_id `diplomacy.state` never reported -- standing in for a city-state, which
+    # this scope never enumerates, met or not.
+    bindings = build_predicate_bindings(observation=board, target=999)
+    assert evaluate_predicate(predicate, bindings) is False
 
 
 def test_a_spy_action_is_greyed_out_with_no_spy_and_lit_with_an_available_one() -> None:

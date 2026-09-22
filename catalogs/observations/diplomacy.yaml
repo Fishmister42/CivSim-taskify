@@ -11,11 +11,32 @@
   parity_basis: >
     Open the Diplomacy overview (or the leader list) and read each met civilization's
     relationship status.
+  # STATED SCOPE, not silent (2026-09-22, the 882758e/0989e3b convention). `relations` has always
+  # enumerated only alive players for which `Player:IsMajor()` answers true -- an EXPLICIT filter
+  # confirmed callable in this context (`nm -DC` on the shipped `libGameCore_{Base,XP1,XP2}.so`:
+  # `GameCore::Lua::IPlayer::lIsMajor` is exported identically to the InGame-side
+  # `GameCore::Cache::Lua::IPlayer::lIsMajor`), not an accessor artefact. A minor civilization
+  # (city-state) is therefore NEVER a `relations` entry, met or not, and that was previously
+  # indistinguishable from "not yet met" for any consumer -- see
+  # specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/BREADTH-MAP.md's "Kong" finding, which
+  # asserted a city-state "HAS been met" on visual/screenshot grounds this pass did not find
+  # independently corroborated anywhere else in the repo or the store (NOT DEMONSTRATED, not
+  # confirmed false either). `relations_scope` makes the enumerated set a fact in the observation
+  # itself; a player_id absent from `relations` is now explained by that field, never by silence.
+  #
+  # Separately (reported, not fixed here -- see lua/gamecore/diplomacy.lua's own comments and
+  # src/civsim_harness/act/predicates.py's KNOWN_SCHEMA_BODY_DISAGREEMENTS /
+  # KNOWN_PHANTOM_PREDICATE_FIELDS, tasks T307/T308): `diplomatic_state` is Cache/InGame-only by
+  # static confirmation (no `GameCore::Lua::` binding for `GetDiplomaticStateIndex` on any
+  # interface) and has never once been non-null on a met relation in this context, for the whole
+  # recorded history of the harness. That is a different defect from the one this pass closes --
+  # it affects met major civilizations' state field, not which players are enumerated at all -- and
+  # is left exactly as already tracked.
   context: GameCore_Tuner
   capability_id: diplomacy.read
   output_schema:
     type: object
-    required: [relations]
+    required: [relations, relations_scope]
     properties:
       relations:
         type: array
@@ -28,4 +49,11 @@
             diplomatic_state: { type: [string, "null"] }
             has_delegation: { type: boolean }
             civilization: { type: [string, "null"] }
+      # The exact set `relations` enumerates -- currently always "alive_major_civilizations". Never
+      # absent: the filter that produces it (Player:IsMajor()) is confirmed bound in this context
+      # (see above), so this is a stated fact, not an unanswered question.
+      relations_scope: { type: string }
+      # Present only when `relations` could not be produced at all -- never a silent `[]`. The
+      # 882758e/0989e3b convention: `no_local_player` before any player object is touched.
+      relations_reason: { type: string }
   introduced_in_version: "2026.09.1"

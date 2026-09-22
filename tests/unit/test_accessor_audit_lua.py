@@ -1041,6 +1041,108 @@ def test_send_delegation_opens_the_diplomacy_session() -> None:
 
 
 # ==========================================================================
+# diplomacy.state -- city-state scope legibility (2026-09-22)
+#
+# The defect this section pins: a city-state and an unmet major civilization both produced no
+# information a consumer could tell apart -- one is out of scope by a deliberate filter
+# (`Player:IsMajor()`, confirmed bound in GameCore_Tuner by `nm -DC`), the other is a real "not
+# met yet" answer the game itself would show. `relations_scope` is what makes the two
+# distinguishable; these tests vary answerability and scope (the axis the fix constrains), not
+# player identity or relation type, per the positive-twin rule.
+# ==========================================================================
+
+_DIPLOMACY_STATE_STUBS = """
+M = { alive = {}, met = {}, delegation = {} }
+
+function M.make_player(id, isMajor)
+    local p = {}
+    function p:GetID() return id end
+    if isMajor ~= nil then
+        function p:IsMajor() return isMajor end
+    end
+    return p
+end
+
+Game = { GetLocalPlayer = function() return 0 end }
+
+local diplomacy = {}
+function diplomacy:HasMet(otherID) return M.met[otherID] == true end
+function diplomacy:HasDelegationAt(otherID) return M.delegation[otherID] == true end
+
+local player = {}
+function player:GetDiplomacy() return diplomacy end
+
+Players = { [0] = player }
+PlayerManager = { GetAlive = function() return M.alive end }
+PlayerConfigurations = setmetatable({}, {
+    __index = function(_, id)
+        local cfg = {}
+        function cfg:GetCivilizationTypeName() return "CIVILIZATION_TEST_" .. tostring(id) end
+        return cfg
+    end
+})
+"""
+
+
+def _diplomacy_state(configure: str = "") -> dict[str, Any]:
+    runtime = _runtime(_DIPLOMACY_STATE_STUBS, LUA / "gamecore" / "diplomacy.lua")
+    if configure:
+        runtime.execute(configure)
+    state: dict[str, Any] = runtime.eval("CivSim_Diplomacy.state()")
+    return state
+
+
+def test_relations_scope_is_stated_and_a_city_state_is_never_an_entry() -> None:
+    """The scope-(a) finding: IsMajor() is an explicit, callable-here filter (nm -DC confirms
+    GameCore::Lua::IPlayer::lIsMajor is bound identically to the InGame side), not an accessor
+    artefact -- so the enumerated set is a fact this observation now states, not an inference."""
+    state = _diplomacy_state(
+        """
+        M.alive = { M.make_player(1, true), M.make_player(2, false), M.make_player(3, true) }
+        """
+    )
+    ids = [row["player_id"] for row in _list(state["relations"])]
+    assert ids == [1, 3]
+    assert state["relations_scope"] == "alive_major_civilizations"
+
+
+def test_a_player_without_is_major_is_kept_defensively() -> None:
+    """`not otherPlayer.IsMajor or otherPlayer:IsMajor()`: when the accessor itself is absent on
+    an object the body keeps the row rather than silently dropping it (lua/gamecore/cities.lua's
+    own precedent)."""
+    state = _diplomacy_state("M.alive = { M.make_player(9, nil) }")
+    ids = [row["player_id"] for row in _list(state["relations"])]
+    assert ids == [9]
+
+
+def test_met_not_met_and_out_of_scope_are_three_different_answers() -> None:
+    """Pins the three-way distinction so it cannot collapse: a met major, a not-met major, and a
+    city-state (out of scope) must never look alike. Before this pass all three that were not
+    "met major" looked identical -- absent from `relations`, or `has_met: false` with nothing
+    saying why a different id got no row at all."""
+    state = _diplomacy_state(
+        """
+        M.alive = { M.make_player(1, true), M.make_player(2, true), M.make_player(3, false) }
+        M.met[1] = true
+        """
+    )
+    by_id = {row["player_id"]: row for row in _list(state["relations"])}
+    assert by_id[1]["has_met"] is True
+    assert by_id[2]["has_met"] is False
+    assert 3 not in by_id
+    assert state["relations_scope"] == "alive_major_civilizations"
+
+
+def test_diplomacy_state_asks_nothing_about_player_minus_one() -> None:
+    """The 882758e/0989e3b `no_local_player` guard, applied to diplomacy.state: never a bare `[]`
+    that reads the same as "nobody is alive"."""
+    state = _diplomacy_state("Game.GetLocalPlayer = function() return -1 end")
+    assert _list(state["relations"]) == []
+    assert state["relations_scope"] == "alive_major_civilizations"
+    assert state["relations_reason"] == "no_local_player"
+
+
+# ==========================================================================
 # camera -- findings 33-37
 # ==========================================================================
 
