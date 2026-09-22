@@ -78,6 +78,13 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
     three timing-or-budget, all 46 passing alone in 42 s. Without this clause the rule fails in a way
     that does not matter, trains everyone to discount it, and stops being a check.
 - **Only lane leads commit and push. Nested sub-agents never do**, however finished the work looks.
+- **A reconciliation pass closes every lane-day**: before reporting, verify each task claimed complete
+  against the **code**, not against the agent's report, and tick or leave open with a reason. Twice on
+  2026-09-22 a task was reported complete and was not, and both times the gap was found by reading the
+  artifact. Ticking from an unverified report is the unearned claim this project keeps removing.
+- **Check a claim in the form the artifact actually uses.** A `grep` for a prose sentence returned zero
+  because the sentence **wraps across two lines** — the false-claim passage was still there, verbatim,
+  and read as fixed. A negative search result is evidence only if the search could have matched.
 - **A closing counterpart is required for every action that opens a modal or full-screen view**, and
   its verification must confirm the view closed. The harness opened a diplomacy session it could not
   exit: `CloseSession()` answers `ok: true` and does nothing, `IsSessionActive()` does not exist on
