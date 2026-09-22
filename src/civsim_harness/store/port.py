@@ -246,6 +246,15 @@ class MatchStore(Protocol):
         `blob` is `None` exactly when the capture was withheld (SC-019); a
         shown/clean capture's blob must be durably stored through this same
         call, never left in local or ephemeral form.
+
+        Write-once, with exactly one permitted second write (T260, FR-015):
+        re-presenting a `capture_id` with different content is refused, except
+        when the only difference is `shown_to_agent` rising false -> true.
+        That upgrade exists because shown-ness is settled *after* the record
+        must already be durable -- the loop persists the frame un-shown, hands
+        it to the provider, and raises the flag once `complete()` has returned,
+        so an interrupted dispatch leaves the truth behind rather than an
+        intention. The flag may never be lowered again by this call.
         """
         ...
 

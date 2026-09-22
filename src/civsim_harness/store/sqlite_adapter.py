@@ -77,7 +77,9 @@ from civsim_harness.run.orphans import (
     DEFAULT_ORPHAN_GRACE_SECONDS,
     LockProbe,
     OrphanFinding,
+    StrayLockFinding,
     sweep_orphans,
+    sweep_stray_locks,
 )
 from civsim_harness.store.contract import RunRecordSet
 from civsim_harness.store.port import TurnCycleRecord
@@ -87,6 +89,26 @@ from civsim_harness.store.sqlite_reads import SqliteReadBase
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _is_shown_upgrade(existing: ScreenCapture, incoming: ScreenCapture) -> bool:
+    """True exactly when *incoming* is *existing* with ``shown_to_agent`` raised false -> true and
+    **nothing else changed** (T260).
+
+    ``write_capture`` is otherwise write-once: a ``capture_id`` re-presented with different content
+    is a defect and is refused. This is the single exception, and it exists because
+    ``shown_to_agent`` is the one field on the record whose truth is not known when the frame is
+    taken. ``run/decision_loop.py`` persists the capture un-shown *before* handing it to the
+    provider (so the evidence survives an interrupted step, FR-051/D5) and raises the flag only
+    once ``provider.complete`` has returned -- the moment the attachment actually happened.
+
+    The predicate is deliberately one-directional and total: shown may never become un-shown, and
+    a "shown" write that also altered the screening status, the blob reference, the withheld
+    reason or any other field is not an upgrade -- it is the reuse this table refuses.
+    """
+    if existing.shown_to_agent or not incoming.shown_to_agent:
+        return False
+    return existing.model_copy(update={"shown_to_agent": True}) == incoming
 
 
 class SqliteMatchStore(SqliteReadBase):
@@ -129,17 +151,35 @@ class SqliteMatchStore(SqliteReadBase):
         and nothing else -- a fixture asserting on a `playing` run it wrote by hand, or
         a migration that should change the schema and not the records.
         :attr:`orphans_paused_on_open` reports what this opening did.
+
+        The same moment also *reports* the other asymmetry (2026-09-22): a run-identity
+        lock standing for a run this store has no row for, or for one it records as
+        terminal, will refuse the next run on that client PID and used to do so with no
+        diagnosis anywhere. Those are logged and offered on :attr:`stray_locks_on_open`;
+        none is removed here. See
+        :func:`~civsim_harness.run.orphans.sweep_stray_locks` for why an open reports and
+        only `civsim store repair` acts.
         """
         super().__init__(
             db_path, blob_dir=blob_dir, read_only=read_only, host_platform=host_platform
         )
         self._orphans_paused_on_open: tuple[OrphanFinding, ...] = ()
+        self._stray_locks_on_open: tuple[StrayLockFinding, ...] = ()
         if orphan_sweep and not read_only:
+            now = (clock or _utcnow)()
             self._orphans_paused_on_open = tuple(
                 sweep_orphans(
                     self,
                     lock=orphan_lock,
-                    now=(clock or _utcnow)(),
+                    now=now,
+                    grace_seconds=orphan_grace_seconds,
+                )
+            )
+            self._stray_locks_on_open = tuple(
+                sweep_stray_locks(
+                    self,
+                    lock=orphan_lock,
+                    now=now,
                     grace_seconds=orphan_grace_seconds,
                 )
             )
@@ -148,6 +188,19 @@ class SqliteMatchStore(SqliteReadBase):
     def orphans_paused_on_open(self) -> tuple[OrphanFinding, ...]:
         """The orphaned runs *this* opening paused (empty unless it found any)."""
         return self._orphans_paused_on_open
+
+    @property
+    def stray_locks_on_open(self) -> tuple[StrayLockFinding, ...]:
+        """Run-identity locks this opening found standing for no run it can see.
+
+        Reported, never acted on -- this opening removed none of them, by design
+        (:func:`~civsim_harness.run.orphans.sweep_stray_locks`). Each is also on the
+        harness log at `WARNING` with its path and PID, which is what makes a run that
+        cannot start say *why* instead of only failing: the lock directory is shared by
+        every store on the host, so an open may diagnose one of these and may not delete
+        it. `civsim store repair` is where that decision belongs.
+        """
+        return self._stray_locks_on_open
 
     # ----------------------------------------------------------------
     # Blob storage (content-addressed)
@@ -549,11 +602,23 @@ class SqliteMatchStore(SqliteReadBase):
                 "SELECT capture_json FROM captures WHERE capture_id = ?", (capture.capture_id,)
             ).fetchone()
             if row is not None:
-                if ScreenCapture.model_validate_json(row[0]) != capture:
+                existing = ScreenCapture.model_validate_json(row[0])
+                if existing == capture:
+                    return capture.capture_id
+                if not _is_shown_upgrade(existing, capture):
                     raise StoreWriteError(
                         "write_capture: capture_id reused with different content",
                         detail={"capture_id": capture.capture_id},
                     )
+                # The one settled-outcome transition this table accepts (T260, FR-015, SC-019):
+                # the frame was persisted un-shown before it was handed to the provider, and the
+                # provider call has now returned, so `shown_to_agent` becomes true of a dispatch
+                # that demonstrably happened. Nothing else about the record may move, and it may
+                # never move back -- `_is_shown_upgrade` enforces both.
+                conn.execute(
+                    "UPDATE captures SET capture_json = ? WHERE capture_id = ?",
+                    (capture.model_dump_json(), capture.capture_id),
+                )
                 return capture.capture_id
             if blob is not None and digest is not None:
                 self._store_blob(digest, blob)

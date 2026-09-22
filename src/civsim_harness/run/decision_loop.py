@@ -351,10 +351,12 @@ class _FreshObservation:
 
     The capture is deliberately unwritten here. ``shown_to_agent`` is a statement about a
     decision request actually dispatched to the provider, and no such request exists when the
-    frame is taken -- so the loop persists the record only at the moment the attachment question
-    is genuinely settled: its own step's provider dispatch, or one of the paths where the frame
-    demonstrably reached no request at all (loop exit, stall, refused context). The persisted
-    flag therefore reports what happened, never an intention (FR-015, SC-019).
+    frame is taken -- so the loop persists the record at the point the frame's fate enters play:
+    one of the paths where it demonstrably reached no request at all (loop exit, stall, refused
+    context), or, on the dispatch path, **un-shown immediately before ``provider.complete`` and
+    upgraded to shown only once that call has returned** (T260). The flag is never written ahead
+    of the outcome it describes, so the persisted record reports what happened, never an
+    intention (FR-015, SC-019).
     ``step_capture.visually_degraded`` is T157's per-step flag, carried into the ``DecisionStep``
     this observation eventually belongs to; ``events`` is every event the capture attempt
     produced."""
@@ -738,13 +740,35 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             ctx.store.write_capture(step_capture.capture, step_capture.blob)
             raise
 
-        # T238: the capture record is written at the moment its fate is settled -- the request
-        # dispatched on the very next line is the one it describes, so `shown_to_agent` reports
-        # actual attachment and the durable write still precedes anything that could interrupt
-        # the step afterwards (FR-051, D5).
-        ctx.store.write_capture(capture_record, step_capture.blob)
+        # T260 (was T238), FR-015, FR-051, D5, SC-019: the capture is persisted here, before the
+        # dispatch, so the evidence survives anything that interrupts the step -- and it is
+        # persisted **un-shown**, because at this line nothing has been shown to anybody yet.
+        #
+        # T238 wrote `capture_record` (shown) here instead, one line ahead of `complete()`, and
+        # called that "actual attachment". It was not: it was an intention about the very next
+        # line. MEASURED on the live store, 2026-09-22: 13 captures carry `shown_to_agent=True`
+        # for decision steps that have no `model_calls` row and no `decision_steps` row at all --
+        # runs run-4c0b8fb4 (2), run-a06e8e68 (10), run-1091122b (1), every one of them
+        # `lifecycle_state=paused`. The reverse direction was clean (0 model calls with images
+        # and no shown capture), which is exactly the signature of a flag written before its
+        # outcome: a successful `ModelCall` rides along in the end-of-turn `TurnCycleRecord`
+        # (only the no-decision path below writes one directly), so a turn interrupted inside
+        # `complete()` left the durable "the agent saw this" claim with its evidence gone.
+        #
+        # A durable flag that records an intention while claiming to record an outcome is a
+        # fabricated verification, so it is now written in two steps: the truth as of this line,
+        # then the upgrade below once the dispatch has demonstrably happened.
+        ctx.store.write_capture(step_capture.capture, step_capture.blob)
 
         response = ctx.provider.complete(request)
+
+        if images:
+            # `complete()` returned, so the frame this request carried did reach the provider --
+            # whatever the response says. `MatchStore.write_capture` accepts precisely this
+            # transition (false -> true, nothing else changed) and no other; the record now
+            # reports what happened. When `images` is empty the first write was already the whole
+            # truth and nothing is rewritten.
+            ctx.store.write_capture(capture_record, step_capture.blob)
 
         # T232, FR-040, contracts/model-provider-port.md P2/P3/P7: one definition of how a
         # completed provider call becomes a `ModelCall`. This loop used to construct it inline,
@@ -840,6 +864,7 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
                 registry=ctx.registry,
                 action_declaration_id=raw_decision.action_declaration_id,
                 target=target,
+                observation=observation,
             )
 
         next_step_id = DecisionStepId(uuid.uuid4().hex)
