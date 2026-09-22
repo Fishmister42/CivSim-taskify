@@ -463,6 +463,19 @@ there was one partial lookup between them.
   inactive, no earlyoom/nohang, 14 GB free). **What delivers the FIRST SIGTERM is not established.**
   The sanctioned split form is green and, because `addopts` excludes `tests/live`, the split IS the
   full accepted suite — so this is a measurement nuisance, not a blocker.
+- **🛑 131 captures were withheld with BYTES ON DISK and NO REASON RECORDED — the feature's own spine
+  defect, in the capture path, at ~6% of every frame ever taken.** Measured across the whole store
+  (2092 captures): 765 shown, 1196 withheld **with** a reason, **131 not shown, blob_ref present, and
+  `withheld_reason` null.** The honest ones are honest — a `provenance_failure` withhold carries a
+  NULL blob **and** a reason. These 131 carry the opposite: the pixels exist, the frame did not reach
+  the agent, **and nothing says why.**
+  **An auditor counting withheld frames finds reasons for 1196 and silence for 131, and cannot tell
+  "withheld for a recorded cause" from "a bug in the reader" from "never evaluated".** That is
+  literally spec 004's spine — *absence and unobservability must not share a representation* — inside
+  our own capture writer, and it was found on the very run that proved delivery works.
+  **Do not fix it by defaulting the reason to a string.** A default would make the 131 look
+  explained. Make the unknown explicit: a withhold with no determined cause must SAY it had no
+  determined cause.
 - **A query that returns the same empty answer for your control as for your subject is broken, not
   conclusive.** A sweep read `outcome: None` for everything including the control, because the
   execution record nests under `decision` rather than beside it. **The control caught a broken query
