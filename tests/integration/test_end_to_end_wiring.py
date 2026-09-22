@@ -814,6 +814,76 @@ def test_a_run_claims_and_releases_its_run_identity(tmp_path: Path) -> None:
     assert list((tmp_path / "run-locks").glob("*.lock.json")) == []
 
 
+def test_a_raise_between_lock_acquire_and_hand_off_still_releases_it(tmp_path: Path) -> None:
+    """T227/T289: the specific leak this lane was asked to fix.
+
+    Before `RunIdentityLock.guard` (identity_lock.py), `run/composition.py`'s
+    `_prepare_connected_run` acquired the run-identity lock once and released it from three
+    independently *conditional* branches (the two `_fail_preparation` calls, and -- far later --
+    `evaluate_stop_facts`/the terminal-run sweep) with no `try`/`finally` spanning acquire through
+    hand-off. Anything raised between the acquire and one of those branches -- a live read that
+    failed, a store write that failed, anything this function did not already name -- reached
+    neither release and left `<lock_dir>/<run_id>.lock.json` on disk forever, silently blocking
+    every later run under that identity. This is exactly such a path: preparation gets all the way
+    past BOTH `_fail_preparation` checks (leader selection is not in play here, and V2 verification
+    matches, the same configuration `test_a_run_claims_and_releases_its_run_identity` above proves
+    succeeds end to end) and only then does `store.write_run_event` -- persisting the
+    `preparing -> playing` transition -- fail.
+
+    Without the fix in `run/composition.py`/`run/identity_lock.py`, this test fails: the lock file
+    is still there after the raise. With it, `run_lock.guard`'s own `finally` releases it because
+    `lock_handle.commit()` is never reached on this path.
+    """
+    _write_seed_set(tmp_path / "seedsets")
+    config_path = tmp_path / "run.yaml"
+    config_values = _write_run_config(config_path)
+
+    saves_dir = FakeHostPlatform().resolve_game_directories(home=tmp_path).saves_dir
+    game = _FakeGame(saves_dir=saves_dir, config_values=config_values)
+    lock = _RecordingRunIdentityLock(tmp_path / "run-locks")
+
+    loop = asyncio.new_event_loop()
+    with _ServerThread(FakeNexusServer()) as server:
+        _script_game(server, game)
+        deps, store = _compose_dependencies(
+            tmp_path, port=server.port, provider=_build_provider(), run_lock=lock
+        )
+        config = load_run_configuration_file(config_path)
+
+        boom = RuntimeError(
+            "simulated store failure between the run-identity lock's acquire and this run's "
+            "hand-off to play -- a path none of the three old conditional releases covered"
+        )
+
+        def _boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise boom
+
+        # The first `write_run_event` call in this (leader-check-skipped, V2-matching) path is
+        # composition.py's own `preparing -> playing` transition -- well past both
+        # `_fail_preparation` branches, and well before `run_contexts[...]` is populated or
+        # `lock_handle.commit()` is reached.
+        store.write_run_event = _boom  # type: ignore[method-assign]
+
+        try:
+            with pytest.raises(RuntimeError) as excinfo:
+                loop.run_until_complete(deps.prepare_run(config))
+            assert excinfo.value is boom
+        finally:
+            loop.close()
+
+    # The acquire genuinely happened -- otherwise this test would prove nothing.
+    assert lock.acquired, "the run-identity lock was never acquired; this test proves nothing"
+    run_id, _pid = lock.acquired[0]
+
+    # T227/T289: the raise must still have released it.
+    assert run_id in lock.released, f"{run_id}'s lock leaked across the raise"
+    assert not lock.is_active(RunId(run_id))
+    assert list((tmp_path / "run-locks").glob("*.lock.json")) == [], (
+        "the lock file is still on disk after an exception between acquire and hand-off -- "
+        "exactly the production defect this test is written to catch"
+    )
+
+
 # --------------------------------------------------------------------------
 # T233 -- the crash/hang detection layer, through the real composition root
 # --------------------------------------------------------------------------

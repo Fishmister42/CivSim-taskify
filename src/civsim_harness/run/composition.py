@@ -142,7 +142,7 @@ from civsim_harness.run.game_over import (
     LuaGameOverReader,
     interpret_game_over,
 )
-from civsim_harness.run.identity_lock import RunIdentityLock
+from civsim_harness.run.identity_lock import RunIdentityLock, RunLockHandle
 from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
 from civsim_harness.run.orphans import DEFAULT_ORPHAN_GRACE_SECONDS
 from civsim_harness.run.preparation import (
@@ -958,170 +958,188 @@ async def _prepare_connected_run(
     # run proceeds (it has already passed the host gate, which is what decides whether a host
     # may run at all).
     client_process = host.locate_game_process()
-    if client_process is not None:
-        run_lock.acquire(run_id=run.run_id, client_pid=client_process.pid, now=clock())
-
-    if leader_result is not None and leader_result.outcome is not LeaderSelectionOutcome.VERIFIED:
-        return await _fail_preparation(
-            store=store,
-            run=run,
-            stop_condition=config.stop_condition,
-            reason="leader/civilization selection could not be verified (V2, V3)",
-            mismatches=leader_result.mismatches,
-            clock=clock,
-            nexus_client=nexus_client,
-            run_lock=run_lock,
-        )
-
-    # -- 8. one snapshot, feeding both of preparation.py's synchronous read seams --------------
-    snapshot: GameSetupSnapshot = await LuaGameSetupReader(
-        execute, state_index_source=nexus_client, state_name=_IN_GAME_STATE_NAME
-    ).read(tuple(configured_fields(config)))
-
-    turn_timer_preflight(read_turn_timer=snapshot.read_turn_timer)
-
-    v2_fallback_fields: list[str] = []
-    v2_unobservable_fields: list[str] = []
-
-    def _read_setting(name: str) -> Any:
-        if name in snapshot.unobservable:
-            # T250: a field live-confirmed to have no read path in ANY phase (today:
-            # `map_settings.resources` -- T218 measured all three candidate getters nil). The
-            # previous shape registered an UNVERIFIED getter that always came back unread, so
-            # every run configuring the field died before turn 1 over a value nothing can read
-            # -- the exact false-failure T218 ranked #1. An unreadable field fails closed as
-            # accepted-unverified and RECORDED (the preparing -> playing transition below
-            # carries `v2_unobservable_fields`), it does not kill the run. Distinct from the
-            # `v2_unverified_fields` no-getter tail on purpose: "we looked, and it is not
-            # observable" is a measured fact; "no getter has been authored" is missing work.
-            v2_unobservable_fields.append(name)
-            return configured_fields(config)[name]
-        # T250: a `phase_deferred` field is deliberately NOT special-cased here. This snapshot
-        # is read in the `InGame` state -- the post-load, pre-turn-1 moment, which is exactly
-        # the phase T218's in-game-only getters (`mod_set`, `opponents.major_count`) are honest
-        # in -- so nothing is ever deferred at this pass and those fields are genuinely read and
-        # compared, fail-closed, right here. If a deferred field ever *did* reach this
-        # comparison (a future front-end V2 pass wired without its in-game re-check),
-        # `snapshot.read_setting` returns an `UnreadSetting` naming the deferral and the run
-        # fails closed -- a deferred comparison that never runs must fail the run, never pass
-        # it vacuously.
-        value = snapshot.read_setting(name)
-        if name == "mod_set" and not isinstance(value, UnreadSetting):
-            # T251: the client reports ids in mixed case and load order, and no version at all
-            # for official content (`Modding.GetModProperty(handle, "Version")` is nil there,
-            # measured on Linux). Compare identities canonically, and record -- never silently
-            # accept -- each pinned version the client could not report, as
-            # `mod_set[<id>].version` on the same transition event `map_settings.resources`
-            # rides (T250). A mod the client does not list still mismatches.
-            value, unverified_versions = reconcile_mod_set_versions(
-                value, configured_fields(config)["mod_set"]
+    # T227/T289: the acquire and every exit from preparation are now bound by one
+    # guard (identity_lock.py's own `RunIdentityLock.guard`) instead of three independently
+    # conditional releases with nothing spanning acquire -> drive -> release -- see that
+    # method's docstring for why an uncommitted exit (any exception this function does not
+    # already name, not only the two failure branches below) must release the lock too.
+    with run_lock.guard(
+        run_id=run.run_id,
+        client_pid=client_process.pid if client_process is not None else None,
+        now=clock(),
+    ) as lock_handle:
+        if (
+            leader_result is not None
+            and leader_result.outcome is not LeaderSelectionOutcome.VERIFIED
+        ):
+            return await _fail_preparation(
+                store=store,
+                run=run,
+                stop_condition=config.stop_condition,
+                reason="leader/civilization selection could not be verified (V2, V3)",
+                mismatches=leader_result.mismatches,
+                clock=clock,
+                nexus_client=nexus_client,
+                lock_handle=lock_handle,
             )
-            v2_unobservable_fields.extend(unverified_versions)
-        if isinstance(value, UnreadSetting) and value.reason == _NO_READ_PATH_REASON:
-            # A narrow, named exception -- not a reversion of `GameSetupSnapshot`'s own "unread
-            # is never treated as matching" rule (see `run/preparation.py`'s own module docstring
-            # on why an earlier draft of *this* module doing that for every field was a defect).
-            # Every field named by the reference configuration (configs/turn50-validation.yaml)
-            # now has a registered read path in `_SETTING_GETTERS` -- `mod_set` reads back
-            # through `Modding.GetActiveMods()` (in-game only, T250) and
-            # `game_settings.victory_types` through `GameInfo.Victories` (an UNVERIFIED shape
-            # that fails closed to "unread", T242) -- or is declared live-confirmed unobservable
-            # (`map_settings.resources`, caught by the branch above before this one) -- so what
-            # reaches this branch is only the open-ended tail: a custom
-            # `map_settings.*`/`game_settings.*`/`opponents.*` key some configuration names that
-            # no getter has been authored for. Every field `_SETTING_GETTERS` *does* cover still
-            # fails closed on a genuine live mismatch or a getter that errored (a different
-            # `UnreadSetting.reason`, left untouched below); only "no read path exists for this
-            # field at all" falls back to the value V3's own seed-set agreement check (step 1
-            # above) already confirmed this configuration is entitled to claim -- and, per T242,
-            # every field that takes this fallback is RECORDED on the run (the preparing ->
-            # playing transition event below carries the list), never silently treated as
-            # verified.
-            v2_fallback_fields.append(name)
-            return configured_fields(config)[name]
-        return value
 
-    verify_result = verify_configuration(config, read_setting=_read_setting)
-    if not verify_result.matched:
-        return await _fail_preparation(
-            store=store,
-            run=run,
-            stop_condition=config.stop_condition,
-            reason="configured setup did not verify against its live read-back (V2)",
-            mismatches=verify_result.mismatches,
-            clock=clock,
+        # -- 8. one snapshot, feeding both of preparation.py's synchronous read seams --------------
+        snapshot: GameSetupSnapshot = await LuaGameSetupReader(
+            execute, state_index_source=nexus_client, state_name=_IN_GAME_STATE_NAME
+        ).read(tuple(configured_fields(config)))
+
+        turn_timer_preflight(read_turn_timer=snapshot.read_turn_timer)
+
+        v2_fallback_fields: list[str] = []
+        v2_unobservable_fields: list[str] = []
+
+        def _read_setting(name: str) -> Any:
+            if name in snapshot.unobservable:
+                # T250: a field live-confirmed to have no read path in ANY phase (today:
+                # `map_settings.resources` -- T218 measured all three candidate getters nil). The
+                # previous shape registered an UNVERIFIED getter that always came back unread, so
+                # every run configuring the field died before turn 1 over a value nothing can read
+                # -- the exact false-failure T218 ranked #1. An unreadable field fails closed as
+                # accepted-unverified and RECORDED (the preparing -> playing transition below
+                # carries `v2_unobservable_fields`), it does not kill the run. Distinct from the
+                # `v2_unverified_fields` no-getter tail on purpose: "we looked, and it is not
+                # observable" is a measured fact; "no getter has been authored" is missing work.
+                v2_unobservable_fields.append(name)
+                return configured_fields(config)[name]
+            # T250: a `phase_deferred` field is deliberately NOT special-cased here. This snapshot
+            # is read in the `InGame` state -- the post-load, pre-turn-1 moment, which is exactly
+            # the phase T218's in-game-only getters (`mod_set`, `opponents.major_count`) are honest
+            # in -- so nothing is ever deferred at this pass and those fields are genuinely read and
+            # compared, fail-closed, right here. If a deferred field ever *did* reach this
+            # comparison (a future front-end V2 pass wired without its in-game re-check),
+            # `snapshot.read_setting` returns an `UnreadSetting` naming the deferral and the run
+            # fails closed -- a deferred comparison that never runs must fail the run, never pass
+            # it vacuously.
+            value = snapshot.read_setting(name)
+            if name == "mod_set" and not isinstance(value, UnreadSetting):
+                # T251: the client reports ids in mixed case and load order, and no version at all
+                # for official content (`Modding.GetModProperty(handle, "Version")` is nil there,
+                # measured on Linux). Compare identities canonically, and record -- never silently
+                # accept -- each pinned version the client could not report, as
+                # `mod_set[<id>].version` on the same transition event `map_settings.resources`
+                # rides (T250). A mod the client does not list still mismatches.
+                value, unverified_versions = reconcile_mod_set_versions(
+                    value, configured_fields(config)["mod_set"]
+                )
+                v2_unobservable_fields.extend(unverified_versions)
+            if isinstance(value, UnreadSetting) and value.reason == _NO_READ_PATH_REASON:
+                # A narrow, named exception -- not a reversion of `GameSetupSnapshot`'s own
+                # "unread is never treated as matching" rule (see `run/preparation.py`'s own
+                # module docstring on why an earlier draft of *this* module doing that for every
+                # field was a defect).
+                # Every field named by the reference configuration (configs/turn50-validation.yaml)
+                # now has a registered read path in `_SETTING_GETTERS` -- `mod_set` reads back
+                # through `Modding.GetActiveMods()` (in-game only, T250) and
+                # `game_settings.victory_types` through `GameInfo.Victories` (an UNVERIFIED shape
+                # that fails closed to "unread", T242) -- or is declared live-confirmed unobservable
+                # (`map_settings.resources`, caught by the branch above before this one) -- so what
+                # reaches this branch is only the open-ended tail: a custom
+                # `map_settings.*`/`game_settings.*`/`opponents.*` key some configuration names that
+                # no getter has been authored for. Every field `_SETTING_GETTERS` *does* cover still
+                # fails closed on a genuine live mismatch or a getter that errored (a different
+                # `UnreadSetting.reason`, left untouched below); only "no read path exists for this
+                # field at all" falls back to the value V3's own seed-set agreement check (step 1
+                # above) already confirmed this configuration is entitled to claim -- and, per T242,
+                # every field that takes this fallback is RECORDED on the run (the preparing ->
+                # playing transition event below carries the list), never silently treated as
+                # verified.
+                v2_fallback_fields.append(name)
+                return configured_fields(config)[name]
+            return value
+
+        verify_result = verify_configuration(config, read_setting=_read_setting)
+        if not verify_result.matched:
+            return await _fail_preparation(
+                store=store,
+                run=run,
+                stop_condition=config.stop_condition,
+                reason="configured setup did not verify against its live read-back (V2)",
+                mismatches=verify_result.mismatches,
+                clock=clock,
+                nexus_client=nexus_client,
+                lock_handle=lock_handle,
+            )
+
+        # T242/T250: a field that passed V2 without a live read is recorded on the run -- on the
+        # very transition event that concludes preparation -- so the record says which fields were
+        # accepted on V3 seed-set agreement alone rather than silently wearing "verified". Two
+        # distinct markers, never conflated: `v2_unverified_fields` is the open-ended no-getter tail
+        # (T242), `v2_unobservable_fields` is the live-confirmed not-observable-in-any-phase set
+        # (T250). A phase-deferred field never appears in either -- at this in-game pass it is read
+        # for real, and anywhere else it fails the run (see `_read_setting` above).
+        detail_parts: dict[str, Any] = {}
+        if v2_fallback_fields:
+            detail_parts["v2_unverified_fields"] = sorted(v2_fallback_fields)
+            detail_parts["v2_unverified_reason"] = (
+                "no live read path is registered for these configured fields; their values "
+                "were accepted on the seed-set agreement (V3) alone and are NOT verified "
+                "against the live client (FR-002/V2, T242)"
+            )
+        if v2_unobservable_fields:
+            detail_parts["v2_unobservable_fields"] = sorted(v2_unobservable_fields)
+            detail_parts["v2_unobservable_reason"] = (
+                "these configured fields are live-confirmed unobservable in any game phase "
+                "(T218/T250: no Lua getter exists for them); their values were accepted on the "
+                "seed-set agreement (V3) alone and are NOT verified against the live client -- "
+                "recorded rather than run-killing (FR-002/V2)"
+            )
+        transition_detail: dict[str, Any] | None = detail_parts or None
+        playing_run, event = transition(
+            run,
+            LifecycleState.PLAYING,
+            occurred_at=clock(),
+            detail=transition_detail,
+        )
+        store.write_run_event(event)
+        store.update_run(
+            playing_run.run_id,
+            lifecycle_state=playing_run.lifecycle_state,
+            started_at=playing_run.started_at,
+        )
+
+        executor = CapabilityExecutor(
+            registry=registry,
+            execute_command=execute,
+            session=nexus_client,
+            lua_root=lua_root,
+            # A Lua result of the shape {ok=false, reason="requires_host_click",
+            # click={x,y,w,h}} is completed with a real synthetic click at that control's centre
+            # (measured Firetuner gap, 2026-09-21: no Lua API reachable from InGame fires a
+            # control's registered callback).
+            host=host,
+            window_resolver=window_provider,
+        )
+        run_contexts[playing_run.run_id] = _RunContext(
+            config=config,
             nexus_client=nexus_client,
-            run_lock=run_lock,
+            execute=execute,
+            registry=registry,
+            catalog_version=catalog_result.observation_catalog_version,
+            executor=executor,
+            guidance=guidance,
+            # T233: built from the PID step 7 already located for T227's lock and from this
+            # run's own connected client -- no second process probe, no second tuner connection.
+            detection=_build_detection_watch(
+                store=store,
+                run_id=playing_run.run_id,
+                nexus_client=nexus_client,
+                client_pid=client_process.pid if client_process is not None else None,
+                clock=clock,
+            ),
         )
 
-    # T242/T250: a field that passed V2 without a live read is recorded on the run -- on the
-    # very transition event that concludes preparation -- so the record says which fields were
-    # accepted on V3 seed-set agreement alone rather than silently wearing "verified". Two
-    # distinct markers, never conflated: `v2_unverified_fields` is the open-ended no-getter tail
-    # (T242), `v2_unobservable_fields` is the live-confirmed not-observable-in-any-phase set
-    # (T250). A phase-deferred field never appears in either -- at this in-game pass it is read
-    # for real, and anywhere else it fails the run (see `_read_setting` above).
-    detail_parts: dict[str, Any] = {}
-    if v2_fallback_fields:
-        detail_parts["v2_unverified_fields"] = sorted(v2_fallback_fields)
-        detail_parts["v2_unverified_reason"] = (
-            "no live read path is registered for these configured fields; their values "
-            "were accepted on the seed-set agreement (V3) alone and are NOT verified "
-            "against the live client (FR-002/V2, T242)"
-        )
-    if v2_unobservable_fields:
-        detail_parts["v2_unobservable_fields"] = sorted(v2_unobservable_fields)
-        detail_parts["v2_unobservable_reason"] = (
-            "these configured fields are live-confirmed unobservable in any game phase "
-            "(T218/T250: no Lua getter exists for them); their values were accepted on the "
-            "seed-set agreement (V3) alone and are NOT verified against the live client -- "
-            "recorded rather than run-killing (FR-002/V2)"
-        )
-    transition_detail: dict[str, Any] | None = detail_parts or None
-    playing_run, event = transition(
-        run,
-        LifecycleState.PLAYING,
-        occurred_at=clock(),
-        detail=transition_detail,
-    )
-    store.write_run_event(event)
-    store.update_run(
-        playing_run.run_id,
-        lifecycle_state=playing_run.lifecycle_state,
-        started_at=playing_run.started_at,
-    )
+        # T227: hand this lock's remaining lifetime to the run itself -- it is about to be
+        # registered in run_contexts and will keep playing turns long after this guard's own
+        # `with` block exits, so only evaluate_stop_facts / the terminal-run sweep may release
+        # it from here on (RunLockHandle.commit's own docstring).
+        lock_handle.commit()
 
-    executor = CapabilityExecutor(
-        registry=registry,
-        execute_command=execute,
-        session=nexus_client,
-        lua_root=lua_root,
-        # A Lua result of the shape {ok=false, reason="requires_host_click", click={x,y,w,h}} is
-        # completed with a real synthetic click at that control's centre (measured Firetuner gap,
-        # 2026-09-21: no Lua API reachable from InGame fires a control's registered callback).
-        host=host,
-        window_resolver=window_provider,
-    )
-    run_contexts[playing_run.run_id] = _RunContext(
-        config=config,
-        nexus_client=nexus_client,
-        execute=execute,
-        registry=registry,
-        catalog_version=catalog_result.observation_catalog_version,
-        executor=executor,
-        guidance=guidance,
-        # T233: built from the PID step 7 already located for T227's lock and from this run's own
-        # connected client -- no second process probe, no second tuner connection.
-        detection=_build_detection_watch(
-            store=store,
-            run_id=playing_run.run_id,
-            nexus_client=nexus_client,
-            client_pid=client_process.pid if client_process is not None else None,
-            clock=clock,
-        ),
-    )
-
-    return PreparedRun(run=playing_run, stop_condition=config.stop_condition)
+        return PreparedRun(run=playing_run, stop_condition=config.stop_condition)
 
 
 async def _fail_preparation(
@@ -1133,7 +1151,7 @@ async def _fail_preparation(
     mismatches: Sequence[SettingMismatch],
     clock: Callable[[], Timestamp],
     nexus_client: NexusClient,
-    run_lock: RunIdentityLock | None = None,
+    lock_handle: RunLockHandle | None = None,
 ) -> PreparedRun:
     """A `Run` already exists (`preparing`) -- record why it cannot proceed and transition it to
     `failed`, per contracts/operator-surface.md's "run created in failed state ... no turn 1"
@@ -1143,9 +1161,17 @@ async def _fail_preparation(
     and nothing else will ever close it -- no `_RunContext` is registered on this path, so the
     tuner's single connection slot would otherwise stay held for the life of the process.
 
-    *run_lock* is released here for the same reason (T227): the run identity was claimed in step 7
-    and this run will never play, so holding the claim would refuse a corrected re-run of the very
-    configuration this failure is telling the operator to fix.
+    *lock_handle* is released here for the same reason (T227): the run identity was claimed in
+    step 7 and this run will never play, so holding the claim would refuse a corrected re-run of
+    the very configuration this failure is telling the operator to fix. This is deliberately an
+    *explicit, early* release rather than leaving it to `_prepare_connected_run`'s own
+    `run_lock.guard` to release on scope exit (T289): the caller is still going to `return` out of
+    that guard's `with` block right after this call, so the guard's own backstop release would
+    fire either way -- but releasing here, at the exact moment `failed` is recorded, keeps the
+    lock's release and the run's terminal transition next to each other in this function, which is
+    where anyone reading *why* it was released should look first. `RunLockHandle.release` is
+    idempotent (see its own docstring), so the guard's later backstop call is always a safe no-op
+    here, never a second live release.
     """
     store.write_run_event(
         RunEvent(
@@ -1175,8 +1201,8 @@ async def _fail_preparation(
         lifecycle_state=failed_run.lifecycle_state,
         ended_at=failed_run.ended_at,
     )
-    if run_lock is not None:
-        run_lock.release(failed_run.run_id)
+    if lock_handle is not None:
+        lock_handle.release()
     await _close_quietly(nexus_client)
     return PreparedRun(run=failed_run, stop_condition=stop_condition)
 

@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,6 +96,67 @@ class LockInspection:
         }
 
 
+class RunLockHandle:
+    """One `with RunIdentityLock.guard(...)` scope's own handle on the lock it just acquired
+    (T227/T289).
+
+    **Why this exists.** Before this class, `acquire` and `release` were two calls a caller had
+    to remember to pair up itself, with nothing enforcing it -- `run/composition.py` acquired once
+    and released from three independently conditional branches, and any exit that reached none of
+    them (an exception raised by a live read, a store write, or anything else between acquire and
+    the run actually being handed off to play) leaked the lock file forever, silently blocking
+    every later run under that run id. `RunIdentityLock.guard` closes that gap by acquiring and
+    handing back one of these, whose `__exit__` (via `guard`'s own `try`/`finally`) releases
+    on *every* exit from that `with` block -- normal return, an early `return`, a raised
+    exception, or a cancelled task -- unless the caller has explicitly `commit()`-ed first.
+
+    **Why `commit()` exists at all.** A run's lock is claimed once, at preparation, but is meant to
+    stay held for as long as the run keeps playing turns -- long after the `with` block that
+    claimed it has returned. `commit()` is how a caller says "this lock's lifetime is no longer
+    this guard's to manage" -- once called, `__exit__` leaves the lock exactly as it is, and
+    releasing it becomes some *other*, later call's job (`run/composition.py`'s own
+    `evaluate_stop_facts`, when the run reaches a stop resolution, or the terminal-run sweep in
+    `_release_terminal_run_clients` as a backstop for the paths that never reach that). A caller
+    that never commits -- because preparation failed, or raised -- gets the lock released
+    automatically, which is the whole point.
+
+    **Double release is safe, by construction.** `release()` here is idempotent (tracked by
+    `_released`, on top of `RunIdentityLock.release` itself already unlinking with
+    ``missing_ok=True``), so a caller that explicitly releases early (e.g.
+    `run/composition.py`'s `_fail_preparation`, which releases the moment a run is recorded
+    `failed` so a corrected re-run is not refused) and then lets this handle's own `__exit__`
+    backstop run too costs nothing: the second call sees `_released` already `True` and returns
+    without touching the filesystem again. Nothing here can turn into releasing a *different*,
+    later acquisition of the same run id out from under its rightful holder, because the handle
+    never re-arms itself -- once released or committed, it stays that way for its whole life.
+    """
+
+    def __init__(self, lock: RunIdentityLock, run_id: RunId | None) -> None:
+        # *run_id* is None exactly when this handle stands in for a "no client PID to key the
+        # lock to" skip (see `RunIdentityLock.guard`'s own docstring) -- nothing was ever
+        # acquired, so `commit()`/`release()` below are deliberately no-ops for it.
+        self._lock = lock
+        self._run_id = run_id
+        self._committed = False
+        self._released = False
+
+    def commit(self) -> None:
+        """Hand this lock's remaining lifetime to the run it was claimed for. After this call,
+        the `with run_lock.guard(...)` scope that produced this handle will NOT release the lock
+        when it exits -- call this only once the run is genuinely going to keep needing the lock
+        past that scope (registered somewhere a later, real release will find it)."""
+        self._committed = True
+
+    def release(self) -> None:
+        """Release the lock now. Safe to call more than once, and safe to call whether or not
+        `commit()` was ever reached -- see this class's own docstring on why a second call, from
+        anywhere, is always a harmless no-op."""
+        if self._released or self._run_id is None:
+            return
+        self._lock.release(self._run_id)
+        self._released = True
+
+
 class RunIdentityLock:
     """Filesystem-backed lock manager: one lock file per ``run_id``, recording
     the client PID it is attached to.
@@ -145,6 +208,37 @@ class RunIdentityLock:
     def release(self, run_id: RunId) -> None:
         """Release *run_id*'s lock, if held. A no-op if it is not."""
         self._path_for(run_id).unlink(missing_ok=True)
+
+    @contextmanager
+    def guard(
+        self, *, run_id: RunId, client_pid: int | None, now: Timestamp
+    ) -> Iterator[RunLockHandle]:
+        """Acquire *run_id*'s lock and guarantee it is released on every exit from the `with`
+        block this opens, unless the caller `commit()`s the yielded :class:`RunLockHandle` first
+        (T227/T289 -- see that class's own docstring for the full reasoning and the double-release
+        story).
+
+        *client_pid* may be `None` -- the caller had no client process to key the lock to
+        (`run/composition.py`'s own documented skip: "the lock is skipped rather than keyed to a
+        fabricated one"). Nothing is acquired in that case, and the yielded handle's `commit`/
+        `release` are both no-ops, so a caller may use this the same way regardless of whether it
+        has a PID to offer.
+
+        This is a thin wrapper over :meth:`acquire`/:meth:`release`, not a new locking mechanism
+        -- `acquire`'s own semantics (refusing a second attach to a live run identity or client
+        PID) are unchanged; this only adds the missing guarantee that whatever it acquires is
+        always given back.
+        """
+        if client_pid is None:
+            yield RunLockHandle(self, None)
+            return
+        self.acquire(run_id=run_id, client_pid=client_pid, now=now)
+        handle = RunLockHandle(self, run_id)
+        try:
+            yield handle
+        finally:
+            if not handle._committed:
+                handle.release()
 
     def is_active(self, run_id: RunId) -> bool:
         """Whether *run_id* currently holds a live lock."""
