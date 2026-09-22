@@ -346,6 +346,32 @@ there was one partial lookup between them.
   **"Produces a value" is not "produces the right value"** — an empty list is a value.
 - `pwsh` is absent: hand-derive the speckit helper JSON; do not edit `.specify/feature.json` while
   lanes run different features concurrently (it still points at 003).
+- **A wall-clock timeout kills a run mid-turn with no regard for what is on the board, and the
+  board's value is not uniform.** Block 28 (2026-09-22) was healthy — nine turns, longest gap 105 s,
+  last gap 41 s — and its outer `timeout 580` cut it off at turn 9 of a higher cap, **114 seconds
+  after it had accepted `prompt.congress_intro`**. That cost `congress.cast_vote` on
+  `prompt.congress_vote`, a never-attempted action on a never-encountered screen, on the one
+  occasion both were reachable. **Stop a driver cleanly; never let its own outer timeout be the
+  thing that ends it.** A timeout kill also orphans the run lock every time (the SIGTERM/atexit
+  defect), so the board stays held after the process is already dead.
+- **Absence in the log is not absence in the run.** I grepped a block's stdout for `congress`, found
+  only the Lua context dump, and nearly called a subagent's true claim fabricated. The stdout carries
+  progress lines and nexus warnings; **step records live in the store**. Check the instrument that
+  would hold the evidence before concluding the evidence does not exist.
+- **A fix that removes an accidental guard is a behaviour change, even when the diff is a pure
+  improvement.** `research.set_civic` verifies `player.current_civic == target`, so a null target
+  makes `None == None` True and a no-op records as `applied`. It was safe only because
+  `researchable_civics` was permanently `[]`, making the action undraftable. `0989e3b` populates that
+  field and thereby opens the fabrication path. **`policies.change_government` has the identical
+  shape and the identical accidental guard.** This is a third fabrication axis: T310 covered `!=`,
+  `not in`, `not X`; T311 the left operand of `in`/`not in`; **neither asked about `==` against a
+  null target.** Fix centrally — make a null-target comparison unevaluable in the evaluator — never
+  by editing the two YAML predicates, because a per-declaration guard is a rule, not a control.
+- **`nm -DC` silence is not evidence that an accessor is unbound.** No `l*Favor*` symbol exists on any
+  player interface, yet `strings -a` finds `GetFavor` and Firaxis' own shipped XP2 UI calls
+  `Players[id]:GetFavor()`. **Some Lua bindings exist only as name strings with no exported
+  trampoline.** The symbol table is sound as a *positive* discriminator (that is how `CanProgress`
+  was settled) and **unsound as a negative**. Do not run a sweep that reads silence as proof.
 
 ## 🛑 Release-blocking, open (found 2026-09-22) — images are gated OFF by design
 **The content screening gate cannot detect the FireTuner window in production, on any platform.**
