@@ -40,7 +40,13 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
   --no-sync python -m tests.live.<driver> … --store /home/matt/CivSolver/civsim-match-store.db` and an
   absolute output dir under the main tree's `spikes/gameplay-<date>/`. Nobody edits the worktree.
 - **Test command** (the only accepted form): `timeout 900 uv run pytest -q -p no:cacheprovider
-  -o faulthandler_timeout=120` (Lua-executing tests: prefix `uv run --with lupa`). A run that does
+  -o faulthandler_timeout=120` (Lua-executing tests: prefix `uv run --with lupa`). **Redirect it to a
+  log and poll that log in a bounded loop** rather than piping to `tail` — `-q` plus `| tail -N` makes
+  a correct 225–270 s suite **completely silent for longer than the watchdog's 3-minute kill ceiling**,
+  so it looks identical to a wedged process while working perfectly. A growing log is the liveness
+  signal. (Scope note: the owner's 3-minute criterion governs **harness game runs**, not an agent's
+  shell commands — but a silent-by-construction command is a hazard either way, and the poll form is
+  already what the no-waiting rule asks for.) A run that does
   not complete is a hang, named by the faulthandler dump; a pytest process older than 15 minutes is
   killed by pid. **Green at `5464571`: 2147 passed / 18 skipped / 0 failed.**
 - Git on a shared tree: explicit paths, `git add <paths> && git commit -- <paths>` back to back,
