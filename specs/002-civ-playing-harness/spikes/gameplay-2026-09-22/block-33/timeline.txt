@@ -1,0 +1,6 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal build_a_builder: objective written to goal-build_a_builder.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=build_a_builder provider=stochastic provider_policy=uniform turn_cap=6]
+t+000s  goal build_a_builder: run run-10253c8e6e8846f0a50230deff42af01
+t+000s  goal build_a_builder: playing turn=1 step=None
+t+068s  ABORTED: KeyboardInterrupt: 

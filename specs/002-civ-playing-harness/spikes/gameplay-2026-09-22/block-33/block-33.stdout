@@ -1,0 +1,37 @@
+  [15:36:06] recording started: every frame via the production capture_window() (window-scoped)
+  [15:36:06] goal build_a_builder: objective written to goal-build_a_builder.md (objective text only)
+{"extra": {"checked_at": "2026-09-22T19:36:06.915734+00:00", "from": "playing", "idle_seconds": 659.213, "last_activity_at": "2026-09-22T19:25:07.702651+00:00", "last_activity_source": "run.started_at", "lock_acquired_at": null, "lock_client_pid": null, "lock_client_pid_alive": false, "lock_path": "/tmp/civsim_harness/run_locks/run-fd895f91c5df43baa80394a72de401eb.lock.json", "lock_present": false, "lock_readable": false, "orphan_cause": "identity lock absent", "reason": "orphaned", "run_id": "run-fd895f91c5df43baa80394a72de401eb", "to": "paused"}, "level": "WARNING", "logger": "civsim_harness", "message": "run/orphans: an orphaned run was paused -- its driver is gone and nothing would have transitioned it", "timestamp": "2026-09-22T19:36:06.922740+00:00"}
+  [15:36:07] PRODUCTION: Runner.start(run-config.yaml) [goal=build_a_builder provider=stochastic provider_policy=uniform turn_cap=6]
+  [15:36:07] goal build_a_builder: run run-10253c8e6e8846f0a50230deff42af01
+  [15:36:07] goal build_a_builder: playing turn=1 step=None
+{"exception": "Traceback (most recent call last):\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/runner.py\", line 923, in _play_run\n    outcome = await run_turn_cycle(turn_deps, run=state.run)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/turn_cycle.py\", line 792, in run_turn_cycle\n    clearance = await _clear_blocking_prompt_before_save(\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/turn_cycle.py\", line 589, in _clear_blocking_prompt_before_save\n    return await _run_decision_loop_watched(deps, loop_ctx)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/turn_cycle.py\", line 557, in _run_decision_loop_watched\n    return await run_under_detection(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/detection.py\", line 418, in run_under_detection\n    return task.result()\n           ^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/decision_loop.py\", line 684, in run_decision_loop\n    initial = await _observe_or_wrap(\n              ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/decision_loop.py\", line 586, in _observe_or_wrap\n    return await _observe(ctx, step_id=step_id, step_index=step_index)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/decision_loop.py\", line 493, in _observe\n    results, screen_identity = await ctx.read_observation_inputs()\n                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/composition.py\", line 414, in __call__\n    results, screen_identity = await self._reader()\n                               ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/observe/reader.py\", line 94, in __call__\n    result = await self._executor.execute(declaration_id, context=declaration.context)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/capability/executor.py\", line 349, in execute\n    value = await self._execute_command(state_index, lua_body)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/run/composition.py\", line 250, in _execute\n    return await client.execute_command(state_index=state_index, lua_body=lua_body)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/nexus/client.py\", line 866, in execute_command\n    raw_result = await asyncio.wait_for(self._await_result(nonce), timeout=bound)\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/asyncio/tasks.py\", line 520, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/nexus/client.py\", line 909, in _await_result\n    frame = await self._read_frame()\n            ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/nexus/client.py\", line 1003, in _read_frame\n    self._pending_frames.extend(self._decoder.feed(chunk))\n                                ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/nexus/codec.py\", line 102, in feed\n    frame = self._try_take_one()\n            ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/matt/CivSolver-live/src/civsim_harness/nexus/codec.py\", line 137, in _try_take_one\n    return NexusFrame(tag=tag, payload=body[:-1].decode(\"utf-8\"))\n                                       ^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeDecodeError: 'utf-8' codec can't decode byte 0xc4 in position 1663: invalid continuation byte", "extra": {"error_type": "UnicodeDecodeError", "run_id": "run-10253c8e6e8846f0a50230deff42af01"}, "level": "ERROR", "logger": "civsim_harness", "message": "run/runner: unhandled failure while recording why a run stopped playing", "timestamp": "2026-09-22T19:36:08.418143+00:00"}
+  [15:37:15] ABORTED: KeyboardInterrupt: 
+{
+  "goal": "build_a_builder",
+  "chain": [
+    "build_a_builder"
+  ],
+  "provider": "stochastic",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T19:36:06.584700+00:00",
+  "parts": [],
+  "aborted": "KeyboardInterrupt: ",
+  "finished_at": "2026-09-22T19:37:24.200647+00:00",
+  "reached": false,
+  "evaluated": false,
+  "reached_reason": "no_parts_recorded",
+  "recording": {
+    "frames": 64,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 12949,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t022s.png",
+      "keyframe_2_t045s.png",
+      "keyframe_3_t068s.png"
+    ],
+    "capture_failures": 0
+  }
+}

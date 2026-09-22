@@ -1,0 +1,29 @@
+{
+  "goal": "build_a_builder",
+  "chain": [
+    "build_a_builder"
+  ],
+  "provider": "stochastic",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T19:25:06.763787+00:00",
+  "parts": [],
+  "aborted": "KeyboardInterrupt: ",
+  "finished_at": "2026-09-22T19:34:43.332587+00:00",
+  "reached": false,
+  "evaluated": false,
+  "reached_reason": "no_parts_recorded",
+  "recording": {
+    "frames": 471,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 94189,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t171s.png",
+      "keyframe_2_t341s.png",
+      "keyframe_3_t511s.png"
+    ],
+    "capture_failures": 0
+  }
+}
