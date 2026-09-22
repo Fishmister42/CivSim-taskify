@@ -34,6 +34,32 @@ skipping the hard parts:
   the one place this suite skips-with-reason rather than asserting further
   (never silently passing the adapter overall: every other capability for
   that adapter is still exercised in the other test functions below).
+
+**Why this whole module is `@pytest.mark.client` (2026-09-22).** Everything
+above is true and none of it needs Civ VI *installed* -- but "needs no client"
+and "cannot touch the client" are different claims, and only the first one was
+ever established. On the host that owns the real client, the four adapters this
+suite builds are the real adapters, and three of the calls below reach that
+host for real:
+
+- `send_input([key_press enter])` (`test_send_input_never_raises`) is the
+  sharp one. On a Linux/X11 session that is an XTEST-injected Enter keypress
+  into whatever window currently holds focus. If Civ VI holds focus, the suite
+  just pressed Enter in somebody's game.
+- `locate_game_process()` scans the real process table for the adapter's own
+  Civ VI executable names, and `test_locate_game_process_matches_every_candidate
+  _name` only fakes `psutil.process_iter` *after*
+  `test_locate_game_process_never_raises` has already scanned for real.
+- `find_game_window()` / `capture_window()` open the real display-server
+  connection and enumerate/capture real windows.
+
+The `pytest.skip` at `test_find_game_window_never_raises_an_opaque_error` fires
+for the windows and macos adapters on this box (their platform dependency is
+absent) -- which is exactly why the path-based reasoning failed: the Linux
+adapter, the one with a live client behind it, is the one that does NOT skip.
+The marker is unconditional on purpose; see the `client` marker's own note in
+`pyproject.toml`. Run this suite with `pytest -m client tests/contract/
+test_host_platform_port.py` when you intend to.
 """
 
 from __future__ import annotations
@@ -60,6 +86,11 @@ from civsim_harness.host.port import (
     InputStatus,
     WindowRect,
 )
+
+#: Module-wide, not per-test: every test function below builds at least one real
+#: adapter, and the dangerous surface (process scan, window resolution, capture,
+#: synthetic input) is spread across all of them. See the module docstring.
+pytestmark = pytest.mark.client
 
 
 def _build_windows() -> HostPlatform:

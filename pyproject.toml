@@ -144,12 +144,30 @@ strict = true
 # three run by default / in CI (plan.md Testing). `live` needs a real Civ VI
 # client and is excluded from the default run via addopts, not deleted from
 # discovery, so `pytest tests/live -m live` still works explicitly.
+#
+# 2026-09-22: that directory rule was the ONLY thing standing between a default
+# `pytest` run and the operator's real client, and a directory is not a
+# declaration. `tests/live/` was excluded by path; everything else was assumed
+# safe because of where it lived. It was not: `tests/contract/
+# test_host_platform_port.py` builds the real Linux adapter and calls
+# `send_input([enter])` on it (XTEST injects that keypress into whatever window
+# currently has focus), and `tests/unit/test_operator_api.py`'s CLI `doctor`
+# test connects a default `NexusClient` to the FireTuner's default endpoint and
+# scans for the real client process. Both sat in the default run. The `client`
+# marker below replaces "infer it from the path" with "say so", and the
+# exclusion is in `addopts` for the same reason `--ignore=tests/live` is:
+# excluded from the default run, never deleted from discovery.
 # --------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--ignore=tests/live"
+# `-m "not client"` is UNCONDITIONAL and must stay that way. The tempting
+# inversion -- skip when the client is absent -- means the test RUNS when the
+# client is PRESENT, which is precisely the machine where running it costs
+# somebody a live game board. Absence of the client is not what makes these
+# tests unsafe; presence of it is.
+addopts = ["--ignore=tests/live", "-m", "not client"]
 # A hung test must name itself. 2026-09-21: the suite stopped at ~40% twice with no output at
 # all, and finding out which test it was took a hand-passed `-o faulthandler_timeout=...`. Both
 # of these are defaults now, so the next one says so by itself:
@@ -164,4 +182,20 @@ timeout = 600
 timeout_method = "thread"
 markers = [
   "live: exercises a real Civilization VI client; excluded from the default run (see plan.md Testing)",
+  # `client` is the declaration `--ignore=tests/live` could only imply. Mark a test
+  # with it when the test, on SOME supported host, can reach the operator's real
+  # machine state rather than a fake:
+  #   * opens a tuner connection to a default/real endpoint (not a FakeNexusServer's
+  #     own ephemeral port),
+  #   * resolves a real game window, or captures from one,
+  #   * scans for / locates the real Civilization VI process,
+  #   * sends synthetic input to the real display server, or
+  #   * takes a run-identity lock outside a `tmp_path` lock directory.
+  # It is deliberately NOT conditional on the client being present: see the
+  # addopts note above. A wrongly-marked safe test costs a little coverage; a
+  # wrongly-unmarked unsafe one costs another lane its game board.
+  # To run them DELIBERATELY, on a machine that owns the client:
+  #     uv run pytest -m client            # just these
+  #     uv run pytest -m "client or not client"   # the whole default tree plus these
+  "client: reaches the real Civilization VI client, FireTuner, display server or run lock; excluded from the default run by addopts (-m 'not client'). Run deliberately with `pytest -m client` on a machine that owns the client",
 ]
