@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 19:53 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 20:23 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -41,19 +41,21 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| diplomacy fix (Opus, resumed) | live negative: the first-meeting STATEMENT answer never confirms (16/16, run-d0933ca8); diagnose from the store whether options changed after an answer (verifier too strict: a correct statement leaves the conversation open with the exit next) or the response never lands (needs the real click); record path/reason on the statement branch | diplomacy answer Lua, `act/verify.py` predicate for the prompt, tests | 19:50 |
-| productions (Opus, resumed) | generalise the bounded verification re-read (~2 s) to every action so a lagging read is never a refusal | `act/verify.py`, `run/turn_cycle.py`, `run/decision_loop.py`, `tests/unit/test_verify_confirm.py` | 19:35 |
-| accessor audit (Opus) | report landed (a606729: 28 phantom names, 10 fields permanently `[]`, 14 of 38 actions could never work — posted to #3); fixes in file-scoped commits: congress, government, great_people, religion bodies + `empire_orders.lua`, then the allowlist + CI test | `lua/**`, `catalogs/observations/*.yaml`, `lua/ACCESSORS.txt`, tests | 19:17 |
-| Live S4 (Fable fork) | builder chain `--goal use_a_builder` running from 59af4a2 (polling in the foreground); entry 10 on its result; Settler + second city if time; end save `civsim-gameplay-2026-09-21-end` and client InGame by 20:55 | client; `spikes/gameplay-2026-09-21/` | 18:00 |
+| accessor audit (Opus) | fixes for the 28 phantoms in file-scoped commits (congress, espionage, government, great_people, religion, units bodies), `lua/ACCESSORS.txt` allowlist + CI test; helper's correction applied (CanChangeGovernment real; SetPolicyActive native-only; symbol maps corroborate) | `lua/**`, `catalogs/observations/*.yaml`, tests | 19:17 |
+| Live S5 (Fable fork) | one question: `cities.set_production` rejected 24/24 under the 4 s re-read with `last_read` queue `[]` — not lag; timed tuner probe (1/3/6/10 s) splits "BUILD never lands" from "observation reads the wrong queue"; end save `…-end2`, client InGame by 20:50 | client; `spikes/gameplay-2026-09-21/goal-06-…` | 20:08 |
 
-**Landed 18:16–19:44:** availability rendering + coverage policy; goal driver + 13 goals, all unblocked;
+**Landed 18:16–20:10:** availability rendering + coverage policy; goal driver + 13 goals, all unblocked;
 scorecard honesty; suite hang fixed + pytest timeouts; production list (VERIFIED LIVE) and
-`cities.set_production` (59af4a2; live probe confirmed the game accepts the table); popup mappings —
-era card + dedication chooser VERIFIED LIVE; `units.build_improvement`; `units.promote` fixed;
-game-over detection (f31fb5b); accessor audit report (a606729). **Live worktree at 59af4a2.**
-Coverage (S4, 19:37): actions applied live 10 of 41, attempted while available 17, images delivered
-220 of 499 steps. Loader/host follow-ups: post-defeat menu refuses `Network.LoadGame`; its exit modal
-ignores synthetic input (relaunch = 17 min recovery). Still blocked: autoplay (owner permission).
+`cities.set_production` insert mode (59af4a2 — still rejected live, under investigation); popup mappings
+(era card + dedication VERIFIED LIVE; congress intro/vote; natural disaster VERIFIED LIVE);
+`units.build_improvement`; `units.promote` fixed; game-over detection (f31fb5b); accessor audit report
+(a606729, posted to #3); bounded verification re-read for every action with `last_read` (14f7418);
+**first-meeting answer fixed** (e0e82f0: AddResponse by the selection's own CHOICE_* key, verifier =
+options changed, decline-as-exit) — unverified live. **Live worktree at 14f7418** (advance to e0e82f0
+after S5's run ends). S4 closed at 20:07: coverage 11 of 41 applied, 18 attempted while available,
+images 277 of 592 steps; day spend ≈ $10. Steam back to the owner at 21:00 (release post drafted).
+Tomorrow's queue: verify e0e82f0 and the audit fixes live; set_production root cause; loader relaunch
+path for post-defeat recovery; web `/compare` budget test load-sensitivity; autoplay permission.
 
 ## Queue, in order
 1. Suite green (gate). 2. Goal runs live on the milestone saves until ~20:45, Sonnet 5, back to
