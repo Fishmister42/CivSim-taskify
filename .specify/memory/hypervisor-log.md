@@ -1444,3 +1444,56 @@ readbacks — three turn cycles recorded `game_turn_advanced: False` while the g
 the `detected_text_tokens` plumbing (blocked on a `HostPlatform` window-enumeration method), and
 the production lock leak in `run/composition.py`, which needs one context manager rather than a
 fixture guard.
+
+### Correction to Live S2, and a third named pattern — "a threshold chosen without measuring the thing it bounds"
+
+**Live S2 above files the `turn.end_turn` miss under the same-command-readback family and prescribes
+"re-read in a separate command … with `game_turn_advanced` derived from that read". Both halves were
+already true of the code.** Verified from the live store rather than from the code's appearance
+(`run-e9d52051…`): `act/verify.py`'s `confirm_execution` already issues a genuinely separate tuner
+command per poll — `confirm_attempts: 14` over ~47 s on the very cycles that failed, each a distinct
+read — and `game_turn_advanced` already derived from that bounded re-read
+(`decision_loop.py:1021`), never from the dispatch's own return.
+
+**The actual defect: `END_TURN_CONFIRM_TIMEOUT_S = 45.0`, a bound set without measuring the thing it
+bounds.** That is a **sibling** of the guard-scope mismatch, not an instance of it, and it earns its
+own name. Fixed in `24c0655` (200.0, and `BACKSTOP_CONFIRM_TIMEOUT_S` with it), **labelled an
+assumption in the source** pending a direct single-dispatch probe. `287dee7` verified green at 2201
+in an isolated worktree; `CivSolver-live` advanced to it.
+
+**Count the instances, because the count is the finding.** Three times in one day a threshold was
+set, or nearly set, without measuring what it bounds: this 45 s bound; the 5-attempt / 5.5 s
+reconnect budget nearly widened against a **90 s** observed window; and the replacement 200.0 itself,
+which clears every observed sample but whose ceiling is unmeasured. **Two of the three were caught
+before landing only because someone asked for the measurement first.**
+
+**What the measurement actually says**, two independent datasets that reconcile:
+- direct from the store's `confirm_*` fields, n=12, ±2.0 s poll: **8 passed at 11.5–16.9 s**, **4
+  timed out at ~47 s**. **Bimodal — nothing between 17 s and 45 s.**
+- a wall-clock bracket on one slow case: **75–155 s** after dispatch.
+
+And the disclosure that makes the second usable: n=1; precision floor **12.4 s**, set by how far
+apart two *unrelated* decision-step reads happened to fall; dispatch-to-first-observed-change, not
+to confirm-success; biased **high** by the model round trip inside `step.started_at`; and
+attributable to **either or both of two redundant dispatches** — so **no single-dispatch latency has
+been measured at all**. The honest summary is "more than ~70 s, plausibly up to ~155 s, true value
+unmeasured". A direct probe is still owed.
+
+**Blast radius, bounded by invariant rather than by choice.** `decision_loop.py`'s I16 forbids any
+wall-clock, step-count or cost check inside the module ("there must never be one added", guarded by
+`test_no_truncation.py`). So each turn's confirm takes its full 200 s **independently and
+additively**, and the backstop path pays its own on top: worst case ≈ N × 200 s before any other
+work. The cap therefore **cannot** live in the module, which makes detached-execution-plus-polling
+the only available mitigation rather than merely the preferable one. Every run brief from here states
+worst case as turns × (bound + overhead) in advance, so an abort is a finding rather than a surprise.
+
+**One more, found by checking instead of asserting.** The confirm loop was offered as the worked
+example of a phase safe from a watchdog's kill ceiling, on the grounds that it polls every ~2 s and
+is therefore demonstrably alive. A grep for any logging or telemetry call inside `confirm_execution`
+returns **nothing**: it polls **silently**. **Active is not emitting.** From outside, the single
+longest legitimate operation in the system — doing exactly the right thing — is indistinguishable
+from a wedged process, so a three-minute ceiling would kill it during a legitimate slow-regime turn.
+The requirement that follows: **the liveness signal must be emitted by the waiting phase itself,
+never inferred from the process still existing**, or the criterion collapses back into the timer it
+was written to replace. Routed to the lane owning `act/verify.py`, together with the open question —
+not yet a finding — of whether the in-flight provider call emits anything, which would matter more.
