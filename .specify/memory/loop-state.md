@@ -508,22 +508,32 @@ there was one partial lookup between them.
   trampoline.** The symbol table is sound as a *positive* discriminator (that is how `CanProgress`
   was settled) and **unsound as a negative**. Do not run a sweep that reads silence as proof.
 
-## 🛑 Release-blocking — ⚠️ THE STATED MECHANISM NO LONGER DESCRIBES `0e91a10` (re-read 15:55)
-**Do not act on the section below without checking which head you are on.** At `0e91a10`, which the
-live worktree now runs, **both halves of the defect are closed**: `0e91a10` carries T265, which
-supplies the declared-text tokens at `run/decision_loop.py:513`, and `observe/capture.py:309` now
-resolves `expected_process` itself so the source gate's identity check runs on a real capture.
-Measured on this box: `list_window_titles()` returns 14 windows and 34 tokens (not None), every view
-declares `screening_profile: platform`, and **`unaddressed_reject_categories(linux/platform) == []`**
-— so the fail-closed rule no longer withholds, and **image delivery may be OPEN**.
-**NOT established: whether a real frame then clears the provenance, geometry and image checks.**
-Zero captures exist at this head. Block 31's 18 frames all failed `provenance_failure` at the
-*previous* head, and `act/camera.py`, `lua/ingame/camera.lua` and `views.yaml`'s `hud_corners` all
-changed in the advance. **GATE: before any block runs at this head, read ONE capture and establish
-what happened to it.** Treat delivery as plausibly open until then.
-**Also note P2 could never have discriminated**: block 31, at a head *without* `483017c`, already
-showed `shown_to_agent {False: 18}` and `sum(image_count) 0`. **The presence of a withheld reason
-cannot separate the content gate from the provenance gate — only the reason's value can.**
+## ✅ RESOLVED 2026-09-22 17:05 — IMAGE DELIVERY IS OPEN AND WORKING. The section below is history.
+**Measured from the store, not inferred: 749 captures have been shown to the agent, 459 of them
+TODAY, the most recent at 18:48:44Z.** Every one is `views.world`, camera mode `world`, zoom
+0.50–1.00. **Images were never actually off; the standing "gated OFF by design" order described a
+mechanism that had already been fixed out from under it.**
+**Both halves of the original defect are closed** at `0e91a10` and later: T265 supplies the
+declared-text tokens at `run/decision_loop.py:513`, and `observe/capture.py:309` resolves
+`expected_process` itself. `unaddressed_reject_categories(linux/platform) == []`, so the fail-closed
+rule withholds nothing.
+**The trap that nearly produced the wrong conclusion, and it is the reusable lesson.** Blocks 34–35
+showed all 65 captures `shown_to_agent: false`, and the obvious reading was "still gated". **It was a
+BOARD reason, not a code reason:** the camera sat at `strategic` / `0.049999713897705` for every one,
+and **nothing in 51 steps ever requested `world` mode** — ordinary uniform-sampling chance. The
+`withheld_reason` was `provenance_failure` (single value), and **`screening_metrics` was `null` on
+every capture — metrics populate only at the content gate, so the content gate never ran at all.**
+**A different gate was doing the withholding the whole time.** Contamination itself was separately
+ruled out on evidence: 301 delivered captures examined, 0 contaminated.
+**Rule: the presence of a withheld reason proves nothing; only its VALUE discriminates.** The
+prediction written to settle this could never have done so — a head *without* the fail-closed change
+already showed every frame withheld, because a second gate was refusing them.
+**Latent, fail-safe, filed not fixed:** a strategic-mode frame relabelled `views.strategic` would
+still withhold. That view declares `zoom_range: [0.05, 0.3]` and `screening.py:837` tests
+`low <= zoom <= high` with **no tolerance**; `0.05 <= 0.049999713897705` is False, short by
+**2.861e-07** — the T321 float class at a site `catalogs/actions/camera.yaml`'s tolerance cannot reach.
+
+### The original finding, as recorded (true of `c211605` and earlier)
 
 ### The original finding, as recorded (true of `c211605` and earlier)
 **The content screening gate cannot detect the FireTuner window in production, on any platform.**
