@@ -172,3 +172,32 @@ Landed this stage: prompt route table + `not_in_catalog` stall (c052c39); paused
 Operator interventions (all labelled, never counted): congress click-through attempt (no-op, Next disabled), operator end-turn probe under the congress, greeting CloseSession ×3, defeat-to-reload (kill at menu + relaunch + load), set_production API probe (CanStartOperation true, RequestOperation accepted, queue read empty).
 
 **End state:** named save `civsim-gameplay-2026-09-21-end.Civ6Save` (1,454,532 bytes, size-stable, game turn 53). Client InGame at turn 53, Persia alive, 1 city, 1 unit, city panel open, tuner free, no lock, no runner. Coverage: actions 11 of 41 applied, 18 attempted-while-available, images 277 of 592 steps. Resume: `cd /home/matt/CivSolver-live && PYTHONPATH=$PWD/src UV_PROJECT_ENVIRONMENT=/home/matt/CivSolver/.venv uv run --no-sync python -m tests.live.demo_landed_run /home/matt/CivSolver/specs/002-civ-playing-harness/spikes/gameplay-2026-09-21/block-26 --provider openrouter --turns 5 --store /home/matt/CivSolver/civsim-match-store.db` (secrets.yaml must exist in the worktree; goal runs: `-m tests.live.goal_run --goal <id> …`).
+
+## Stage 5 (20:08–20:30 EDT) — one question: was `set_production`'s 80/80 lag or a non-landing?
+
+| goal | run | game turns | provider | result |
+|---|---|---|---|---|
+| 06 set_capital_production | run-ba3ad80d | 53 → 56 | Sonnet 5 (worktree 14f7418, bounded re-read) | not reached: `cities.set_production` UNIT_SETTLER rejected **24/24** with `confirm_attempts 2`, `confirm_elapsed_s ≈ 4.1`, `last_read {"city.production_queue": []}` every time; `cities.select` ×2 and `prompts.tech_civic_completed` ×1 applied; 27 calls, 10 images, $0.82 |
+
+**Operator probe (labelled, recorded on run-ba3ad80d, not counted):** the exact table
+`{PARAM_UNIT_TYPE = GameInfo.Units["UNIT_BUILDER"].Hash, PARAM_INSERT_MODE = VALUE_EXCLUSIVE}` via
+`CityManager.RequestOperation(city, BUILD, t)` from InGame: `CanStartOperation` true, queue size
+0 → **1 within 1 s**, current production `UNIT_BUILDER`, turns_left 1, unchanged at +3/+6/+10 s.
+The harness's own `cities.state` body then reports `production_queue: ["UNIT_BUILDER"]` (bodies
+probe, 16/16), so the observation read is right.
+
+**Verdict: not lag — the harness's action never lands.** `act/executor._build_arguments` passes the
+decision's target as the only positional (`("UNIT_SETTLER",)`); `CivSim_CityOrders_SetProduction(cityId,
+productionType)` (city_orders.lua:213–217) therefore receives the type name as `cityId`, finds no
+city, answers `city_not_found` — and the executor discards the dispatch answer (the step record
+carries only the verification), so it surfaces as `verification_failed`. Same class as the promote
+bug fixed in 6606d4b; `unit_orders.lua:107` carries the lone-argument guard, `city_orders.lua` does
+not. Fix: lone-string normalisation (selected city + target) in `city_orders.lua`, and record the
+Lua's own answer on the step. Before the probe the queue was empty at turn 56 despite 24 "sets"
+minutes earlier — the harness has still never built anything; the Builder in the queue now is the
+probe's.
+
+**End state:** named save `civsim-gameplay-2026-09-21-end2.Civ6Save` (1,469,267 bytes, size-stable,
+game turn 56, Persia alive, 1 city, 1 warrior). `BoostUnlockedPopup` was already hidden at
+wind-down (operator close recorded, no-op). Client InGame, no prompt, tuner free, no lock, no runner.
+Spend this stage $0.82; day ≈ $7.9. Probe script: `operator_probe_set_production.py`.

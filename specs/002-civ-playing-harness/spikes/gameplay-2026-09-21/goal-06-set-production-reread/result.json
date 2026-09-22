@@ -1,0 +1,115 @@
+{
+  "goal": "set_capital_production",
+  "chain": [
+    "set_capital_production"
+  ],
+  "provider": "openrouter",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T00:09:28.354396+00:00",
+  "parts": [
+    {
+      "goal": "set_capital_production",
+      "title": "Set the capital's production",
+      "run_id": "run-ba3ad80d69a54bea9256cf8958fe2d7b",
+      "turn_cap": 3,
+      "reached": false,
+      "reached_at_turn": null,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": "turn_cap",
+      "prerequisites": [
+        {
+          "predicate": "player.cities.count >= 1",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "player.cities.available_productions != []",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "finished",
+      "elapsed_s": 474.8,
+      "success_predicate": "observed_applied_cities_set_production >= 1 and player.cities.production_queue != []",
+      "success_check": {
+        "predicate": "observed_applied_cities_set_production >= 1 and player.cities.production_queue != []",
+        "met": false,
+        "reason": null
+      },
+      "steps": 27,
+      "turns_recorded": [
+        1,
+        2,
+        3
+      ],
+      "actions": {
+        "cities.set_production": {
+          "verification_failed": 24
+        },
+        "cities.select": {
+          "applied": 2
+        },
+        "prompts.tech_civic_completed": {
+          "applied": 1
+        }
+      },
+      "actions_applied": {
+        "cities.select": 2,
+        "prompts.tech_civic_completed": 1
+      },
+      "provider": "openrouter",
+      "provider_policy": "uniform",
+      "game_start_turn": 53,
+      "store": {
+        "run": {
+          "lifecycle_state": "finished",
+          "stop_resolution": "turn_reached",
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 3,
+        "decision_steps": 27,
+        "save_points": 3,
+        "captures": 33,
+        "run_events": 46,
+        "model_calls": 27,
+        "turns_recorded": [
+          1,
+          2,
+          3
+        ],
+        "captures_shown_to_agent": 10,
+        "capture_screening": [
+          "screened_clean",
+          "withheld"
+        ],
+        "model_calls_served": [
+          "openrouter/anthropic/claude-sonnet-5"
+        ],
+        "model_cost_usd": 0.8183,
+        "model_input_tokens": 363620,
+        "model_output_tokens": 9107
+      }
+    }
+  ],
+  "recording": {
+    "frames": 436,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 38449,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t159s.png",
+      "keyframe_2_t319s.png",
+      "keyframe_3_t478s.png"
+    ],
+    "capture_failures": 0
+  },
+  "finished_at": "2026-09-22T00:18:04.785512+00:00",
+  "reached": false
+}

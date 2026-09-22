@@ -1,0 +1,11 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal set_capital_production: objective written to goal-set_capital_production.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=set_capital_production provider=openrouter provider_policy=uniform turn_cap=3]
+t+003s  goal set_capital_production: run run-ba3ad80d69a54bea9256cf8958fe2d7b
+t+003s  goal set_capital_production: playing turn=None step=None
+t+005s  goal set_capital_production: playing turn=1 step=None
+t+139s  goal set_capital_production: playing turn=2 step=None
+t+292s  goal set_capital_production: playing turn=3 step=None
+t+464s  goal set_capital_production: turn cap 3 reached -- stopping the run
+t+478s  goal set_capital_production: finished turn=3 step=None
+t+478s  goal set_capital_production not reached; the chain stops here (a later part starts from a state that never arrived)

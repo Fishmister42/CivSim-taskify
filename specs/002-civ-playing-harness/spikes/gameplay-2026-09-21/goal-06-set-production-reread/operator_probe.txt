@@ -1,0 +1,8 @@
+BEFORE: {"ok": true, "turns_left": -1, "city_id": 65536, "at0": "nil", "currently_building": "n/a", "game_turn": 56, "cur_name": "nil", "cur_hash": 0, "size": 0}
+ISSUE: {"insert_mode": "-1744919098", "can_ok": true, "request_ok": true, "can_start": "true", "unit_hash": 299201842, "request_err": "nil", "failure_reasons": [], "can_err": "nil"}
+  +1s: {"ok": true, "turns_left": 1, "city_id": 65536, "at0": "1", "currently_building": "n/a", "game_turn": 56, "cur_name": "UNIT_BUILDER", "cur_hash": 299201842, "size": 1}
+  +3s: {"ok": true, "turns_left": 1, "city_id": 65536, "at0": "1", "currently_building": "n/a", "game_turn": 56, "cur_name": "UNIT_BUILDER", "cur_hash": 299201842, "size": 1}
+  +6s: {"ok": true, "turns_left": 1, "city_id": 65536, "at0": "1", "currently_building": "n/a", "game_turn": 56, "cur_name": "UNIT_BUILDER", "cur_hash": 299201842, "size": 1}
+  +10s: {"ok": true, "turns_left": 1, "city_id": 65536, "at0": "1", "currently_building": "n/a", "game_turn": 56, "cur_name": "UNIT_BUILDER", "cur_hash": 299201842, "size": 1}
+operator_intervention event written to run-ba3ad80d69a54bea9256cf8958fe2d7b
+LANDED: True

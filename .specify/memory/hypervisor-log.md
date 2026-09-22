@@ -976,3 +976,18 @@ Operator interventions all recorded, none counted. End save `civsim-gameplay-202
 (t53, size-stable). Client left InGame t53, city panel open, tuner free, no lock. Lessons: keep every
 foreground command < 600 s (my own poll loop backgrounded twice); goal driver needs secrets in the
 worktree; `git add` with one missing path stages nothing.
+
+### Live S5 — 2026-09-21 (20:08–20:30 EDT)
+
+One question answered: `cities.set_production`'s 80/80 rejection was NOT verification lag. Under
+the bounded re-read (14f7418) it still failed 24/24 with `last_read production_queue []` after
+4.1 s; a labelled operator probe issuing the exact `{PARAM_UNIT_TYPE=hash, PARAM_INSERT_MODE=
+VALUE_EXCLUSIVE}` table filled the queue within 1 s (UNIT_BUILDER, stable at +10 s), and the
+harness's own `cities.state` body then read `["UNIT_BUILDER"]`. Cause at the source: the executor
+passes only the target, `CivSim_CityOrders_SetProduction(cityId, productionType)` gets the type
+name as `cityId` (city_orders.lua:213–217, no lone-argument guard unlike unit_orders.lua:107),
+answers `city_not_found`, and the executor drops the dispatch answer before verifying. Same class
+as the promote bug (6606d4b). Fix for tomorrow: normalise the lone argument (selected city + target)
+and record the Lua's answer on the step. The harness has still never built anything by its own
+action. End save `civsim-gameplay-2026-09-21-end2` (t56, Persia alive); client InGame, no prompt,
+no lock. Spend $0.82. Entry 11 on #3.
