@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 20:23 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 20:38 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -14,8 +14,8 @@ reads the constitution, this file, then issue #1's tail, and continues.
 - Autoplay the game's own AI to reach deep saves (~t100/t150/t200); run goal runs from them.
 - Spend: the OpenRouter cap is the agent's for the week; run rate is far below it — **increase it**.
   Never ask before spending; the provider's refusal is the only stop.
-- Steam/client: the owner wants Steam back at about **21:00 EDT on 2026-09-21**; release it with a
-  `status: done` post on #1 before then. On later days, check before launching.
+- Steam/client: **released to the owner at 20:30 EDT on 2026-09-21** (issue #1). Check with the owner
+  before launching again; the client was left InGame at game turn 56 with named saves `…-end` (t53) and `…-end2` (t56).
 - The T201 soak is parked ("I don't even care right now").
 
 ## Standing rules for every agent (learned the hard way today)
@@ -41,27 +41,23 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| accessor audit (Opus) | fixes for the 28 phantoms in file-scoped commits (congress, espionage, government, great_people, religion, units bodies), `lua/ACCESSORS.txt` allowlist + CI test; helper's correction applied (CanChangeGovernment real; SetPolicyActive native-only; symbol maps corroborate) | `lua/**`, `catalogs/observations/*.yaml`, tests | 19:17 |
-| Live S5 (Fable fork) | one question: `cities.set_production` rejected 24/24 under the 4 s re-read with `last_read` queue `[]` — not lag; timed tuner probe (1/3/6/10 s) splits "BUILD never lands" from "observation reads the wrong queue"; end save `…-end2`, client InGame by 20:50 | client; `spikes/gameplay-2026-09-21/goal-06-…` | 20:08 |
+| productions (Opus, resumed) | `cities.set_production` root cause (executor passes only the target; the city-orders Lua took it as the city id → `city_not_found`, discarded): lone-argument guard + **record every dispatch answer on the step** (ActionExecution/Decision schemas) | `lua/ingame/city_orders.lua`, `run/decision_loop.py`, `models/decision.py`, schemas, tests | 20:30 |
 
-**Landed 18:16–20:10:** availability rendering + coverage policy; goal driver + 13 goals, all unblocked;
-scorecard honesty; suite hang fixed + pytest timeouts; production list (VERIFIED LIVE) and
-`cities.set_production` insert mode (59af4a2 — still rejected live, under investigation); popup mappings
-(era card + dedication VERIFIED LIVE; congress intro/vote; natural disaster VERIFIED LIVE);
-`units.build_improvement`; `units.promote` fixed; game-over detection (f31fb5b); accessor audit report
-(a606729, posted to #3); bounded verification re-read for every action with `last_read` (14f7418);
-**first-meeting answer fixed** (e0e82f0: AddResponse by the selection's own CHOICE_* key, verifier =
-options changed, decline-as-exit) — unverified live. **Live worktree at 14f7418** (advance to e0e82f0
-after S5's run ends). S4 closed at 20:07: coverage 11 of 41 applied, 18 attempted while available,
-images 277 of 592 steps; day spend ≈ $10. Steam back to the owner at 21:00 (release post drafted).
-Tomorrow's queue: verify e0e82f0 and the audit fixes live; set_production root cause; loader relaunch
-path for post-defeat recovery; web `/compare` budget test load-sensitivity; autoplay permission.
+Everything else has landed. **Head `877af65`+; live worktree advanced to head.** Accessor audit complete:
+report `a606729`, observation bodies `e076f83`, action bodies `03efcac`, allowlist `lua/ACCESSORS.txt` +
+CI guard `98e7ccd` — all unverified live. First-meeting answer fixed `e0e82f0` — unverified live.
+Coverage at close (store, 20:29): actions applied live 11 of 41, attempted while available 18,
+screens 9 of 18, images 287 of 619 steps, 43 runs, spend $13.40 cumulative (≈ $12 on 09-21).
 
-## Queue, in order
-1. Suite green (gate). 2. Goal runs live on the milestone saves until ~20:45, Sonnet 5, back to
-back, posted to #3 as entries. 3. Structural blockers: `city.available_productions` always `[]`;
-camera readback (3 actions never verify); dedication chooser unmapped. 4. Verify live: greeting
-answer via `AddResponse`, pre-save clearance. 5. 002 client-gated tasks T177/T191–T194/T198/T200.
+## Queue, in order (2026-09-22)
+1. Owner's OK to launch. 2. From the worktree at head: verify live `cities.set_production` (once the
+dispatch-answer commit lands) → `--goal use_a_builder` (build → use) → Settler → `found_second_city`;
+the first-meeting answer (`path: add_response`, `choice_key`, `offered_after` changed); the 14 repaired
+actions as play reaches them (policies after Code of Laws, delegation, camera zoom/view). 3. Loader:
+post-defeat main menu refuses `Network.LoadGame` and its exit modal ignores synthetic input → build the
+relaunch into Principle VII recovery. 4. Web `/compare` render-budget test is load-sensitive on this box.
+5. Autoplay fast-forward: owner runs `! uv run python specs/002-civ-playing-harness/spikes/autoplay_ff.py --turns 2`.
+6. `debug_overlay` corner false positive. 7. 002 client-gated tasks T177/T191–T194/T198/T200. T201 parked.
 
 ## State
 Head: see `git log -1`. Coverage (18:00): actions applied 9 of 38, attempted 23 (9 of the 14
