@@ -11,11 +11,19 @@ Files live under `catalogs/`, are loaded and validated at startup, hashed, and r
 
 ```text
 catalogs/
-├── VERSION                  # Single line, e.g. "2026.09.1"
+├── VERSION                  # Single line, e.g. "2026.09.14"
+├── capabilities.yaml        # every IntegrationCapability (see the schema below)
+├── screening_profiles.yaml  # the per-platform detector profiles views resolve against
 ├── observations/*.yaml      # kind: observation
 │   └── views.yaml           # kind: view  (visual observations)
 └── actions/*.yaml           # kind: action
 ```
+
+*(Corrected 2026-09-22: the tree omitted both `capabilities.yaml` — where every
+`IntegrationCapability` this document specifies actually lives, per
+`capability/loader.py::_discover_capability_files`, which reads `capabilities.yaml` and/or a
+`capabilities/` directory — and `screening_profiles.yaml`, which `screening_profile` below
+resolves against. A reader looking for the capability entries found only declaration files.)*
 
 ## Declaration schema
 
@@ -74,8 +82,30 @@ camera_requirements:
   mode: city_screen                    # world | strategic | city_screen | diplomacy | congress
   zoom_range: [min, max]               # must be within what the standard UI allows
   target_must_be_revealed: true        # FR-026 — cannot point at unrevealed plots
-screening_profile: default             # which detector profile applies (R7)
+screening_profile: platform            # HOW the detector profile resolves — see below (R7)
 ```
+
+**`screening_profile` names a resolution *rule*, not a profile — and this is the field most likely
+to mislead you.** `parity/screening.py::resolve_screening_profile` looks the declared value up in
+`catalogs/screening_profiles.yaml` **only when it is literally `default`**, which always means the
+strictest profile regardless of host. **Any other value resolves by the running host platform**:
+`profiles[<host platform>]`, falling back to `profiles.default` when that platform has no entry.
+The declared string itself is never used as a key. So:
+
+- `screening_profile: default` ⇒ always `profiles.default`, the strictest profile.
+- `screening_profile: platform` ⇒ the host's own profile. This is what all five shipped views
+  declare (`catalogs/observations/views.yaml`), and `platform` is deliberately **not** a key in
+  `screening_profiles.yaml` (its keys are `windows`, `macos`, `linux`, `default`) — it is a word
+  meaning "resolve by host", not a lookup.
+- `screening_profile: windows` ⇒ **silently the *host's* profile, not the Windows one.** On a Linux
+  host this resolves to `profiles.linux`, with no error and no warning. There is no way to pin a
+  view to a foreign platform's profile, and asking for one is not rejected.
+
+*(Corrected 2026-09-22: this field was documented as `screening_profile: default   # which detector
+profile applies`, as if the value named a profile. It does not. The `windows` case above is the one
+that bites: an author writes the name of the profile they want, gets a different profile, and
+nothing anywhere says so. `screening_profiles.yaml`'s own `resolution_rule` block states the real
+rule; this contract now matches it.)*
 
 A capture may be shown to the agent only if it carries a `view_declaration_id` resolving here, its
 camera state satisfies `camera_requirements`, and screening passed (FR-024 – FR-026). Captures are
@@ -130,31 +160,58 @@ fails catalog load. The gap statement must say what the capability does, what it
 and why Firetuner could not do it. This is why SC-020's "100 % coverage" is checkable by loading the
 catalog rather than by reviewing code.
 
+**The rule also runs the other way, and load fails just as hard** (`models/catalog.py`'s
+`_bespoke_requires_gap`): `path: firetuner` with a `firetuner_gap` that is **not** `null` raises
+`firetuner_gap must be absent (null) when path == firetuner`. A `firetuner` entry annotated
+`firetuner_gap: "n/a"`, `""` or "none needed" aborts startup, not turn 1. Both directions are one
+validator, because a gap statement on a Firetuner path is a contradiction: there is no gap.
+*(Documented 2026-09-22 — this contract previously published only the bespoke direction, at the
+list item below and in the paragraph above, so an author writing a well-meaning `"n/a"` met an
+abort this document never warned of.)*
+
 **`parity_basis` is optional here.** Every `ParityDeclaration` that resolves to this capability
 already carries its own required, non-empty `parity_basis`, so omitting the field on the capability
 means it is inherited from those declarations — this is the normal case, and is why none of the
 catalog's entries restate it. Set it only to override or clarify at the capability level; if
 present, it must be non-empty, same as the declaration-level field.
 
-Example of a compliant bespoke entry:
+Example of a compliant bespoke entry — **hypothetical, and deliberately so.** It is written against
+a capability that does not exist, so it cannot drift into describing a module that was never built:
 
 ```yaml
-capability_id: saves.save_game
+capability_id: example.hypothetical_capability   # illustrative only — not a shipped entry
 path: bespoke
-implementation_ref: src/civsim_harness/saves/dialog_driver.py
-reads: [save directory listing]
-writes: [named .Civ6Save file]
+implementation_ref: src/civsim_harness/<subpackage>/<module>.py
+reads: [what the capability reads]
+writes: [what the capability writes]
 firetuner_gap: >
-  No save-to-named-file call is reachable from the GameCore_Tuner or InGame Lua contexts;
-  enumeration output recorded in research R5. Named per-turn saves are required by FR-007,
-  so the in-client Save Game dialog is driven with synthetic input and the result verified
-  on the filesystem before the turn proceeds.
+  What was probed, in which context, and what it returned; why no Firetuner-reachable call
+  satisfies the requirement; and what this capability does instead. A gap statement names a
+  measured negative result, not an expectation of one.
 ```
+
+**For what is actually declared bespoke today, read `catalogs/capabilities.yaml` and grep for
+`path: bespoke`** — the catalog is the authority, and this contract deliberately does not restate
+its contents.
+
+*(Corrected 2026-09-22: this example previously showed `saves.save_game` as `path: bespoke` with
+`implementation_ref: src/civsim_harness/saves/dialog_driver.py` and a `firetuner_gap` citing
+"research R5". Every part of that was counterfactual. **R5 returned Outcome A**: the T077 spike ran
+against a live Linux client on 2026-09-20 and found `Network.SaveGame(gameFile)` in the `InGame`
+context writes a real `.Civ6Save` — four consecutive calls, four valid, size-stable files
+(`spikes/r5-save-path.md`). R5 was a spike with three outcomes, not a finding of absence
+(`research.md` R5). Accordingly the shipped catalog declares `saves.save_game` as `path: firetuner`
+/ `lua/ingame/save_game.lua` / `firetuner_gap: null`; `src/civsim_harness/saves/` contains no
+`dialog_driver.py` and never did; and `catalogs/actions/saves.yaml` records that under Principle II
+that positive result makes the dialog driver **"forbidden, not merely unnecessary"**. The contract's
+only worked example of the bespoke rule was pointing readers at a forbidden, non-existent module.)*
 
 ## Load-time validation (all failures abort startup, not turn 1)
 
 1. Every declaration has a non-empty `parity_basis`.
-2. Every `capability_id` resolves; every `path: bespoke` has a non-empty `firetuner_gap`.
+2. Every `capability_id` resolves; every `path: bespoke` has a non-empty `firetuner_gap`, **and
+   every `path: firetuner` has `firetuner_gap: null`** — a non-null gap on a Firetuner path aborts
+   load just as a missing one on a bespoke path does (`models/catalog.py`).
 3. `declaration_id` values are unique across all files.
 4. Action entries have both `availability_predicate` and `verification_predicate`.
 5. Observation and view entries have a valid `output_schema`.

@@ -21,12 +21,32 @@ directing session and for deliverable 4's orchestration.
 | `civsim run abandon <run_id> [--reason <text>]` | *(no HTTP form)* | Abandon a branch: record `branch_abandoned`, mark its own turns superseded — never deleted — and leave its lifecycle terminal (FR-035) |
 | `civsim run archive <run_id>` | `POST /runs/{id}/archive` | Mark a terminal run archived — the only thing that makes its saves eligible for removal (FR-004, FR-036) |
 | `civsim run status <run_id>` | `GET /runs/{id}/status` | Lifecycle diagnostics — see the bound below |
-| `civsim seedset accept-build <set> --to <build> --reason <text>` | `POST /seedsets/{name}/accept-build` | Record an operator acceptance of a Civ VI build change for that set (FR-002) |
+| `civsim seedset accept-build <set> --to <build> --reason <text>` | *(no HTTP form)* | Record an operator acceptance of a Civ VI build change for that set (FR-002). CLI-only, scoped to `operator/cli.py` (T174) |
 | `civsim saves reap --dry-run` / `--confirm` | *(no HTTP form)* | Delete save files for **already archived** runs only. Operator-invoked; never a background job (R17) |
 | `civsim doctor` | `GET /health` | Host platform and support tier, tuner connection, client liveness and build, store reachability, catalog load, capture path, disk headroom |
 
-**Every command is recorded as a `lifecycle_command_received` run event** before it takes effect, so
-the timeline shows what was asked as well as what happened.
+**Every command that names an existing `run_id` is recorded as a `lifecycle_command_received` run
+event** before it takes effect, so the timeline shows what was asked as well as what happened. That
+is `pause`, `resume`, `stop` (`operator/commands.py`), and `resume-from`, `branch`, `archive`,
+`abandon` (`operator/cli.py`, and the same shape in `operator/api.py`).
+
+**Four commands are deliberately not recorded this way, and `start` is the consequential one.**
+A `lifecycle_command_received` event requires a `run_id` (`models/records.py`'s `RunEvent`), and
+`start` is the one command with no run to attach one to — the `Run` does not exist until the
+runner's own preparation path creates it. `start` is therefore a pass-through
+(`operator/commands.py`'s `start`), and the first durable trace of it is the `Run` record itself
+plus the `lifecycle_transition` event `run/lifecycle.py::transition` writes as that run enters its
+first state; a preparation that fails before a `Run` exists raises instead (`run/preparation.py`'s
+`build_pin_preflight`), while one that fails after leaves a `preparation_mismatch` event
+(`run/composition.py`). `status` records nothing because it is a read, not a command
+(`operator/commands.py:115-120`); `saves reap` and `seedset accept-build` are not run-scoped and
+record nothing either.
+
+*(Corrected 2026-09-22: this paragraph previously said "**Every** command is recorded … before it
+takes effect", full stop. An auditor reconstructing "what was asked" from
+`lifecycle_command_received` alone silently loses every `start` — the most consequential command on
+the surface — and would read its absence as a gap in the record rather than as the documented
+design.)*
 
 **Pause is safe-point, not immediate.** It takes effect at a turn boundary rather than mid-turn —
 interrupting between executing an action and persisting the turn is precisely the half-written state
@@ -104,6 +124,17 @@ The enforcement is structural rather than a rule someone must remember:
 3. `last_known_good_save` is present on purpose — deliverable 1's FR-027 requires the user to be
    able to see what they need in order to act *here*, so the two surfaces meet at exactly that
    handoff and nowhere else.
+
+**Out of this bound's scope, deliberately: `civsim store ...`.** `operator/cli.py` mounts
+`store_app` (`operator/store_cli.py`) on the same `civsim` console script, and that sub-app
+presents run records (`store runs`), per-call model-call metrics (`store model-calls`), and a
+claimed-versus-demonstrated coverage scorecard (`store coverage`) — the shapes this bound refuses
+`status` above. That is not a second presentation of run state under FR-053: it is deliverable 3's
+own record-inspection tooling, answering to FR-011, FR-015, and FR-017, mounted here rather than
+as a second binary because it is still a store-adjacent operator tool, not because it shares this
+contract's scope. This bound governs `status` (`run status` / `GET /runs/{id}/status`) and every
+other command in the table above; it does not reach `store`, and nothing here exempts a future
+command added directly to `run`/`saves`/`seedset`/`audit`/`doctor` from it.
 
 ## Error responses
 

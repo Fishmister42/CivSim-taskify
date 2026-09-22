@@ -142,10 +142,19 @@ capability appears offered-but-empty rather than absent. Honest, but not the pop
 `RunConfigurationReader` protocol in favour of the published read — and is recorded here, on the
 contract that surfaced it, so it is filed rather than folklore.
 
-The conformance suite below asserts none of these extensions today; the consumer's own suite
-exercises both their presence (its fake store offers all four) and their absence
-(`published_port_only`). When deliverable 3 lands them, `tests/contract/test_match_store_port.py`
-is where E1–E5 get asserted against the real store.
+**E1–E5 are asserted against the real store today.** Deliverable 3 landed them (see "Implemented
+by" above), and `tests/contract/test_match_store_port.py` is where they are pinned — the file
+carries a dedicated "Capability extensions E1–E5" section (`:1134-1136`) with per-extension tests:
+E1 `list_runs` across every lifecycle state including archived (`:1162`) and
+`get_turn_cycle_attempt` returning the abandoned attempt asked for (`:1195`), E4
+`get_capture_blob` returning bytes for a kept capture and `None` for a withheld one (`:1182`), and
+E5 `get_run_configuration` resolving run ids and nothing else (`:1016-1065`). The consumer's own
+suite still additionally exercises their absence (`published_port_only`).
+
+*(Corrected 2026-09-22: this paragraph previously read "The conformance suite below asserts none of
+these extensions today … When deliverable 3 lands them", contradicting this file's own header,
+which records deliverable 3 as landed on 2026-09-21 in `93a9b7e`. Someone triaging coverage would
+conclude E1–E5 are untested.)*
 
 ## Archival and retention
 
