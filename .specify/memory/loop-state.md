@@ -30,6 +30,17 @@ explicit `model`: `opus` for orchestration and judgment, `sonnet` for bounded co
 itself was switched to Opus 5. Separate from the OpenRouter budget, which funds in-game model calls.
 
 ## Standing rules for every agent (learned the hard way)
+**Guarantee a safety property by the ABSENCE OF AN EDGE, not the correctness of a flag.** An
+`operator_only=True` parameter makes Principle I rest on every future caller passing it right — the
+"a rule is not a control" failure, demonstrated four times on 2026-09-22 including twice by the people
+who wrote the rule. Instead build a path with **no delivery mechanism at all**: a capture whose result
+has nowhere to go but the operator's eye and the artefact directory, structurally unable to reach a
+provider request because nothing connects it. Ratchet it with an assertion that **no operator-capture
+symbol is reachable from the provider-request path** — the reachability roster already exists here.
+**A frame is the one observation that does not share the harness's failure mode** (on the `EndGameMenu`
+board every harness-side signal agreed with itself and all were wrong), which is exactly why it must
+never become an input to the thing it checks.
+
 **The move that kept producing the better fix** (2026-09-22, four instances): **remove the dependency
 rather than strengthen the thing it depends on.** Session reuse removes the refusal tail instead of
 sizing a retry against it; the `atexit` backstop removes the need for terminal paths to funnel instead
