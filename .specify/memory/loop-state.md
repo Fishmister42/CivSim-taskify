@@ -263,6 +263,17 @@ there was one partial lookup between them.
   which holds only if the record reliably says a stub was in the loop. **A stochastic block
   misrecorded as a model call is a Principle I question, not an accounting one — a decision attributed
   to a model that no model made.**
+- **A BOUND THAT LIVES IN A LOCAL IS RENEWED BY RE-ENTRY. Sweep for allowances scoped narrower than
+  the thing they bound.** Two independent discoveries in two modules on 2026-09-22, found hours apart
+  by different agents: `chain.py`'s attempt ladder lived in a local, so re-entering `complete_step` for
+  one step handed it a fresh ladder (fixed, `65bc562`); and `NoProgressTracker` is a per-invocation
+  local while the decision loop runs **twice** for a turn cycle's first attempt (prompt clearance, then
+  the attempt), both step lists concatenated under **one `turn_cycle_id`** — so one recorded turn can
+  run two complete 8-step ladders and publish a streak of 8. Measured: a cycle with **16 consecutive
+  rejected end-turns** under `limit=8`, climbing 1→8, restarting, climbing again; **61 trip events
+  across 54 distinct (run, turn) pairs, 8 of them represented by no cycle outcome at all.** This is the
+  guard-scope mismatch in its most sweepable form: **find every counter, budget or ladder held in a
+  local, and compare its lifetime to the lifetime of the thing it is supposed to limit.**
 - **A MEASUREMENT IS ONLY AS CURRENT AS THE TREE IT WAS TAKEN IN — re-measure before escalating.**
   On 2026-09-22 "HEAD is functionally red, ten failures" was escalated as blocking every lane. **The
   redness was real and the commit was wrong:** it was measured in a worktree pinned four commits behind
