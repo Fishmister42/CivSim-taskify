@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO / "tests") not in sys.path:
     sys.path.insert(0, str(REPO / "tests"))
 
-from civsim_harness.errors import PreflightError  # noqa: E402
+from civsim_harness.errors import HarnessError, PreflightError  # noqa: E402
 from civsim_harness.models.run import LifecycleState  # noqa: E402
 from civsim_harness.provider.openrouter import OpenRouterProvider  # noqa: E402
 from civsim_harness.provider.stochastic import (  # noqa: E402
@@ -988,6 +988,130 @@ def test_driver_stops_at_the_turn_cap_without_success() -> None:
     assert result["stop_reason"] == "turn_cap"
     assert runner.stop_requests == ["run-fake"]
     assert result["success_check"]["met"] is False
+
+
+class FakeRunnerFinishedBeforeStop:
+    """Reproduces block-10 (2026-09-22 live defect, spec 002): the run reaches FINISHED **on its
+    own** before the driver's own stop trigger gets a chance to call `request_stop` -- exactly
+    the race a run's own `stop_condition: turn_reached` and this driver's turn-cap backstop can
+    land in when they watch the identical recorded-turn signal. `get_status` reports FINISHED
+    from the first poll onward (matching block-10's timeline, where `status.lifecycle_state` was
+    already "finished" in the very poll that went on to evaluate the turn cap), and
+    `request_stop` still raises the same `HarnessError` the real runner raises for an
+    already-terminal run.
+    """
+
+    def __init__(self, states: list[FakeStatus]) -> None:
+        self._states = states
+        self.stop_requests: list[str] = []
+        self.polls = 0
+
+    def get_status(self, run_id: Any) -> FakeStatus:
+        index = min(self.polls, len(self._states) - 1)
+        self.polls += 1
+        return self._states[index]
+
+    def request_stop(self, run_id: Any) -> None:
+        self.stop_requests.append(str(run_id))
+        raise HarnessError(
+            "a run already in a terminal lifecycle state cannot be stopped",
+            detail={"run_id": run_id, "lifecycle_state": "finished"},
+        )
+
+
+def test_stopping_an_already_terminal_run_still_produces_a_complete_result() -> None:
+    """2026-09-22 live defect (block-10): the driver called `request_stop` on a run the runner
+    had already finished on its own; the resulting `HarnessError` propagated out of `drive_goal`
+    uncaught, aborting result assembly one level up (`run_chain`/`main` in `goal_run.py`) so no
+    summary body was ever written for this part. Stopping an already-terminal run is the benign
+    outcome it looks like -- the run already reached the state the stop call wanted -- and must
+    not abort anything.
+
+    FAILS without the fix: `drive_goal` raises `HarnessError` instead of returning, because the
+    unfixed code calls `runner.request_stop(run_id)` directly with no handling for "already
+    terminal". Confirmed failing against a pre-fix backup copy of `goal_run.py` (never via
+    `git stash`/`git reset`) before this fix was written.
+    """
+    goal = load_goals()["found_second_city"]
+    at_cap = records(
+        (1, observation(cities=[city(65536)], units=[unit(1, "UNIT_SETTLER")]),
+         "units.move_to", "applied"),
+        (2, observation(cities=[city(65536)], units=[unit(1, "UNIT_SETTLER")]),
+         "turn.end_turn", "applied"),
+    )
+    runner = FakeRunnerFinishedBeforeStop([FakeStatus(LifecycleState.FINISHED, 2, 1)])
+
+    # The load-bearing assertion: this call must return, not raise.
+    result = drive_goal(
+        goal,
+        runner=runner,
+        run_id="run-fake",
+        read_records=lambda: at_cap,
+        turn_cap=2,
+        sleep=lambda _s: None,
+    )
+
+    # request_stop was still attempted (and still raced) -- the driver just no longer treats
+    # that race as fatal.
+    assert runner.stop_requests == ["run-fake"]
+    assert result["stop_reason"] == "turn_cap"
+
+    # "complete" means result assembly actually ran to the end: the fields `drive_goal` only
+    # fills in after the poll loop, which an uncaught exception would have skipped entirely.
+    assert result["final_state"] == "finished"
+    assert result["turns_recorded"] == [1, 2]
+    assert result["success_check"] is not None
+
+    # And the goal genuinely was not reached -- reflecting a real evaluation, not a default left
+    # over from an aborted run.
+    assert result["reached"] is False
+    assert result["evaluated"] is True
+
+
+def test_reached_false_is_distinguishable_from_never_evaluated() -> None:
+    """`reached` starts False and is only ever set True by an evaluation (2026-09-22 live
+    defect), so a run that was NEVER EVALUATED must not be indistinguishable, in the artefact,
+    from one evaluated and found wanting. This is the assertion that stops the defect recurring:
+    a reader of `result.json` who only checks `reached` cannot tell these two parts apart, but
+    `evaluated` says so directly.
+    """
+    goal = load_goals()["found_second_city"]
+
+    # Genuinely evaluated: the run played to its turn cap, and the predicate was checked against
+    # real recorded steps and found false.
+    at_cap = records(
+        (1, observation(cities=[city(65536)], units=[unit(1, "UNIT_SETTLER")]),
+         "units.move_to", "applied"),
+        (2, observation(cities=[city(65536)], units=[unit(1, "UNIT_SETTLER")]),
+         "turn.end_turn", "applied"),
+    )
+    evaluated_result = drive_goal(
+        goal,
+        runner=FakeRunner(_playing(6)),
+        run_id="run-fake",
+        read_records=lambda: at_cap,
+        turn_cap=2,
+        sleep=lambda _s: None,
+    )
+
+    # Never evaluated: the run paused immediately, before the store ever recorded a single step,
+    # so the success predicate was never checked against anything.
+    never_evaluated_result = drive_goal(
+        goal,
+        runner=FakeRunner([FakeStatus(LifecycleState.PAUSED, 1, 3)]),
+        run_id="run-fake-2",
+        read_records=lambda: records(),
+        turn_cap=15,
+        sleep=lambda _s: None,
+    )
+
+    # Both say "reached: False" -- identical on that one field.
+    assert evaluated_result["reached"] is False
+    assert never_evaluated_result["reached"] is False
+
+    # Only `evaluated` tells them apart.
+    assert evaluated_result["evaluated"] is True
+    assert never_evaluated_result["evaluated"] is False
 
 
 def test_driver_stops_when_the_starting_observation_makes_the_goal_infeasible() -> None:

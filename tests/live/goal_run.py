@@ -73,7 +73,7 @@ from civsim_harness.act.predicates import (  # noqa: E402
     evaluate_predicate,
 )
 from civsim_harness.capability.loader import load_catalog  # noqa: E402
-from civsim_harness.errors import PreflightError  # noqa: E402
+from civsim_harness.errors import HarnessError, PreflightError  # noqa: E402
 from civsim_harness.models.catalog import DeclarationKind  # noqa: E402
 from civsim_harness.nexus.client import NexusClient  # noqa: E402
 from civsim_harness.run.composition import PROVIDER_POLICY_NAMES  # noqa: E402
@@ -1183,6 +1183,10 @@ def run_goal(
             "provider": provider,
             "provider_policy": provider_policy,
             "reached": False,
+            # The run never started, so the success predicate was never checked against a
+            # recorded observation -- `reached: False` here must not be read as "evaluated and
+            # found wanting" (2026-09-22 live defect: absence and negative sharing one field).
+            "evaluated": False,
             "blocked_by": goal.blocked_by,
             "error": str(exc),
         }
@@ -1210,6 +1214,32 @@ def run_goal(
             lock.unlink()
             recorder.note(f"goal {goal.goal_id}: stale run-identity lock cleared ({lock.name})")
     return result
+
+
+def _request_stop_unless_already_terminal(
+    runner: Any, run_id: Any, *, note: Callable[[str], None]
+) -> None:
+    """Ask the runner to stop -- unless it already reached a terminal state on its own.
+
+    2026-09-22 live defect (block-10): a run's own ``stop_condition`` and this driver's own stop
+    triggers (success, the turn-cap backstop) can watch the identical signal -- the store's
+    recorded turn count -- and resolve within the same poll. When the runner gets there first,
+    ``request_stop`` raises ``HarnessError`` because the run is already terminal; but that
+    terminal state *is* the state this call was trying to reach. Same ruling as the lock context
+    manager earlier today: a run that has already reached the state you were driving it to has
+    not failed to get there. So only this specific "already terminal" error is swallowed here --
+    it must never abort result assembly. Any other ``HarnessError`` from ``request_stop`` (an
+    unknown run id, for instance) is a real failure and still propagates.
+    """
+    try:
+        runner.request_stop(run_id)
+    except HarnessError as exc:
+        if exc.message != "a run already in a terminal lifecycle state cannot be stopped":
+            raise
+        note(
+            f"run {run_id} was already terminal when stop was requested -- "
+            "that is the benign race this is, not a failure to stop"
+        )
 
 
 def drive_goal(
@@ -1252,6 +1282,10 @@ def drive_goal(
         "run_id": str(run_id),
         "turn_cap": turn_cap,
         "reached": False,
+        # Distinct from `reached`: True only once the success predicate has actually been
+        # checked against a recorded observation. Without this, "never evaluated" and "evaluated
+        # and false" both read as `reached: False` in the artefact (2026-09-22 live defect).
+        "evaluated": False,
         "reached_at_turn": None,
         "prerequisites_met": None,
         "blocked_by": goal.blocked_by,
@@ -1286,10 +1320,11 @@ def drive_goal(
                     f"({unmet}); stopping the run"
                 )
                 result["stop_reason"] = "prerequisites_not_met"
-                runner.request_stop(run_id)
+                _request_stop_unless_already_terminal(runner, run_id, note=note)
 
         if records.steps:
             success, _bindings = _evaluate_against_store(goal, records, catalog_root=catalog_root)
+            result["evaluated"] = True
             if success.met and not result["reached"]:
                 result["reached"] = True
                 result["reached_at_turn"] = records.turns_recorded[-1]
@@ -1298,7 +1333,7 @@ def drive_goal(
                     f"goal {goal.goal_id}: REACHED at recorded turn "
                     f"{result['reached_at_turn']} -- stopping the run"
                 )
-                runner.request_stop(run_id)
+                _request_stop_unless_already_terminal(runner, run_id, note=note)
             elif (
                 records.turns_recorded
                 and records.turns_recorded[-1] >= turn_cap
@@ -1306,7 +1341,7 @@ def drive_goal(
             ):
                 result["stop_reason"] = "turn_cap"
                 note(f"goal {goal.goal_id}: turn cap {turn_cap} reached -- stopping the run")
-                runner.request_stop(run_id)
+                _request_stop_unless_already_terminal(runner, run_id, note=note)
 
         if status.lifecycle_state in terminal:
             break
@@ -1317,6 +1352,8 @@ def drive_goal(
 
     records = read_records()
     success, _bindings = _evaluate_against_store(goal, records, catalog_root=catalog_root)
+    if records.steps:
+        result["evaluated"] = True
     if success.met and not result["reached"]:
         result["reached"] = True
         result["reached_at_turn"] = records.turns_recorded[-1] if records.steps else None
@@ -1420,9 +1457,16 @@ def summarize(results: Mapping[str, Any]) -> str:
         f"| finished {results.get('finished_at')}"
     )
     for part in parts:
-        reached = "REACHED" if part.get("reached") else "not reached"
+        if part.get("reached"):
+            status_label = "REACHED"
+        elif part.get("evaluated") is False:
+            # Explicit `False`, not merely falsy/missing -- an older-shaped part (no `evaluated`
+            # key) keeps reading as "not reached" rather than silently flipping label.
+            status_label = "NOT EVALUATED"
+        else:
+            status_label = "not reached"
         lines.append("")
-        lines.append(f"**{part.get('goal')} -- {part.get('title')}: {reached}**")
+        lines.append(f"**{part.get('goal')} -- {part.get('title')}: {status_label}**")
         lines.append("")
         lines.append(
             f"- run: `{part.get('run_id', 'n/a')}` | final state: {part.get('final_state')}"
