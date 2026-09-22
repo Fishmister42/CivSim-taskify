@@ -68,34 +68,62 @@ local function CivSim_Camera_Move(x, y)
     return { ok = (ok and result ~= false), target_plot = { x = x, y = y } }
 end
 
--- UNVERIFIED: no confirmed direct "set zoom to value" call; `UI.SetCameraZoom` is a placeholder
--- name, not a confirmed one.
+-- ACCESSOR AUDIT (2026-09-21, specs/002-civ-playing-harness/spikes/lua-accessor-audit-2026-09-21.md):
+-- `UI.SetCameraZoom` was a placeholder name that never became real -- and no `UI.*` function whose
+-- name contains "Camera" exists anywhere in Firaxis' 645 shipped Lua files. The camera API is
+-- spelled "Map". Under its pcall this order reported `ok = false` every time, which is why
+-- `camera.zoom` is one of the three camera actions the coverage report lists as never applied.
+--
+-- SOURCE (this machine, 2026-09-21; steamassets/base/assets/ui/worldinput.lua:1204): the zoom
+-- hotkey issues `UI.SetMapZoom( oldZoom - ZOOM_SPEED, 0.0, 0.0 )` -- three arguments, and Firaxis
+-- passes 0.0, 0.0 at every call site (the mouse-anchored variants are commented out at :355,
+-- :358, :1461, :1464). The value is the same normalized scale `UI.GetMapZoom()` reads back
+-- (base/assets/ui/worldview/cameramanager.lua:41), which this file's own read_state already uses
+-- and which T213 MEASURED at 0.707 in the default view -- so the action and its
+-- verification_predicate are finally on the same scale.
 local function CivSim_Camera_Zoom(zoomLevel)
-    local ok, result = pcall(function() return UI.SetCameraZoom(zoomLevel) end) -- UNVERIFIED
-    return { ok = (ok and result ~= false), zoom = zoomLevel }
+    if type(zoomLevel) ~= "number" then
+        return { ok = false, reason = "zoom_not_a_number", zoom = zoomLevel }
+    end
+    local ok, err = pcall(function() UI.SetMapZoom(zoomLevel, 0.0, 0.0) end)
+    if not ok then
+        return {
+            ok = false,
+            reason = "UI.SetMapZoom errored: " .. tostring(err),
+            zoom = zoomLevel,
+        }
+    end
+    return { ok = true, zoom = zoomLevel, mechanism = "UI.SetMapZoom" }
 end
 
--- UNVERIFIED: view-mode toggle (world <-> strategic view) is known in the base game as a hotkey
--- action; the exact `ActionTypes` key (`ToggleStrategicView` is a placeholder name) is not
--- confirmed. CORRECTED against a live client (spike P1) in one respect: the table this must be
--- read from is `ActionTypes`, not `ActionTypeIndex` — `ActionTypeIndex` was the same wrong table
--- name lua/ingame/turn_control.lua used to guess at for ACTION_ENDTURN; the confirmed table is
--- `ActionTypes` (observed holding `ACTION_ENDTURN = 751412917`, a Civ VI type hash, not a small
--- stable enum — read any member from this table at call time and never hard-code its value, the
--- same rule turn_control.lua follows). Whether `ActionTypes.ToggleStrategicView` (or whatever its
--- real key is) actually exists remains unconfirmed — only the table name is corrected here, not
--- the key.
+-- ACCESSOR AUDIT (2026-09-21): `ActionTypes["ToggleStrategicView"]` was a placeholder key. It
+-- reads nil, so this body called `UI.RequestAction(nil)` on both branches -- and both branches
+-- were identical, so even a real toggle key could not have honoured a requested *mode*.
+--
+-- SOURCE (this machine, 2026-09-21; steamassets/base/assets/ui/minimappanel.lua:369-381,
+-- `Toggle2DView`): the strategic-view switch is not an action hotkey at all. It reads
+-- `UI.GetWorldRenderView()` and sets the other one:
+--   UI.SetWorldRenderView( WorldRenderView.VIEW_3D )  -- the world view
+--   UI.SetWorldRenderView( WorldRenderView.VIEW_2D )  -- the strategic view
+-- Corroborated at base/assets/ui/worldview/citybannermanager.lua:1466 and
+-- base/assets/ui/automation/automation_observercamera.lua:246,250. Setting the view directly is
+-- also what makes this action idempotent: asking for "strategic" while already strategic leaves
+-- it strategic, where a toggle would have flipped it away and failed its own verification.
 local function CivSim_Camera_SetViewMode(mode)
-    local ok, result = pcall(function()
+    if mode ~= "world" and mode ~= "strategic" then
+        return { ok = false, reason = "unknown_view_mode", mode = mode }
+    end
+    local ok, err = pcall(function()
         if mode == "strategic" then
-            return UI.RequestAction(ActionTypes and ActionTypes["ToggleStrategicView"]) -- UNVERIFIED: key name
+            UI.SetWorldRenderView(WorldRenderView.VIEW_2D)
         else
-            return UI.RequestAction(ActionTypes and ActionTypes["ToggleStrategicView"]) -- UNVERIFIED: same
-            -- hotkey is assumed to toggle back; a client that requires two distinct action types
-            -- would need this branch corrected against the live client.
+            UI.SetWorldRenderView(WorldRenderView.VIEW_3D)
         end
     end)
-    return { ok = (ok and result ~= false), mode = mode }
+    if not ok then
+        return { ok = false, reason = "UI.SetWorldRenderView errored: " .. tostring(err), mode = mode }
+    end
+    return { ok = true, mode = mode, mechanism = "UI.SetWorldRenderView" }
 end
 
 -- T260 -- the camera's look-at plot, through Firaxis' own pair of accessors.
@@ -120,14 +148,11 @@ local function CivSim_Camera_LookAtPlot()
         return nil, nil, "UI is not readable in this context"
     end
     if not hasWorldTarget then
-        -- Absent on 1.0.12.9 (MEASURED T213); tried anyway for builds that do carry it, so this
-        -- file needs no per-build fork.
-        local okLegacy, lx, ly = pcall(function() return UI.GetCameraTargetPlot() end)
-        if okLegacy and type(lx) == "number" and type(ly) == "number" then
-            return math.floor(lx), math.floor(ly), nil
-        end
-        return nil, nil,
-            "UI.GetMapLookAtWorldTarget is absent on this build and UI.GetCameraTargetPlot answered no plot"
+        -- ACCESSOR AUDIT (2026-09-21): the fallback here used to try `UI.GetCameraTargetPlot()`,
+        -- "for builds that do carry it". No build carries it: the name appears in none of
+        -- Firaxis' 645 shipped Lua files and is not a registered UI binding in any shipped
+        -- binary, so there is no build to fork for. T213 had already MEASURED it absent here.
+        return nil, nil, "UI.GetMapLookAtWorldTarget is absent on this build"
     end
     local okWorld, wx, wy, wz = pcall(function() return UI.GetMapLookAtWorldTarget() end)
     if not okWorld then
@@ -190,23 +215,21 @@ local function CivSim_Camera_ReadState()
     local zoom, mode = nil, "world"
     -- MEASURED (2026-09-21, Linux 1.0.12.9, live, T213): `UI.GetCameraTargetPlot`,
     -- `UI.GetMapLookAtPlot`, `UI.GetCameraZoom` and `UI.IsStrategicView` do NOT exist on this
-    -- build; every read below was silently failing under its pcall, so `zoom` was nil and the
-    -- provenance gate withheld every capture ("camera_state carries no numeric zoom"). What
-    -- exists: `UI.GetMapZoom()` (0..1, 0.707 at the default view), `UI.GetWorldRenderView()`
-    -- (0 at the world view; the strategic value is UNVERIFIED and assumed 1), `UI.LookAtPlot`,
-    -- `UI.GetCursorPlotID`. The missing look-at getter is what T260 replaces, above.
-    local okZoom, z = pcall(function() return UI.GetCameraZoom() end) -- absent on 1.0.12.9
-    if not okZoom or type(z) ~= "number" then
-        okZoom, z = pcall(function() return UI.GetMapZoom() end) -- MEASURED: 0.70710706710815
-    end
+    -- build; every read here was silently failing under its pcall, so `zoom` was nil and the
+    -- provenance gate withheld every capture ("camera_state carries no numeric zoom").
+    -- ACCESSOR AUDIT (2026-09-21): those four are not build-specific absences -- none of them
+    -- appears in any of Firaxis' 645 shipped Lua files or as a registered UI binding in any
+    -- shipped binary. There is no build on which they answer, so the two first-tries are gone and
+    -- the real accessors are the only reads.
+    local okZoom, z = pcall(function() return UI.GetMapZoom() end) -- MEASURED: 0.70710706710815
     if okZoom and type(z) == "number" then zoom = z end
-    local okMode, m = pcall(function() return UI.IsStrategicView() and "strategic" or "world" end) -- absent
-    if not okMode then
-        okMode, m = pcall(function()
-            local view = UI.GetWorldRenderView() -- MEASURED: 0 at the world view
-            return (view == 1) and "strategic" or "world" -- UNVERIFIED: the strategic value
-        end)
-    end
+    -- minimappanel.lua:369 and citybannermanager.lua:1466 both test
+    -- `UI.GetWorldRenderView() == WorldRenderView.VIEW_2D`; VIEW_2D *is* the strategic view
+    -- (minimappanel.lua:369-381 `Toggle2DView`). Comparing against the named enum rather than the
+    -- literal 1 also retires this file's old "the strategic value is UNVERIFIED and assumed 1".
+    local okMode, m = pcall(function()
+        return (UI.GetWorldRenderView() == WorldRenderView.VIEW_2D) and "strategic" or "world"
+    end)
     if okMode and type(m) == "string" then mode = m end
     -- T221/T260: every read in this function is pcall-guarded, because run/composition.py reads
     -- this function every decision step to satisfy each view's declared camera_requirements -- a

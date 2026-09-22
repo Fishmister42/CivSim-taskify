@@ -74,17 +74,87 @@ local function CivSim_FindLocalSpyUnit(spyUnitId)
     return nil
 end
 
+-- ACCESSOR AUDIT (2026-09-21, specs/002-civ-playing-harness/spikes/lua-accessor-audit-2026-09-21.md):
+-- `UnitOperationTypes.SPY_MISSION` and `UnitOperationTypes.PARAM_SPY_MISSION` exist nowhere -- not
+-- in Firaxis' shipped Lua, not as engine strings. Both read `nil`, so `tParameters[nil] = ...`
+-- raised and the operation type matched nothing. There is no generic "spy mission" operation.
+--
+-- SOURCE (this machine, 2026-09-21; steamassets/base/assets/ui/):
+--   choosers/espionagechooser.lua:196-236 -- the legal missions for a city are enumerated from the
+--     database: `for operation in GameInfo.UnitOperations()` where
+--     `operation.CategoryInUI == "OFFENSIVESPY"`, each tested with
+--     `UnitManager.CanStartOperation(spy, operation.Hash, cityPlot, false, true)`; the failures
+--     come back as results[UnitOperationResults.FAILURE_REASONS] (:234).
+--   popups/espionagepopup.lua:472-477 -- OnAccept, the button that actually starts the mission,
+--     issues `UnitManager.RequestOperation(spy, operation.Hash)` with NO parameter table: the spy
+--     is already standing in the target city, so there is nothing to address.
+--   choosers/espionagechooser.lua:612-616 -- travelling to a different city is a different
+--     operation, SPY_TRAVEL_NEW_CITY, and that one does take PARAM_X/PARAM_Y.
+--   popups/espionagepopup.lua:328-333 -- renewing passes PARAM_X/PARAM_Y as well.
+-- The real constants are SPY_COUNTERSPY, SPY_GAIN_SOURCES, SPY_GREAT_WORK_HEIST,
+-- SPY_LISTENING_POST, SPY_SIPHON_FUNDS, SPY_STEAL_TECH_BOOST, SPY_TRAVEL_NEW_CITY; the only
+-- UnitOperationTypes.PARAM_* keys that exist are PARAM_X, PARAM_Y, PARAM_FLAGS,
+-- PARAM_IMPROVEMENT_TYPE, PARAM_MODIFIERS, PARAM_OPERATION_TYPE and PARAM_WMD_TYPE.
+--
+-- `missionType` is a UnitOperations OperationType name, matching what espionage.state reports as a
+-- spy's `mission`. The operation is refused unless the game itself says it can start, so the
+-- harness never issues a mission the chooser would have greyed out.
+-- UNVERIFIED LIVE.
 local function CivSim_Espionage_AssignMission(spyUnitId, missionType, targetCityId)
     local unit = CivSim_FindLocalSpyUnit(spyUnitId)
     if unit == nil then
-        return { ok = false, reason = "spy_not_found" }
+        return { ok = false, reason = "spy_not_found", spy_unit_id = spyUnitId }
     end
-    local tParameters = {}
-    tParameters[UnitOperationTypes.PARAM_SPY_MISSION] = missionType -- UNVERIFIED
-    tParameters[UnitOperationTypes.PARAM_X] = targetCityId -- UNVERIFIED: placeholder until the real
-    -- target-addressing parameter (city ID vs. plot coordinate) is confirmed
-    local accepted = UnitManager.RequestOperation(unit, UnitOperationTypes.SPY_MISSION, tParameters) -- UNVERIFIED
-    return { ok = (accepted ~= false), spy_unit_id = spyUnitId, mission = missionType, target_city_id = targetCityId }
+    local okRow, row = pcall(function() return GameInfo.UnitOperations[missionType] end)
+    if not okRow or type(row) ~= "table" or row.Hash == nil then
+        return { ok = false, reason = "unknown_mission", spy_unit_id = spyUnitId, mission = missionType }
+    end
+    if row.CategoryInUI ~= "OFFENSIVESPY" then
+        -- espionagechooser.lua:211 -- only this category is on the mission list a human sees.
+        return {
+            ok = false,
+            reason = "mission_not_offered_by_the_espionage_panel",
+            spy_unit_id = spyUnitId,
+            mission = missionType,
+        }
+    end
+    local okPlot, plot = pcall(function() return Map.GetPlot(unit:GetX(), unit:GetY()) end)
+    if not okPlot or plot == nil then
+        return { ok = false, reason = "spy_plot_unreadable", spy_unit_id = spyUnitId }
+    end
+    local okCan, canStart = pcall(function()
+        return UnitManager.CanStartOperation(unit, row.Hash, plot, false, true)
+    end)
+    if not okCan then
+        return { ok = false, reason = "can_start_operation_unanswerable", spy_unit_id = spyUnitId }
+    end
+    if canStart ~= true then
+        return {
+            ok = false,
+            reason = "mission_button_is_greyed_out",
+            spy_unit_id = spyUnitId,
+            mission = missionType,
+        }
+    end
+    local okRequest, err = pcall(function()
+        -- espionagepopup.lua:473 -- no parameter table; the spy acts where it stands.
+        UnitManager.RequestOperation(unit, row.Hash)
+    end)
+    if not okRequest then
+        return {
+            ok = false,
+            reason = "UnitManager.RequestOperation errored: " .. tostring(err),
+            spy_unit_id = spyUnitId,
+            mission = missionType,
+        }
+    end
+    return {
+        ok = true,
+        spy_unit_id = spyUnitId,
+        mission = missionType,
+        target_city_id = targetCityId,
+        mechanism = "UnitManager.RequestOperation(spy, <OFFENSIVESPY operation hash>)",
+    }
 end
 
 CivSim_EspionageOrders = {

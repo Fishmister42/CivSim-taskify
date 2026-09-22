@@ -9,10 +9,11 @@
 -- either. This file must stay entirely self-contained — no shared module can ever be factored out
 -- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
 --
--- UNVERIFIED (whole file, except one accessor): see lua/gamecore/congress.lua's header — spike P3
--- confirms `Game.GetWorldCongress()` exists as a real accessor in InGame (corrected below from
--- the previous `Game.GetCongress()` guess to match), but every method called on what it returns
--- (`:CastVote(...)` included) is still unconfirmed and pending a live-client spike.
+-- ACCESSOR AUDIT (2026-09-21, specs/002-civ-playing-harness/spikes/lua-accessor-audit-2026-09-21.md):
+-- `Game.GetWorldCongress():CastVote(...)` was an invented name. The World Congress object has no
+-- mutators at all -- the eight methods Firaxis ever calls on it are all reads -- so this order
+-- raised inside its pcall and reported `ok = false` every time. Voting is a player operation.
+-- UNVERIFIED LIVE.
 --
 -- Parity note: only a resolution and choice already reported active by CivSim_Congress.state()
 -- may be voted on, spending no more of the local player's own diplomatic favor than the standard
@@ -59,17 +60,59 @@ local function CivSim_JsonEncode(value)
     end
 end
 
-local function CivSim_Congress_CastVote(resolutionId, choiceId, favorSpent)
-    local localPlayer = Game.GetLocalPlayer()
-    -- VERIFIED (P3): Game.GetWorldCongress() itself confirmed to exist. UNVERIFIED: :CastVote(...).
-    local ok, result = pcall(function()
-        return Game.GetWorldCongress():CastVote(localPlayer, resolutionId, choiceId, favorSpent) -- UNVERIFIED
+-- SOURCE (this machine, 2026-09-21;
+-- steamassets/dlc/expansion2/ui/additions/worldcongresspopup.lua:2239-2253): submitting the
+-- player's resolution votes is one request per resolution --
+--   UI.RequestPlayerOperation(playerID, PlayerOperations.WORLD_CONGRESS_RESOLUTION_VOTE, {
+--     [PARAM_RESOLUTION_TYPE]      = <GameInfo.Resolutions row>.Hash,   -- :2241
+--     [PARAM_WORLD_CONGRESS_VOTES] = <number of VOTES, not favor>,      -- :2242
+--     [PARAM_RESOLUTION_OPTION]    = 1 or 2 (the A/B side),             -- :2246
+--     [PARAM_RESOLUTION_SELECTION] = <target index, ZERO-based>,        -- :2247
+--   })
+-- The ballot is then finalised with PlayerOperations.WORLD_CONGRESS_SUBMIT_TURN (:2270), which is
+-- a separate act the harness has no declaration for and this body deliberately does not issue:
+-- submitting would end the player's congress turn, not cast one vote.
+--
+-- NOTE on the third argument: the engine takes VOTES, and the favor those votes cost comes off the
+-- ladder `pWorldCongress:GetVotesandFavorCost(playerID)` (:575). The old body's `favorSpent`
+-- name claimed the opposite. `congress.cast_vote` declares only a `target` today, so choice and
+-- vote count arrive nil through act/executor.py's positional convention; rather than guess a side
+-- for the player, that is refused by name.
+local function CivSim_Congress_CastVote(resolutionId, choiceId, votes)
+    if type(resolutionId) ~= "number" then
+        return { ok = false, reason = "unknown_resolution", resolution_id = resolutionId }
+    end
+    if choiceId ~= 1 and choiceId ~= 2 then
+        return {
+            ok = false,
+            reason = "vote_option_not_supplied",
+            resolution_id = resolutionId,
+            choice_id = choiceId,
+        }
+    end
+    local voteCount = (type(votes) == "number" and votes > 0) and votes or 1
+    local ok, err = pcall(function()
+        local tParameters = {}
+        tParameters[PlayerOperations.PARAM_RESOLUTION_TYPE] = resolutionId
+        tParameters[PlayerOperations.PARAM_WORLD_CONGRESS_VOTES] = voteCount
+        tParameters[PlayerOperations.PARAM_RESOLUTION_OPTION] = choiceId
+        UI.RequestPlayerOperation(
+            Game.GetLocalPlayer(), PlayerOperations.WORLD_CONGRESS_RESOLUTION_VOTE, tParameters)
     end)
+    if not ok then
+        return {
+            ok = false,
+            reason = "UI.RequestPlayerOperation errored: " .. tostring(err),
+            resolution_id = resolutionId,
+            choice_id = choiceId,
+        }
+    end
     return {
-        ok = (ok and result ~= false),
+        ok = true,
         resolution_id = resolutionId,
         choice_id = choiceId,
-        favor_spent = favorSpent,
+        votes = voteCount,
+        mechanism = "PlayerOperations.WORLD_CONGRESS_RESOLUTION_VOTE",
     }
 end
 

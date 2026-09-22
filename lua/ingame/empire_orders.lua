@@ -105,47 +105,157 @@ local function CivSim_EmpireOrders_SetCivic(civicType)
     return { ok = true, civic = civicType, mechanism = "PlayerOperations.PROGRESS_CIVIC" }
 end
 
--- UNVERIFIED: Player:GetCulture():SetPolicyActive(slotIndex, policyIndex) is the pattern recalled
--- from community modding references to policy slotting; exact signature not confirmed.
+-- ACCESSOR AUDIT (2026-09-21): `Player:GetCulture():SetPolicyActive(slot, policyIndex)` is not
+-- callable from Lua. The native method exists (`GameCore::Player::Culture::SetPolicyActive`,
+-- steamassets/dlc/expansion2/binaries/win64/gamecore_xp2_finalrelease.map:17226) but it has no
+-- `?l...@IPlayerCulture@Lua@Cache@GameCore@@` trampoline in either shipped linker map or either
+-- GameCore binary -- it is engine-internal -- and no shipped Lua calls it. The name came from
+-- community modding notes; every `policies.slot_policy` order raised inside its pcall and
+-- reported `ok = false` forever.
+--
+-- SOURCE (this machine, 2026-09-21; steamassets/):
+--   base/assets/ui/screens/governmentscreen.lua:1549-1575 -- OnConfirmPolicies_Yes builds TWO
+--     tables and makes ONE call: `pPlayerCulture:RequestPolicyChanges(clearList, addList)` (:1570).
+--     `clearList` (:1559,:1564) is an array of the ZERO-BASED slot indices to empty; `addList`
+--     (:1560,:1566) is a sparse map from slot index to the POLICY HASH to place there.
+--   base/assets/ui/screens/governmentscreen.lua:1555-1557 -- the removals have to be in the same
+--     call as the additions, or the engine still believes a card sits in its old slot. That is why
+--     this body re-sends the whole loadout rather than one slot.
+--   base/assets/ui/screens/governmentscreen.lua:2284-2289 -- the current loadout is read back with
+--     GetNumPolicySlots() and GetSlotPolicy(i), zero-based, -1 for an empty slot.
+-- UNVERIFIED LIVE: read out of Firaxis' caller, not yet exercised against a running client.
 local function CivSim_EmpireOrders_SlotPolicy(slotIndex, policyType)
     local localPlayer = Game.GetLocalPlayer()
-    local culture = Players[localPlayer]:GetCulture()
     local row = GameInfo.Policies[policyType]
     if row == nil then
         return { ok = false, reason = "unknown_policy" }
     end
-    local ok, result = pcall(function() return culture:SetPolicyActive(slotIndex, row.Index) end) -- UNVERIFIED
-    return { ok = (ok and result ~= false), slot = slotIndex, policy = policyType }
+    local okCulture, culture = pcall(function() return Players[localPlayer]:GetCulture() end)
+    if not okCulture or culture == nil then
+        return { ok = false, reason = "player_culture_unavailable", policy = policyType }
+    end
+    local okSlots, slotCount = pcall(function() return culture:GetNumPolicySlots() end)
+    if not okSlots or type(slotCount) ~= "number" then
+        return { ok = false, reason = "get_num_policy_slots_unanswerable", policy = policyType }
+    end
+    if type(slotIndex) ~= "number" or slotIndex < 0 or slotIndex >= slotCount then
+        return { ok = false, reason = "slot_out_of_range", slot = slotIndex, slot_count = slotCount }
+    end
+    local clearList, addList = {}, {}
+    for i = 0, slotCount - 1 do
+        local okSlot, occupant = pcall(function() return culture:GetSlotPolicy(i) end)
+        local filled = okSlot and type(occupant) == "number" and occupant ~= -1
+        if filled or i == slotIndex then
+            clearList[#clearList + 1] = i
+        end
+        if filled and i ~= slotIndex then
+            local okRow, existing = pcall(function() return GameInfo.Policies[occupant] end)
+            if okRow and type(existing) == "table" and existing.Hash ~= nil then
+                addList[i] = existing.Hash
+            end
+        end
+    end
+    addList[slotIndex] = row.Hash
+    local ok, err = pcall(function() return culture:RequestPolicyChanges(clearList, addList) end)
+    if not ok then
+        return {
+            ok = false,
+            reason = "Culture:RequestPolicyChanges errored: " .. tostring(err),
+            slot = slotIndex,
+            policy = policyType,
+        }
+    end
+    return {
+        ok = true,
+        slot = slotIndex,
+        policy = policyType,
+        mechanism = "Culture:RequestPolicyChanges",
+    }
 end
 
--- UNVERIFIED: government change is believed to go through a Culture-scoped method analogous to
--- SetPolicyActive; exact name not confirmed. This is only ever called when a government change is
--- currently legal (a human can only change government when one is newly unlocked or a cooldown
--- has elapsed), mirrored by this action's availability_predicate.
+-- ACCESSOR AUDIT (2026-09-21): `culture:SetCurrentGovernment(index)` is real and IS callable from
+-- Lua (`IPlayerCulture::lSetCurrentGovernment` is a registered trampoline), so the objection here
+-- is parity, not existence. It is a GAMEPLAY-SCRIPT setter: its only appearance in the shipped
+-- corpus is dlc/blackdeathscenario/scripts/blackdeathscenario.lua:187, a scenario forcing a
+-- government on a player. It bypasses the anarchy/legality path the human's click goes through,
+-- so using it here would be an action no human could issue (Principle I).
+--
+-- SOURCE (this machine, 2026-09-21; steamassets/):
+--   base/assets/ui/screens/governmentscreen.lua:912 and :929 -- the Confirm button calls
+--     `pPlayerCulture:RequestChangeGovernment(<government HASH>)`, which returns a boolean.
+--     Note the asymmetry Firaxis ships: GetCurrentGovernment() RETURNS an index, this one TAKES a
+--     hash (also IsGovernmentUnlocked at :2334).
+--   base/assets/ui/screens/governmentscreen.lua:859-873 -- IsAbleToChangeGovernment() is the gate
+--     that decides whether the button is offered at all; the harness's availability_predicate is
+--     the stand-in for it, and this body does not re-litigate it.
+-- UNVERIFIED LIVE.
 local function CivSim_EmpireOrders_ChangeGovernment(governmentType)
     local localPlayer = Game.GetLocalPlayer()
-    local culture = Players[localPlayer]:GetCulture()
     local row = GameInfo.Governments[governmentType]
     if row == nil then
         return { ok = false, reason = "unknown_government" }
     end
-    local ok, result = pcall(function() return culture:SetCurrentGovernment(row.Index) end) -- UNVERIFIED
-    return { ok = (ok and result ~= false), government = governmentType }
+    local okCulture, culture = pcall(function() return Players[localPlayer]:GetCulture() end)
+    if not okCulture or culture == nil then
+        return { ok = false, reason = "player_culture_unavailable", government = governmentType }
+    end
+    local ok, accepted = pcall(function() return culture:RequestChangeGovernment(row.Hash) end)
+    if not ok then
+        return {
+            ok = false,
+            reason = "Culture:RequestChangeGovernment errored: " .. tostring(accepted),
+            government = governmentType,
+        }
+    end
+    return {
+        ok = (accepted ~= false),
+        government = governmentType,
+        mechanism = "Culture:RequestChangeGovernment",
+    }
 end
 
--- UNVERIFIED: governor assignment accessor surface not confirmed; Player:GetGovernors() is
--- assumed by analogy with the read side in lua/gamecore/government.lua.
+-- ACCESSOR AUDIT (2026-09-21): `PlayerGovernors:AssignGovernor(type, cityId)` exists nowhere in
+-- the shipped corpus, so this order could never have succeeded.
+--
+-- SOURCE (this machine, 2026-09-21; steamassets/):
+--   dlc/expansion1/ui/additions/governorpanel.lua:556-564 -- the "assign to city" button issues
+--     UI.RequestPlayerOperation(localPlayer, PlayerOperations.ASSIGN_GOVERNOR, {
+--       [PARAM_GOVERNOR_TYPE] = <GameInfo.Governors row INDEX>, [PARAM_CITY_DEST] = cityID })
+--     (:560, :561, :562). Identical in dlc/expansion2/ui/additions/governorpanel.lua:568-570.
+--   dlc/expansion1/ui/additions/governorassignmentchooser.lua:377-380 -- the chooser's Confirm
+--     adds PARAM_PLAYER_ONE for a city another player owns; a governor the harness assigns is
+--     always going to one of the local player's own cities (the action's availability_predicate
+--     requires `city.owner_is_local_player`), which is the short form above.
+-- UNVERIFIED LIVE.
 local function CivSim_EmpireOrders_AssignGovernor(governorType, cityId)
-    local localPlayer = Game.GetLocalPlayer()
-    local player = Players[localPlayer]
-    local ok, governors = pcall(function() return player:GetGovernors() end) -- UNVERIFIED
-    if not ok or governors == nil then
-        return { ok = false, reason = "governors_unavailable" }
+    local row = GameInfo.Governors[governorType]
+    if row == nil then
+        return { ok = false, reason = "unknown_governor", governor = governorType }
     end
-    local ok2, result = pcall(function()
-        return governors:AssignGovernor(governorType, cityId) -- UNVERIFIED
+    if type(cityId) ~= "number" then
+        return { ok = false, reason = "unknown_city", governor = governorType, city_id = cityId }
+    end
+    local ok, err = pcall(function()
+        local tParameters = {}
+        tParameters[PlayerOperations.PARAM_GOVERNOR_TYPE] = row.Index
+        tParameters[PlayerOperations.PARAM_CITY_DEST] = cityId
+        UI.RequestPlayerOperation(
+            Game.GetLocalPlayer(), PlayerOperations.ASSIGN_GOVERNOR, tParameters)
     end)
-    return { ok = (ok2 and result ~= false), governor = governorType, city_id = cityId }
+    if not ok then
+        return {
+            ok = false,
+            reason = "UI.RequestPlayerOperation errored: " .. tostring(err),
+            governor = governorType,
+            city_id = cityId,
+        }
+    end
+    return {
+        ok = true,
+        governor = governorType,
+        city_id = cityId,
+        mechanism = "PlayerOperations.ASSIGN_GOVERNOR",
+    }
 end
 
 CivSim_EmpireOrders = {

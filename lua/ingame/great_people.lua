@@ -59,13 +59,42 @@ local function CivSim_JsonEncode(value)
     end
 end
 
+-- ACCESSOR AUDIT (2026-09-21): `Game.GetGreatPeople():Recruit(...)` exists in none of Firaxis'
+-- shipped Lua files and is not a registered engine binding, so this order raised inside its pcall
+-- and reported `ok = false` every time it was ever dispatched. (It was never dispatched: the read
+-- side's own phantom kept `recruitable_individuals` empty, so the action was never available.)
+--
+-- SOURCE (this machine, 2026-09-21; steamassets/base/assets/ui/popups/greatpeoplepopup.lua):
+--   :886-894  OnRecruitButtonClick -- the Recruit button issues
+--     UI.RequestPlayerOperation(Game.GetLocalPlayer(), PlayerOperations.RECRUIT_GREAT_PERSON,
+--       { [PlayerOperations.PARAM_GREAT_PERSON_INDIVIDUAL_TYPE] = individualID })
+--     with exactly one parameter key, whose value is the GreatPersonIndividuals row INDEX
+--     (:267 plumbs kPerson.IndividualID, which is entry.Individual from :726) -- an index, NOT a
+--     hash, unlike the religion operations. The request answers nothing; great_people.state's own
+--     re-read is what confirms it, never the `ok` here.
+-- UNVERIFIED LIVE.
 local function CivSim_GreatPeople_Recruit(individualId)
-    local localPlayer = Game.GetLocalPlayer()
-    -- VERIFIED (P3): Game.GetGreatPeople() itself confirmed to exist. UNVERIFIED: :Recruit(...).
-    local ok, result = pcall(function()
-        return Game.GetGreatPeople():Recruit(localPlayer, individualId) -- UNVERIFIED
+    if type(individualId) ~= "number" then
+        return { ok = false, reason = "unknown_individual", individual_id = individualId }
+    end
+    local ok, err = pcall(function()
+        local tParameters = {}
+        tParameters[PlayerOperations.PARAM_GREAT_PERSON_INDIVIDUAL_TYPE] = individualId
+        UI.RequestPlayerOperation(
+            Game.GetLocalPlayer(), PlayerOperations.RECRUIT_GREAT_PERSON, tParameters)
     end)
-    return { ok = (ok and result ~= false), individual_id = individualId }
+    if not ok then
+        return {
+            ok = false,
+            reason = "UI.RequestPlayerOperation errored: " .. tostring(err),
+            individual_id = individualId,
+        }
+    end
+    return {
+        ok = true,
+        individual_id = individualId,
+        mechanism = "PlayerOperations.RECRUIT_GREAT_PERSON",
+    }
 end
 
 CivSim_GreatPeopleOrders = {
