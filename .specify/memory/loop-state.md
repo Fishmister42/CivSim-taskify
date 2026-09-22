@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 20:38 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 20:48 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -14,8 +14,9 @@ reads the constitution, this file, then issue #1's tail, and continues.
 - Autoplay the game's own AI to reach deep saves (~t100/t150/t200); run goal runs from them.
 - Spend: the OpenRouter cap is the agent's for the week; run rate is far below it — **increase it**.
   Never ask before spending; the provider's refusal is the only stop.
-- Steam/client: **released to the owner at 20:30 EDT on 2026-09-21** (issue #1). Check with the owner
-  before launching again; the client was left InGame at game turn 56 with named saves `…-end` (t53) and `…-end2` (t56).
+- Steam/client: released 20:30, **re-taken 20:45 at the owner's word for a builder re-trial; the window is
+  open-ended — "you'll know when you have to stop, I'll ping you"**. Never wind down on the clock; release
+  with a `status: done` on #1 only when the owner pings. On later days, check before launching.
 - The T201 soak is parked ("I don't even care right now").
 
 ## Standing rules for every agent (learned the hard way today)
@@ -41,13 +42,12 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| productions (Opus, resumed) | `cities.set_production` root cause (executor passes only the target; the city-orders Lua took it as the city id → `city_not_found`, discarded): lone-argument guard + **record every dispatch answer on the step** (ActionExecution/Decision schemas) | `lua/ingame/city_orders.lua`, `run/decision_loop.py`, `models/decision.py`, schemas, tests | 20:30 |
+| productions (Opus, resumed) | `cities.set_production` lone-argument guard (the executor hands the type to the city-id slot) + record every dispatch answer on the step | `lua/ingame/city_orders.lua`, `run/decision_loop.py`, `models/decision.py`, schemas, tests | 20:30 |
+| Live S6 (Fable fork) | polling the worktree hash (foreground) for the fix; then `--goal use_a_builder` (build → use) with Sonnet 5, Settler → `found_second_city`, then every feasible goal back to back with coverage blocks between; entries 12+ on #3; hands off on context (~90 min) with end save `…-end3` | client; `spikes/gameplay-2026-09-21/goal-07-…` | 20:42 |
 
-Everything else has landed. **Head `877af65`+; live worktree advanced to head.** Accessor audit complete:
-report `a606729`, observation bodies `e076f83`, action bodies `03efcac`, allowlist `lua/ACCESSORS.txt` +
-CI guard `98e7ccd` — all unverified live. First-meeting answer fixed `e0e82f0` — unverified live.
-Coverage at close (store, 20:29): actions applied live 11 of 41, attempted while available 18,
-screens 9 of 18, images 287 of 619 steps, 43 runs, spend $13.40 cumulative (≈ $12 on 09-21).
+Head `46d30af`+; live worktree at 877af65 (advance to the fix commit when it lands). Accessor audit
+complete (`a606729`, `e076f83`, `03efcac`, `98e7ccd`) — all unverified live. Coverage at 20:29: actions
+applied live 11 of 41, attempted while available 18, images 287 of 619 steps, spend $13.40 cumulative.
 
 ## Queue, in order (2026-09-22)
 1. Owner's OK to launch. 2. From the worktree at head: verify live `cities.set_production` (once the
