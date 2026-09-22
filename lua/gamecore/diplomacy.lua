@@ -31,6 +31,19 @@ local function CivSim_JsonEncode(value)
         return tostring(value)
     elseif t == "string" then
         local escaped = value:gsub('[%c"\\]', function(c)
+            -- `%c` is iscntrl() under the CLIENT's locale, which includes the C1 range
+            -- 0x80-0x9F. UTF-8 continuation bytes are 0x80-0xBF, so the two overlap: escaping a
+            -- matched high byte SEVERS the sequence and the whole frame stops decoding (three
+            -- dead runs, 2026-09-22 -- "Kamal ud-Din Behzad" emitted a raw C4 followed by the
+            -- literal text \\u0081). Lua patterns match bytes, not characters. The guard lives
+            -- here rather than in the character class because narrowing the class needs \0,
+            -- spelled `%z` in Lua 5.1 and `\0` in 5.2+, with no spelling valid in both -- and the
+            -- client's Lua is not the version this repo's tests embed, so a wrong choice would
+            -- pass every test and break every observation. Byte-identical in all 27 files and in
+            -- nexus/sentinels.py's LUA_JSON_PRELUDE; tests/unit/test_lua_json_encoding.py
+            -- enforces that identity, which is what stands in for the shared module the sandbox
+            -- forbids.
+            if string.byte(c) >= 0x80 then return c end
             if c == '"' then return '\\"'
             elseif c == '\\' then return '\\\\'
             elseif c == '\n' then return '\\n'

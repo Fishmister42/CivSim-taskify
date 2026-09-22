@@ -685,3 +685,117 @@ async def test_completeness_served_and_persisted_is_the_derivation_not_the_creat
         )
     finally:
         store.close()
+
+
+# --------------------------------------------------------------------------
+# 2026-09-22: the recording path must not be able to fail the way the run did.
+#
+# Three consecutive live runs died on the *first* observation read with a bare
+# `UnicodeDecodeError` out of `nexus/codec.py` (a Lua JSON encoder severing a UTF-8 sequence --
+# see `tests/unit/test_lua_json_encoding.py`). `UnicodeDecodeError` is **not** a `HarnessError`,
+# so it flew straight past `_play_run`'s inner `except HarnessError` and its whole failure
+# routing, into the outer net -- which logged, set an in-memory `last_error`, and re-raised into
+# a `Future` nothing awaits. Nothing was ever persisted, so the run sat at
+# `lifecycle_state: playing` forever while its driver polled a status that could never change,
+# and it would have burned its outer wall clock to the end.
+#
+# The two properties pinned below are separable and both were broken:
+#   1. a non-`HarnessError` must still move the run out of `playing` (the hang), and
+#   2. a cause whose *reason text* cannot be encoded must still be recorded, as an explicit
+#      "could not encode" marker rather than by losing the run.
+# --------------------------------------------------------------------------
+
+
+def _runner_whose_turn_raises(
+    store: SqliteMatchStore, prepared: PreparedRun, exc: BaseException
+) -> Runner:
+    """A runner whose very first turn-dependency build raises *exc* -- the earliest point in a
+    turn, standing in for the first observation read that actually died."""
+
+    def _raise(_prepared: PreparedRun, _turn_number: int) -> TurnCycleDependencies:
+        raise exc
+
+    return Runner(
+        RunnerDependencies(
+            store=store,
+            prepare_run=lambda _config: prepared,
+            build_turn_dependencies=_raise,
+            evaluate_stop_facts=_evaluate_stop_facts,
+        )
+    )
+
+
+def _production_decode_error() -> UnicodeDecodeError:
+    """The exact exception class and shape that ended three live runs."""
+    return UnicodeDecodeError("utf-8", b"Kam\xc4\\u0081l", 3, 4, "invalid continuation byte")
+
+
+async def test_a_non_harness_error_still_moves_the_run_out_of_playing(tmp_path: Path) -> None:
+    """The hang, directly: a bare ``UnicodeDecodeError`` is not a ``HarnessError``, and the run
+    must still not be left looking like it is happily playing.
+
+    Sibling of ``test_a_run_never_remains_non_terminal_after_an_unrecoverable_condition``, which
+    pins the same invariant for ``HarnessError``. That one passed throughout; this is the half
+    that did not, and the difference between them is the whole defect.
+    """
+    store = SqliteMatchStore(tmp_path / "match.db")
+    prepared = _make_prepared_run(store)
+    run_id = prepared.run.run_id
+    runner = _runner_whose_turn_raises(store, prepared, _production_decode_error())
+    try:
+        runner.start(CONFIG_PATH)
+        await _wait_until(lambda: runner.get_status(run_id).last_error is not None)
+        status = runner.get_status(run_id)
+
+        assert status.last_error is not None
+        assert status.last_error.type == "UnicodeDecodeError"
+        # The defect: this was `playing`, in memory *and* on disk, forever.
+        assert status.lifecycle_state is not LifecycleState.PLAYING
+        assert status.lifecycle_state is LifecycleState.PAUSED
+        # Persisted, not merely in-process: the driver polls the store, not this object.
+        persisted = store.get_run(run_id)
+        assert persisted is not None
+        assert persisted.lifecycle_state is LifecycleState.PAUSED
+    finally:
+        store.close()
+
+
+async def test_a_cause_whose_reason_cannot_be_encoded_is_recorded_as_unencodable(
+    tmp_path: Path,
+) -> None:
+    """The recording path must not fail the way the run did.
+
+    A lone surrogate in the reason text makes ``RunEvent.model_dump_json()`` raise
+    ``PydanticSerializationError`` *inside* ``write_run_event`` -- a ``UnicodeEncodeError`` raised
+    while recording a ``UnicodeDecodeError``, which is the defect restated exactly.
+
+    **Absence and unobservability must not share a representation.** The run must not be lost, and
+    the record must *say* the reason could not be encoded rather than omitting it -- an absent
+    ``reason`` key is indistinguishable from a failure that had nothing to say.
+    """
+    store = SqliteMatchStore(tmp_path / "match.db")
+    prepared = _make_prepared_run(store)
+    run_id = prepared.run.run_id
+    runner = _runner_whose_turn_raises(store, prepared, HarnessError("bad \udcc4 byte"))
+    try:
+        runner.start(CONFIG_PATH)
+        await _wait_until(lambda: runner.get_status(run_id).last_error is not None)
+
+        persisted = store.get_run(run_id)
+        assert persisted is not None
+        assert persisted.lifecycle_state is not LifecycleState.PLAYING
+
+        transitions = [
+            event
+            for event in store.list_run_events(run_id)
+            if event.event_type is RunEventType.LIFECYCLE_TRANSITION
+            and event.detail.get("to") == LifecycleState.PAUSED.value
+        ]
+        assert transitions, "the run left `playing` without recording that it did"
+        detail = transitions[-1].detail
+        # The stated gap, not a silent one.
+        assert detail.get("reason_unencodable") is True
+        assert "reason" not in detail
+        assert detail.get("error_type") == "HarnessError"
+    finally:
+        store.close()

@@ -260,6 +260,49 @@ class _RunState:
     last_error: tuple[str, Timestamp] | None = None
 
 
+def _encodable_reason(exc: BaseException) -> str | None:
+    """*exc*'s message, but only when it can survive being written to the store.
+
+    Returns ``None`` when it cannot, so the caller can record a stated gap instead of a value.
+    **Never raises** -- this runs on the path that records why a run stopped, and that path must
+    not be able to fail the way the run did.
+
+    2026-09-22: it could. A run died on a ``UnicodeDecodeError`` out of ``nexus/codec.py``, and
+    the reason text carried through to ``RunEvent.detail`` then made
+    ``RunEvent.model_dump_json()`` raise ``PydanticSerializationError`` *inside*
+    ``store.write_run_event`` -- a ``UnicodeEncodeError`` raised while recording a
+    ``UnicodeDecodeError``. The ``encode`` below is exactly what the store will do to this string,
+    performed here where it is still recoverable rather than mid-write where it is not.
+    """
+    try:
+        reason = str(exc)
+    except Exception:  # pragma: no cover - an exception whose __str__ itself fails
+        return None
+    try:
+        reason.encode("utf-8")
+    except Exception:
+        return None
+    return reason
+
+
+def _failure_detail(exc: BaseException) -> dict[str, Any]:
+    """The ``detail`` for a failure transition, built so that it can always be written.
+
+    **Absence and unobservability must not share a representation.** A reason that could not be
+    encoded is recorded as ``reason_unencodable: True``, never by omitting ``reason`` -- an absent
+    key is indistinguishable from a failure that simply had nothing to say, and the whole point of
+    this path is that the operator can tell the difference.
+    """
+    try:
+        error_type = type(exc).__name__
+    except Exception:  # pragma: no cover - defensive; type() on a live object does not fail
+        error_type = "unknown"
+    reason = _encodable_reason(exc)
+    if reason is None:
+        return {"reason_unencodable": True, "error_type": error_type}
+    return {"reason": reason, "error_type": error_type}
+
+
 def _coincident_event(
     run_id: RunId, turn_number: int, resolution: StopResolution, occurred_at: Timestamp
 ) -> RunEvent:
@@ -1093,7 +1136,7 @@ class Runner(RunnerProtocol):
             LifecycleState.PAUSED,
             occurred_at=self._deps.clock(),
             turn_number=state.current_turn,
-            detail={"reason": str(exc), "error_type": type(exc).__name__},
+            detail=_failure_detail(exc),
         )
         self._deps.store.write_run_event(event)
         self._deps.store.update_run(state.run.run_id, lifecycle_state=state.run.lifecycle_state)
@@ -1104,22 +1147,92 @@ class Runner(RunnerProtocol):
 
     def _record_unexpected_failure(self, state: _RunState, exc: Exception) -> None:
         """Last-resort safety net for :meth:`_play_run`: something failed *while this runner was
-        already trying to record why the run stopped* (most plausibly ``transition()`` raising a
-        second time because the run reached a state ``_handle_run_failure`` did not anticipate).
+        already trying to record why the run stopped*, or failed in a way its routing never saw.
         ``state.last_error`` -- read by ``get_status``, and settable purely in-memory under
         ``self._lock`` -- is set here unconditionally, since it is the one guarantee that survives
         even this; the failure is also logged loudly (``telemetry.logging``, T015) rather than left
         for the scheduled coroutine's ``Future`` to silently discard, which is the defect this
-        module exists to close."""
+        module exists to close.
+
+        **2026-09-22: in-memory and logged was not enough, and three dead live runs proved it.**
+        The first observation read raised a bare ``UnicodeDecodeError`` (``nexus/codec.py``, a Lua
+        JSON encoder severing a UTF-8 sequence). That is not a ``HarnessError``, so it flew past
+        :meth:`_play_run`'s inner ``except HarnessError`` and all of :meth:`_handle_run_failure`
+        into this net -- which recorded nothing durable. The run therefore sat at
+        ``lifecycle_state: playing`` **forever**, while its driver polled a store field that could
+        never change, and would have run to its outer wall clock. ``last_error`` lives in this
+        process's memory; the driver reads the store, so the two never met.
+
+        So this net now also drives the run out of ``playing`` and persists it
+        (:meth:`_force_recorded_pause`). "The run is still playing" and "the run died and we could
+        not say why" are different facts and must not share a representation.
+
+        One log record, not two: whether the lifecycle landed is reported as a field on the same
+        ERROR record rather than as a second one, so a caller counting records still sees exactly
+        one failure here.
+        """
         with self._lock:
             state.last_error = (type(exc).__name__, self._deps.clock())
+        lifecycle_recorded = self._force_recorded_pause(state, exc)
         log_event(
             get_harness_logger(),
             logging.ERROR,
             "run/runner: unhandled failure while recording why a run stopped playing",
-            extra={"run_id": state.run.run_id, "error_type": type(exc).__name__},
+            extra={
+                "run_id": state.run.run_id,
+                "error_type": type(exc).__name__,
+                "lifecycle_recorded": lifecycle_recorded,
+            },
             exc_info=True,
         )
+
+    def _force_recorded_pause(self, state: _RunState, exc: Exception) -> bool:
+        """Get the run out of ``playing`` and onto the record. Returns whether it landed.
+
+        **Never raises**, and never re-raises *exc*: it is the last thing standing between a
+        failure and a run stranded mid-flight, so every step is individually guarded. It takes
+        ``self._lock`` itself (the caller does not hold it, and the lock is not reentrant).
+
+        ``paused`` is the target for the same reason :meth:`_pause_on_failure` uses it: ``failed``
+        is reachable only from ``preparing`` or ``resuming``, never from ``playing``, and this
+        module must not widen that graph to paper over a defect. A run already terminal, or
+        already ``paused`` (a second failure racing the first), is left alone -- both are
+        legitimately *not* ``playing`` already, which is the property that matters here.
+
+        Returning ``False`` is itself a real outcome, not a swallowed error: the state genuinely
+        could not be recorded, and the caller reports that on the log record rather than implying
+        the run was safely parked.
+        """
+        try:
+            with self._lock:
+                current = state.run.lifecycle_state
+                if current in TERMINAL_STATES or current is LifecycleState.PAUSED:
+                    return False
+                run, event = transition(
+                    state.run,
+                    LifecycleState.PAUSED,
+                    occurred_at=self._deps.clock(),
+                    turn_number=state.current_turn,
+                    detail=_failure_detail(exc),
+                )
+                # Event first, then the run row: the store's write-before-advance discipline, kept
+                # even here. `_failure_detail` is built to be writable, so a failure below is an
+                # store-level fault (disk, lock) that would defeat either order anyway.
+                self._deps.store.write_run_event(event)
+                state.run = run
+                self._deps.store.update_run(
+                    state.run.run_id, lifecycle_state=state.run.lifecycle_state
+                )
+        except Exception:
+            return False
+        try:
+            # T239: leaving the actively-playing set widens turn_gaps' checked range, so the
+            # persisted derivation is refreshed here as on every other terminal-ish transition.
+            # Bookkeeping: its failure must not turn a recorded pause back into an unrecorded one.
+            refresh_run_completeness(self._deps.store, state.run.run_id)
+        except Exception:
+            pass
+        return True
 
     def _advance(self, state: _RunState, to_state: LifecycleState) -> tuple[Run, RunEvent]:
         """Caller holds ``self._lock``. Record and persist one lifecycle transition."""

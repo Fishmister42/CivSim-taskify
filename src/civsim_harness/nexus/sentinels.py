@@ -116,6 +116,10 @@ LUA_JSON_PRELUDE = (
     'return "{" .. table.concat(parts, ",") .. "}" end end '
     "local s = tostring(v); "
     "s = s:gsub('[%c\"\\\\]', function(c) "
+    # See any lua/**/*.lua CivSim_JsonEncode for why this guard is here and not in the class:
+    # `%c` is the client locale's iscntrl(), which spans C1 (0x80-0x9F) and therefore overlaps
+    # UTF-8 continuation bytes. Escaping one severs the sequence and the frame stops decoding.
+    "if string.byte(c) >= 0x80 then return c end "
     "if c == '\"' then return '\\\\\"' "
     "elseif c == '\\\\' then return '\\\\\\\\' "
     "elseif c == '\\n' then return '\\\\n' "
