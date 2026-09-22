@@ -73,6 +73,22 @@ end
 -- rule.
 local function CivSim_FindLocalCity(cityId)
     local localPlayer = Game.GetLocalPlayer()
+    -- MEASURED LIVE 2026-09-21 (Stage 5, run-ba3ad80d, 24 of 24): a nil id must mean "the city the
+    -- human has selected", exactly as it does for a unit in lua/ingame/unit_orders.lua:80-86. A
+    -- city order's own parity basis is the panel of the city whose banner was clicked
+    -- (`cities.select` is the click), and `UI.GetHeadSelectedCity()` is the same call
+    -- `cities.selection` already reports from. A wrong id is still not found, and nothing here
+    -- ever picks a city on its own.
+    if cityId == nil then
+        local ok, selected = pcall(function() return UI.GetHeadSelectedCity() end)
+        if ok and selected ~= nil then
+            local okOwner, owner = pcall(function() return selected:GetOwner() end)
+            if okOwner and owner == localPlayer then
+                return selected
+            end
+        end
+        return nil
+    end
     local cities = Players[localPlayer]:GetCities()
     for _, c in cities:Members() do
         if c:GetID() == cityId then
@@ -80,6 +96,28 @@ local function CivSim_FindLocalCity(cityId)
         end
     end
     return nil
+end
+
+-- MEASURED LIVE 2026-09-21 (Stage 5, run-ba3ad80d): `cities.set_production` was rejected 24 of 24
+-- with `production_queue` empty on every re-read, while a labelled probe issuing this file's own
+-- parameter table through `CityManager.RequestOperation` filled the queue with UNIT_BUILDER inside
+-- a second and `cities.state` read it back. The game accepted the order; the harness never sent
+-- it. `act/executor.py`'s `_build_arguments` passes a decision's `target` as the LAST positional
+-- argument, and a city order's target is the ITEM -- so every dispatch arrived here as
+-- `set_production("UNIT_BUILDER")`, the item name landed in the `cityId` parameter,
+-- `CivSim_FindLocalCity` compared city ids against a string, and the order came back
+-- `city_not_found` for a city that was selected with its panel open. Identical in shape to the
+-- `units.promote` bug (6606d4b): `unit_orders.lua` carried this normalisation, this file did not.
+--
+-- A lone string argument is therefore the production/purchase item, and the city is the selected
+-- one -- which is what every one of these declarations' availability predicates already require
+-- (`city.is_selected and ...`, catalogs/actions/cities.yaml). The explicit `(cityId, itemType)`
+-- form still works for a caller that names the city.
+local function CivSim_CityOrders_NormaliseArguments(cityId, itemType)
+    if type(cityId) == "string" and itemType == nil then
+        return nil, cityId
+    end
+    return cityId, itemType
 end
 
 -- --------------------------------------------------------------------------
@@ -211,13 +249,20 @@ do
 end
 
 local function CivSim_CityOrders_SetProduction(cityId, productionType)
+    cityId, productionType = CivSim_CityOrders_NormaliseArguments(cityId, productionType)
     local city = CivSim_FindLocalCity(cityId)
     if city == nil then
         return { ok = false, reason = "city_not_found" }
     end
+    if type(productionType) ~= "string" then
+        -- The inverse shape (a bare city id and no item) says what it is instead of being read as
+        -- an item name, so no order is ever issued for something nobody named.
+        return { ok = false, reason = "no_production_named", city_id = city:GetID() }
+    end
     local spec, hash, needsPlacement = CivSim_CityOrders_ResolveProduction(city, productionType)
     if spec == nil then
-        return { ok = false, reason = "unknown_production_item", city_id = cityId, production = productionType }
+        return { ok = false, reason = "unknown_production_item", city_id = city:GetID(),
+                 production = productionType }
     end
     if needsPlacement then
         -- A human's next act here is a click on a map plot; the harness has no action for that, so
@@ -226,7 +271,7 @@ local function CivSim_CityOrders_SetProduction(cityId, productionType)
         return {
             ok = false,
             reason = "requires_plot_placement",
-            city_id = cityId,
+            city_id = city:GetID(),
             production = productionType,
             kind = spec.kind,
         }
@@ -245,7 +290,7 @@ local function CivSim_CityOrders_SetProduction(cityId, productionType)
         return {
             ok = false,
             reason = "operation_refused",
-            city_id = cityId,
+            city_id = city:GetID(),
             production = productionType,
             kind = spec.kind,
             refusal_reasons = CivSim_CityOrders_ResultStrings(results),
@@ -263,7 +308,7 @@ local function CivSim_CityOrders_SetProduction(cityId, productionType)
     local current = CivSim_CityOrders_CurrentProduction(city)
     local result = {
         ok = true,
-        city_id = cityId,
+        city_id = city:GetID(),
         production = productionType,
         kind = spec.kind,
         insert_mode = "exclusive",
@@ -285,25 +330,31 @@ end
 -- `PARAM_YIELD_TYPE = GameInfo.Yields["YIELD_GOLD"].Index`. `PARAM_PRODUCTION_ITEM`, which this
 -- file used to write, does not exist.
 local function CivSim_CityOrders_Purchase(cityId, itemType, yieldType, currency)
+    cityId, itemType = CivSim_CityOrders_NormaliseArguments(cityId, itemType)
     local city = CivSim_FindLocalCity(cityId)
     if city == nil then
         return { ok = false, reason = "city_not_found" }
+    end
+    if type(itemType) ~= "string" then
+        return { ok = false, reason = "no_purchase_item_named", city_id = city:GetID() }
     end
     -- Units (productionpanel.lua:425) and buildings (:470) only: a district is "purchased" through
     -- plot placement (:496-517), not through a PURCHASE command, and a project cannot be bought.
     local spec, hash = CivSim_CityOrders_ResolveProduction(city, itemType)
     if spec == nil or (spec.kind ~= "unit" and spec.kind ~= "building") then
-        return { ok = false, reason = "unknown_purchase_item", city_id = cityId, item = itemType }
+        return { ok = false, reason = "unknown_purchase_item", city_id = city:GetID(),
+                 item = itemType }
     end
     local okYield, yieldIndex = pcall(function() return GameInfo.Yields[yieldType].Index end)
     if not okYield or yieldIndex == nil then
-        return { ok = false, reason = "unknown_yield_type", city_id = cityId, item = itemType }
+        return { ok = false, reason = "unknown_yield_type", city_id = city:GetID(),
+                 item = itemType }
     end
     local tParameters = {}
     tParameters[CityCommandTypes[spec.param]] = hash
     tParameters[CityCommandTypes.PARAM_YIELD_TYPE] = yieldIndex
     local accepted = CityManager.RequestCommand(city, CityCommandTypes.PURCHASE, tParameters)
-    return { ok = (accepted ~= false), city_id = cityId, item = itemType, currency = currency }
+    return { ok = (accepted ~= false), city_id = city:GetID(), item = itemType, currency = currency }
 end
 
 local function CivSim_CityOrders_PurchaseWithGold(cityId, itemType)

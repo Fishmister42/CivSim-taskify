@@ -58,6 +58,19 @@ class ActionExecution(HarnessModel):
     rejection_reason: RejectionReason | None = None
     # The predicate declared on the action entry, and its observed result.
     verification: dict[str, Any] = Field(default_factory=dict)
+    #: What the action's own Lua answered when it was dispatched -- its ``{ok, reason, ...}``
+    #: table, verbatim -- or ``None`` when no dispatch happened (the decision was rejected before
+    #: execution) or the capability returned nothing.
+    #:
+    #: MEASURED LIVE 2026-09-21 (Stage 5, run-ba3ad80d): ``cities.set_production`` was refused 24
+    #: times by its own Lua with ``city_not_found`` -- the item name was arriving in the city-id
+    #: parameter -- and every one of those refusals reached the ledger as a bare
+    #: ``verification_failed``, because the dispatch answer was discarded and only the predicate's
+    #: verdict was recorded. "The game refused this order, and here is the game's word for why" and
+    #: "the effect was not visible afterwards" are different facts; recording only the second one
+    #: cost a whole live stage to diagnose. Kept deliberately separate from ``verification``: this
+    #: is what the order said, that is what the board said.
+    dispatch_result: dict[str, Any] | None = None
     verified_at: Timestamp
 
     @model_validator(mode="after")

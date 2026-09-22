@@ -126,6 +126,20 @@ def _utcnow() -> Timestamp:
     return datetime.now(UTC)
 
 
+def _dispatch_result(answer: Any) -> dict[str, Any] | None:
+    """The action's own Lua answer, as a record field (see ``ActionExecution.dispatch_result``).
+
+    Every order in ``lua/ingame/*.lua`` returns a ``{ok = ..., reason = ...}`` table, which is what
+    this normally receives. A capability that returns nothing records nothing; anything else is
+    kept verbatim under ``value`` rather than dropped or coerced into a shape it does not have.
+    """
+    if answer is None:
+        return None
+    if isinstance(answer, Mapping):
+        return {str(key): value for key, value in answer.items()}
+    return {"value": answer}
+
+
 class MidTurnObservationFailure(HarnessError):
     """A fresh observation could not be assembled mid-attempt (T096, research R14).
 
@@ -845,7 +859,13 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
         else:
             declaration = dispatch_outcome.declaration
             assert declaration is not None
-            await ctx.execute_action(
+            # MEASURED LIVE 2026-09-21 (Stage 5, run-ba3ad80d): this answer used to be thrown
+            # away. `cities.set_production` was refused 24 times by its own Lua with
+            # `city_not_found` -- the item name was arriving in the city-id parameter -- and every
+            # one of those refusals reached the ledger as a bare `verification_failed`, because
+            # only the predicate's verdict was ever recorded. The order's own word for what
+            # happened is kept, on every action, alongside (never instead of) the verification.
+            dispatch_answer = await ctx.execute_action(
                 declaration.declaration_id,
                 raw_decision.parameters,
                 raw_decision.parameters.get("target"),
@@ -902,7 +922,9 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
                 timeout_s=confirm_timeout_s,
                 poll_s=confirm_poll_s,
             )
-            execution = verification.execution
+            execution = verification.execution.model_copy(
+                update={"dispatch_result": _dispatch_result(dispatch_answer)}
+            )
             progress = verification.progress
 
         next_observation = next_fresh.observation

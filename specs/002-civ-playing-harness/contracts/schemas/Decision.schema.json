@@ -4,6 +4,19 @@
       "additionalProperties": false,
       "description": "The outcome of dispatching one decision's action, and how it was verified.\n\n``outcome`` is derived from the action's declared verification predicate\nand must never be asserted directly by an executor (FR-011) -- this\nmodel cannot enforce *that* on its own (it has no access to the\npredicate evaluator), but it does enforce the one thing it can:\n``rejection_reason`` is present exactly when ``outcome == rejected`` or\n``partially_applied`` is not itself a rejection, so a reason is\nmeaningless there too. ``applied`` never carries a rejection reason.",
       "properties": {
+        "dispatch_result": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatch Result"
+        },
         "outcome": {
           "$ref": "#/$defs/ExecutionOutcome"
         },
