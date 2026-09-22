@@ -1,6 +1,8 @@
 """``civsim store …`` -- the operator's window onto the match-tracking store itself (003 T036).
 
-Seven commands, all over the published contract and nothing else (FR-017):
+Eight commands, all over the published contract and nothing else (FR-017). The roster below is
+the whole of it -- ``test_the_docstring_roster_is_the_registered_command_set`` fails if a command
+is added, removed or renamed without this list moving with it:
 
 - ``info``      schema version, identity, counts, migrations, dangling parents
 - ``migrate``   bring a 1.0 file to 1.1 (copy first); ``--dry-run`` says what would change

@@ -156,3 +156,44 @@ def test_open_read_only_resolves_the_environment_path(
     finally:
         explicit.close()
     assert datetime.now(UTC).year >= 2026
+
+
+def test_the_docstring_roster_is_the_registered_command_set() -> None:
+    """The module docstring's bullet list is the command surface, not a description of it.
+
+    ``store_cli``'s docstring published "Seven commands" over a list of eight for as long as
+    ``repair`` has existed: prose that states a count drifts the moment the code moves, and
+    nothing was checking. This pins the roster itself -- the names in the docstring, the count
+    it claims, and the read-only/writer split -- against what Typer actually registered.
+    """
+    import re
+
+    from civsim_harness.operator import store_cli
+
+    doc = store_cli.__doc__ or ""
+    registered = {command.name for command in store_cli.store_app.registered_commands}
+    assert registered == {
+        "info",
+        "migrate",
+        "runs",
+        "model-calls",
+        "coverage",
+        "export",
+        "import",
+        "repair",
+    }
+
+    bullets = set(re.findall(r"^- ``([a-z-]+)``", doc, flags=re.MULTILINE))
+    assert bullets == registered, "the docstring's bullet list is not the registered commands"
+
+    count = re.search(r"^(\w+) commands, all over the published contract", doc, flags=re.MULTILINE)
+    assert count is not None, "the docstring no longer states its command count"
+    assert count.group(1).lower() == "eight"
+    assert len(registered) == 8
+
+    reader_prose = doc.split("open the store **read-only**")[0].rsplit("\n\n", 1)[-1]
+    writer_prose = doc.split("are the three writers")[0].rsplit("read-only**", 1)[-1]
+    readers = set(re.findall(r"``([a-z-]+)``", reader_prose))
+    writers = set(re.findall(r"``([a-z-]+)``", writer_prose))
+    assert readers | writers == registered
+    assert not readers & writers
