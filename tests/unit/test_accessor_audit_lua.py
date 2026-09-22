@@ -1202,3 +1202,123 @@ ContextPtr = nil
     unknown = runtime.eval('CivSim_Screens.respond("prompt.not_a_real_prompt", "continue")')
     assert unknown["ok"] is False
     assert unknown["reason"] == "unknown_prompt"
+
+
+# ===========================================================================================
+# 2026-09-21 20:46:35 EDT: `Civ6 segfault at b0 in libGameCore_XP2.so`, ip resolved (nm on the
+# shipped .so) to GameCore::Definition::Government::GetPrereqCivicReference() -- the engine
+# dereferenced a NULL government definition inside `culture:IsGovernmentUnlocked(hash)`, the
+# first live sweep of these bodies. pcall cannot catch a native fault, so the only guard is never
+# to make the call with anything the engine could resolve to nothing, and never for player -1.
+# These tests make the engine stub *record* what it was handed and fault on a non-number, the way
+# the real engine did.
+# ===========================================================================================
+
+
+def test_government_never_hands_the_engine_a_row_without_a_hash() -> None:
+    runtime = _runtime(_GOVERNMENT_STUBS, LUA / "gamecore" / "government.lua")
+    runtime.execute(
+        """
+        local culture = Players[0]:GetCulture()
+        CIVSIM_TEST_CALLS = {}
+        local real = culture.IsGovernmentUnlocked
+        function culture:IsGovernmentUnlocked(hash)
+            if type(hash) ~= "number" then error("NATIVE FAULT: null definition") end
+            CIVSIM_TEST_CALLS[#CIVSIM_TEST_CALLS + 1] = hash
+            return real(self, hash)
+        end
+        GameInfo.Governments = make_info_table({
+            { GovernmentType = "GOVERNMENT_CHIEFDOM", Hash = 601, Index = 0 },
+            { GovernmentType = "GOVERNMENT_UNRESOLVABLE", Index = 9 },
+        }, {"GovernmentType"})
+        M.current_government = -1
+        """
+    )
+    state = runtime.eval("CivSim_Government.state()")
+    calls = _list(runtime.eval("CIVSIM_TEST_CALLS"))
+    assert calls == [601]
+    assert "GOVERNMENT_UNRESOLVABLE" not in _list(state["available_governments"])
+    assert _list(state["available_governments"]) == ["GOVERNMENT_CHIEFDOM"]
+
+
+def test_government_says_why_when_every_row_lacks_a_hash() -> None:
+    runtime = _runtime(_GOVERNMENT_STUBS, LUA / "gamecore" / "government.lua")
+    runtime.execute(
+        """
+        local culture = Players[0]:GetCulture()
+        function culture:IsGovernmentUnlocked(hash)
+            if type(hash) ~= "number" then error("NATIVE FAULT: null definition") end
+            return true
+        end
+        GameInfo.Governments = make_info_table({
+            { GovernmentType = "GOVERNMENT_A", Index = 0 },
+            { GovernmentType = "GOVERNMENT_B", Index = 1 },
+        }, {"GovernmentType"})
+        """
+    )
+    state = runtime.eval("CivSim_Government.state()")
+    assert _list(state["available_governments"]) == []
+    assert state["available_governments_reason"] == "government_rows_without_hash"
+
+
+def test_policies_never_hand_the_engine_a_row_without_a_hash() -> None:
+    runtime = _runtime(_GOVERNMENT_STUBS, LUA / "gamecore" / "government.lua")
+    runtime.execute(
+        """
+        local culture = Players[0]:GetCulture()
+        CIVSIM_TEST_CALLS = {}
+        local predicates = {
+            "IsPolicyUnlocked", "IsPolicyObsolete", "CanPolicyBeSlotted", "IsPolicyBanned",
+        }
+        for _, name in ipairs(predicates) do
+            local real = culture[name]
+            culture[name] = function(self, hash)
+                if type(hash) ~= "number" then error("NATIVE FAULT: null definition") end
+                CIVSIM_TEST_CALLS[#CIVSIM_TEST_CALLS + 1] = hash
+                return real(self, hash)
+            end
+        end
+        GameInfo.Policies = make_info_table({
+            { PolicyType = "POLICY_SURVEY", Hash = 501, Index = 1 },
+            { PolicyType = "POLICY_UNRESOLVABLE", Index = 9 },
+        }, {"PolicyType"})
+        M.unlocked = { POLICY_SURVEY = true }
+        M.slot_count = 1
+        M.slot_policies = {}
+        """
+    )
+    state = runtime.eval("CivSim_Government.state()")
+    calls = _list(runtime.eval("CIVSIM_TEST_CALLS"))
+    assert calls and all(isinstance(h, (int, float)) for h in calls)
+    assert "POLICY_UNRESOLVABLE" not in _list(state["available_policies"])
+
+
+def test_government_asks_nothing_about_player_minus_one() -> None:
+    runtime = _runtime(_GOVERNMENT_STUBS, LUA / "gamecore" / "government.lua")
+    runtime.execute(
+        """
+        local culture = Players[0]:GetCulture()
+        Game.GetLocalPlayer = function() return -1 end
+        Players[-1] = nil
+        function culture:IsGovernmentUnlocked(hash) error("NATIVE FAULT: null player") end
+        """
+    )
+    state = runtime.eval("CivSim_Government.state()")
+    assert state["available_governments_reason"] == "no_local_player"
+    assert state["available_policies_reason"] == "no_local_player"
+    assert state["governors_reason"] == "no_local_player"
+    assert _list(state["available_governments"]) == []
+
+
+def test_great_people_asks_nothing_about_player_minus_one() -> None:
+    state = _great_people_state("Game.GetLocalPlayer = function() return -1 end")
+    assert state["recruitable_individuals_reason"] == "no_local_player"
+    assert state["points_by_class_reason"] == "no_local_player"
+    assert _list(state["recruitable_individuals"]) == []
+
+
+def test_religion_asks_nothing_about_player_minus_one() -> None:
+    state = _religion_state("Game.GetLocalPlayer = function() return -1 end")
+    assert state["available_beliefs_reason"] == "no_local_player"
+    assert _list(state["available_beliefs"]) == []
+    assert state["pantheon_selected"] is False

@@ -114,16 +114,24 @@ local function CivSim_Government_AvailablePolicies(culture)
     -- instead of reporting "no cards available".
     local probed, answered = false, false
     local available = {}
+    local skippedPolicies = 0
     for row in GameInfo.Policies() do
         local hash = row.Hash
-        local obsolete = CivSim_Government_Try(function() return culture:IsPolicyObsolete(hash) end)
-        local slottable = CivSim_Government_Try(function() return culture:CanPolicyBeSlotted(hash) end)
-        local banned = CivSim_Government_Try(function() return culture:IsPolicyBanned(hash) end)
-        local unlocked = nil
-        if type(slottable) ~= "boolean" then
-            unlocked = CivSim_Government_Try(function() return culture:IsPolicyUnlocked(hash) end)
+        local obsolete, slottable, banned, unlocked = nil, nil, nil, nil
+        if type(hash) ~= "number" then
+            -- Same fault class as the government loop: each predicate resolves the policy
+            -- definition from this hash (governmentscreen.lua:2270-2271 passes row.Hash of InGame
+            -- rows, always numeric). A non-number is never handed to the engine.
+            skippedPolicies = skippedPolicies + 1
+        else
+            obsolete = CivSim_Government_Try(function() return culture:IsPolicyObsolete(hash) end)
+            slottable = CivSim_Government_Try(function() return culture:CanPolicyBeSlotted(hash) end)
+            banned = CivSim_Government_Try(function() return culture:IsPolicyBanned(hash) end)
+            if type(slottable) ~= "boolean" then
+                unlocked = CivSim_Government_Try(function() return culture:IsPolicyUnlocked(hash) end)
+            end
         end
-        if not probed then
+        if not probed and type(hash) == "number" then
             probed = true
             answered = (type(slottable) == "boolean" or type(unlocked) == "boolean")
         end
@@ -140,7 +148,8 @@ local function CivSim_Government_AvailablePolicies(culture)
         end
     end
     if not answered then
-        return {}, "policy_availability_predicate_unanswerable"
+        return {}, (skippedPolicies > 0) and "policy_rows_without_hash"
+            or "policy_availability_predicate_unanswerable"
     end
     return available, nil
 end
@@ -197,8 +206,26 @@ end
 
 local function CivSim_Government_GetState()
     local localPlayer = Game.GetLocalPlayer()
+    -- Every shipped screen returns before touching a player object when there is no local
+    -- player (greatpeoplepopup.lua:690-692 `if (displayPlayerID == -1) then return end`). An
+    -- engine method asked about player -1 dereferences nothing a pcall can catch.
+    if type(localPlayer) ~= "number" or localPlayer < 0 then
+        return {
+            current_government = nil,
+            available_governments = {},
+            available_policies = {},
+            governors = {},
+            available_governors = {},
+            available_governments_reason = "no_local_player",
+            available_policies_reason = "no_local_player",
+            governors_reason = "no_local_player",
+        }
+    end
     local player = Players[localPlayer]
-    local culture = CivSim_Government_Try(function() return player:GetCulture() end)
+    local culture = nil
+    if player ~= nil then
+        culture = CivSim_Government_Try(function() return player:GetCulture() end)
+    end
 
     -- governmentscreen.lua:2250-2254 -- GetCurrentGovernment() returns a GameInfo.Governments row
     -- INDEX, or -1 before Code of Laws; the screen's own "no government" state is that sentinel.
@@ -219,16 +246,34 @@ local function CivSim_Government_GetState()
         governmentsReason = "player_culture_unavailable"
     else
         local answered = false
+        local skipped = 0
         for row in GameInfo.Governments() do
-            local unlocked = CivSim_Government_Try(function()
-                return culture:IsGovernmentUnlocked(row.Hash)
-            end)
+            -- 2026-09-21 20:46:35 EDT, kernel log: `Civ6 segfault at b0 in libGameCore_XP2.so`,
+            -- ip = GameCore::Definition::Government::GetPrereqCivicReference() -- the engine
+            -- dereferenced a NULL government definition inside this very call. The engine
+            -- resolves the definition from the hash it is handed; a row whose Hash is not a
+            -- number resolves to nothing, and pcall cannot catch a native fault. Firaxis only
+            -- ever passes `government.Hash` of rows the InGame GameInfo returns
+            -- (governmentscreen.lua:2334), which always carry a numeric Hash. Never hand the
+            -- engine anything else.
+            local hash = row.Hash
+            local unlocked = nil
+            if type(hash) == "number" then
+                unlocked = CivSim_Government_Try(function()
+                    return culture:IsGovernmentUnlocked(hash)
+                end)
+            else
+                skipped = skipped + 1
+            end
             if type(unlocked) == "boolean" then answered = true end
             if unlocked == true and row.GovernmentType ~= currentGovernment then
                 availableGovernments[#availableGovernments + 1] = row.GovernmentType
             end
         end
-        if not answered then governmentsReason = "is_government_unlocked_unanswerable" end
+        if not answered then
+            governmentsReason = (skipped > 0) and "government_rows_without_hash"
+                or "is_government_unlocked_unanswerable"
+        end
     end
 
     local availablePolicies, policiesReason = CivSim_Government_AvailablePolicies(culture)

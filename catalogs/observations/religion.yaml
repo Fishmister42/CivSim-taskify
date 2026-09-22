@@ -10,7 +10,11 @@
     Open the Religion overview screen for the local player's own pantheon/religion/beliefs, and
     read a city banner or the religion overview's per-city breakdown for a visible city's
     majority religion.
-  context: GameCore_Tuner
+  # 2026-09-21: moved GameCore_Tuner -> InGame after the 20:46 client segfault (a NULL
+  # government definition dereferenced inside IsGovernmentUnlocked). Every accessor this
+  # body calls is one Firaxis calls from an InGame screen; the same call from the gamecore
+  # tuner state resolved no definition. UNVERIFIED LIVE until a crash-watched block runs it.
+  context: InGame
   capability_id: religion.read
   output_schema:
     type: object

@@ -94,12 +94,19 @@ local function CivSim_Religion_AvailableBeliefs(pantheonSelected, ownReligionInd
     end
     local answered = false
     for row in GameInfo.Beliefs() do
-        local inPantheon = CivSim_Religion_Try(function()
-            return gameReligion:IsInSomePantheon(row.Index)
-        end)
-        local inReligion = CivSim_Religion_Try(function()
-            return gameReligion:IsInSomeReligion(row.Index)
-        end)
+        -- Each predicate resolves the belief definition from this index (religionscreen.lua:462-464
+        -- passes row.Index of InGame rows, always numeric); a non-number is never handed to the
+        -- engine -- a native fault is not catchable (2026-09-21 20:46 segfault, government.lua).
+        local beliefIndex = row.Index
+        local inPantheon, inReligion = nil, nil
+        if type(beliefIndex) == "number" then
+            inPantheon = CivSim_Religion_Try(function()
+                return gameReligion:IsInSomePantheon(beliefIndex)
+            end)
+            inReligion = CivSim_Religion_Try(function()
+                return gameReligion:IsInSomeReligion(beliefIndex)
+            end)
+        end
         if type(inPantheon) == "boolean" or type(inReligion) == "boolean" then answered = true end
         local taken = (inPantheon == true) or (inReligion == true)
         local classMatches
@@ -107,9 +114,10 @@ local function CivSim_Religion_AvailableBeliefs(pantheonSelected, ownReligionInd
             classMatches = (row.BeliefClassType == "BELIEF_CLASS_PANTHEON")
         else
             classMatches = (row.BeliefClassType ~= "BELIEF_CLASS_PANTHEON")
-            if classMatches and type(ownReligionIndex) == "number" and ownReligionIndex ~= -1 then
+            if classMatches and type(ownReligionIndex) == "number" and ownReligionIndex ~= -1
+                and type(beliefIndex) == "number" then
                 local tooMany = CivSim_Religion_Try(function()
-                    return gameReligion:IsTooManyForReligion(row.Index, ownReligionIndex)
+                    return gameReligion:IsTooManyForReligion(beliefIndex, ownReligionIndex)
                 end)
                 if tooMany == true then classMatches = false end
             end
@@ -136,8 +144,23 @@ end
 -- both left as they were.
 local function CivSim_Religion_GetState()
     local localPlayer = Game.GetLocalPlayer()
+    -- Shipped screens return before touching a player object when the local player is -1
+    -- (greatpeoplepopup.lua:690-692); nothing below may be asked about player -1.
+    if type(localPlayer) ~= "number" or localPlayer < 0 then
+        return {
+            pantheon_selected = false,
+            religion_founded = false,
+            own_religion = nil,
+            available_beliefs = {},
+            city_majority_religions = {},
+            available_beliefs_reason = "no_local_player",
+        }
+    end
     local player = Players[localPlayer]
-    local religionMgr = player:GetReligion() -- UNVERIFIED: Player:GetReligion()
+    local religionMgr = nil
+    if player ~= nil then
+        religionMgr = CivSim_Religion_Try(function() return player:GetReligion() end)
+    end
 
     local pantheonSelected = false
     local ok1, pantheonType = pcall(function() return religionMgr:GetPantheon() end) -- UNVERIFIED

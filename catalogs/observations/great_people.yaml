@@ -17,7 +17,11 @@
     Open the Great People screen and read the cards it is currently offering -- their class,
     their point threshold, and whether Recruit is available -- and the local player's own point
     totals per class.
-  context: GameCore_Tuner
+  # 2026-09-21: moved GameCore_Tuner -> InGame after the 20:46 client segfault (a NULL
+  # government definition dereferenced inside IsGovernmentUnlocked). Every accessor this
+  # body calls is one Firaxis calls from an InGame screen; the same call from the gamecore
+  # tuner state resolved no definition. UNVERIFIED LIVE until a crash-watched block runs it.
+  context: InGame
   capability_id: great_people.read
   output_schema:
     type: object

@@ -105,7 +105,11 @@ local function CivSim_GreatPeople_Offered(localPlayer)
     for _, entry in ipairs(timeline) do
         local individualIndex = entry.Individual
         local row = nil
-        if individualIndex ~= nil then
+        -- CanRecruitPerson(player, individual) resolves the individual's definition from this
+        -- index; a non-number resolves to nothing and a native fault is not catchable (the
+        -- 2026-09-21 20:46 segfault was this class of call in government.lua). Firaxis passes
+        -- `entry.Individual` from the engine's own timeline (greatpeoplepopup.lua:728).
+        if type(individualIndex) == "number" then
             row = CivSim_GreatPeople_Try(function()
                 return GameInfo.GreatPersonIndividuals[individualIndex]
             end)
@@ -149,10 +153,14 @@ local function CivSim_GreatPeople_Points(player)
     end
     local answered = false
     for row in GameInfo.GreatPersonClasses() do
-        local total = CivSim_GreatPeople_Try(function() return points:GetPointsTotal(row.Index) end)
-        local perTurn = CivSim_GreatPeople_Try(function()
-            return points:GetPointsPerTurn(row.Index)
-        end)
+        local classIndex = row.Index
+        local total, perTurn = nil, nil
+        if type(classIndex) == "number" then
+            total = CivSim_GreatPeople_Try(function() return points:GetPointsTotal(classIndex) end)
+            perTurn = CivSim_GreatPeople_Try(function()
+                return points:GetPointsPerTurn(classIndex)
+            end)
+        end
         if type(total) == "number" then
             answered = true
             pointsByClass[#pointsByClass + 1] = {
@@ -170,6 +178,16 @@ end
 
 local function CivSim_GreatPeople_GetState()
     local localPlayer = Game.GetLocalPlayer()
+    -- greatpeoplepopup.lua:690-692: the shipped popup returns before touching anything when
+    -- the local player is -1. Nothing below may be asked about player -1.
+    if type(localPlayer) ~= "number" or localPlayer < 0 then
+        return {
+            recruitable_individuals = {},
+            points_by_class = {},
+            recruitable_individuals_reason = "no_local_player",
+            points_by_class_reason = "no_local_player",
+        }
+    end
     local player = Players[localPlayer]
 
     local offered, offeredReason = CivSim_GreatPeople_Offered(localPlayer)
