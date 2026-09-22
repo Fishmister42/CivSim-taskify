@@ -84,6 +84,12 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
     three timing-or-budget, all 46 passing alone in 42 s. Without this clause the rule fails in a way
     that does not matter, trains everyone to discount it, and stops being a check.
 - **Only lane leads commit and push. Nested sub-agents never do**, however finished the work looks.
+- **"What measurement is this number from?" is a standing question at review, not a courtesy.**
+  Three times on 2026-09-22 a threshold was set, or nearly set, without measuring what it bounds: the
+  45 s end-turn confirm bound against an advance landing 75–155 s; a 5.5 s reconnect budget nearly
+  widened against a 90 s observed window; and **the replacement 200.0 itself**, which clears every
+  observed sample but whose ceiling is unmeasured and is labelled ASSUMPTION pending a direct probe.
+  **Two of the three were caught only because someone asked for the measurement before the number.**
 - **A reconciliation pass closes every lane-day**: before reporting, verify each task claimed complete
   against the **code**, not against the agent's report, and tick or leave open with a reason. Twice on
   2026-09-22 a task was reported complete and was not, and both times the gap was found by reading the
