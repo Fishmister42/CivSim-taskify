@@ -1,0 +1,9 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal set_capital_production: objective written to goal-set_capital_production.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=set_capital_production provider=stochastic provider_policy=uniform provider_script=None turn_cap=1]
+t+000s  goal set_capital_production: run run-5bc9f81f2c934438a99f0cf20eef1738
+t+000s  goal set_capital_production: playing turn=1 step=None
+t+029s  goal set_capital_production: finished turn=1 step=None
+t+029s  goal set_capital_production: turn cap 1 reached -- stopping the run
+t+029s  run run-5bc9f81f2c934438a99f0cf20eef1738 is already finished -- nothing to stop; the state this stop wanted is the state the run is in
+t+029s  goal set_capital_production not reached; the chain stops here (a later part starts from a state that never arrived)

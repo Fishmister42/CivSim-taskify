@@ -1,0 +1,137 @@
+  [16:31:40] recording started: every frame via the production capture_window() (window-scoped)
+  [16:31:40] goal set_capital_production: objective written to goal-set_capital_production.md (objective text only)
+  [16:31:41] PRODUCTION: Runner.start(run-config.yaml) [goal=set_capital_production provider=stochastic provider_policy=uniform provider_script=None turn_cap=1]
+  [16:31:41] goal set_capital_production: run run-5bc9f81f2c934438a99f0cf20eef1738
+  [16:31:41] goal set_capital_production: playing turn=1 step=None
+  [16:32:09] goal set_capital_production: finished turn=1 step=None
+  [16:32:09] goal set_capital_production: turn cap 1 reached -- stopping the run
+  [16:32:09] run run-5bc9f81f2c934438a99f0cf20eef1738 is already finished -- nothing to stop; the state this stop wanted is the state the run is in
+  [16:32:09] goal set_capital_production not reached; the chain stops here (a later part starts from a state that never arrived)
+{
+  "goal": "set_capital_production",
+  "chain": [
+    "set_capital_production"
+  ],
+  "provider": "stochastic",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "provider_script": null,
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T20:31:40.496845+00:00",
+  "parts": [
+    {
+      "goal": "set_capital_production",
+      "title": "Set the capital's production",
+      "run_id": "run-5bc9f81f2c934438a99f0cf20eef1738",
+      "turn_cap": 1,
+      "reached_at_turn": null,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": "turn_cap",
+      "reached": false,
+      "evaluated": true,
+      "reached_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "player.cities.count >= 1",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "player.cities.available_productions != []",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "finished",
+      "elapsed_s": 28.2,
+      "success_predicate": "observed_applied_cities_set_production >= 1 and player.cities.production_queue != []",
+      "success_check": {
+        "predicate": "observed_applied_cities_set_production >= 1 and player.cities.production_queue != []",
+        "met": false,
+        "reason": null
+      },
+      "steps": 7,
+      "turns_recorded": [
+        1
+      ],
+      "actions": {
+        "prompts.tech_civic_completed": {
+          "unavailable_to_human_now": 1
+        },
+        "camera.set_view_mode": {
+          "applied": 1
+        },
+        "diplomacy.declare_war": {
+          "unavailable_to_human_now": 1
+        },
+        "units.found_city": {
+          "unavailable_to_human_now": 1
+        },
+        "cities.set_production": {
+          "unavailable_to_human_now": 1
+        },
+        "units.select": {
+          "applied": 1
+        },
+        "turn.end_turn": {
+          "applied": 1
+        }
+      },
+      "actions_applied": {
+        "camera.set_view_mode": 1,
+        "units.select": 1,
+        "turn.end_turn": 1
+      },
+      "provider": "stochastic",
+      "provider_policy": "uniform",
+      "game_start_turn": 78,
+      "store": {
+        "run": {
+          "lifecycle_state": "finished",
+          "stop_resolution": "turn_reached",
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 1,
+        "decision_steps": 7,
+        "save_points": 1,
+        "captures": 9,
+        "run_events": 26,
+        "model_calls": 7,
+        "turns_recorded": [
+          1
+        ],
+        "captures_shown_to_agent": 0,
+        "capture_screening": [
+          "withheld"
+        ],
+        "model_calls_served": [
+          "stochastic/uniform-v1"
+        ],
+        "model_cost_usd": 0,
+        "model_input_tokens": 0,
+        "model_output_tokens": 0
+      }
+    }
+  ],
+  "finished_at": "2026-09-22T20:32:13.017049+00:00",
+  "reached": false,
+  "evaluated": true,
+  "reached_reason": null,
+  "recording": {
+    "frames": 28,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 6636,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t009s.png",
+      "keyframe_2_t018s.png",
+      "keyframe_3_t028s.png"
+    ],
+    "capture_failures": 0
+  }
+}
