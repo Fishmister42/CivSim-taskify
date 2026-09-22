@@ -214,7 +214,32 @@ web application; the presentation surface is deliverable 1, which reads the stor
 **Scale/Scope**: Full games across every era (300+ turns) under seed sets of ~10–20 seeds. **One
 capture and one model call per decision step**, not per turn — with an unbounded step count per
 turn, this is the dominant cost and storage term in the system and is accepted deliberately (spec
-Assumptions). 53 functional requirements across 12 subsystems.
+Assumptions). **54 functional requirements (FR-001 – FR-054), in the nine groups `spec.md` itself
+heads them under**: Run definition and lifecycle, Turn cycle, Human-parity boundary, Integration
+path, Reproducibility/saves/branching, Model access, Resilience, Recording boundary, Host
+environment.
+
+*Corrected 2026-09-22.* This read "53 functional requirements across 12 subsystems". Both numbers
+were wrong and they were wrong differently. The requirement count was simply stale — `spec.md` has
+defined FR-054 since its initial commit. **The "12 subsystems" figure is not restated with a
+different number, because there is no grouping anywhere in these artifacts that yields twelve**;
+substituting a plausible count would repeat the defect rather than fix it. The nine named above are
+re-derivable by anyone: they are the bold headings in `spec.md`'s Functional Requirements section,
+counted. Where a number appears in this plan it should be possible to reproduce it from a named
+source, which is the standard these three figures failed.
+
+**FR-054 (Host environment) belongs in the Constitution Check and had no place in it.** It requires
+the harness to verify, before a run starts, that the host can provide every capability the run needs
+of it — at minimum a working path to take and verify FR-007's per-turn quicksave — and to refuse the
+run before turn 1 naming the missing capability, while a merely *degraded* capability (FR-050's
+images) is recorded and the run proceeds. That is the **Platform support is stated as a tier**
+paragraph above made binding, and it is **Principle IV's** guard as much as a host concern: a run
+that cannot take its quicksave cannot be branched from or compared to anything, so refusing it
+before turn 1 is what stops an incomparable run from entering a seed set at all. It ships as
+`observe/host_gate.py`'s `evaluate_host_gate`, wired into the no-live-client gate block of
+`run/composition.py` alongside `catalog_preflight` and `debug_menu_preflight`; it raises on
+`UNSUPPORTED` and records `visually_degraded` on `SUPPORTED`, which is exactly the split FR-054's
+last sentence draws.
 
 ## Constitution Check
 
@@ -248,7 +273,8 @@ requirement):
 | Nexus act capabilities (`InGame` Lua) | Action | The mouse/keyboard path for that order, purchase, or selection |
 | Window capture of the game's own screen | Observation (visual) | Looking at the screen |
 | Camera move / zoom / strategic-view toggle | Action | Dragging, scrolling, or pressing the view hotkey |
-| Bespoke save/load dialog driving | Action | Esc → Save Game → type a name → Save |
+| ~~Bespoke save/load dialog driving~~ — **never written; forbidden once R5 returned Outcome A** (row kept so the table is not silently rewritten) | Action | Esc → Save Game → type a name → Save |
+| Bespoke synthetic click at a prompt control's rectangle (`prompts.orders`) | Action | Clicking that button on the prompt the game is already showing — the option is one the prompt itself offered |
 | Screen-identity probe (which screen is up) | Observation | Seeing which screen is on the monitor |
 | End turn | Action | Clicking the end-turn button, or pressing its hotkey |
 | Game build / version read | Observation (out-of-game) | Reading the version string on the main menu — recorded as run provenance, never placed in the agent's context |
@@ -258,6 +284,17 @@ it a decision the agent issues, so it needs a declaration like any other action 
 the kind of surface that would otherwise reach the game without one. **The build read** is declared
 for completeness of the audit even though its destination is the run record rather than the agent:
 it is out-of-game provenance under FR-020 and is filtered out of context like model identity or cost.
+
+**The prompt-click row is new on 2026-09-22, and the save/load row's strikethrough is the point.**
+Until then this table listed *bespoke save/load dialog driving* as a surface this plan introduces,
+while the Constitution Check a few paragraphs below called that same surface "forbidden rather than
+merely unnecessary" and said it was never written — the table was simply not revisited when R5
+returned. Deleting the row would have hidden a planned-and-abandoned surface; it is struck through
+and kept. The surface that *did* arrive is the one underneath it, and it had no row at all: a
+synthetic click at a prompt control's rectangle. Its parity basis is unusually tight — the harness
+may only click a control the prompt is already offering, and the offered set comes from
+`screens.probe`, a declared observation the parity filter sees like any other — but tight is not
+the same as absent, and it needed stating here.
 
 **Deferred gate, not a deviation**: the capture path's occlusion immunity is a hypothesis until the
 hygiene spike in R6 passes. The design fails safe — if no capture path can be proven clean, runs
@@ -521,8 +558,14 @@ the spec's requirement groups, which keeps the traceability in `tasks.md` mechan
 
 **`host/` is the one subpackage that maps to a platform rather than a requirement group**, and it is
 drawn that way on purpose. Collecting every OS-specific import into one directory makes "is the
-harness platform-neutral?" answerable by looking at an import graph instead of by reading thirteen
-subpackages — the same reasoning that puts the parity boundary in `catalogs/` as data. A lint rule
+harness platform-neutral?" answerable by looking at an import graph instead of by reading the other
+**fifteen** — the same reasoning that puts the parity boundary in `catalogs/` as data.
+*(Corrected 2026-09-22 from "thirteen subpackages". `src/civsim_harness/` holds **16** top-level
+packages, counting directories one level down and excluding `__pycache__`: `act`, `agent`,
+`capability`, `config`, `host`, `models`, `nexus`, `observe`, `operator`, `parity`, `provider`,
+`resilience`, `run`, `saves`, `store`, `telemetry`. Fifteen is what is left once `host/` itself is
+set aside. The counting rule is stated so the number can be re-derived rather than taken on
+trust.)* A lint rule
 enforcing it is cheap; the CI matrix catches what the lint rule misses.
 
 ## Complexity Tracking
