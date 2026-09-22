@@ -231,10 +231,28 @@ ELIGIBLE_EXPLANATION = (
     "missing turns, so it may be used as trending input (Principle III)."
 )
 
-#: The two non-``complete`` values 002's schema publishes. Listed so a third,
-#: future value is distinguishable from these and gets its own reason rather
-#: than being folded into one that asserts something nobody recorded.
-_KNOWN_INCOMPLETE = ("has_gaps", "unknown")
+#: The non-``complete`` values 002's schema publishes. Listed so a future value
+#: is distinguishable from these and gets its own reason rather than being
+#: folded into one that asserts something nobody recorded.
+#:
+#: ``in_flight`` added 2026-09-22 (T313) after T298 introduced it: a run whose
+#: current turn is attempted and not yet persisted. It was **already refused**
+#: before this line changed, because the check below is keyed on
+#: ``status != COMPLETE`` and only *names* the reason from this tuple -- so the
+#: gate was correct and only the vocabulary was stale. Without the entry the
+#: run was additionally tagged ``COMPLETENESS_UNRECOGNIZED``, which is honest
+#: about this interface and misleading to a reader who takes it as a defect in
+#: the run rather than a gap in this list.
+#:
+#: Worth keeping the contrast that produced this fix. The same new status met
+#: two consumers of the same concept with **opposite defaults**: this one is
+#: fail-closed (anything that is not ``complete`` is ineligible) and refused it
+#: safely with no code change, while ``store/trends.py::exclusion_for``
+#: enumerated the incomplete values and let everything else fall through to
+#: *eligible* -- so it would have **admitted** it into a Principle III trend.
+#: That one is now an allowlist too. A default's direction has to be a decision,
+#: never whatever the enumeration happened to omit.
+_KNOWN_INCOMPLETE = ("has_gaps", "in_flight", "unknown")
 
 
 def derive_trend_eligibility(
