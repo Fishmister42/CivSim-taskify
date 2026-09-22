@@ -1574,3 +1574,35 @@ store query, never by an instinct.
 The practical form, for whoever runs the next lane: **when a ruling is handed down, the next action is
 not to evaluate it — it is to run the lookup it implies.** If the lookup cannot be run, that is itself
 the finding.
+
+### Refinement to the lookup rule, and the better closing note (2026-09-22)
+
+**A partial lookup is worse than none, because it launders the claim.** The T280 crossing was
+misattributed by three parties in one exchange, and the decisive sentence was this lane's: *"Reading
+the diff, it is T280 work."* One diff was read — `preparation.py`'s — and that authorship was
+generalised to two files nobody opened. `decision_loop.py`'s change was T265 plumbing authorised hours
+earlier under a different brief. The other lane inferred authorship from filenames; the hypervisor
+ruled without reading any diff and then granted a retroactive crossing for something that had not
+happened, papering over the error rather than exposing it.
+
+Not running a check leaves a claim **visibly unsupported**. Running a partial one and naming it makes
+the claim **sound verified**, and nobody re-checks a sentence that cites its own evidence. So:
+
+> **Run the lookup on each thing you are about to claim, not on one and then generalise. A lookup
+> answers exactly the question asked of it and nothing adjacent.**
+
+**And the better closing note, demonstrated rather than asserted.** The only part of that handling
+which cost nothing was the **mitigation** — flagging rather than objecting, and re-reading every file
+immediately before editing it. Those held **while the belief behind them was wrong.** That is the
+whole argument for procedural safeguards over correct beliefs: the safeguard does not need the actor
+to be right, and today it was not.
+
+### Wall-clock measurement on this host is uninformative, not merely noisy
+
+Measured spread on an **unchanged** binary: **1.08 s to 3.71 s** — a **3.4× spread**, against the ~2×
+a genuine regression would produce. The measurement therefore **cannot separate a regression from an
+idle moment at all**, under any conditions. This is stronger than the earlier "inconclusive under
+load" reading, which was right for a weaker reason. **No wall-clock margin is evidence for anything
+on this box.** Count reads, operations or allocations instead (`125a74f` already does this for the
+`/compare` budget case). The timing-or-budget clause in the verification rule stands, but its
+justification is now this number rather than an impression of load.
