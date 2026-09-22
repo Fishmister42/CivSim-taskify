@@ -90,6 +90,12 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
   widened against a 90 s observed window; and **the replacement 200.0 itself**, which clears every
   observed sample but whose ceiling is unmeasured and is labelled ASSUMPTION pending a direct probe.
   **Two of the three were caught only because someone asked for the measurement before the number.**
+  **Converse, and it is the stronger half: when a number is unmeasured, the first move is not always to
+  measure it — ask whether the fix needs the number at all.** A fix that removes the wait from existence
+  beats a well-measured one that waits, because it cannot rot when the figure drifts. Worked example:
+  the chain-leg refusal tail needs no measurement if the legs **reuse the session** and never reconnect —
+  correct whether the tail is 2 s or 90 s. A measurement only constrains fixes of the form "wait long
+  enough" or "retry enough times". Say so in the brief, or the fix gets "improved" into a retry.
 - **A reconciliation pass closes every lane-day**: before reporting, verify each task claimed complete
   against the **code**, not against the agent's report, and tick or leave open with a reason. Twice on
   2026-09-22 a task was reported complete and was not, and both times the gap was found by reading the
