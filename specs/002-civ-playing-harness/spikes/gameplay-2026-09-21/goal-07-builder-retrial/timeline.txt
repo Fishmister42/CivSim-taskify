@@ -1,0 +1,10 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal build_a_builder: objective written to goal-build_a_builder.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=build_a_builder provider=openrouter provider_policy=uniform turn_cap=12]
+t+007s  goal build_a_builder: run run-024bc6135d9a4493bef4311fb472df74
+t+007s  goal build_a_builder: playing turn=None step=None
+t+009s  goal build_a_builder: playing turn=1 step=None
+t+021s  goal build_a_builder: paused turn=1 step=None
+t+021s  goal build_a_builder: run paused -- this part's terminal state
+t+021s  goal build_a_builder: stale run-identity lock cleared (run-024bc6135d9a4493bef4311fb472df74.lock.json)
+t+021s  goal build_a_builder not reached; the chain stops here (a later part starts from a state that never arrived)

@@ -201,3 +201,36 @@ probe's.
 game turn 56, Persia alive, 1 city, 1 warrior). `BoostUnlockedPopup` was already hidden at
 wind-down (operator close recorded, no-op). Client InGame, no prompt, tuner free, no lock, no runner.
 Spend this stage $0.82; day ≈ $7.9. Probe script: `operator_probe_set_production.py`.
+
+## Stage 7 — 2026-09-21 21:09 EDT → (after Stage 6 was killed by an API 529 error)
+
+**Stage 6's abort, diagnosed from the record (not inferred):** `goal-07-builder-retrial` part
+`build_a_builder`, run `run-024bc613…`, started 20:46:27 from worktree 454b2f8; turn 1 began 20:46:36;
+at ~20:46:4x the harness logged `run/detection: a detection pass failed` with `ConnectionResetError`
+on the tuner; the run **paused at 20:46:48** with `stop_reason None`, `record_completeness_status
+unknown`, zero model calls, timeline empty. The client's own logs stop at **20:41** (FiraxisLive
+"No activity, disconnecting" 20:41:56 is the online service, not an exit); no crash dump or marker
+anywhere under the game's data dir. So the client was already gone, or died, between 20:41 and
+20:46:4x — after Stage 5 left it InGame at 20:30 and before Stage 6's first turn; nothing in the
+harness touched it in that window (Stage 6 was polling `git` for the fix). Cause: **unknown, no
+crash artefact**. **Finding for the recovery owner:** a detection pass that itself fails with a
+connection reset is logged as a WARNING and the run merely pauses — the client's death is not
+named (`ClientFaultDetected` never fires), so Principle VII recovery cannot start. Relaunching now.
+
+**Correction (21:20, from the kernel and Steam logs):** the client did not die at 20:41. `journalctl`:
+`Sep 21 20:46:35 Civ6[1915400]: segfault at b0 ip … error 4 in libGameCore_XP2.so` + a systemd core
+dump; Steam console `Removing process … for gameID 289070` at 20:46:45. So Civ VI **segfaulted
+during Stage 6's turn 1** (turn began 20:46:36 on worktree 454b2f8 — the first live sweep of the
+audit's repaired bodies and `game_over.lua`). The harness recorded only `ConnectionResetError` in a
+detection pass and `stop_reason None`. Two earlier Civ6 segfaults (ip 0, in `Civ6` itself) are also in
+dmesg from earlier today. Suspect: a repaired body calling an XP2 gamecore method the engine
+dereferences; bisect (454b2f8 vs 14f7418) pending a client.
+
+**Relaunch blocked by the account (21:11–21:27):** `steam steam://rungameid/289070` ×2 and
+`steam -applaunch 289070` all forwarded to the running Steam and spawned nothing. The Steam window
+held the dialog **"You are logged in on another computer already playing Slay the Spire 2. Launching
+Sid Meier's Civilization VI here will disconnect the other session from Steam."** Continue would kick
+the owner; clicked **Cancel** (labelled operator action) and left the client down. The owner's
+other-machine session at ~20:4x is also the most plausible trigger of the 20:46 disconnect that
+preceded the segfault. No further live work until the owner pings. Resume point: save
+`civsim-gameplay-2026-09-21-end2` (game turn 56), worktree 454b2f8 (bisect first), `secrets.yaml` in place.

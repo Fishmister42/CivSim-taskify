@@ -1013,3 +1013,13 @@ Process: live runs now execute from a detached worktree; a 15-min cron self-chec
 forbidden to wait on background notifications (one more fork stall caught within 10 min). Loader
 follow-ups: post-defeat menu refuses Lua loads; exit modal ignores synthetic input (17-min recovery).
 Autoplay still blocked on the owner's permission. Loop state: `.specify/memory/loop-state.md`.
+
+### Live S7 — 2026-09-21 21:09–21:30 EDT (no play: client crashed in S6, account in use elsewhere)
+
+Diagnosed S6's abort from primary sources: kernel `segfault … in libGameCore_XP2.so` at 20:46:35 +
+core dump, Steam removed the game's processes at 20:46:45 — the client crashed during S6's turn 1,
+the first live sweep on 454b2f8 (audit-repaired bodies, game_over.lua). Harness recorded only a
+detection-pass `ConnectionResetError` and `stop_reason None` (finding: a death during the probe/
+sweep is not named). Relaunch ×3 spawned nothing: Steam's dialog says the owner is playing Slay the
+Spire 2 on another computer and continuing would disconnect him — clicked Cancel, did not launch.
+Client down; resume from `…-end2` (t56); bisect 454b2f8 vs 14f7418 before any chain run. $0 spent.
