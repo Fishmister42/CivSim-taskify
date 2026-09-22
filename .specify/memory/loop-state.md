@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 21:32 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 21:58 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -43,16 +43,19 @@ reads the constitution, this file, then issue #1's tail, and continues.
 | lane | scope | files | started |
 |---|---|---|---|
 | Live S7 (Fable fork) | standing down: ledger, entry 12 (the 20:46 segfault, the other-session explanation, the stand-down), log section; hands off with the client DOWN | `spikes/gameplay-2026-09-21/`, log | 21:08 |
-| crash diff (Fable fork, headless) | `git diff 14f7418..454b2f8 -- lua/`: new engine calls at turn start / probe / sweep ranked for null dereference, Firaxis-style guards + lupa tests, `spikes/client-segfault-2026-09-21.md` | `lua/**`, tests | 21:25 |
-| orphan hygiene (Opus) | orphan detection on write-mode open + runner start; `civsim store repair [--dry-run]` | `run/lifecycle.py`, `run/runner.py`, `store/`, `operator/store_cli.py`, tests | 21:21 |
+| orphan hygiene (Fable fork; the Opus agent was killed 3× by API 500s) | orphan detection on write-mode open + runner start; `civsim store repair [--dry-run]` | `run/lifecycle.py`, `run/runner.py`, `store/`, `operator/store_cli.py`, tests | 21:21 |
 
-**Segfault reframed:** the kernel line is real (`Civ6 segfault at b0 in libGameCore_XP2.so`, 20:46:35, first
-turn on 454b2f8), but the owner's other-machine Steam session starting around then plausibly disconnected
-the game here first. The Lua bisect is a guard-patch exercise until the account is free. Harness findings
-either way: a client death during the probe/sweep surfaced as ConnectionResetError with `stop_reason: None`
-(must be named); a killed driver leaves a run `playing` (fix in flight).
-**When the owner pings:** load end2 → one 1-turn coverage block from head under crash watch → bisect to
-14f7418 if it crashes → guard patch → `--goal use_a_builder` → Settler → second city → every feasible goal.
+**Segfault NAMED (not the owner's session):** `nm -DC libGameCore_XP2.so` resolves the crash ip to
+`GameCore::Definition::Government::GetPrereqCivicReference()` reading `this+0xb0` — a NULL government
+definition — reached from `e076f83`'s `government.state` per-row `IsGovernmentUnlocked(row.Hash)` loop run
+from `GameCore_Tuner` (Firaxis calls it only InGame). **Guard patch `882758e`**: government/great_people/
+religion bodies → InGame; per-row calls only with numeric Hash/Index; `no_local_player` guard; six lupa
+tests; `spikes/client-segfault-2026-09-21.md`. **Live worktree at `882758e`.** Harness findings: a client
+death during the probe/sweep surfaced as ConnectionResetError with `stop_reason: None` (must be named);
+a killed driver leaves a run `playing` (fix in flight).
+**When the owner pings:** load end2 → one 1-turn coverage block from the worktree at `882758e` under crash
+watch (tail `dmesg` for `Civ6.*segfault` after the turn) → if it survives, `--goal use_a_builder` → Settler →
+second city → every feasible goal; if it segfaults, `nm -DC` on the new ip names the next call.
 Coverage today: 3 → 11 of 41 applied live; images 0 → 287 of 619 steps; spend $13.40 cumulative.
 
 ## Queue, in order (2026-09-22)
