@@ -110,4 +110,9 @@ uv run civsim run start configs/turn50-validation.yaml
   -> "no runner is configured..." / exit code 1  (reproduced live, see Verdict)
 ```
 
+The `catalog` line above is a snapshot from this audit's date (2026-09-20) and is already stale --
+the catalog has moved since (`catalogs/VERSION` is now `2026.09.14`; the declaration count is
+computed at run time by `operator/doctor.py`, not pinned here). Do not treat `51 declarations` as
+current; run `civsim doctor` for the live number.
+
 Test counts are unchanged from before this audit (no source, test, or config file was modified).

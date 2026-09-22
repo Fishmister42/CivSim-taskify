@@ -88,7 +88,7 @@ platform          : ok  (windows 10.0.26200, tier UNSUPPORTED)
 tuner connection  : unreachable  (Could not connect to the Nexus tuner interface)
 client            : not running
 store             : ok
-catalog           : ok  (version 2026.09.1, 51 declarations, 0 undeclared)
+catalog           : ok  (version <catalog_version>, <N> declarations, 0 undeclared)
 capture path      : none (runs will be visually degraded)
 provider key      : MISSING
 disk headroom     : 899.1 GB free
@@ -96,19 +96,26 @@ disk headroom     : 899.1 GB free
 
 Nothing here is an exception or a stack trace — every line is a check that ran and reported its
 own result, even the ones that failed. That is deliberate: an operator (or CI) needs to be able to
-run `doctor` on a bare checkout and get a diagnosis, not a traceback. Compare this to the fully
-healthy example from `quickstart.md`, taken against a live client:
+run `doctor` on a bare checkout and get a diagnosis, not a traceback. Compare this to the **shape**
+of a fully healthy run (see `quickstart.md` for the live, unpinned version):
 
 ```text
 platform          : ok  (macos 15.3, tier VALIDATED)
-tuner connection  : ok  (GameCore_Tuner=2, InGame=5)
+tuner connection  : ok  (GameCore_Tuner=<gc_index>, InGame=<ingame_index>)
 client            : ok  (pid 18244, build mac/1.0.12.9)
 store             : ok
-catalog           : ok  (version 2026.09.1, 215 declarations, 0 undeclared)
+catalog           : ok  (version <catalog_version>, <N> declarations, 0 undeclared)
 capture path      : ok  (screencapturekit, hygiene spike PASSED)
 provider key      : present
 disk headroom     : 41.2 GB free
 ```
+
+**The angle-bracket values are placeholders, deliberately.** The catalog version and declaration
+count are computed at run time from `catalogs/` (`operator/doctor.py`'s
+`declaration_count=len(catalog.declarations)`), and the tuner context indices from resolving the
+live state table — pinning today's values here is the exact defect spec 001 shipped (`167/91/49`
+written down where the tool printed `180/103/50`), and the catalog alone has moved fourteen
+revisions in about ten days. Run `civsim doctor` for the numbers.
 
 A few lines are worth more than a glance:
 

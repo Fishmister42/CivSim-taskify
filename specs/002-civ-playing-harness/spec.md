@@ -4,7 +4,13 @@
 
 **Created**: 2026-09-19
 
-**Status**: Draft
+**Status**: In Progress (2026-09-22) — 261 of 292 tasks closed; see
+[validation-results.md](./validation-results.md)
+
+*`Draft` was no longer accurate — implementation is well underway with 261 of 292 tasks in
+[tasks.md](./tasks.md) closed and validation evidence already recorded. It is not `Implemented`
+either: 31 tasks remain open, and validation-results.md records several success criteria (SC-001,
+SC-002, SC-010, SC-011, SC-014) as unobserved rather than passing.*
 
 **Input**: User description: "feature 2"
 

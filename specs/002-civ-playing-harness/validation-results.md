@@ -955,6 +955,28 @@ above:
   merely unverified.
 - **Cross-platform save identity (R20/T199)** has no spike on disk.
 
+### Success criteria with no evidence behind them (audited 2026-09-22)
+
+Named explicitly, by SC number, so this cannot be read as "covered." Each row below was verified
+against the current tree, not carried over from a prior pass — where the tree had moved since a
+task's own note was written, this row reflects the tree, not the note.
+
+| SC | What it claims | What exists | What does not |
+|---|---|---|---|
+| **SC-001** | >= 90% of started attempts reach their stop condition unattended | Nothing to measure against by itself — the per-attempt failure/stop bookkeeping this would be computed from does exist | **No success-rate counter exists anywhere in `src/`** — there is no quantity for a test to assert a percentage against. Compounded by **T237** (open): a cold client still needs a human operator to reach turn 1, so a fully unattended attempt cannot even begin yet |
+| **SC-002** | A run plays every era to victory or defeat, unattended | Five model-driven runs recorded and measured (T202) | **No test mentions eras or a full game.** Every recorded run is early-game (game turns 5-17); the **longest single recorded run is 3 harness turns**, capped by the driver. Late-game and full-era behavior is unmeasured, not merely unmodeled |
+| **SC-010** | A genuinely killed client is detected and recorded within 60s | The detection wiring itself is production code with real callers (T233, landed): `DetectionAggregator`/`HeartbeatMonitor`/`ProcessLivenessMonitor` run inside the turn cycle, covered by `tests/integration/test_end_to_end_wiring.py` and `test_turn_cycle.py` | Every one of those tests exercises the wiring against **fakes on a simulated/configured clock** (`tests/unit/test_detection.py` asserts the 60s figure only as a *configuration bound* — `DEFAULT_OPERATION_BOUNDS_S[...] <= 60.0`). **No test has ever measured detection latency against a genuinely killed client process.** T193's live test file (`tests/live/test_crash_recovery.py`) does not exist |
+| **SC-011** | Across >= 20 unattended runs, zero silently-missing turns | The **per-run** gap derivation (`FR-052`, record completeness) is well covered — unit, integration and contract tests all exercise it | **The >= 20-run fleet quantifier returns zero grep hits anywhere in `tests/`.** Nothing asserts the claim at fleet scale. The **largest recorded corpus is 7 runs** (T202: two fake-provider, five model-driven) |
+| **SC-014** | Two branches from one save point begin from an identical game position; the parent's record is unchanged | `tests/integration/test_branching.py` asserts the **parent-immutability half** thoroughly (the parent's own save-point record is byte-identical before/after branching) and that both branches load the same recorded save point. A live test for the **position-equality half** now exists — `tests/live/test_branch_identity.py` (T177), written 2026-09-22 in commit `c440496` | That live test **has never been executed against a real client** — its own commit message says it only "collect[s]/skip[s] cleanly" so far. No test anywhere asserts that two independently-loaded branches' *live game state* (turn number, treasury, map seed) actually matches. The identical-position claim rests on the R5 spike narrative only |
+
+**None of this is "everything is unverified."** The per-run mechanics underneath several of these
+rows — completeness derivation, per-run cost/duration, lineage recording, the detection wiring's
+own cadence — are well asserted and covered by tests today. What is empty, specifically, is the
+**fleet-scale** claim (SC-011), the **full-game/every-era** claim (SC-002), the **unattended-rate**
+claim (SC-001), and the **real-client** half of SC-010 and SC-014. An auditor should read each row
+above as "the mechanism this depends on is tested; the claim itself has not been measured," not as
+"nothing here works."
+
 ---
 
 ## Verification
