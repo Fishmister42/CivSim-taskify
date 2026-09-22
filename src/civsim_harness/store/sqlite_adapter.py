@@ -46,6 +46,9 @@ import hashlib
 import os
 import sqlite3
 import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
@@ -70,10 +73,20 @@ from civsim_harness.models.records import (
 )
 from civsim_harness.models.run import Run
 from civsim_harness.models.turn import ScreenCapture, ScreeningStatus, TurnCycle, TurnOutcome
+from civsim_harness.run.orphans import (
+    DEFAULT_ORPHAN_GRACE_SECONDS,
+    LockProbe,
+    OrphanFinding,
+    sweep_orphans,
+)
 from civsim_harness.store.contract import RunRecordSet
 from civsim_harness.store.port import TurnCycleRecord
 from civsim_harness.store.schema import run_projection
 from civsim_harness.store.sqlite_reads import SqliteReadBase
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 class SqliteMatchStore(SqliteReadBase):
@@ -87,6 +100,54 @@ class SqliteMatchStore(SqliteReadBase):
     before the row referencing it is committed. `read_only=True` opens the file for readers
     (the web interface): every write raises, and a 1.0 file is refused rather than migrated.
     """
+
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        blob_dir: str | Path | None = None,
+        read_only: bool = False,
+        host_platform: str | None = None,
+        orphan_sweep: bool = True,
+        orphan_lock: LockProbe | None = None,
+        orphan_grace_seconds: float = DEFAULT_ORPHAN_GRACE_SECONDS,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        """Open the store, and on a **write-mode** open repair any orphaned run first.
+
+        `run/orphans.py`: a run left in `preparing`/`playing` whose run-identity lock is
+        absent or whose lock-holder PID is dead is transitioned to `paused` with a
+        recorded `lifecycle_transition` event carrying `reason: orphaned` and the
+        evidence. This is the right moment for it because a write-mode open is something
+        about to *act* on this store, and everything it would compute -- completeness,
+        turn gaps, the run catalog -- reads a dead `playing` run as live and answers
+        accordingly (Principle III). A run whose lock holder is alive is never touched.
+
+        The sweep never raises (see :func:`~civsim_harness.run.orphans.sweep_orphans`)
+        and is skipped entirely for `read_only=True`, where no write is permitted at all
+        (W5). *orphan_sweep=False* turns it off for a caller that wants a store opened
+        and nothing else -- a fixture asserting on a `playing` run it wrote by hand, or
+        a migration that should change the schema and not the records.
+        :attr:`orphans_paused_on_open` reports what this opening did.
+        """
+        super().__init__(
+            db_path, blob_dir=blob_dir, read_only=read_only, host_platform=host_platform
+        )
+        self._orphans_paused_on_open: tuple[OrphanFinding, ...] = ()
+        if orphan_sweep and not read_only:
+            self._orphans_paused_on_open = tuple(
+                sweep_orphans(
+                    self,
+                    lock=orphan_lock,
+                    now=(clock or _utcnow)(),
+                    grace_seconds=orphan_grace_seconds,
+                )
+            )
+
+    @property
+    def orphans_paused_on_open(self) -> tuple[OrphanFinding, ...]:
+        """The orphaned runs *this* opening paused (empty unless it found any)."""
+        return self._orphans_paused_on_open
 
     # ----------------------------------------------------------------
     # Blob storage (content-addressed)

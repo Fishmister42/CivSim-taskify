@@ -144,6 +144,7 @@ from civsim_harness.run.game_over import (
 )
 from civsim_harness.run.identity_lock import RunIdentityLock
 from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
+from civsim_harness.run.orphans import DEFAULT_ORPHAN_GRACE_SECONDS
 from civsim_harness.run.preparation import (
     GameSetupSnapshot,
     LeaderSelectionOutcome,
@@ -517,9 +518,7 @@ def _resolve_capture_path(
     if window is None:
         return CapturePath.NONE
     try:
-        return select_capture_path(
-            host=host, host_info=host_info, window=window
-        ).capture_path
+        return select_capture_path(host=host, host_info=host_info, window=window).capture_path
     except HarnessError:
         # `capture_window` is contractually not allowed to raise (host/port.py), so this is
         # defensive only -- an adapter that breaks that contract must not take preparation down.
@@ -868,9 +867,7 @@ async def _prepare_connected_run(
     # -- 5. the build pin, now that GameCore_Tuner exists to read it through -------------------
     actual_build = await read_game_build(
         operating_system=host_info.os,
-        read_via_tuner=make_tuner_version_reader(
-            execute, game_core_tuner_state_index=nexus_client
-        ),
+        read_via_tuner=make_tuner_version_reader(execute, game_core_tuner_state_index=nexus_client),
         read_via_host=make_host_executable_version_reader(host),
     )
 
@@ -1386,9 +1383,7 @@ def build_runner_dependencies(
 
         return read_game_over
 
-    async def _prepare(
-        config: RunConfiguration, branch_from: BranchFrom | None
-    ) -> PreparedRun:
+    async def _prepare(config: RunConfiguration, branch_from: BranchFrom | None) -> PreparedRun:
         # T214: release any client still held by an already-terminal run before asking the tuner
         # for its single connection slot again -- see `_release_terminal_run_clients`.
         await _release_terminal_run_clients(store, run_contexts, resolved_run_lock)
@@ -1644,6 +1639,11 @@ def build_runner_dependencies(
         connection_health=connection_health,
         disk_headroom_gb=disk_headroom_gb,
         clock=clock,
+        # run/orphans.py (2026-09-21): the runner's start path pauses any run whose driver is
+        # gone, judged against the SAME lock directory this composition acquires locks in --
+        # a different directory would make every run look unheld.
+        orphan_lock=resolved_run_lock,
+        orphan_grace_seconds=DEFAULT_ORPHAN_GRACE_SECONDS,
     )
 
 

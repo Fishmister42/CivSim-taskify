@@ -9,10 +9,12 @@ Seven commands, all over the published contract and nothing else (FR-017):
 - ``coverage``  the claimed harness surface versus what the store says was demonstrated live
 - ``export``    a run as a bundle directory, ``--archive`` for the ``.tar.gz`` (FR-027)
 - ``import``    a bundle directory or archive into this store (FR-027)
+- ``repair``    pause runs whose driver is gone -- ``playing``/``preparing`` with no live lock
+                holder -- with the evidence on the event; ``--dry-run`` lists and changes nothing
 
 ``info``, ``runs``, ``model-calls``, ``coverage`` and ``export`` open the store **read-only** --
-an operator inspecting a store never migrates it by accident. ``migrate`` and ``import`` are the
-two writers.
+an operator inspecting a store never migrates it by accident. ``migrate``, ``import`` and
+``repair`` are the three writers (``repair --dry-run`` is a read).
 Exit code 2 carries a `StoreSchemaError` / `StoreReadError` / `BundleError` message, so a script
 can tell "the store refused" from "the command was misused" (exit 1, Typer's own).
 
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -38,6 +41,13 @@ from civsim_harness.errors import (
 )
 from civsim_harness.models.common import RunId
 from civsim_harness.models.run import ComparabilityStatus, LifecycleState, RecordCompletenessStatus
+from civsim_harness.run.identity_lock import RunIdentityLock
+from civsim_harness.run.orphans import (
+    DEFAULT_ORPHAN_GRACE_SECONDS,
+    OrphanFinding,
+    repair_orphans,
+    scan_orphans,
+)
 from civsim_harness.store import schema as store_schema
 from civsim_harness.store.bundle import read_bundle, write_bundle
 from civsim_harness.store.contract import RunQuery, RunSort
@@ -440,3 +450,83 @@ def store_import(path: Path, store_path: Path | None = _StoreOption) -> None:
 
 
 __all__ = ["store_app"]
+
+
+# --------------------------------------------------------------------------
+# repair
+# --------------------------------------------------------------------------
+
+_LockDirOption = typer.Option(
+    None,
+    "--lock-dir",
+    help="Run-identity lock directory (default: the harness's own, under the temp dir).",
+)
+_GraceOption = typer.Option(
+    DEFAULT_ORPHAN_GRACE_SECONDS,
+    "--grace-seconds",
+    min=0.0,
+    help="Leave alone a run whose last recorded activity is younger than this.",
+)
+
+
+def _echo_findings(findings: list[OrphanFinding]) -> None:
+    if not findings:
+        typer.echo("orphaned runs: none")
+        return
+    typer.echo(f"orphaned runs: {len(findings)}")
+    for finding in findings:
+        typer.echo("  " + finding.render())
+
+
+@store_app.command("repair")
+def store_repair(
+    store_path: Path | None = _StoreOption,
+    dry_run: bool = _DryRunOption,
+    lock_dir: Path | None = _LockDirOption,
+    grace_seconds: float = _GraceOption,
+) -> None:
+    """Pause runs whose driver is gone (`run/orphans.py`, 2026-09-21).
+
+    A run left in ``playing`` or ``preparing`` whose run-identity lock is absent, unreadable,
+    or names a dead process is nobody's: its driver was killed, crashed, or lost with the
+    host, and nothing will ever transition it. Left as is, it reads as *live* to every
+    downstream consumer and hides the gap at its last, unfinished turn (Principle III).
+    ``repair`` moves each such run to ``paused`` -- never ``finished`` or ``failed`` -- and
+    records a ``lifecycle_transition`` event with ``reason: orphaned`` and everything it
+    checked (lock path, PID and liveness, last activity and how stale it was). A run whose
+    lock holder is alive is never touched. ``--dry-run`` opens the store read-only and lists
+    the same evidence without writing a byte.
+    """
+    path = _resolve(store_path)
+    if not path.exists():
+        # A write-mode open would create an empty store here; repairing nothing into a new
+        # file is not what an operator pointing at the wrong path wants.
+        typer.echo(f"store repair refused: no store file at {path}", err=True)
+        raise typer.Exit(code=2)
+    lock = RunIdentityLock(lock_dir) if lock_dir is not None else RunIdentityLock()
+    now = datetime.now(UTC)
+    typer.echo(f"store            : {path}")
+    typer.echo(f"lock directory   : {lock.lock_dir}")
+    typer.echo(f"grace seconds    : {grace_seconds:g}")
+    if dry_run:
+        store = _open(path, read_only=True)
+        try:
+            findings = scan_orphans(store, lock=lock, now=now, grace_seconds=grace_seconds)
+        finally:
+            store.close()
+        _echo_findings(findings)
+        typer.echo(f"dry run: {len(findings)} run(s) would be paused; nothing changed")
+        return
+    try:
+        # orphan_sweep=False: the open must not pre-empt the command, or this listing
+        # would always read "none" for the runs the open just repaired.
+        store = SqliteMatchStore(path, orphan_sweep=False)
+    except (StoreSchemaError, StoreReadError) as exc:
+        raise _refuse(exc, what="store open") from exc
+    try:
+        findings = scan_orphans(store, lock=lock, now=now, grace_seconds=grace_seconds)
+        _echo_findings(findings)
+        applied = repair_orphans(store, findings, now=now)
+    finally:
+        store.close()
+    typer.echo(f"paused {len(applied)} orphaned run(s)")

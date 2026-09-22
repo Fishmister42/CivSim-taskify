@@ -186,9 +186,9 @@ same hash — guidance that varies per run is a contract violation, not a featur
 
 ```text
 preparing ──> playing <──> waiting_on_model
-    │            │  ^────> waiting_on_game
-    │            │
-    │            ├──> paused ──> playing
+    │  │         │  ^────> waiting_on_game
+    │  │         │
+    │  └───────> ├──> paused ──> playing
     │            ├──> interrupted ──> resuming ──> playing
     │            │         └──────────────────────> failed
     │            └──> finished
@@ -198,6 +198,11 @@ preparing ──> playing <──> waiting_on_model
 **Validation**:
 
 - Every transition is recorded as a `RunEvent` (FR-003).
+- **`preparing`/`playing` → `paused` is additionally legal for one external actor**: the orphan
+  sweep (`run/orphans.py`), which pauses a run whose run-identity lock is absent or whose
+  lock-holder PID is dead — a driver killed, crashed, or lost with the host — and records the
+  lock path, PID and last recorded activity as `reason: orphaned` on the transition event, never
+  moving such a run to `finished` or `failed`.
 - `finished` requires exactly one `stop_resolution`. Where a stop resolution coincides with a
   victory, defeat, or crash on the same turn, one is recorded as the stop resolution and the others
   appear as events (spec edge case, invariant I10).

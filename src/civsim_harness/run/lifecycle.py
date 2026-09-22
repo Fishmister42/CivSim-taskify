@@ -3,7 +3,7 @@
 data-model.md SS4. The legal transition graph, read literally off that
 section's diagram:
 
-    preparing        -> playing | failed
+    preparing        -> playing | paused | failed
     playing          -> waiting_on_model | waiting_on_game | paused | interrupted | finished
     waiting_on_model -> playing
     waiting_on_game  -> playing
@@ -17,7 +17,20 @@ transition that actually executes produces a ``lifecycle_transition``
 produced or any ``Run`` field changes, so a rejected attempt leaves no trace
 on either.
 
-The one edge the SS4 ASCII diagram draws ambiguously is the branch to
+``preparing -> paused`` is the one edge this module adds to the SS4 diagram rather
+than reading off it (2026-09-21, ``run/orphans.py``). It exists for exactly one
+actor: the orphan sweep, which finds a run whose driver process is gone -- killed,
+crashed, or lost with the host -- and which nothing will ever transition again. Such
+a run is stuck claiming to be in flight, and the honest state for it is ``paused``:
+its record is intact, it is resumable, and ``paused -> playing`` already leads back.
+``preparing`` needs the edge as much as ``playing`` does, because the run identity's
+lock is claimed *during* preparation (``run/composition.py``), so a driver killed
+before turn 1 leaves a ``preparing`` orphan with exactly the same signature. It is
+deliberately not an edge to ``failed`` (terminal, and a killed driver is not a
+failed run) and never to ``finished`` (which would assert a stop resolution the run
+never reached -- Principle VII's silent data loss in its purest form).
+
+The other edge the SS4 ASCII diagram draws ambiguously is the branch to
 ``failed`` below ``interrupted -> resuming -> playing``. The diagram's prose
 resolves it unambiguously: "A run reaching ``failed`` from ``resuming`` must
 identify its last-known-good save (FR-048)" names ``resuming`` as the state
@@ -54,7 +67,9 @@ TERMINAL_STATES: frozenset[LifecycleState] = frozenset(
 #: being absent, so ``LEGAL_TRANSITIONS[state]`` never raises ``KeyError`` for
 #: a real ``LifecycleState``.
 LEGAL_TRANSITIONS: dict[LifecycleState, frozenset[LifecycleState]] = {
-    LifecycleState.PREPARING: frozenset({LifecycleState.PLAYING, LifecycleState.FAILED}),
+    LifecycleState.PREPARING: frozenset(
+        {LifecycleState.PLAYING, LifecycleState.PAUSED, LifecycleState.FAILED}
+    ),
     LifecycleState.PLAYING: frozenset(
         {
             LifecycleState.WAITING_ON_MODEL,

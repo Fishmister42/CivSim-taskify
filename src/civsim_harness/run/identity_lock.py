@@ -46,6 +46,54 @@ class ActiveRunLock:
     lock_path: Path
 
 
+@dataclass(frozen=True)
+class LockInspection:
+    """What one run identity's lock file says, read **without changing anything**.
+
+    :meth:`RunIdentityLock.acquire`'s own scan clears a stale or malformed lock as it
+    goes -- correct there, because acquisition is already a write and a wedged run id is
+    the failure it exists to prevent. A *diagnosis* must not: orphan detection
+    (``run/orphans.py``) reports the lock as evidence for a lifecycle transition it is
+    about to record, and evidence that the act of looking has already erased is not
+    evidence. So this is a pure read, and every field below is a fact the caller may
+    quote back into a ``RunEvent``.
+
+    ``present`` is whether the file exists at all; ``readable`` is false for a malformed
+    or half-written one (whose ``client_pid`` is then ``None``); ``pid_alive`` is
+    ``psutil.pid_exists`` on the recorded PID -- the Civ VI client process the run was
+    keyed to, which is the only liveness fact the lock carries.
+    """
+
+    run_id: RunId
+    lock_path: Path
+    present: bool
+    readable: bool
+    client_pid: int | None
+    pid_alive: bool
+    acquired_at: str | None
+
+    @property
+    def held_by_live_process(self) -> bool:
+        """Whether this lock is a live claim on the run identity.
+
+        True only when the file is there, parses, names a PID, and that PID still
+        exists. Anything else -- absent, malformed, or naming a dead process -- is not
+        a claim anyone is currently honouring.
+        """
+        return self.present and self.readable and self.client_pid is not None and self.pid_alive
+
+    def as_detail(self) -> dict[str, object]:
+        """This inspection as plain JSON for a ``RunEvent.detail`` (Principle VII)."""
+        return {
+            "lock_path": str(self.lock_path),
+            "lock_present": self.present,
+            "lock_readable": self.readable,
+            "lock_client_pid": self.client_pid,
+            "lock_client_pid_alive": self.pid_alive,
+            "lock_acquired_at": self.acquired_at,
+        }
+
+
 class RunIdentityLock:
     """Filesystem-backed lock manager: one lock file per ``run_id``, recording
     the client PID it is attached to.
@@ -101,6 +149,66 @@ class RunIdentityLock:
     def is_active(self, run_id: RunId) -> bool:
         """Whether *run_id* currently holds a live lock."""
         return any(lock.run_id == run_id for lock in self._active_locks())
+
+    @property
+    def lock_dir(self) -> Path:
+        """The directory these locks live in -- quoted as evidence, never written here."""
+        return self._lock_dir
+
+    def inspect(self, run_id: RunId) -> LockInspection:
+        """Read *run_id*'s lock file and report it, changing nothing (see
+        :class:`LockInspection`).
+
+        Unlike :meth:`is_active`, this never unlinks a stale or malformed file: it is the
+        read orphan detection quotes into the transition it records, and it must be
+        possible to ask the same question twice and get the same answer.
+        """
+        path = self._path_for(run_id)
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return LockInspection(
+                run_id=run_id,
+                lock_path=path,
+                present=False,
+                readable=False,
+                client_pid=None,
+                pid_alive=False,
+                acquired_at=None,
+            )
+        except OSError:
+            return LockInspection(
+                run_id=run_id,
+                lock_path=path,
+                present=True,
+                readable=False,
+                client_pid=None,
+                pid_alive=False,
+                acquired_at=None,
+            )
+        try:
+            data = json.loads(raw)
+            client_pid = int(data["client_pid"])
+            acquired_at = str(data["acquired_at"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return LockInspection(
+                run_id=run_id,
+                lock_path=path,
+                present=True,
+                readable=False,
+                client_pid=None,
+                pid_alive=False,
+                acquired_at=None,
+            )
+        return LockInspection(
+            run_id=run_id,
+            lock_path=path,
+            present=True,
+            readable=True,
+            client_pid=client_pid,
+            pid_alive=psutil.pid_exists(client_pid),
+            acquired_at=acquired_at,
+        )
 
     def _path_for(self, run_id: RunId) -> Path:
         return self._lock_dir / f"{run_id}.lock.json"

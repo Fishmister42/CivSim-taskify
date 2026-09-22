@@ -43,6 +43,11 @@ from store_support.builders import (
     make_turn_cycle_record,
 )
 
+# `orphan_sweep=False` (2026-09-21): these runs are written with fixed past timestamps and no
+# run-identity lock, which is exactly what `run/orphans.py` pauses on a write-mode open. This
+# file measures write atomicity and retry idempotence, so the open-time sweep is switched off
+# here; `tests/integration/test_orphan_repair.py` covers the sweep itself.
+
 
 class _InjectedFault(sqlite3.OperationalError):
     pass
@@ -74,7 +79,7 @@ class _FaultingConnection:
 
 def _check_invariants(path: Path) -> SqliteMatchStore:
     """Every turn present has all its steps and calls; no orphan rows anywhere."""
-    store = SqliteMatchStore(path)
+    store = SqliteMatchStore(path, orphan_sweep=False)
     conn = store._conn  # noqa: SLF001 -- white-box integrity check
     for turn_cycle_id, step_count in conn.execute(
         "SELECT turn_cycle_id, step_count FROM turn_cycles"
@@ -262,7 +267,7 @@ OPERATIONS: list[tuple[str, Callable[[SqliteMatchStore], None], Callable[..., No
 
 def _statement_count(tmp_path: Path, operation: Callable[[SqliteMatchStore], None]) -> int:
     path = tmp_path / "count.db"
-    store = SqliteMatchStore(path)
+    store = SqliteMatchStore(path, orphan_sweep=False)
     _baseline(store)
     proxy = _FaultingConnection(store._conn, fail_at=0, after=False)  # noqa: SLF001
     store._conn = proxy  # type: ignore[assignment]  # noqa: SLF001
@@ -288,7 +293,7 @@ def test_every_interruption_leaves_the_record_whole_or_absent_and_the_retry_idem
     for after in (False, True):
         for k in range(1, statements + 1):
             path = tmp_path / f"{name}-{int(after)}-{k}.db"
-            store = SqliteMatchStore(path)
+            store = SqliteMatchStore(path, orphan_sweep=False)
             _baseline(store)
             proxy = _FaultingConnection(store._conn, fail_at=k, after=after)  # noqa: SLF001
             store._conn = proxy  # type: ignore[assignment]  # noqa: SLF001
@@ -331,7 +336,7 @@ _CHILD = textwrap.dedent(
     from civsim_harness.store.sqlite_adapter import SqliteMatchStore
 
     path = sys.argv[1]
-    store = SqliteMatchStore(path)
+    store = SqliteMatchStore(path, orphan_sweep=False)
     store.create_run(make_run("k", "k-cfg"), make_config("k-cfg"))
     turn = 1
     while True:

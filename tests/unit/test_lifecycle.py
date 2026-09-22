@@ -72,6 +72,9 @@ def test_terminal_states_have_no_outgoing_edges() -> None:
 def test_transition_graph_matches_data_model_ss4_exactly() -> None:
     """Locks in the exact edge set read off the SS4 diagram and its prose.
 
+    ``preparing -> paused`` is the one edge added beside the diagram (SS4 validation,
+    2026-09-21): the orphan sweep pauses a run whose driver died during preparation.
+
     In particular: ``resuming -> failed`` is legal (FR-048's "a run reaching
     failed from resuming must identify its last-known-good save" names
     resuming, not interrupted, as the state that feeds failed), and
@@ -79,7 +82,11 @@ def test_transition_graph_matches_data_model_ss4_exactly() -> None:
     diagram's ASCII art is locally ambiguous about that branch.
     """
     expected = {
-        LifecycleState.PREPARING: {LifecycleState.PLAYING, LifecycleState.FAILED},
+        LifecycleState.PREPARING: {
+            LifecycleState.PLAYING,
+            LifecycleState.PAUSED,  # the orphan sweep's edge (run/orphans.py, 2026-09-21)
+            LifecycleState.FAILED,
+        },
         LifecycleState.PLAYING: {
             LifecycleState.WAITING_ON_MODEL,
             LifecycleState.WAITING_ON_GAME,
@@ -107,6 +114,7 @@ def test_transition_graph_matches_data_model_ss4_exactly() -> None:
     "from_state,to_state",
     [
         (LifecycleState.PREPARING, LifecycleState.PLAYING),
+        (LifecycleState.PREPARING, LifecycleState.PAUSED),
         (LifecycleState.PLAYING, LifecycleState.WAITING_ON_MODEL),
         (LifecycleState.WAITING_ON_MODEL, LifecycleState.PLAYING),
         (LifecycleState.PLAYING, LifecycleState.WAITING_ON_GAME),

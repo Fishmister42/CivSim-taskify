@@ -101,6 +101,11 @@ from civsim_harness.resilience.recovery import RecoveryEngine
 from civsim_harness.run.decision_loop import UnknownScreenEncountered
 from civsim_harness.run.game_over import GameOverDetected
 from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
+from civsim_harness.run.orphans import (
+    DEFAULT_ORPHAN_GRACE_SECONDS,
+    LockProbe,
+    sweep_orphans,
+)
 from civsim_harness.run.stop import StopDecision, StopEvaluation, evaluate_stop
 from civsim_harness.run.turn_cycle import TurnCycleDependencies, run_turn_cycle
 from civsim_harness.saves.addressing import SaveAddressingError, require_available_save_point
@@ -223,6 +228,24 @@ class RunnerDependencies:
     disk_headroom_gb: Callable[[], float] = field(default=lambda: 0.0)
     clock: Callable[[], Timestamp] = field(default=_utcnow)
 
+    orphan_sweep: bool = True
+    """Whether :meth:`Runner.start` / :meth:`Runner.start_branch` first repair any orphaned run
+    (``run/orphans.py``, 2026-09-21).
+
+    On by default, because the start path is one of the two moments this codebase is about to act
+    on a store whose answers a dead ``playing`` run silently distorts -- completeness, turn gaps,
+    the run catalog -- and because starting a *new* run while an old one still claims to be in
+    flight is exactly the state an operator reads as "two runs are playing". The runner's own
+    non-terminal runs are excluded from the sweep by :meth:`Runner._sweep_orphans`, so this can
+    never pause a run this instance is driving."""
+
+    orphan_lock: LockProbe | None = None
+    """The lock probe the sweep reads, or ``None`` for a
+    :class:`~civsim_harness.run.identity_lock.RunIdentityLock` over the harness's own default
+    directory. A test composition points it at ``tmp_path``."""
+
+    orphan_grace_seconds: float = DEFAULT_ORPHAN_GRACE_SECONDS
+
 
 @dataclass
 class _RunState:
@@ -298,6 +321,33 @@ class Runner(RunnerProtocol):
 
     # -- RunnerProtocol -----------------------------------------------------
 
+    def _sweep_orphans(self) -> None:
+        """Pause any orphaned run in the store before this runner starts a new one
+        (``run/orphans.py``, 2026-09-21).
+
+        Runs this instance is itself driving are excluded: their lock may not be claimed
+        yet (it is acquired *during* preparation) and they are, by definition, not
+        orphaned. Everything else in ``preparing``/``playing`` whose lock holder is gone is
+        transitioned to ``paused`` with the evidence on the event. ``sweep_orphans`` never
+        raises, so a store that cannot be swept cannot stop a run from starting; the
+        unrepaired run stays exactly as visible to ``civsim store repair`` as before.
+        """
+        if not self._deps.orphan_sweep:
+            return
+        with self._lock:
+            own = frozenset(
+                RunId(str(run_id))
+                for run_id, state in self._runs.items()
+                if state.run.lifecycle_state not in TERMINAL_STATES
+            )
+        sweep_orphans(
+            self._deps.store,
+            lock=self._deps.orphan_lock,
+            now=self._deps.clock(),
+            grace_seconds=self._deps.orphan_grace_seconds,
+            exclude=own,
+        )
+
     def start(self, config_path: Path) -> RunId:
         """Start *config_path* -- an ordinary run configuration, **or a branch document** (T226).
 
@@ -317,6 +367,7 @@ class Runner(RunnerProtocol):
         if branch_from is not None:
             return self.start_branch(config_path, branch_from)
 
+        self._sweep_orphans()
         config = load_run_configuration_file(config_path)
         try:
             prepared = self._resolve_prepared_run(config)
@@ -373,6 +424,7 @@ class Runner(RunnerProtocol):
         branch by name, exactly as :meth:`resume_from` does. The failure is surfaced with the
         branch's own lineage attached rather than flattened into a generic "preparation failed".
         """
+        self._sweep_orphans()
         prepare_branch = self._deps.prepare_branch
         if prepare_branch is None:
             raise RunPreparationFailed(
@@ -537,9 +589,7 @@ class Runner(RunnerProtocol):
                 # the whole life of the run before this. Deriving at read time is what makes a
                 # run that died mid-flight report the gaps it left behind, rather than whatever
                 # was last stamped on it.
-                record_completeness_status=record_completeness_status(
-                    self._deps.store, run_id
-                ),
+                record_completeness_status=record_completeness_status(self._deps.store, run_id),
                 comparability_status=state.run.comparability_status,
                 archived=state.run.archived_at is not None,
                 disk_headroom_gb=self._deps.disk_headroom_gb(),
