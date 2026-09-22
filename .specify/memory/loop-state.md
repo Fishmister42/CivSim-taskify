@@ -52,6 +52,18 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
   accepted suite command there, revert on red. Never verify in `/home/matt/CivSolver-live` — a bad
   commit there can be picked up by a run before it can be walked back. The rule always meant "the tree
   this commit produces is green"; reading a neighbour's unfinished file was never what it verified.
+  - **Use a BARE `uv run`** — no `--no-sync`, no `UV_PROJECT_ENVIRONMENT` override, no `PYTHONPATH`.
+    That is the **live-run** form: it borrows the main venv and resolves imports to the *shared* tree,
+    so a "verification" run that uses it silently tests the wrong source. Confirmed by
+    `uv run python -c "import civsim_harness; print(civsim_harness.__file__)"` from the worktree:
+    bare → `CivSolver-verify/src/...`; with the overrides → `CivSolver/src/...`. The hypervisor and the
+    live lane each fell into this an hour apart, and the hypervisor then broadcast a wrong "the rule is
+    broken" correction after diagnosing an error message instead of running that one command.
+  - **A clean worktree isolates the CODE; it does not isolate the MACHINE.** Treat a **timing or budget**
+    failure as **inconclusive** until re-run on a quiet box; a **functional** failure is real immediately.
+    At `c211605`: 3 failed / 2165 passed under a concurrent live model run and another lane's suite, all
+    three timing-or-budget, all 46 passing alone in 42 s. Without this clause the rule fails in a way
+    that does not matter, trains everyone to discount it, and stops being a check.
 - **Only lane leads commit and push. Nested sub-agents never do**, however finished the work looks.
 - **A closing counterpart is required for every action that opens a modal or full-screen view**, and
   its verification must confirm the view closed. The harness opened a diplomacy session it could not
