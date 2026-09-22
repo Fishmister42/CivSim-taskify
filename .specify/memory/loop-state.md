@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 20:48 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 21:12 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -42,12 +42,13 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| productions (Opus, resumed) | `cities.set_production` lone-argument guard (the executor hands the type to the city-id slot) + record every dispatch answer on the step | `lua/ingame/city_orders.lua`, `run/decision_loop.py`, `models/decision.py`, schemas, tests | 20:30 |
-| Live S6 (Fable fork) | polling the worktree hash (foreground) for the fix; then `--goal use_a_builder` (build → use) with Sonnet 5, Settler → `found_second_city`, then every feasible goal back to back with coverage blocks between; entries 12+ on #3; hands off on context (~90 min) with end save `…-end3` | client; `spikes/gameplay-2026-09-21/goal-07-…` | 20:42 |
+| Live S7 (Fable fork) | S6 was killed by an API 529 at ~20:47 right after launching the builder re-trial; its run paused at 14 s with no turn, and the client was found DOWN at 21:06. S7: diagnose the pause and the client death from the store + client logs, relaunch, load `…-end2` (t56), then `--goal use_a_builder` → Settler → second city → every feasible goal, entries 12+ on #3, hand off on context with `…-end3` | client; `spikes/gameplay-2026-09-21/goal-08-…` | 21:08 |
+| orphan hygiene (Opus) | a killed driver leaves a run `playing` forever (run-02168773 since 19:36): orphan detection on write-mode open + runner start (lock absent / holder pid dead → `paused`, reason `orphaned`, evidence recorded) and `civsim store repair [--dry-run]` | `run/lifecycle.py`, `run/runner.py`, `store/`, `operator/store_cli.py`, tests | 21:10 |
 
-Head `46d30af`+; live worktree at 877af65 (advance to the fix commit when it lands). Accessor audit
-complete (`a606729`, `e076f83`, `03efcac`, `98e7ccd`) — all unverified live. Coverage at 20:29: actions
-applied live 11 of 41, attempted while available 18, images 287 of 619 steps, spend $13.40 cumulative.
+Head `454b2f8` (production fix: lone-argument guard + `dispatch_result` on every step); live worktree at
+`454b2f8`. Audit complete (`a606729`, `e076f83`, `03efcac`, `98e7ccd`, `46d30af`), all unverified live.
+API outage ~20:47–21:05 (529s); the hypervisor's cron survived, the fork did not. Coverage at 20:29:
+actions applied live 11 of 41, images 287 of 619 steps, spend $13.40 cumulative.
 
 ## Queue, in order (2026-09-22)
 1. Owner's OK to launch. 2. From the worktree at head: verify live `cities.set_production` (once the
