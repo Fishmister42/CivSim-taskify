@@ -66,9 +66,12 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
     Third distinct way this check misfired in one day. Two tells: **a sync that installs nothing while
     the failure does not move is not addressing the failure**; and confirm the verifier itself
     (`civsim_harness.__file__` resolves into the worktree, and a group-only import succeeds) before
-    trusting any result. **Keep a known-green reference at any head you intend to advance to** — an
-    independent green from another lane at the same hash is what makes a setup error cheap instead of a
-    suspected regression.
+    trusting any result. **Keep an INDEPENDENTLY-PRODUCED green at any head you intend to advance to** —
+    different worktree, different venv, same hash. The independence is where the value is: two greens
+    from the same environment corroborate nothing, since they share whatever that environment got wrong,
+    which is the exact failure mode that produced the false red. **A reference that shares your setup is
+    not a control.** So whoever verifies a head publishes its count *and its environment* — worktree,
+    venv, sync command — and the next lane can tell whether its own result is evidence or an echo.
   - **A clean worktree isolates the CODE; it does not isolate the MACHINE.** Treat a **timing or budget**
     failure as **inconclusive** until re-run on a quiet box; a **functional** failure is real immediately.
     At `c211605`: 3 failed / 2165 passed under a concurrent live model run and another lane's suite, all
