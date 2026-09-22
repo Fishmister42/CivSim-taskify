@@ -1,3 +1,16 @@
+> **✅ RE-VERIFIED 2026-09-22 (headless, T322). This run's `REACHED` STANDS, and it stands on
+> stronger evidence than it did when it was written.** The action it scores on,
+> `prompts.ai_diplomatic_approach`, was verified by `target not in prompt.options` — a negative over
+> a container, satisfied by the option list merely emptying, so 7 of that action's 14 store-wide
+> `applied` records were confirmed by nothing having happened. **Both of THIS run's two applies are
+> among the 7 that are NOT affected**, re-derived by replaying each record's own post-execution
+> observation against the corrected predicate: step 1 (`2ed1fc35`, 21:20:57Z) left the conversation
+> open offering a genuinely *changed* option set — the leader replied — and step 2 (21:21:02Z) took
+> the board to `raw_screen_id: InGame`. Both still verify under the corrected predicate.
+> **Evidence tier: applied-and-verified (store record + replay), upgraded from the
+> "resting on a doubted assumption" grade `.specify/memory/loop-state.md` briefly carried.**
+> The `applied=2` tally below is unchanged. Nothing in this file is withdrawn.
+
 ### Goal run: answer_first_meeting
 
 - provider: `openrouter` (policy `uniform`) | started 2026-09-22T21:20:47.611494+00:00 | finished 2026-09-22T21:32:54.366715+00:00

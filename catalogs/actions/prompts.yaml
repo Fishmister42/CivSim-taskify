@@ -137,12 +137,51 @@
   availability_predicate: >
     game.has_blocking_prompt and game.current_screen == "prompt.diplomatic_approach"
     and target in prompt.options
-  # NOT "the conversation is gone": a correct answer keeps it open with the leader's reply (see
-  # finding 2 above). The chosen statement is no longer on offer in both the cases that count --
-  # the leader replied, or the session ended and nothing is offered at all -- and is still on offer
-  # when nothing happened, which is exactly the swallowed-click case this must keep catching.
+  # CORRECTED 2026-09-22 (T322), from the store rather than from reasoning. The predicate below
+  # used to be the bare `target not in prompt.options`, and the note that stood here defended it as
+  # covering "both the cases that count". It covered a third case it never named: **the option list
+  # simply emptying**. That is a negative over a container, and a negative over a container is
+  # satisfied by success, by the prompt vanishing, by the board moving on, and by nothing happening
+  # at all -- so a no-op records `applied`, the one failure direction nothing downstream can detect.
+  #
+  # MEASURED (civsim-match-store.db, 2026-09-22): all 14 `applied` records for this action
+  # confirmed on the FIRST post-dispatch read (`confirm_attempts: 1`, `confirm_elapsed_s: 0.0`),
+  # and **12 of the 14 were decided by `prompt_options: []`** -- the empty list, not a changed one.
+  # In 7 of those the engine's own `raw_screen_id` was UNCHANGED across the action
+  # (`DiplomacyActionView` before and after); in the other 5 it had moved to `InGame`. The old
+  # predicate read both identically.
+  #
+  # `d74a4c7` ("a comparison whose operand went missing is now unevaluable") does NOT close this,
+  # and two of the fourteen were recorded with it already in the running tree. It cannot fire here:
+  # `act/predicates.py::_bind_prompt_namespace` hard-defaults `options` to `[]`, so the right
+  # operand is never absent. That fix closes ABSENCE; this defect is EMPTINESS, and **an empty list
+  # is a value** -- the project's own standing rule.
+  #
+  # So the predicate now asserts what the action MADE TRUE, in the two endings the live record
+  # actually shows, and nothing else:
+  #   1. the conversation is still up AND is offering a set that no longer holds the chosen
+  #      statement -- the leader replied (MEASURED 2026-09-21 12:35 EDT, and live in block 37,
+  #      where answering a first-meeting statement left `prompt.diplomatic_approach` open with a
+  #      genuinely different `["Goodbye"]`); or
+  #   2. the world is back -- the conversation ended (MEASURED live: `screen: world` with
+  #      `raw_screen_id: InGame`, the engine's own context, not just the harness's classification).
+  # Emptying the list while the diplomacy context stays up satisfies neither, which is the whole
+  # point. The swallowed-click case (`prompt_options` byte-identical, 16/16 steps of
+  # `run-d0933ca8...`) is still caught by branch 1's `target not in prompt.options`.
+  #
+  # NOT claimed: that the 7 were no-ops. This build exposes no session-state read, and the
+  # `CloseSession()`-does-nothing explanation was RETRACTED on 2026-09-22
+  # (specs/002-civ-playing-harness/analyze-2026-09-22.md -- the tuner returns the pre-call value
+  # when the readback rides in the same command). What is established is that the OLD predicate
+  # could not tell the two apart and recorded `applied` either way.
+  #
+  # Written as ONE folded line on purpose: YAML's `>` keeps the newline before a line indented
+  # further than the first, so an expression broken across lines with a hanging indent reaches the
+  # evaluator as a genuine multi-line string and fails to parse. Caught here by the tests, not live.
   verification_predicate: >
-    target not in prompt.options
+    (game.current_screen == "prompt.diplomatic_approach" and prompt.is_active and
+    target not in prompt.options) or (game.current_screen == "world" and
+    game.raw_screen_id == "InGame")
   target_kind: option
   target_hint: >
     one of the open prompt's offered options (prompt_options), exactly as it is written there

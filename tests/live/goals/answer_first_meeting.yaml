@@ -24,4 +24,13 @@ notes: >
   prompt up -- which is precisely what --feasibility answers per milestone save. Unlike every
   other prompt family, prompt.diplomatic_approach DOES get real options
   (CivSim_DiplomacyStatementChoices in lua/ingame/screens.lua), so the action is reachable once
-  the prompt is on screen. One of the five actions attempted live and never applied.
+  the prompt is on screen.
+
+  CORRECTED 2026-09-22 (T322). This note used to end "One of the five actions attempted live and
+  never applied." That is no longer true and was already stale: block 37 (run-3edb5591,
+  2026-09-22T21:20:47Z) reached this goal with two applies, and both survive the verification
+  predicate's correction that same day -- re-derived by replaying each record's own post-execution
+  observation. Seven OTHER applies of this action, in blocks 35 and earlier, do not survive it:
+  they confirmed against an emptied `prompt_options` while the engine's `raw_screen_id` stayed
+  `DiplomacyActionView`. So the honest statement is: applied live, twice, verified by replay --
+  and the store's raw `applied` count for this action reads 14 while only 7 are supported.

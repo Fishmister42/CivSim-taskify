@@ -212,6 +212,7 @@ def _eval_node(node: ast.AST, bindings: Mapping[str, Any], predicate: str) -> An
     if isinstance(node, ast.UnaryOp):
         operand = _eval_node(node.operand, bindings, predicate)
         if isinstance(node.op, ast.Not):
+            _refuse_unresolved_unary_operand(node.operand, operand, predicate)
             return not operand
         # ast.USub -- the only other unary op _ALLOWED_NODE_TYPES permits.
         try:
@@ -402,6 +403,43 @@ def _refuse_unresolved_operand(
                     "operand_side": side,
                 },
             )
+
+
+def _refuse_unresolved_unary_operand(operand_node: ast.AST, value: Any, predicate: str) -> None:
+    """Refuse ``not <field>`` when ``<field>`` resolved to ``None`` by absence (T322).
+
+    **The gap in T314 this closes.** :func:`_refuse_unresolved_operand` guards ``ast.Compare``
+    only, and that is where every enumerated instance lived -- so the docstring above could say
+    absence "survives a surrounding ``not``" and be right about ``not (target in X)``, where the
+    ``in`` is a comparison the guard already refused. It is **wrong about a bare field read**:
+    ``not great_person.is_recruitable`` parses as ``UnaryOp(Not, Attribute)`` with no ``Compare``
+    node anywhere, so nothing was ever consulted and ``not None`` evaluated to ``True`` -- a
+    verification satisfied by an absent field, i.e. the fabricating direction, in the one shipped
+    declaration (``great_people.recruit``) that uses this shape.
+
+    Found by enumerating the shape rather than by chasing an instance: a degenerate-post-state
+    probe over every shipped ``verification_predicate`` returned exactly two predicates that a
+    vanished board satisfies, and this was the one nobody had named.
+
+    Same carve-out and same failure direction as the comparison guard: an explicit ``null`` is an
+    author asking about absence on purpose, and unevaluable is already fail-closed at every call
+    site (``act.verify`` records ``rejected``; ``act.dispatch``/``act.availability`` report "not
+    available now"). ``and``/``or`` stay three-valued around it via :func:`_eval_bool_op`, so a
+    predicate another operand can decide is still decided.
+    """
+    if value is not None or _is_null_literal(operand_node):
+        return
+    raise PredicateEvaluationError(
+        "predicate negated a value the observation does not carry: `not "
+        f"{ast.unparse(operand_node)}` would read absence as success. Absence is not a value to "
+        "negate -- write an explicit `null` literal to ask about absence on purpose.",
+        detail={
+            "predicate": predicate,
+            "operator": "Not",
+            "unresolved_operand": ast.unparse(operand_node),
+            "operand_side": "operand",
+        },
+    )
 
 
 def _apply_comparison(op: ast.cmpop, left: Any, right: Any, predicate: str) -> bool:

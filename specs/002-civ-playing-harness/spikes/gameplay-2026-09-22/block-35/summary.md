@@ -1,3 +1,20 @@
+> **🔴 CORRECTED 2026-09-22 (headless, T322): this run's `prompts.ai_diplomatic_approach:
+> applied=2` is WITHDRAWN. Under the corrected verification predicate it is `applied=0`.**
+> That action verified with `target not in prompt.options` — a negative over a container, satisfied
+> whenever the container stops containing the target, **including by the option list simply
+> emptying**. Replaying each of this run's two records against its own post-execution observation
+> (recoverable exactly: `confirm_attempts: 1`, so the verified reading is the next step's persisted
+> observation): **both** confirmed against `prompt_options: []` while the engine's own
+> `raw_screen_id` was **unchanged** at `DiplomacyActionView` — the diplomacy context never moved.
+> Steps `6ea51298` (20:44:21Z) and `c19febd8` (20:45:30Z).
+> **Not claimed: that these were no-ops.** This build exposes no session-state read, and the
+> `CloseSession()`-does-nothing explanation was itself retracted (`analyze-2026-09-22.md`). What is
+> established is that the predicate could not tell "the leader answered" from "the options went
+> away" and recorded `applied` either way — so these two records do not support the claim they were
+> read as making. The goal's own verdict (`not reached`) is unaffected.
+> The raw `result.json` / `block-35.stdout` are left exactly as recorded: they are the instrument's
+> output, and correcting them would falsify the record rather than the claim.
+
 ### Goal run: found_second_city
 
 - provider: `stochastic` (policy `uniform`) | started 2026-09-22T20:42:16.303155+00:00 | finished 2026-09-22T20:46:12.513742+00:00

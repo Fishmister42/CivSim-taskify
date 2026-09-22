@@ -43,6 +43,9 @@ import yaml
 from pydantic import ValidationError as PydanticValidationError
 
 from civsim_harness.capability.predicates import unknown_predicate_symbols
+from civsim_harness.capability.verification_shape import (
+    assert_verification_asserts_something_positive,
+)
 from civsim_harness.capability.version import compute_content_hash
 from civsim_harness.errors import CatalogError
 from civsim_harness.models.catalog import (
@@ -283,6 +286,26 @@ def _load_declarations(files: Iterable[Path]) -> dict[DeclarationId, ParityDecla
                 _check_predicate_symbols(
                     declaration, "verification_predicate", declaration.verification_predicate
                 )
+                # T322. Validation 6's shape half: a verification predicate that asserts only
+                # that something is NO LONGER true is satisfied by a no-op, and a no-op recorded
+                # `applied` is the one failure direction nothing downstream can detect. Rejected
+                # here, at load, so it cannot be introduced by a future catalog author phrasing a
+                # predicate the way `prompts.ai_diplomatic_approach` was phrased -- a rule is not
+                # a control. See capability/verification_shape.py for the reviewed exceptions.
+                try:
+                    assert_verification_asserts_something_positive(
+                        declaration_id=declaration.declaration_id,
+                        verification_predicate=declaration.verification_predicate,
+                    )
+                except AssertionError as exc:
+                    raise CatalogError(
+                        "verification_predicate is satisfiable by a no-op",
+                        detail={
+                            "declaration_id": str(declaration.declaration_id),
+                            "field": "verification_predicate",
+                            "reason": str(exc),
+                        },
+                    ) from exc
             else:
                 # The rest of validation 5, beyond "output_schema is present".
                 assert declaration.output_schema is not None

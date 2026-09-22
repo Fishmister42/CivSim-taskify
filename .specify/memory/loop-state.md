@@ -515,6 +515,49 @@ there was one partial lookup between them.
   was unmeasured (every stored sample was a range endpoint). Measured today: a requested `0.5`
   returned `0.50000047683716` — error **4.768e-07**, the same magnitude as the endpoint samples, well
   inside the declared `0.001`. **The assumption is closed by a number, not by an argument.**
+- **✅ RESOLVED 2026-09-22 (headless, T322) — the hypothesis below was RIGHT, and two of its
+  particulars were wrong. Fixed at the predicate AND at catalog load. Read this block first; the
+  original entry stands beneath it unaltered.**
+  **The emptiness hypothesis is CONFIRMED, mechanically.** `act/predicates.py::_bind_prompt_namespace`
+  hard-defaults `options` to `[]`, so the right operand is **never** absent and `d74a4c7`'s
+  `_refuse_unresolved_operand` can never fire on it. `d74a4c7` closes ABSENCE; this was EMPTINESS.
+  **Re-derived from the store, each record looked up individually. The post-execution reading is
+  recoverable exactly** — every one of the 14 has `confirm_attempts: 1`, so the observation
+  `confirm_execution` verified against is byte-for-byte the one persisted as the NEXT step's
+  `observation`. Replayed: **12 of 14 were decided by `prompt_options: []`**, and they split:
+  **7** had the engine's own `raw_screen_id` **unchanged** (`DiplomacyActionView` before and after,
+  `has_blocking_prompt` merely flipping false); **5** had moved to `InGame`/`world`. The other
+  **2** verified against a genuinely different non-empty set — the leader replied.
+  **🔴 TWO CORRECTIONS to the entry below, both found by running the lookup rather than inheriting it:**
+  1. **It is TEN records targeting `"Goodbye"`, not nine.** Re-derive counts; do not carry them.
+  2. **BLOCK 37'S TWO APPLIES SURVIVE THE FIX — they are the two BEST-supported of the fourteen,
+     not fabrications.** `2ed1fc35` step 1 left the conversation open offering a genuinely changed
+     `["Goodbye"]`; step 2 took it to `InGame`/`world`. **So `answer_first_meeting`'s `reached: true`
+     does NOT rest on a fabrication** and is upgraded from "resting on a doubted assumption" to
+     applied-and-verified-by-replay. The entry below reasoned forward from "two fired after the fix"
+     to "two fabrications fired after the fix"; the first half was true and the second was never
+     looked up. **The lane that fell into this is the one that wrote the rule about it.**
+  **What the evidence does NOT support, stated because the weaker claim is the provable one:** that
+  the 7 were no-ops. This build exposes no session-state read, and the `CloseSession()`-does-nothing
+  explanation was **already retracted** (`specs/002-civ-playing-harness/analyze-2026-09-22.md`: the
+  tuner returns the pre-call value when the readback rides in the same command — "Both calls worked;
+  the measurement was wrong"). What IS established is about the predicate: **it could not discriminate
+  "the leader answered" from "the options went away", and recorded `applied` either way.**
+  **Fix, and it is structural rather than a rule.** The predicate now asserts what the action MADE
+  TRUE — the conversation still up and offering a changed set, or the world back with
+  `raw_screen_id == "InGame"`. Beyond the instance, `capability/verification_shape.py` **rejects at
+  catalog load** any verification predicate whose every `or` branch is a bare negative, so the shape
+  cannot be reintroduced by an author phrasing a predicate badly. **Falsifiable prediction, stated
+  before the change and then measured: 14/14 applied under the old predicate → 7/14 under the new,
+  reclassifying exactly the 7 and no others.** Held.
+  **Sweep of all 41 shipped verification predicates (the full list, fixed or not) is in
+  `KNOWN_NEGATIVE_VERIFICATIONS`: 20 more carry the shape.** Sharpest: **`prompts.era_dedication`**
+  (the chooser's X dismisses without dedicating, so "screen gone" is satisfied by no dedication) and
+  **`great_people.recruit`**, a SECOND defect nobody had named — `not great_person.is_recruitable` is
+  `UnaryOp(Not, Attribute)` with **no `ast.Compare` node**, so `d74a4c7`'s guard was never consulted
+  and `not None` read `True`. **`d74a4c7`'s own docstring claims absence "survives a surrounding
+  `not`"; that is true of `not (x in y)` and false of a bare field read.** Closed this pass at the
+  evaluator (`_refuse_unresolved_unary_operand`).
 - **🛑 LIVE FABRICATION, STILL OPEN: `prompts.ai_diplomatic_approach` records `applied` for a no-op,
   and `d74a4c7` does NOT close it.** Verification is `target not in prompt.options` — **a negative
   over a CONTAINER, satisfied whenever the container stops containing the target for any reason.**

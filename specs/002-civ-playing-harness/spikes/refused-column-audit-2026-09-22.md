@@ -183,6 +183,17 @@ on record (`src/civsim_harness/store/coverage.py:350`). Reproduced against this 
 `prompts.natural_disaster`, `prompts.tech_civic_completed`, `research.set_tech`, `saves.save_game`,
 `turn.end_turn`, `units.found_city`, `units.move_to`, `units.select`.
 
+> **⚠️ CAVEAT ADDED 2026-09-22 (headless, T322): the 15 does not move, but one entry's evidence
+> shrank by half.** `prompts.ai_diplomatic_approach` verified with `target not in prompt.options`
+> — a negative over a container, satisfied by the container emptying. **7 of its 14 `applied`
+> records fall** under the corrected predicate; it stays on this list on the surviving 7.
+> **The threshold definition quoted just above is what makes this invisible**: "at least one
+> `APPLIED`" cannot distinguish an action with 14 sound applies from one with 1, so a coverage
+> headline built on it is insensitive to exactly the failure that was found. That is a property of
+> the metric, not of this audit — worth stating beside the number rather than after it.
+> 20 further shipped verification predicates carry the same shape; the full list, with each one's
+> failure direction, is `capability/verification_shape.py::KNOWN_NEGATIVE_VERIFICATIONS`.
+
 ### The numerator does not move. The denominator does.
 
 **"15 of 41 is a floor, not a count" was the wrong framing and should not be carried forward.** Counting
