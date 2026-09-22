@@ -160,6 +160,11 @@ async def _run_one_step(
     provider = FakeModelProvider()
     provider.set_default_decision_factory(_decision_factory)
     store = SqliteMatchStore(tmp_path / "match.db")
+    # 2026-09-22 (run/step_journal.py): the loop journals each completed step as a run-scoped
+    # `RunEvent`, which the store refuses when the run has no row.
+    from store_support.builders import make_config, make_run
+
+    store.create_run(make_run("run-1", "run-1-cfg"), make_config("run-1-cfg"))
     game = _FakeGame(answer=answer, applies=applies)
     ctx = DecisionLoopContext(
         run_id=RunId("run-1"),

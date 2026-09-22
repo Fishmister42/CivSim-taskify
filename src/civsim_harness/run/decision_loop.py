@@ -112,6 +112,7 @@ from civsim_harness.parity.screening import ScreeningProfiles
 from civsim_harness.provider.accounting import build_model_call
 from civsim_harness.provider.port import Image, ModelProvider
 from civsim_harness.run.no_progress import NoProgressTracker, build_no_progress_event
+from civsim_harness.run.step_journal import journal_step
 from civsim_harness.store.port import DecisionStepBundle, MatchStore
 
 #: The catalog's own convention (``catalogs/observations/game.yaml``, ``act.predicates``): the
@@ -1024,6 +1025,34 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             model_call=model_call,
         )
         steps.append(bundle)
+
+        # Constitution Principle III, 2026-09-22 (run-0fc1d146): this step is now complete, and
+        # until this line the only durable trace of it anywhere was its capture row -- a picture
+        # of the board with no record of what the agent concluded from it. Decision steps become
+        # durable at turn commit (`run/turn_cycle.py`'s `write_then_advance`, and the abandoned
+        # -attempt write above it), so a turn that never ends never persists a single one: that
+        # run was killed after 67 minutes with 285 completed steps, 285 distinct
+        # `decision_step_id`s and zero `decision_steps` rows, and all 285 steps' reasoning died
+        # with the process.
+        #
+        # So the step is journalled here, synchronously, one append-only `write_run_event` per
+        # completed step (`run/step_journal.py` explains why that operation and not a new one).
+        # This is **not** a bound of any kind: no clock is read, no counter is compared, nothing
+        # here can end a turn or shorten one. It only removes the invisibility -- a SIGKILL after
+        # step N now leaves steps 1..N reconstructible, which is the failure that actually
+        # happened and the one an on-exit flush could never have covered.
+        #
+        # A failed journal write propagates, exactly as the `write_capture` above it does: a run
+        # that keeps playing while its record silently stops accumulating is the defect, not the
+        # remedy.
+        journal_step(
+            ctx.store,
+            run_id=ctx.run_id,
+            turn_number=ctx.turn_number,
+            turn_cycle_id=ctx.turn_cycle_id,
+            bundle=bundle,
+            occurred_at=ended_at,
+        )
 
         # MEASURED (2026-09-21, gameplay block 4, run-fd5fa128, stochastic provider): a "Civic
         # Completed" popup was up, the provider never acknowledged it, and its `turn.end_turn`

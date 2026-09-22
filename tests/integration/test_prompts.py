@@ -288,6 +288,14 @@ class _RecordingActionExecutor:
         self.calls.append((declaration_id, dict(parameters), target))
 
 
+def _seed_run(store: SqliteMatchStore, run_id: str) -> None:
+    """The `runs` row the loop's per-step journal event hangs off (run/step_journal.py)."""
+    from store_support.builders import make_config, make_run
+
+    if store.get_run(RunId(run_id)) is None:
+        store.create_run(make_run(run_id, f"{run_id}-cfg"), make_config(f"{run_id}-cfg"))
+
+
 def _build_context(
     *,
     observation_reader: _ScriptedObservationReader,
@@ -297,6 +305,11 @@ def _build_context(
 ) -> DecisionLoopContext:
     catalog = load_catalog(CATALOG_ROOT)
     registry = CapabilityRegistry(catalog)
+    # 2026-09-22 (run/step_journal.py): the loop now journals each completed step as a run-scoped
+    # `RunEvent`, and the store refuses an event whose run has no row -- the parent-integrity the
+    # port has always enforced, now reached by this path. A test that drives the loop against a
+    # real store owes it the run the loop is playing.
+    _seed_run(store, "run-prompts-1")
     return DecisionLoopContext(
         run_id=RunId("run-prompts-1"),
         turn_number=1,

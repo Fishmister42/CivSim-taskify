@@ -153,6 +153,15 @@ class RunEventType(StrEnum):
     MODEL_CHAIN_EXHAUSTED = "model_chain_exhausted"
     IMAGE_WITHHELD = "image_withheld"
     CAPTURE_FAILED = "capture_failed"
+    # 2026-09-22: one completed decision step, made durable the moment it completed rather than
+    # at turn commit (`run/step_journal.py`, Constitution Principle III). MEASURED: run-0fc1d146
+    # ran one turn for 67 minutes and was killed with 285 completed steps whose reasoning existed
+    # only in process memory -- decision steps become durable at `write_turn_cycle`, and a turn
+    # that never ends never gets there. This event is the per-step half. It carries the whole
+    # `DecisionStepBundle` in `detail` and makes **no** claim about whether its turn committed:
+    # that is resolved at read time, because an event can never be edited (FR-006) and a claim
+    # about the future written into an immutable record is a claim that eventually lies.
+    DECISION_STEP_COMPLETED = "decision_step_completed"
     # Gameplay day (2026-09-21, owner's ruling): a human operator acted on the client outside
     # the harness's own action path -- e.g. answered a prompt the catalog could not yet map so
     # play could continue. Recorded so the run's record says what was not the agent's doing;

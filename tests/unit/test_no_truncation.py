@@ -50,6 +50,7 @@ from civsim_harness.run.decision_loop import DecisionLoopContext, run_decision_l
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
 from fakes.fake_host import FakeHostPlatform
 from fakes.fake_provider import FakeModelProvider
+from store_support.builders import make_config, make_run
 
 TICK_DECLARATION_ID = DeclarationId("test.tick")
 GAME_TURN_STATE_DECLARATION_ID = DeclarationId("game.turn_state")
@@ -155,6 +156,12 @@ async def test_500_step_productive_turn_completes_untouched(tmp_path: Path) -> N
     provider = FakeModelProvider()
     provider.set_default_decision_factory(_decision_factory)
     store = SqliteMatchStore(tmp_path / "match.db")
+    # 2026-09-22 (run/step_journal.py): each completed step is journalled as a run-scoped
+    # `RunEvent`, and the store refuses an event whose run has no row. Seeding the run is a
+    # fixture correction, not a weakening: the 500 scripted steps below, and every assertion
+    # about them, are untouched -- which is the point, since the journal is a durability write
+    # and must not be able to shorten a turn.
+    store.create_run(make_run("run-1", "run-1-cfg"), make_config("run-1-cfg"))
 
     ctx = DecisionLoopContext(
         run_id=RunId("run-1"),
