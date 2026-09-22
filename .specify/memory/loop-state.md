@@ -428,6 +428,41 @@ there was one partial lookup between them.
   pytest running) rather than wedged. **Contention vs. a genuinely slow test is NOT settled — do not
   quote this as a hang.** The split form loop-state prescribes is green and, because `addopts`
   excludes `tests/live` by default, the split IS the full accepted suite.
+- **🛑 If your test environment cannot reproduce the production condition, the obvious test passes
+  vacuously — simulate the condition explicitly AND assert the simulation fired.** The UTF-8 encoder
+  fix (`34b029a`) turned on this: **no locale installed on this box makes `%c` match `0x81`** —
+  measured across `C`, `C.utf8`, `POSIX`, `en_US.utf8`, `en_GB.utf8` and the ambient locale, because
+  glibc's UTF-8 ctype tables classify no byte above `0x7F`. **The naive discriminating-pair test
+  could not have failed against the broken encoder.** The fix ships `_SIMULATE_CLIENT_LOCALE` to
+  reproduce the documented production condition, and the encoder fixture **asserts the simulation
+  actually fired**, so a pattern drifting out from under the wrapper is a loud failure rather than a
+  silent pass. **This is the same family as "a positive control that production cannot reach is not a
+  positive control", pointed at the negative direction.**
+  Two more from the same fix. **The count was 28, not the 27 I briefed** — the 27 Lua files plus
+  `nexus/sentinels.py`'s `LUA_JSON_PRELUDE`, reached by a different code path; re-derive counts, do
+  not inherit them from a brief. And **"one shared helper" was impossible**: the sandbox has no
+  `require`/`io`/`debug` and `capability/executor.py` states *"No shared Lua helper is ever
+  injected."* The control that replaced it is a test asserting **all 28 copies are byte-identical**,
+  so a divergent edit or a 29th carrying the old text fails the suite. **When the shared abstraction
+  is forbidden, pin the duplication instead of trusting it.**
+- **✅ PREDICTION CONFIRMED (camera).** The falsifiable prediction that `camera.set_view_mode` would
+  begin applying from the first block run after ~15:14 — once `44e8d01`'s camera binding was actually
+  in the running tree — **held**: block-34 (`run-5bc9f81f2c934438a99f0cf20eef1738`, 20:31:40Z)
+  applied `camera.set_view_mode` alongside `units.select` and `turn.end_turn`. So its 69 recorded
+  refusals were **T308's binding defect, already fixed**, and not a second comparison bug. The zoom
+  float defect stands separately, established by reproduction at HEAD.
+- **The ~176 s `EXITCODE:143` on the bare full suite is REAL, REPRODUCIBLE and UNEXPLAINED — two
+  independent lanes hit it and neither could name the killer. Do not quote it as a hang.**
+  Established: exit 143 is SIGTERM (128+15), **not** the outer `timeout` (GNU `timeout` returns 124,
+  and not until its own deadline); reproduced 5/5 at a byte-identical log length; **the 59% figure is
+  an artefact of block buffering**, not the failure point — unbuffered, the last line is
+  `tests/unit/test_identity_lock_sigterm.py`, dying on that file's third test. **But `tests/unit`
+  alone passes that file green, so it is an INTERACTION, not the file.** `run/identity_lock.py:139`
+  re-delivers SIGTERM to **its own** pid only — it does not signal other processes, so "lanes kill
+  each other through the lock" is **ruled out by reading the code**. No OOM daemon (`systemd-oomd`
+  inactive, no earlyoom/nohang, 14 GB free). **What delivers the FIRST SIGTERM is not established.**
+  The sanctioned split form is green and, because `addopts` excludes `tests/live`, the split IS the
+  full accepted suite — so this is a measurement nuisance, not a blocker.
 - **A query that returns the same empty answer for your control as for your subject is broken, not
   conclusive.** A sweep read `outcome: None` for everything including the control, because the
   execution record nests under `decision` rather than beside it. **The control caught a broken query
