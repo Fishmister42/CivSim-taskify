@@ -1707,3 +1707,45 @@ Its remaining risk is the tempting fix: regenerating the export **always** goes 
 that was the right direction. Whether the model gained a field it should have, or the export went
 stale, is a question about **intent** that the test cannot answer and must be established from the
 commit that caused the drift.
+
+### A defect recurring inside its own remedy — twice today (2026-09-22)
+
+Two instances, and the second is what makes it a finding about **how we fix things** rather than about
+locks or rules:
+
+1. **The lookup rule.** Written by this lane after a misattribution, then violated by this lane twice
+   more — the third time *after* writing it. Stating a rule does not produce compliance with it.
+2. **"A docstring standing in for a mechanism."** Named in the ledger after `RunLockHandle.commit()`
+   promised the lock was *"registered somewhere a later, real release will find it"* when nothing
+   guaranteed that. The commit that **removed** that promise, `d3cae2f`, introduced a new one: its
+   scope note says what it cannot cover is *"a hard kill (`SIGKILL`, or any signal Python can't
+   catch)"*. **`SIGTERM` is a signal Python can catch — it is simply not caught.** No `signal` handler
+   exists in the file. So the documented boundary sits in the wrong place, and an auditor reading it
+   would conclude `timeout` kills were covered.
+
+**And `timeout` is what this project's own standing rules use** — `timeout 580` for live drivers,
+`timeout 900` for the suite — and `timeout` sends `SIGTERM` by default, which Python's default
+disposition handles by terminating **without running `atexit` handlers**. So the uncovered path is not
+an edge case; **it is the kill our own conventions generate.** Ruling: install the handler *and*
+correct the sentence — install only while a lock is held, restore the previous handler on release,
+release-then-re-raise the default disposition so the process still dies as the caller expects, and
+chain rather than clobber an existing handler.
+
+**The general lesson.** A fix is written in the frame of the defect it is fixing, so the pattern it is
+fixing is exactly the one it is least equipped to notice in itself. The remedy is not vigilance — that
+failed twice today, once by the author of the rule — but **applying the same check to the fix that
+was applied to the defect.** Concretely: when a fix's commit message states a boundary, run the lookup
+on the boundary. *"Which signals does this actually catch?"* is a `grep` for `signal`, and it took
+under a minute.
+
+### Also worth recording: the fix that beat its own brief
+
+`d3cae2f` was given an enumeration gate — prove every terminal path funnels through `_finish`, stop
+and report if they do not. It ran the enumeration, **found they do not funnel** (`evaluate_stop_facts`
+is reached on two of `Runner._play_run`'s several terminal paths; operator stop and every
+`HarnessError` routed to paused/failed bypass it), and then chose a design that **does not need them
+to funnel**: `commit()` arms an `atexit` backstop, and `RunIdentityLock.release()` — the one point
+every release path already converges on — disarms it. That is *"ask whether the fix needs the number
+at all"* one level up: it does not need the paths to funnel, so it does not care that they do not.
+The convergence claim was verified rather than accepted, which is the only reason the design is known
+to hold.
