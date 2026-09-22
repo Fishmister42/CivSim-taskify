@@ -66,7 +66,7 @@ from civsim_harness.act.dispatch import (
     dispatch_action,
     rejection_to_execution,
 )
-from civsim_harness.act.predicates import resolve_selected_subject_target
+from civsim_harness.act.predicates import acted_subject_ids, resolve_selected_subject_target
 from civsim_harness.act.prompts import PromptRouteStatus, route_prompt
 from civsim_harness.act.verify import confirm_execution
 from civsim_harness.agent.context import assemble_context, select_screened_images
@@ -875,6 +875,7 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
             context=LuaContext.IN_GAME,
             action_declaration_id=raw_decision.action_declaration_id,
             observation=observation,
+            parameters=raw_decision.parameters,
             target=target,
         )
         # T230, FR-026/FR-027, research R8: a camera request is an *information-channel* request.
@@ -981,6 +982,17 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
                 observation_of=lambda fresh: fresh.observation,
                 reobserve=reobserve,
                 target=raw_decision.parameters.get("target"),
+                # MEASURED LIVE 2026-09-22: a Builder built a mine, its charges went 3 -> 2, and
+                # the step was recorded `rejected` -- because Civ VI auto-cycles the selection off
+                # a unit after a completed order, and the verification predicate binds `unit` to
+                # whatever is selected at read time. By the final read that was a Settler with 0
+                # charges. The order's own answer already names the unit it acted on, so the
+                # predicate is bound to that unit instead of to the selection. `units.move_to`
+                # names none and is therefore untouched (42 of 42 stored answers carry no
+                # `unit_id` key).
+                acted_subject_ids=acted_subject_ids(
+                    declaration.declaration_id, dispatch_answer
+                ),
                 clock=ctx.clock,
                 timeout_s=confirm_timeout_s,
                 poll_s=confirm_poll_s,

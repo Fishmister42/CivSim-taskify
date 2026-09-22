@@ -33,6 +33,24 @@ documents for subject resolution -- it is not a verified, per-action argument ma
 environment has no live Civ VI client or Lua interpreter to verify one against), and is recorded
 here with the same honesty this catalog's own Lua files use for their ``UNVERIFIED`` call shapes.
 
+**CLOSED 2026-09-22: the gap above is no longer open for an action that declares its arguments.**
+That convention could express exactly ONE argument in practice. Re-derived from the store (1600
+action records, snapshot 23:27Z): every decision's ``parameters`` key-set is ``('target',)`` or
+``()`` and nothing else, so ``extra`` was empty on every dispatch ever made -- because
+``agent/context.py`` told the model to name its subject in ``parameters.target`` "and nothing
+else". Five shipped actions dispatch to a Lua function taking two or three arguments and could
+not work at all: ``policies.slot_policy`` (71 of 71 ``unknown_policy``),
+``religion.found_religion`` (40 of 40 ``unknown_religion_or_belief``), and
+``congress.cast_vote`` / ``espionage.assign_mission`` / ``policies.assign_governor``, never
+attempted and refused by their own Lua on the nil argument.
+``ParityDeclaration.lua_arguments`` now states a declaration's real positional shape and
+:func:`_build_arguments` builds the call from it; the agent's action listing renders the extra
+parameter names from that same field, so the two cannot drift. A declaration that does not say
+marshals exactly as described above, which is what keeps the five per-action Lua shims
+(``units.move_to``, ``units.build_improvement``, ``units.promote``, ``camera.move``, the
+``cities.*`` family) working untouched -- and ``tests/unit/test_declared_lua_arguments.py``
+ratchets that no *new* multi-argument order is written as a sixth shim.
+
 **The one declaration-id-shaped exception: prompt responses.** Every ``prompts.*`` action shares one
 generic Lua function, ``lua/ingame/screens.lua``'s ``CivSim_Screens.respond(promptType, optionId)``
 (``catalogs/actions/prompts.yaml``'s own header) -- ``promptType`` is the screen id, matching
@@ -75,7 +93,12 @@ from typing import Any
 from civsim_harness.act.prompts import prompt_screen_for_declaration_id
 from civsim_harness.capability.executor import CapabilityExecutor
 from civsim_harness.capability.registry import CapabilityRegistry
-from civsim_harness.models.catalog import IntegrationCapability
+from civsim_harness.errors import CatalogError
+from civsim_harness.models.catalog import (
+    IntegrationCapability,
+    ParityDeclaration,
+    lua_argument_parameter_name,
+)
 from civsim_harness.models.common import CapabilityId, DeclarationId
 
 #: catalogs/actions/prompts.yaml's own capability_id -- the one family of declarations dispatched
@@ -108,7 +131,7 @@ class ActionExecutor:
         declaration = self._registry.resolve(declaration_id)
         capability = self._registry.capability_for(declaration_id)
         arguments = _build_arguments(
-            declaration_id=declaration_id,
+            declaration=declaration,
             capability=capability,
             parameters=parameters,
             target=target,
@@ -119,24 +142,79 @@ class ActionExecutor:
         return result.value
 
 
+def missing_declared_arguments(
+    declaration: ParityDeclaration, parameters: Mapping[str, Any]
+) -> list[str]:
+    """Which of *declaration*'s declared ``lua_arguments`` this decision did not supply.
+
+    ``[]`` for a declaration that declares none -- it takes whatever the legacy convention
+    produces, exactly as before. Used by :mod:`civsim_harness.act.dispatch` to refuse the decision
+    before anything is executed, and re-asked by :func:`_build_arguments` at the point of use.
+    """
+    if declaration.lua_arguments is None:
+        return []
+    missing: list[str] = []
+    for entry in declaration.lua_arguments:
+        name = lua_argument_parameter_name(entry)
+        key = "target" if name is None else name
+        if parameters.get(key) is None:
+            missing.append(key)
+    return missing
+
+
 def _build_arguments(
     *,
-    declaration_id: DeclarationId,
+    declaration: ParityDeclaration,
     capability: IntegrationCapability,
     parameters: Mapping[str, Any],
     target: Any,
 ) -> tuple[Any, ...]:
-    """Turn one decision's free-form ``parameters``/``target`` into positional Lua call arguments.
+    """Turn one decision's ``parameters``/``target`` into positional Lua call arguments.
 
-    See the module docstring's "genuinely open design surface" note: this is an explicit,
-    documented convention, not a verified per-action mapping. ``prompts.orders`` is the one
-    exception with a real, non-guessed shape (see below).
+    **Declared arguments first (the mechanism that replaced the per-action shim).** When the
+    declaration carries ``lua_arguments``, the call is built in exactly that order: ``target``
+    takes the value the agent chose, and ``parameters.<name>`` takes that key from the decision's
+    own ``parameters``. Nothing is inferred from key ordering and nothing is optional -- a
+    declared argument the decision did not supply raises here rather than sending a shorter call,
+    because "silently pass fewer" is precisely how ``policies.slot_policy`` spent 71 dispatches
+    answering ``unknown_policy`` with the policy name sitting in the slot-index parameter. The
+    production path refuses earlier still, at ``act/dispatch.py``; this is the re-check at the
+    point of use that the rest of this codebase already applies (see :class:`ActionExecutor`'s
+    own docstring on defense in depth).
+
+    **A declaration that says nothing behaves exactly as it always did.** See the module
+    docstring's "genuinely open design surface" note: the fallback below is the original
+    explicit, documented convention -- every non-``target`` parameter value in sorted-key order,
+    then ``target`` -- left byte-for-byte alone, because five shipped actions (``units.move_to``,
+    ``units.build_improvement``, ``units.promote``, ``camera.move`` and the ``cities.*`` family)
+    carry their own Lua-side normalisation written against it. ``prompts.orders`` is the one
+    capability-level exception, and it is evaluated first so no prompt declaration can be
+    re-routed by declaring arguments.
     """
     if capability.capability_id == _PROMPT_CAPABILITY_ID:
         # NOT a prefix swap: `act/prompts.py` owns the screen-id <-> declaration-id mapping in both
         # directions, exception table included. Deriving it a second time here is what wedged the
         # 2026-09-22 board -- see the module docstring's MEASURED LIVE note.
-        return (prompt_screen_for_declaration_id(declaration_id), target)
+        return (prompt_screen_for_declaration_id(declaration.declaration_id), target)
+
+    if declaration.lua_arguments is not None:
+        missing = missing_declared_arguments(declaration, parameters)
+        if missing:
+            raise CatalogError(
+                "this action's Lua takes arguments the decision did not supply, so the call "
+                "cannot be built -- it is refused rather than dispatched with fewer",
+                detail={
+                    "declaration_id": str(declaration.declaration_id),
+                    "lua_arguments": list(declaration.lua_arguments),
+                    "missing": missing,
+                    "supplied": sorted(parameters),
+                },
+            )
+        built: list[Any] = []
+        for entry in declaration.lua_arguments:
+            name = lua_argument_parameter_name(entry)
+            built.append(target if name is None else parameters[name])
+        return tuple(built)
 
     extra = tuple(value for key, value in sorted(parameters.items()) if key != "target")
     if target is None:

@@ -122,13 +122,28 @@
   availability_predicate: >
     unit.is_selected and unit.owner_is_local_player and unit.charges_remaining > 0
     and target in unit.available_builds
-  # The charge counter going down by one is what a human watches. DOCUMENTED LIMIT: a Builder
-  # spending its LAST charge is consumed and leaves the map, and the game then selects some other
-  # unit, whose own charges_remaining will not satisfy this -- so that one case reads as rejected
-  # even though the improvement was built. The conservative direction on purpose (FR-011: a
-  # predicate that cannot confirm the effect is never read as success); the plot's own
-  # `improvement` in map.state is the reading that covers it, and the goal run's success predicate
-  # already accepts either.
+  # The charge counter going down by one is what a human watches.
+  #
+  # CORRECTED 2026-09-22 (headless), and the correction is the point: the "DOCUMENTED LIMIT"
+  # recorded here used to say the game selects another unit only when a Builder spends its LAST
+  # charge and is consumed. **The real behaviour is far broader** -- Civ VI auto-cycles the
+  # selection off a unit after ANY completed order. MEASURED, turn cycle
+  # `1b68484f1ed240c8864d1cf5094ebd31` at 21:27Z: the Builder 458754 built IMPROVEMENT_MINE on
+  # (44,30) on an ORDINARY charge, its charges went 3 -> 2, the dispatch answered `ok: true`, and
+  # the step was still recorded `rejected` -- because by the confirming read the game had selected
+  # a Settler with 0 charges and `unit` bound to it: `0 == 3 - 1`. The final read was assembled
+  # 1.8 ms before the rejection was stamped, so it had the right data and scored it wrong; no
+  # confirm timeout could have helped.
+  #
+  # FIXED at the binding, not at the predicate text: `act/predicates.py`'s `acted_subject_ids`
+  # binds `unit` to the unit the ORDER'S OWN ANSWER names (`unit_id`), on both sides of the
+  # comparison, so the predicate below now reads the Builder whatever the game has since selected.
+  #
+  # The genuine last-charge limit REMAINS, and stays conservative on purpose (FR-011): a Builder
+  # consumed by its final charge is gone from `units.state`, the namespace binds absent, the
+  # comparison is unevaluable and the step reads rejected even though the improvement was built.
+  # The plot's own `improvement` in map.state is the reading that covers it, and the goal run's
+  # success predicate already accepts either.
   verification_predicate: >
     unit.charges_remaining == observed_charges_remaining - 1
   target_kind: name

@@ -15,7 +15,8 @@
         "unavailable_to_human_now",
         "illegal_in_context",
         "out_of_parity_camera",
-        "verification_failed"
+        "verification_failed",
+        "missing_required_argument"
       ],
       "title": "RejectionReason",
       "type": "string"

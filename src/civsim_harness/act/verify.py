@@ -74,21 +74,34 @@ _OBSERVED_FIELD_SOURCES: Mapping[str, tuple[str, str]] = {
     "observed_turn_number": ("game", "turn_number"),
     "observed_diplomatic_favor": ("player", "diplomatic_favor"),
     # `units.build_improvement`: the build charge counter on the unit panel, read before the order
-    # goes out. The bindings below are built with no ``target``, so the ``unit`` namespace resolves
-    # to the entry ``units.state`` reports as selected -- the same unit a build order acts on.
+    # goes out. Bound to the unit the ORDER ACTED ON when the dispatch answer named one (see
+    # `observed_snapshot`'s `acted_subject_ids`), falling back to the entry `units.state` reports
+    # as selected. It used to be selection-only at both ends of the comparison, which is what made
+    # a verified mine read as a failure: by the post-execution read the game had cycled the
+    # selection onto a Settler and `0 == 3 - 1` decided a build that had already happened.
     "observed_charges_remaining": ("unit", "charges_remaining"),
 }
 
 
-def observed_snapshot(pre_observation: Observation) -> dict[str, Any]:
+def observed_snapshot(
+    pre_observation: Observation, *, acted_subject_ids: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     """Flatten *pre_observation* into the ``observed_*`` keys this catalog's verification
     predicates reference (see :data:`_OBSERVED_FIELD_SOURCES`).
 
     Built from the same :func:`~civsim_harness.act.predicates.build_predicate_bindings` the
     dispatch/verify bindings themselves use, so a rename applied there (e.g. ``screen`` ->
     ``current_screen``) is reflected here automatically rather than needing to be duplicated.
+
+    *acted_subject_ids* binds this snapshot to the **same** subject the post-execution bindings
+    use, so a before/after comparison such as ``observed_charges_remaining - 1`` is about one
+    unit rather than about two different ones. The dispatch has already happened by the time
+    verification runs, so the order's own answer is available here too; without it the "before"
+    half carries the identical selection guess the "after" half was just fixed for.
     """
-    pre_bindings = build_predicate_bindings(observation=pre_observation)
+    pre_bindings = build_predicate_bindings(
+        observation=pre_observation, acted_subject_ids=acted_subject_ids
+    )
     snapshot: dict[str, Any] = {}
     for observed_name, (namespace, field) in _OBSERVED_FIELD_SOURCES.items():
         namespace_value = pre_bindings.get(namespace)
@@ -141,6 +154,7 @@ def verify_execution(
     target: Any = None,
     verified_at: Timestamp,
     confirm_window: ConfirmWindow | None = None,
+    acted_subject_ids: Mapping[str, Any] | None = None,
 ) -> ExecutionVerification:
     """Evaluate *declaration*'s ``verification_predicate`` and derive its outcome and progress.
 
@@ -158,9 +172,12 @@ def verify_execution(
     """
     assert declaration.verification_predicate is not None  # guaranteed for kind == action
 
-    snapshot = observed_snapshot(pre_observation)
+    snapshot = observed_snapshot(pre_observation, acted_subject_ids=acted_subject_ids)
     bindings = build_predicate_bindings(
-        observation=post_observation, target=target, observed_snapshot=snapshot
+        observation=post_observation,
+        target=target,
+        observed_snapshot=snapshot,
+        acted_subject_ids=acted_subject_ids,
     )
 
     try:
@@ -265,6 +282,7 @@ async def confirm_execution[ReadT](
     timeout_s: float,
     poll_s: float,
     target: Any = None,
+    acted_subject_ids: Mapping[str, Any] | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     monotonic: Callable[[], float] = time.monotonic,
     emit: Callable[[str, Mapping[str, Any]], None] = emit_harness_liveness,
@@ -317,6 +335,7 @@ async def confirm_execution[ReadT](
             target=target,
             verified_at=clock(),
             confirm_window=window,
+            acted_subject_ids=acted_subject_ids,
         )
         if verification.execution.outcome is ExecutionOutcome.APPLIED:
             return verification, read

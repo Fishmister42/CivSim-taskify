@@ -638,6 +638,7 @@ def build_predicate_bindings(
     observation: Observation,
     target: Any = None,
     observed_snapshot: Mapping[str, Any] | None = None,
+    acted_subject_ids: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the ``evaluate_predicate`` bindings environment from a live ``Observation``.
 
@@ -657,6 +658,19 @@ def build_predicate_bindings(
 
     *observed_snapshot*, when given, is merged in verbatim (already-prefixed ``observed_*`` keys) --
     see ``act.verify`` for how a pre-execution snapshot is built and threaded through here.
+
+    *acted_subject_ids*, when given, names the subject an order **actually acted on** --
+    ``{"unit": 458754}`` -- and that entry is bound in place of both the ``target`` match and the
+    selection fallback. MEASURED LIVE 2026-09-22 (``run`` cycle
+    ``1b68484f1ed240c8864d1cf5094ebd31``, 21:27Z): ``units.build_improvement`` built
+    ``IMPROVEMENT_MINE`` on plot (44,30), Builder 458754's charges went 3 -> 2, and the step was
+    recorded **rejected** because Civ VI had cycled the selection onto a Settler with 0 charges by
+    the time verification read back -- ``unit.charges_remaining == observed_charges_remaining - 1``
+    evaluated ``0 == 3 - 1``. The selection is a *guess* at which subject an order acted on; the
+    order's own answer is a fact, and :func:`acted_subject_ids` is what turns one into the other.
+    An id that names no entry in the fresh observation binds the absent namespace
+    (``{"exists": False}``) and never falls through to the selection -- falling through would
+    reinstate exactly the defect for the case (the unit left the map) it is most likely to hit.
     """
     index = observation_index(observation)
 
@@ -688,6 +702,7 @@ def build_predicate_bindings(
         "camera": camera,  # T308: wired to camera.read_state, same merge shape as game/player.
         "target": target,
     }
+    acted_on = dict(acted_subject_ids or {})
     for namespace, (declaration_id, list_field, id_field) in _SUBJECT_SOURCES.items():
         extra = _CONGRESS_TOP_LEVEL_FIELDS if namespace == "congress" else ()
         bindings[namespace] = _bind_subject_namespace(
@@ -698,6 +713,7 @@ def build_predicate_bindings(
             target=target,
             extra_top_level_fields=extra,
             selection_id=_selected_city_id(index) if namespace == "city" else None,
+            acted_subject_id=acted_on.get(namespace),
         )
 
     if observed_snapshot:
@@ -745,6 +761,38 @@ def resolve_selected_subject_target(
         ):
             return item.get(id_field)
     return None
+
+
+def acted_subject_ids(
+    action_declaration_id: DeclarationId, dispatch_answer: Any
+) -> dict[str, Any]:
+    """The subject an order's own Lua answer says it acted on, as ``{namespace: id}``.
+
+    **Why this table and not a new one.** :data:`_SELECTED_SUBJECT_BY_ACTION_PREFIX` is exactly
+    the set of namespaces for which "whatever is selected" currently stands in for "the thing the
+    order acted on"; this function replaces that guess with the order's own answer for precisely
+    those namespaces and no others, so the blast radius is the fallback being removed rather than
+    every predicate in the catalog. The key read out of the answer is the namespace's own
+    ``id_field`` from :data:`_SUBJECT_SOURCES` (``unit_id``, ``city_id``) -- already the name
+    ``lua/ingame/unit_orders.lua`` and ``lua/ingame/city_orders.lua`` answer with -- so nothing
+    new has to be kept in step by hand.
+
+    ``{}`` -- meaning "nothing is named, behave exactly as before" -- whenever the action has no
+    selected subject namespace, the answer is not a mapping, or the answer carries no id. That
+    last case is the common one and it is load-bearing: MEASURED from the store, 46 of 46 recorded
+    answers from ``units.move_to`` carry **no** ``unit_id`` key at all (its Lua writes
+    ``unit_id = unitId``, nil under the lone-plot normalisation, and a Lua table constructor drops
+    a nil value), so that action's binding is untouched by this mechanism.
+    """
+    prefix = str(action_declaration_id).split(".", 1)[0]
+    namespace = _SELECTED_SUBJECT_BY_ACTION_PREFIX.get(prefix)
+    if namespace is None or not isinstance(dispatch_answer, Mapping):
+        return {}
+    _declaration_id, _list_field, id_field = _SUBJECT_SOURCES[namespace]
+    acted_on = dispatch_answer.get(id_field)
+    if acted_on is None:
+        return {}
+    return {namespace: acted_on}
 
 
 #: The subject namespaces resolved *only* from the action's own ``target`` -- there is no
@@ -905,6 +953,7 @@ def _bind_subject_namespace(
     target: Any,
     extra_top_level_fields: Sequence[str] = (),
     selection_id: Any | None = None,
+    acted_subject_id: Any | None = None,
 ) -> dict[str, Any]:
     source = index.get(declaration_id)
     namespace: dict[str, Any] = {"exists": False}
@@ -927,6 +976,18 @@ def _bind_subject_namespace(
         # field on the bound subject rather than an absent one that resolves to None.
         if "is_selected" not in item and selection_id is not None:
             namespace["is_selected"] = item.get(id_field) == selection_id
+        return namespace
+
+    # The order's own answer, when it named the subject it acted on. Outranks both the `target`
+    # match and the selection fallback, and -- deliberately -- does NOT fall through to either
+    # when the id is gone from the board: an order whose subject left the map must leave the
+    # namespace absent (`{"exists": False}`), so the predicate is unevaluable and the step stays
+    # rejected, rather than silently re-reading whichever unit the game has since selected. See
+    # `build_predicate_bindings`'s own docstring for the measurement.
+    if acted_subject_id is not None:
+        for item in items:
+            if isinstance(item, Mapping) and item.get(id_field) == acted_subject_id:
+                return _bind(item)
         return namespace
 
     if target is not None:

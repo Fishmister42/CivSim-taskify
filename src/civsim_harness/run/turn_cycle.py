@@ -378,6 +378,9 @@ async def _dispatch_backstop_end_turn(
         context=LuaContext.IN_GAME,
         action_declaration_id=_END_TURN_DECLARATION_ID,
         observation=pre_observation,
+        # The backstop's end turn carries no parameters at all -- turn.end_turn declares no
+        # lua_arguments, so this is stated rather than defaulted (see dispatch_action's docstring).
+        parameters={},
     )
     if dispatch_outcome.status is DispatchStatus.rejected:
         assert dispatch_outcome.rejection_reason is not None

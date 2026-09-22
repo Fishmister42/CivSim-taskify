@@ -12,7 +12,10 @@
 
 - declaration_id: espionage.assign_mission
   kind: action
-  summary: Assign an available spy to a mission against a target city.
+  summary: >
+    Assign an available spy to a mission against a target city. parameters: {"target": <the
+    spy's unit_id from espionage.state>, "mission_type": "<an offensive-spy operation the
+    espionage panel offers that spy>", "target_city_id": <the city it acts against>}.
   parity_basis: >
     Open the Espionage panel, select an available spy, and assign it a mission against a
     target city offered on that panel.
@@ -24,5 +27,12 @@
     spy.mission != null
   target_kind: spy_id
   target_hint: >
-    the spy's unit_id from espionage.state; the mission and the city are those the espionage panel offers that spy
+    the spy's unit_id from espionage.state; mission_type and target_city_id are the mission and
+    the city the espionage panel offers that spy
+  # Never attempted in any recorded run, and it could not have worked:
+  # CivSim_Espionage_AssignMission(spyUnitId, missionType, targetCityId) looks up
+  # `GameInfo.UnitOperations[missionType]` and answers `unknown_mission` for nil -- and with only
+  # one argument sendable, and the target already spoken for by the spy, the mission (the thing
+  # the action is named for) could never be sent.
+  lua_arguments: ["target", "parameters.mission_type", "parameters.target_city_id"]
   introduced_in_version: "2026.09.1"

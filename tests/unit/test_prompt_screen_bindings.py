@@ -138,6 +138,7 @@ def test_the_action_is_available_for_an_offered_option_and_only_then(
         context=LuaContext.IN_GAME,
         action_declaration_id=DeclarationId(action),
         observation=observation,
+        parameters={"target": option},
         target=option,
     )
     assert authorized.status is DispatchStatus.authorized
@@ -148,6 +149,7 @@ def test_the_action_is_available_for_an_offered_option_and_only_then(
         context=LuaContext.IN_GAME,
         action_declaration_id=DeclarationId(action),
         observation=observation,
+        parameters={"target": "something the screen never showed"},
         target="something the screen never showed",
     )
     assert refused.status is DispatchStatus.rejected
@@ -170,6 +172,7 @@ def test_the_action_is_unavailable_while_a_different_screen_is_up(
         context=LuaContext.IN_GAME,
         action_declaration_id=DeclarationId(action),
         observation=_observation(quiet_world),
+        parameters={"target": option},
         target=option,
     )
     assert outcome.status is DispatchStatus.rejected
@@ -342,7 +345,7 @@ def _dispatched_prompt_type(registry: CapabilityRegistry, action: str) -> str:
 
     declaration_id = DeclarationId(action)
     arguments = _build_arguments(
-        declaration_id=declaration_id,
+        declaration=registry.resolve(declaration_id),
         capability=registry.capability_for(declaration_id),
         parameters={},
         target="an option",

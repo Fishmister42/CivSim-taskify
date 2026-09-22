@@ -40,6 +40,12 @@ class RejectionReason(StrEnum):
     ILLEGAL_IN_CONTEXT = "illegal_in_context"
     OUT_OF_PARITY_CAMERA = "out_of_parity_camera"
     VERIFICATION_FAILED = "verification_failed"
+    #: The declaration says which positional arguments its Lua takes
+    #: (``ParityDeclaration.lua_arguments``) and this decision did not supply one of them. Its
+    #: own reason rather than ``unavailable_to_human_now``: the game was offering the command --
+    #: nothing is greyed out -- the *decision* was incomplete, and folding the two together would
+    #: make a malformed decision read, in coverage, as a board that never offered the action.
+    MISSING_REQUIRED_ARGUMENT = "missing_required_argument"
 
 
 class ActionExecution(HarnessModel):

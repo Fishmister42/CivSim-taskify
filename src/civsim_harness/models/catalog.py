@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 
 from pydantic import Field, model_validator
 
@@ -120,6 +120,32 @@ class HudCorner(StrEnum):
     BOTTOM_RIGHT = "bottom_right"
 
 
+#: ``lua_arguments`` entry: the decision's own ``parameters.target``, in whatever position this
+#: action's Lua actually takes it.
+LUA_ARGUMENT_TARGET: Final[str] = "target"
+
+#: ``lua_arguments`` entry prefix: a named value the agent supplies in ``Decision.parameters``,
+#: e.g. ``parameters.slot_index``. The prefix is what makes "from the catalog's own declaration"
+#: and "from the model's parameters" impossible to confuse at a glance -- one reads ``target``,
+#: the other names its source explicitly.
+#:
+#: There is deliberately **no** third form (no literal constants, no optional arguments with a
+#: default). Three of this project's most serious 2026-09-22 defects were an optional parameter
+#: with a safe-looking empty default that every unit test supplied and the single production call
+#: site did not; a form no shipped declaration uses is exactly that shape waiting to happen.
+#: Every declared argument is required, and a decision missing one is refused, never truncated.
+LUA_ARGUMENT_PARAMETER_PREFIX: Final[str] = "parameters."
+
+_LUA_ARGUMENT_PARAMETER_RE = re.compile(r"^parameters\.[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def lua_argument_parameter_name(entry: str) -> str | None:
+    """The ``Decision.parameters`` key *entry* names, or ``None`` when it names ``target``."""
+    if entry == LUA_ARGUMENT_TARGET:
+        return None
+    return entry[len(LUA_ARGUMENT_PARAMETER_PREFIX) :]
+
+
 class ParityDeclaration(HarnessModel):
     """One observable, visual view, or action, with its human equivalent
     (data-model.md SS10; contracts/capability-catalog.md).
@@ -154,6 +180,11 @@ class ParityDeclaration(HarnessModel):
     # reachable_plots -- the plot, not the unit".
     target_kind: TargetKind | None = None
     target_hint: str | None = None
+    # Actions only, optional (additive). The ordered positional arguments this declaration's Lua
+    # function actually takes -- see LUA_ARGUMENT_TARGET / LUA_ARGUMENT_PARAMETER_PREFIX below
+    # for the two forms and why there are only two. A declaration that says nothing marshals
+    # exactly as it did before this field existed (`act/executor.py::_build_arguments`).
+    lua_arguments: tuple[str, ...] | None = None
 
     @model_validator(mode="after")
     def _kind_specific_shape(self) -> ParityDeclaration:
@@ -165,6 +196,7 @@ class ParityDeclaration(HarnessModel):
             raise ValueError("target_kind / target_hint are only meaningful on an action")
         if self.target_hint is not None and self.target_kind is None:
             raise ValueError("target_hint requires target_kind")
+        self._validate_lua_arguments()
 
         if self.kind == DeclarationKind.VIEW:
             if self.camera_requirements is None:
@@ -202,6 +234,39 @@ class ParityDeclaration(HarnessModel):
             raise ValueError("output_schema is required for an observation or view declaration")
 
         return self
+
+    def _validate_lua_arguments(self) -> None:
+        """Reject a malformed ``lua_arguments`` at catalog load, never at dispatch time.
+
+        The checks are the ones that keep the field from silently losing the agent's own choice:
+        a declared list that omits ``target`` would marshal an action whose ``target_kind`` says
+        it takes one *without* it, which is the failure mode this whole field exists to remove.
+        """
+        if self.lua_arguments is None:
+            return
+        if self.kind is not DeclarationKind.ACTION:
+            raise ValueError("lua_arguments is only meaningful on an action")
+        if not self.lua_arguments:
+            raise ValueError(
+                "lua_arguments must name at least one argument; omit the field entirely for an "
+                "action whose Lua takes the default single positional argument"
+            )
+        for entry in self.lua_arguments:
+            if entry == LUA_ARGUMENT_TARGET:
+                continue
+            if not _LUA_ARGUMENT_PARAMETER_RE.match(entry):
+                raise ValueError(
+                    f"lua_arguments entry {entry!r} is neither {LUA_ARGUMENT_TARGET!r} nor "
+                    f"{LUA_ARGUMENT_PARAMETER_PREFIX}<name>"
+                )
+        if len(set(self.lua_arguments)) != len(self.lua_arguments):
+            raise ValueError("lua_arguments must not name the same argument twice")
+        takes_target = self.target_kind is not None and self.target_kind is not TargetKind.NONE
+        if takes_target and LUA_ARGUMENT_TARGET not in self.lua_arguments:
+            raise ValueError(
+                f"lua_arguments omits {LUA_ARGUMENT_TARGET!r} while target_kind is "
+                f"{self.target_kind.value!r} -- the agent's own choice would never reach the game"
+            )
 
 
 class CatalogVersion(HarnessModel):

@@ -9,7 +9,10 @@
 
 - declaration_id: congress.cast_vote
   kind: action
-  summary: Cast a vote (spending diplomatic favor) on an active World Congress resolution.
+  summary: >
+    Cast a vote (spending diplomatic favor) on an active World Congress resolution. parameters:
+    {"target": <an active resolution_id from congress.state>, "choice_id": 1 or 2 (which side of
+    the resolution you back), "votes": <how many votes to cast, at least 1>}.
   parity_basis: >
     Open the World Congress screen during an active session and cast a vote, spending
     diplomatic favor, on one of the currently proposed resolutions.
@@ -21,5 +24,15 @@
     player.diplomatic_favor < observed_diplomatic_favor
   target_kind: resolution_id
   target_hint: >
-    an active resolution's resolution_id from congress.state
+    an active resolution's resolution_id from congress.state; choice_id is the A/B side and votes
+    is how many votes to cast
+  # Never attempted in any recorded run. lua/ingame/congress.lua's
+  # CivSim_Congress_CastVote(resolutionId, choiceId, votes) already RECORDED this defect in its
+  # own comment -- "congress.cast_vote declares only a `target` today, so choice and vote count
+  # arrive nil through act/executor.py's positional convention; rather than guess a side for the
+  # player, that is refused by name" (`vote_option_not_supplied`). Declaring the arguments is what
+  # makes the side the agent's own choice instead of a guess the Lua refuses to make.
+  # worldcongresspopup.lua:2239-2253: PARAM_RESOLUTION_OPTION is 1 or 2 and
+  # PARAM_WORLD_CONGRESS_VOTES is a count of VOTES, not of favor.
+  lua_arguments: ["target", "parameters.choice_id", "parameters.votes"]
   introduced_in_version: "2026.09.1"

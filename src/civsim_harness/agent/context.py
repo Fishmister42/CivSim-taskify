@@ -59,7 +59,12 @@ from typing import Any, Final
 from civsim_harness.act.availability import availability_by_action
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.errors import CatalogError
-from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration, TargetKind
+from civsim_harness.models.catalog import (
+    LUA_ARGUMENT_TARGET,
+    DeclarationKind,
+    ParityDeclaration,
+    TargetKind,
+)
 from civsim_harness.models.common import ModelRef
 from civsim_harness.models.config import GuidanceSet
 from civsim_harness.models.turn import (
@@ -165,7 +170,9 @@ def assemble_action_catalog_text(
     lines = [
         "Actions you may take (choose exactly one per step by its id):",
         "Every action that acts on something names that thing in parameters.target, and nothing "
-        "else: a technology, civic, policy, belief, government or production item by its name "
+        "else unless its own line below names further parameters (a few orders take more than "
+        "one value -- send exactly the keys that line lists, or the order is refused): a "
+        "technology, civic, policy, belief, government or production item by its name "
         'exactly as the observed state lists it (e.g. {"target": "TECH_MINING"}); a destination '
         'plot as {"target": {"x": 43, "y": 31}}; another civilization, a congress resolution, a '
         "great person or a spy by its id. Unit and city orders act on the unit or city the game "
@@ -208,7 +215,28 @@ def assemble_action_catalog_text(
 
 def _render_action(declaration: ParityDeclaration) -> str:
     summary = " ".join(str(declaration.summary or "").split())
-    return f"- {declaration.declaration_id}: {summary}{_render_target(declaration)}"
+    return (
+        f"- {declaration.declaration_id}: {summary}"
+        f"{_render_target(declaration)}{_render_extra_parameters(declaration)}"
+    )
+
+
+def _render_extra_parameters(declaration: ParityDeclaration) -> str:
+    """`` -- also send: parameters.slot_index`` for an action whose Lua takes more than a target.
+
+    Derived from the declaration's own ``lua_arguments``, never written out by hand: the model is
+    the only caller that can supply these, so a hand-maintained sentence drifting away from the
+    declaration would make the declared argument unreachable and every such action would refuse
+    for a missing parameter. MEASURED (2026-09-22): across all 1600 action records in the store
+    the parameter key-set is ``('target',)`` or ``()`` and never anything else -- because the
+    paragraph above used to end "and nothing else".
+    """
+    if not declaration.lua_arguments:
+        return ""
+    extra = [entry for entry in declaration.lua_arguments if entry != LUA_ARGUMENT_TARGET]
+    if not extra:
+        return ""
+    return " -- also send: " + ", ".join(extra)
 
 
 #: T256: one concrete example per `TargetKind`, rendered after each action's summary so the

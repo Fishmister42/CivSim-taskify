@@ -21,7 +21,10 @@
 
 - declaration_id: religion.found_religion
   kind: action
-  summary: Found a religion with a founder belief, once eligible.
+  summary: >
+    Found a religion with a founder belief, once eligible. parameters: {"target": "<a founder
+    belief from player.available_beliefs>", "religion_type": "<the religion to found, e.g.
+    RELIGION_BUDDHISM>"}.
   parity_basis: >
     Use a Great Prophet (or an eligible unit) in a holy site to found a religion and pick its
     first belief in the religion-founding screen.
@@ -34,7 +37,14 @@
     player.religion_founded
   target_kind: name
   target_hint: >
-    a founder belief from player.available_beliefs
+    a founder belief from player.available_beliefs; religion_type is the religion being founded
+  # MEASURED from the store 2026-09-22: 39 dispatches, 39 refused `unknown_religion_or_belief`,
+  # 0 applied. `lua/ingame/religion.lua`'s CivSim_Religion_FoundReligion(religionType, beliefType)
+  # issues two separate requests exactly as religionscreen.lua:905-919 does -- FOUND_RELIGION then
+  # ADD_BELIEF -- so it needs BOTH names. This declaration's own target is the BELIEF (its
+  # availability predicate is `target in player.available_beliefs`), so the religion had no way to
+  # be sent at all and `GameInfo.Religions[<belief name>]` was nil on every call.
+  lua_arguments: ["parameters.religion_type", "target"]
   introduced_in_version: "2026.09.1"
 
 - declaration_id: religion.select_belief

@@ -26,10 +26,12 @@ invents a shortcut around that.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from civsim_harness.act.executor import missing_declared_arguments
 from civsim_harness.act.predicates import (
     PredicateEvaluationError,
     build_predicate_bindings,
@@ -92,6 +94,7 @@ def dispatch_action(
     context: LuaContext,
     action_declaration_id: DeclarationId,
     observation: Observation,
+    parameters: Mapping[str, Any],
     target: Any = None,
 ) -> DispatchOutcome:
     """Resolve *action_declaration_id* and evaluate its availability, never executing anything.
@@ -111,6 +114,15 @@ def dispatch_action(
       (a predicate that cannot be evaluated is treated as unavailable, never as available by
       default -- fail closed, matching FR-011's "never assert without verification" spirit applied
       to availability rather than to the executor's own claim).
+    - :attr:`~civsim_harness.models.decision.RejectionReason.MISSING_REQUIRED_ARGUMENT` -- the
+      declaration names the positional arguments its Lua takes (``lua_arguments``) and *parameters*
+      does not carry one of them. Checked last, so it can only ever describe a command the game
+      really is offering.
+
+    *parameters* is the decision's own ``Decision.parameters`` mapping and has **no default**: an
+    argument check that a caller can skip by forgetting a keyword is the "optional parameter with
+    a safe-looking empty default that no production caller passes" shape this project has been
+    bitten by three times. Every caller states what the decision supplied, including ``{}``.
     """
     try:
         declaration = registry.resolve(action_declaration_id)
@@ -173,6 +185,29 @@ def dispatch_action(
             detail={
                 "action_declaration_id": str(action_declaration_id),
                 "predicate": declaration.availability_predicate,
+            },
+        )
+
+    # Asked last, and after availability on purpose: "the button is greyed out" is the stronger
+    # statement about the game, so an unavailable action keeps reporting that. Only a command the
+    # game really is offering can be refused for an incomplete decision -- and it is refused
+    # *here*, before `act/executor.py` is ever reached, so the board is left untouched and the
+    # refusal is one ordinary recorded step rather than an exception through the run loop.
+    missing = missing_declared_arguments(declaration, parameters)
+    if missing:
+        return DispatchOutcome(
+            status=DispatchStatus.rejected,
+            rejection_reason=RejectionReason.MISSING_REQUIRED_ARGUMENT,
+            detail={
+                "action_declaration_id": str(action_declaration_id),
+                "lua_arguments": list(declaration.lua_arguments or ()),
+                "missing": missing,
+                "supplied": sorted(parameters),
+                "reason": (
+                    "this action takes more than the one target: "
+                    + ", ".join(missing)
+                    + " was not supplied, so the order cannot be issued"
+                ),
             },
         )
 

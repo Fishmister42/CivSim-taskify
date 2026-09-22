@@ -50,9 +50,17 @@ Every `lua/**/*.lua` file in this catalog:
    requested `declaration_id`, calling it, and `print()`-ing its encoded result inside the
    `---BEGIN:<nonce>---` / `---END:<nonce>---` wrapper. Each file ends with an example-invocation
    comment showing that call so the contract is visible next to the library it dispatches into.
-4. Marks any Civ VI Gameplay/Lua API call whose existence, name, or exact field shape is uncertain
+4. Takes its positional arguments from the dispatching declaration, not from a re-derivation of
+   its own. An action whose Lua function takes **more than one** positional argument declares
+   `lua_arguments` in `catalogs/actions/*.yaml` (`["parameters.slot_index", "target"]`), and the
+   dispatcher builds the call in exactly that order; a declared argument the decision did not
+   supply is refused, never truncated. Five older orders instead normalise their own arguments
+   inside the Lua ("a lone string in the first parameter is really the last one") — that is the
+   convention `lua_arguments` replaced, and `tests/unit/test_declared_lua_arguments.py` pins the
+   exemption list so a sixth cannot be written silently.
+5. Marks any Civ VI Gameplay/Lua API call whose existence, name, or exact field shape is uncertain
    with an inline `-- UNVERIFIED:` comment rather than presenting a guess as fact.
-5. Never reads unrevealed fog-of-war contents, opponent internal state, hidden AI intent, other
+6. Never reads unrevealed fog-of-war contents, opponent internal state, hidden AI intent, other
    civilizations' undisclosed research/civics, RNG state, or debug/provenance data — the source
    files are themselves part of the parity boundary, not just the catalog entries pointing at them.
 
@@ -109,6 +117,19 @@ one matching entry's fields under the namespace. A `target` that matches nothing
 field in that namespace to its "absent" value (`exists: false`, or `false`/`null` for booleans
 and scalars), which is what lets an availability predicate simply check e.g. `spy.exists and
 spy.is_available` rather than needing a separate existence check bolted on.
+
+**At VERIFICATION time the order's own answer outranks both** (2026-09-22). "The unit/city the
+human selected" is a *guess* at which subject an order acted on, and Civ VI auto-cycles the
+selection off a unit after any completed order — so by the time the effect is read back, the
+selection is routinely something else. MEASURED: a Builder built `IMPROVEMENT_MINE`, its charges
+went 3 → 2, and `units.build_improvement` was still recorded `rejected`, because `unit` had bound
+to a Settler with 0 charges. When the dispatched Lua's own answer names the subject it acted on
+(`unit_id` / `city_id` — the same field names the subject lists use), that id is what the
+verification predicate binds, on both sides of an `observed_*` comparison. An id that no longer
+appears in the fresh observation binds the **absent** namespace and never falls back to the
+selection: a unit consumed by its order must make its predicate unevaluable, not re-read whichever
+unit the game selected next. An order that names no subject (`units.move_to`'s answer carries no
+`unit_id`) is bound exactly as this section describes, unchanged.
 
 ### Field vocabulary
 

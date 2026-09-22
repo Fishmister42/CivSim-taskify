@@ -153,6 +153,21 @@
     "kind": {
       "$ref": "#/$defs/DeclarationKind"
     },
+    "lua_arguments": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lua Arguments"
+    },
     "output_schema": {
       "anyOf": [
         {

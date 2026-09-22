@@ -4,7 +4,9 @@
 
 - declaration_id: policies.slot_policy
   kind: action
-  summary: Slot an available policy card into an open policy slot.
+  summary: >
+    Slot an available policy card into an open policy slot. parameters: {"target":
+    "<a policy from player.available_policies>", "slot_index": <which slot, zero-based>}.
   parity_basis: >
     Open the Government screen and drag (or click) an available policy card into an open slot.
   context: InGame
@@ -15,7 +17,14 @@
     not (target in player.available_policies)
   target_kind: name
   target_hint: >
-    a policy from player.available_policies
+    a policy from player.available_policies; slot_index is the slot it goes into
+  # MEASURED from the store 2026-09-22: 71 dispatches, 71 refused `unknown_policy`, 0 applied.
+  # `lua/ingame/empire_orders.lua`'s CivSim_EmpireOrders_SlotPolicy(slotIndex, policyType) takes
+  # the slot FIRST, and the harness could pass only one argument, so the policy name arrived in
+  # `slotIndex`, `GameInfo.Policies[nil]` was nil, and every order answered `unknown_policy`.
+  # The slot index is a real choice a human makes (which open slot the card goes into) and is
+  # zero-based, matching governmentscreen.lua:2284-2289's own GetSlotPolicy(i) indexing.
+  lua_arguments: ["parameters.slot_index", "target"]
   introduced_in_version: "2026.09.1"
 
 - declaration_id: policies.change_government
@@ -37,7 +46,9 @@
 
 - declaration_id: policies.assign_governor
   kind: action
-  summary: Assign an appointed governor to a city.
+  summary: >
+    Assign an appointed governor to a city. parameters: {"target": "<a governor from
+    player.available_governors>", "city_id": <that city's city_id from cities.state>}.
   parity_basis: >
     Open the Governors panel and assign an appointed governor to a city.
   context: InGame
@@ -48,5 +59,11 @@
     not (target in player.available_governors)
   target_kind: name
   target_hint: >
-    a governor from player.available_governors; the selected city receives them
+    a governor from player.available_governors; city_id is the city that receives them
+  # Never attempted in any recorded run, and it could not have worked:
+  # CivSim_EmpireOrders_AssignGovernor(governorType, cityId) refuses `unknown_city` unless the
+  # SECOND argument is a number, and only one argument could ever be sent. The city is named
+  # explicitly rather than taken from the selection because the engine's own operation takes
+  # PARAM_CITY_DEST (governorpanel.lua:556-564) -- the panel's chooser names a city too.
+  lua_arguments: ["target", "parameters.city_id"]
   introduced_in_version: "2026.09.1"
