@@ -143,6 +143,41 @@ This run also closes the remaining half of the availability-gate question: the l
 `units.found_city` on a board where it was genuinely available, the harness dispatched it, and it
 worked -- so the gate discriminates correctly in both directions.
 
+## Finding 5 -- all three rejected moves were LEGAL, and at least one of them landed
+
+The legality question was raised as a caution against counting rejected moves as defects: a move
+to a plot the unit could not reach is an **honest refusal**, not a bug. It is settled from the
+store, because each decision step's own observation carries the unit's `reachable_plots` as the
+agent saw them:
+
+| step | unit at | target | target in its own `reachable_plots`? | outcome | `confirm_elapsed_s` |
+|---|---|---|---|---|---|
+| t1 s5 | (42,30) | (43,31) | **yes** | rejected | 7.509 |
+| t2 s1 | (43,31) | (44,32) | **yes** | applied | **0.0** |
+| t2 s2 | (44,32) | (43,31) | **yes** | rejected | 7.478 |
+
+**All three were legal.** So "the move was refused because it was illegal" is ruled out, and the
+caution does not apply here.
+
+**And the t1 s5 move demonstrably LANDED**: the next turn's first step observes the warrior
+standing at **(43,31)** -- exactly the target its own move had been scored `rejected` for. The
+unit moved; the harness recorded a refusal. That makes **three** actions in this one run proven to
+have worked while scored as failures -- the founding, the production order, and this move --
+**not two**, which is the number this stage gave earlier when the legality was still unestablished.
+Correcting that upward, having previously corrected it downward: the earlier caution was right to
+demand the check, and the check came back the other way.
+
+The t2 s2 move to (43,31) is **unestablished** -- the run ended before any later observation could
+confirm it, and this stage's close-out read did not include `units.state`. It should not be
+counted either way.
+
+**The puzzle worth flagging rather than explaining away:** t2 s1 verified at **0.0 s on attempt
+1** while the two rejected moves both sat out the full 3-attempt ceiling, and this probe measured
+an adjacent-plot move observable at **<=0.167 s**. Three different results for the same action
+class on the same unit within two turns. The 7.478/7.509 s figures are where the harness stopped
+looking, not how long the game took -- but why one move confirms instantly and another has not
+confirmed 7.5 s later is **not** answered by this block, and is the next thing to measure.
+
 ## The coverage block was NOT taken by this stage (second collision, stated plainly)
 
 The stage's third task was a `--provider stochastic --provider-policy coverage` block. It was
