@@ -185,6 +185,22 @@ REASON_TIMEOUT = "timeout"
 REASON_INVALID_RESULT_JSON = "invalid_result_json"
 REASON_HANDSHAKE_FAILED = "handshake_failed"
 REASON_CONNECTION_CLOSED = "connection_closed"
+#: The steady-state read/write path hit an ``OSError`` -- ``ConnectionResetError``,
+#: ``BrokenPipeError``, ``ConnectionAbortedError``, or any other socket error -- rather than the
+#: clean EOF ``REASON_CONNECTION_CLOSED`` names. Both mean "the peer is gone"; they are kept
+#: distinct because *how* the client died is evidence worth keeping in the record (a reset is a
+#: process death or a forced close, an EOF is an orderly shutdown).
+#:
+#: **Why this exists at all** (T281): a dead peer raises ``ConnectionResetError`` straight out of
+#: ``drain()``/``read()``, and that is an :class:`OSError`, *not* a
+#: :class:`~civsim_harness.errors.HarnessError`. Every handler above this module -- the pre-save
+#: fault handling in ``run/turn_cycle.py``, ``Runner._handle_run_failure``'s exhaustive routing of
+#: a ``HarnessError`` to a legal recorded lifecycle state -- is keyed on ``HarnessError``, so a raw
+#: ``OSError`` sailed past all of it into ``Runner._record_unexpected_failure``, which performs no
+#: lifecycle transition at all: the run stayed ``playing`` forever with no recorded stop condition,
+#: violating FR-005 / data-model.md invariant I10. Naming the failure here is the whole fix; no
+#: handler above needed changing.
+REASON_CONNECTION_RESET = "connection_reset"
 #: The client answered a command with a tag-3 ``ERR:`` payload (a Lua runtime error in the
 #: dispatched chunk) instead of a sentinel-bracketed result -- measured live, see `_await_result`.
 REASON_LUA_ERROR = "lua_error"
@@ -233,7 +249,11 @@ def _is_reconnect_refusal(exc: Exception) -> bool:
     - the same drop as an :class:`OSError` (``ConnectionResetError`` /
       ``ConnectionAbortedError`` -- Windows surfaces a peer-closed connection this
       way rather than as a clean EOF, exactly as ``saves/load_game.py``'s reconnect
-      loop already handles).
+      loop already handles). Since T281 the transport names that shape itself, so it
+      arrives here as :class:`NexusError` with ``REASON_CONNECTION_RESET`` rather than as
+      a bare ``OSError``; the bare-``OSError`` arm below is kept for anything that can
+      still raise one outside :meth:`_send_raw`/:meth:`_read_frame` (``open_connection``
+      itself already becomes :class:`PreflightError`).
 
     All are retried by :meth:`reconnect`. A handshake that fails any *other* way (a
     real protocol violation -- a malformed state list, the wrong tag) is **not** the
@@ -243,7 +263,7 @@ def _is_reconnect_refusal(exc: Exception) -> bool:
     if isinstance(exc, PreflightError):
         return True
     if isinstance(exc, NexusError):
-        return exc.detail.get("reason") == REASON_CONNECTION_CLOSED
+        return exc.detail.get("reason") in (REASON_CONNECTION_CLOSED, REASON_CONNECTION_RESET)
     return isinstance(exc, OSError)
 
 
@@ -835,6 +855,12 @@ class NexusClient:
         payload = f"CMD:{state_index}:{wrap_lua(nonce, lua_body)}"
 
         async with self._lock:
+            # Deliberately outside the try below (T281): that handler catches only `TimeoutError`
+            # and exists to discard a nonce whose result may still be in flight. A `_send_raw`
+            # that fails never put the command on the wire, so there is nothing in flight and
+            # nothing to discard -- and since T281 it already raises a named `NexusError`
+            # (REASON_CONNECTION_RESET), which is exactly the shape every caller of this method
+            # handles. Moving it inside would change nothing and would blur that distinction.
             await self._send_raw(TAG_COMMAND, payload)
             try:
                 raw_result = await asyncio.wait_for(self._await_result(nonce), timeout=bound)
@@ -911,20 +937,64 @@ class NexusClient:
     # -- wire plumbing ------------------------------------------------------
 
     async def _send_raw(self, tag: int, payload: str) -> None:
+        """Frame *payload* and put it on the wire, naming a dead peer rather than leaking an
+        ``OSError`` (T281).
+
+        A client that has died mid-run raises ``ConnectionResetError`` / ``BrokenPipeError``
+        out of ``write()``/``drain()``. Those are :class:`OSError`\\ s, not
+        :class:`~civsim_harness.errors.HarnessError`\\ s, so before this wrap existed one escaped
+        every handler in the run stack and stranded the run in ``playing`` with no recorded stop
+        condition at all (see :data:`REASON_CONNECTION_RESET`). Only the transport is wrapped:
+        the exception keeps its identity as ``__cause__``, nothing is retried or swallowed here,
+        and the caller that already knows what a failed Nexus call means decides what happens
+        next.
+        """
         if self._writer is None:
             raise NexusError(
                 "Nexus client is not connected", detail={"reason": REASON_NOT_CONNECTED}
             )
-        self._writer.write(encode_frame(tag, payload))
-        await self._writer.drain()
+        try:
+            self._writer.write(encode_frame(tag, payload))
+            await self._writer.drain()
+        except TimeoutError:
+            # `TimeoutError` is an `OSError` subclass (PEP 3151) and asyncio's is the same class,
+            # so it would otherwise be swallowed by the arm below and mis-named a dead peer. A
+            # timeout is not a death: it keeps its own identity and its own REASON_TIMEOUT
+            # handling in `execute_command`/`connect`.
+            raise
+        except OSError as exc:
+            raise NexusError(
+                "Nexus connection to the game client failed while sending a frame -- the client "
+                "is gone (a dead peer, not a protocol fault)",
+                detail={"reason": REASON_CONNECTION_RESET, "error_type": type(exc).__name__},
+            ) from exc
 
     async def _read_frame(self) -> NexusFrame:
+        """The next frame from the client, or a named :class:`NexusError` if there will be none.
+
+        Two distinct ways the peer can be gone, both named rather than raised raw (T281 for the
+        second): a clean EOF -- an empty read -- is ``REASON_CONNECTION_CLOSED``, and an
+        ``OSError`` out of the read itself (``ConnectionResetError`` and friends, how a killed
+        client most often surfaces) is ``REASON_CONNECTION_RESET``. Both are
+        :class:`~civsim_harness.errors.HarnessError`\\ s, which is what every handler above this
+        module is keyed on.
+        """
         while not self._pending_frames:
             if self._reader is None:
                 raise NexusError(
                     "Nexus client is not connected", detail={"reason": REASON_NOT_CONNECTED}
                 )
-            chunk = await self._reader.read(4096)
+            try:
+                chunk = await self._reader.read(4096)
+            except TimeoutError:
+                # See `_send_raw`: `TimeoutError` is an `OSError`, and a timeout is not a death.
+                raise
+            except OSError as exc:
+                raise NexusError(
+                    "Nexus connection to the game client failed while awaiting a frame -- the "
+                    "client is gone (a dead peer, not a protocol fault)",
+                    detail={"reason": REASON_CONNECTION_RESET, "error_type": type(exc).__name__},
+                ) from exc
             if not chunk:
                 raise NexusError(
                     "Nexus connection closed by the game client",
