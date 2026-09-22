@@ -263,6 +263,21 @@ there was one partial lookup between them.
   which holds only if the record reliably says a stub was in the loop. **A stochastic block
   misrecorded as a model call is a Principle I question, not an accounting one — a decision attributed
   to a model that no model made.**
+- **A MEASUREMENT IS ONLY AS CURRENT AS THE TREE IT WAS TAKEN IN — re-measure before escalating.**
+  On 2026-09-22 "HEAD is functionally red, ten failures" was escalated as blocking every lane. **The
+  redness was real and the commit was wrong:** it was measured in a worktree pinned four commits behind
+  HEAD, inside a red interval that two later commits had already closed. `bbe69e8`'s validator rejected
+  15 fixtures declaring `implementation_ref="test"`; `36aa948` fixed them **two commits before HEAD**.
+  HEAD verified green twice, 1363 passed. **A worktree's name is not its hash** — the one called
+  `headnow` was at `8420dbc`. Check `git -C <wt> rev-parse HEAD` before quoting any result from it.
+- **`decision_loop.py`'s docstring makes an absolute claim its own file contradicts.** It says there is
+  *"no wall-clock check anywhere in this module, and there must never be one added"* — while
+  `END_TURN_CONFIRM_TIMEOUT_S = 200.0` (`:233`) and `ACTION_CONFIRM_TIMEOUT_S = 4.0` (`:237`) live in it,
+  both predating the window. They do not violate I16 **as the test operationalises it** — they bound how
+  long *one dispatched action* is re-read, not how long a turn may run, which is why the 500-step test
+  passes. **The detached-plus-poll ruling survives on its own merits (a SIGKILL is the leak path with no
+  in-process fix); the reason given for it that morning — "a confirmation timeout cannot live in this
+  module" — was false.** Another docstring standing in for a mechanism, this one asserting an absolute.
 - **A MECHANISM THAT EXPLAINS THE EVIDENCE IS NOT THE MECHANISM THAT PRODUCED IT.** On 2026-09-22 a
   "deterministic suite hang" was escalated as blocking: **byte-identical truncation at ~60% across two
   runs with different outer budgets (870 s, 890 s)**, presented as ruling out contention. It does not —
