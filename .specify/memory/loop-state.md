@@ -195,6 +195,29 @@ there was one partial lookup between them.
   "[b]in/pytest"`** — and that form already existed in the tree while two of us used the wrong one.
   Note why it hid: it failed **safe** (reported busy when clear), and **a fail-safe defect survives
   far longer than a dangerous one** because nothing goes wrong until you need the answer.
+- **AUDIT THE FAIL-SAFE DIRECTION DELIBERATELY, because nothing else will make you.** The corollary is
+  sharper than it first looks: a fail-safe defect survives **longest in exactly the mechanisms we trust
+  most**, since a guard erring toward "not ready" or "withhold" never produces a visible incident.
+  Three of 2026-09-22's findings share it — `firetuner_window` (withholds nothing while the coverage
+  guard reports it addressed), the suite gate (busy when the box is clear), completeness's in-flight
+  exemption (`complete` when data was lost). Each sat all day; the dangerous ones were found in minutes.
+- **Distinguish a record WORSE than the truth from a record BETTER than it.** Nearly every finding on
+  2026-09-22 under-reported — a real action recorded refused, a turn caused and not credited. Those are
+  recoverable: the record can be corrected upward. **A predicate that evaluates True against an ABSENT
+  field records a no-op as `applied` — and nothing in the data would ever reveal it.** Under-reporting
+  is a measurement problem; fabricating is a credibility problem that poisons the sound claims too.
+  **So for every predicate over a possibly-absent field, record which way absence resolves: False
+  (under-reports, visible) or True (fabricates, invisible). The True list is the one that matters.**
+  Live instance: `declare_war`'s `== "war"` under-reports; `make_peace`'s `!= "war"` on the same absent
+  field fabricates, and is unreachable today only because availability reads that field first — **so
+  fixing the context without fixing the predicate shape converts it into a silent liar.**
+- **Beware the fix that manufactures its own confirmation.** Raising the action-confirm bound would
+  have "fixed" `cities.set_production`'s 110 failures, and the improvement would have been read as
+  proof the bound caused them — while the real defect (wrong dispatch parameters; +1 s when correctly
+  parameterised) stayed in place. A wrong fix that moves the number is worse than none.
+- **Gate on what the measurement is FOR.** A **functional** pass/fail is not load-sensitive: it needs
+  only isolation and a pinned head. A **timing** result is, and no waiting rescues it here — 248 s
+  loaded against ~225 s quiet is ~10% noise for pass/fail and meaningless against a 3.4× spread.
 - **A closing counterpart is required for every action that opens a modal or full-screen view**, and
   its verification must confirm the view closed. The harness opened a diplomacy session it could not
   exit: `CloseSession()` answers `ok: true` and does nothing, `IsSessionActive()` does not exist on
