@@ -1,0 +1,298 @@
+  [09:34:52] recording started: every frame via the production capture_window() (window-scoped)
+  [09:34:52] goal build_a_builder: objective written to goal-build_a_builder.md (objective text only)
+  [09:34:53] PRODUCTION: Runner.start(run-config.yaml) [goal=build_a_builder provider=openrouter provider_policy=uniform turn_cap=8]
+  [09:34:55] goal build_a_builder: run run-d3d0368b0cf34ff7ad782a41e539d8c0
+  [09:34:55] goal build_a_builder: playing turn=1 step=None
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	43	30	0	true	false
+nexus: discarding unmatched output: OnGovernorChanged
+1	5
+OnGovernorChanged
+1	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+City CS property Detected
+table: 0x7892fc2007f0	trader to	7
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+OnGovernorChanged
+2	2
+OnGovernorChanged
+2	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+2	5
+OnTradeRouteActivityChanged	2	2	65536	1	327683
+2	2	65536	1	327683
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+City CS property Detected
+table: 0x7892fc847210	trader to	6
+table: 0x7892fc847210	trader to	13
+Search Result	2
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+nexus: discarding unmatched output: OnGovernorChanged
+3	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+3	2
+OnGovernorChanged
+3	5
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani control Property assigned
+nexus: discarding unmatched output: OnGovernorChanged
+4	2
+OnGovernorChanged
+4	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+4	5
+nexus: discarding unmatched output: OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+nexus: discarding unmatched output: OnGovernorChanged
+5	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+5	2
+OnGovernorChanged
+5	5
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+City CS property Detected
+table: 0x7892fc8c04c0	trader to	12
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+nexus: discarding unmatched output: OnGameTurnStarted: Turn	59	Local State:	24	2026-09-22 09:35:58
+Player	LEADER_CYRUS	 forgot to pick a civic: Adjust. Turn	59
+Resolving Buffered Parameters
+Shoud Terminate
+PlotInfo::OnCitySelectionChanged	0	65536	0	0	0	false	false
+  [09:36:03] goal build_a_builder: playing turn=2 step=None
+nexus: discarding unmatched output: OnGovernorChanged
+1	5
+OnGovernorChanged
+1	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+City CS property Detected
+table: 0x7892fc2007f0	trader to	7
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+nexus: discarding unmatched output: OnGovernorChanged
+2	2
+OnGovernorChanged
+2	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+2	5
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+City CS property Detected
+table: 0x7892fc847210	trader to	6
+table: 0x7892fc847210	trader to	13
+Search Result	2
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+nexus: discarding unmatched output: OnGovernorChanged
+3	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+3	2
+OnGovernorChanged
+3	5
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+OnGovernorChanged
+4	2
+OnGovernorChanged
+4	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+4	5
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	11
+nexus: discarding unmatched output: OnGovernorChanged
+5	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+5	2
+OnGovernorChanged
+5	5
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+City CS property Detected
+table: 0x7892fc8c04c0	trader to	12
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	12
+nexus: discarding unmatched output: OnGameTurnStarted: Turn	60	Local State:	68	2026-09-22 09:36:26
+Resolving Buffered Parameters
+Shoud Terminate
+  [09:36:32] goal build_a_builder: playing turn=3 step=None
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	43	30	0	true	false

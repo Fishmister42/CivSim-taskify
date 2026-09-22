@@ -1158,12 +1158,15 @@ as one `verification_failed`:
    failures, 3.8 MB GIF). **An action argument the catalog declares out of range must be refused at
    availability time, not accepted by the engine and paid for by the capture path.**
 
-**Coordination incident (recorded, not counted).** A headless lane's live-test self-check started a
+**Coordination incident (recorded, not counted; ATTRIBUTION CORRECTED — see Live S2).** An agent
+this lane itself spawned to write its own `tests/live/**` files, operating headless, started a
 real run against this lane's client mid-stage (`run-09110770797041989212fe6559f57900`, lock at
 12:45:58 UTC holding this client's pid, a `t0001` quicksave at 12:46:15, in no store). It cost this
 stage one refused tuner probe — the tuner takes one connection — and left a lock that would have
-blocked the next run. The lane confirmed and removed it, and is adding skip-guards that run *before*
-any lock or tuner connection plus `try/finally` lock release. Incident on issue #1. The rule this
+blocked the next run. That agent confirmed and removed it, and added skip-guards that run *before*
+any lock or tuner connection plus `try/finally` lock release. It was **not** the headless lane that
+owns loader/recovery, host-generic, web and store; that lane did nothing and the original wording
+wrongly implicated it. Incident on issue #1. The rule this
 earns: **a `live`-marked test must prove the client is free before it touches it, and must not be
 able to leave a lock behind.** Worth noting honestly: that collision's positive control *did* start
 and finish a real charter-matched run, which is the substance of T191 — but it was not run as T191
@@ -1263,3 +1266,85 @@ but never called. Entry points and named modules' import scope were checked, **n
 transitive import graph — "essentially zero, not provably zero". The durable fix is T287: the
 safe/unsafe line was being inferred from a directory path rather than declared, since `pyproject.toml`
 registered `live` as its only marker and `--ignore=tests/live` as its only exclusion.
+
+### Live S2 — 2026-09-22 (09:00–09:31 EDT) — a turn ended, the queue filled, and a whole pattern turned out to be a measurement error
+
+**The headline, bounded.** `run-e9d52051ce7b458c9f06482ae2eabf16` (goal `build_a_builder`, Sonnet 5
+via OpenRouter, worktree `c211605`, 3 harness turns, $0.272110 / 8 calls):
+
+- **Game turn 56 → 57, observed.** `game.turn_state.turn_number` reads 56 at t1/s1–t3/s1 and **57**
+  at t3/s2–s4 — separate observation commands, later-read evidence.
+- **`cities.set_production` APPLIED, 1 of 1. It was 0 applied of 113.** Verbatim:
+  `{"ok":true,"reason":"issued_not_yet_confirmed","confirmed":false,"insert_mode":"exclusive",
+  "city_id":65536,"production":"UNIT_BUILDER","kind":"unit"}`. `city_id: 65536` is a real city id,
+  not the type name — **the lone-argument bug is dead.** The `applied` verdict came from the
+  harness's later re-observation, not the call's own return.
+- **The precise claim:** `production_queue` already held `["UNIT_BUILDER"]` at t1/s1, so this run did
+  not place the *first* order. It read `[]` at t3/s2–s3 after that Builder completed; the harness
+  dispatched at t3/s3; t3/s4 reads `["UNIT_BUILDER"]`. **The harness filled an empty queue by its
+  own verified action** — the first time. The Builder that exists completed off the *pre-existing*
+  order when the turn advanced; credit the turn advance, not `set_production`.
+- Two more first-evers applied: `prompts.congress_intro` (host click, WorldCongressIntro/
+  AcceptButton) and `prompts.natural_disaster` (Close). Coverage 11 → **13 of 41**, screens 9 → 10.
+
+**The bug that had wedged everything was one string in Python, not Lua.** `act/executor.py` derived
+the Lua prompt key by inline prefix swap — right for 12 of 13 prompt declarations, wrong for the
+13th, because the catalog names the action for what the human does (`prompts.ai_diplomatic_approach`,
+answering an *AI's* approach) and the screen for what is on screen (`prompt.diplomatic_approach`).
+**That exception was already recorded, in both directions, in `act/prompts.py`'s
+`PROMPT_ACTION_BY_SCREEN`, with an inverse helper `prompt_screen_for_declaration_id` — tested,
+documented, and with zero callers in `src/`.** The table was added for screen → action and the
+action → screen direction was left re-deriving it by hand. Proven live before any edit:
+`respond("prompt.ai_diplomatic_approach","Goodbye")` → `{"reason":"unknown_prompt","ok":false}`;
+`respond("prompt.diplomatic_approach","__probe__")` → `{"ok":false,"reason":"option_not_offered",
+"offered":["Goodbye"],"prompt":"prompt.diplomatic_approach"}`. Fix `c211605` wires the helper and
+adds a test that parses `CIVSIM_KNOWN_SCREENS` out of `lua/ingame/screens.lua` and asserts the
+dispatched key for all 13 declarations (old derivation fails exactly 1 of 13). **Why a green suite
+shipped this:** the pre-existing test that dispatches this declaration stubs the Lua so it discards
+`promptType` entirely.
+
+**Consequence, recorded because the catalog said otherwise:** `e0e82f0`'s `AddResponse` work has
+**never once executed**. Yesterday's 48/48 first-meeting failures were never evidence about that
+path. The greeting path remains **untried** — `path: add_response` NOT observed, and today's
+success does not sweep it up.
+
+**A RETRACTION that removes two entries from this ledger's own pattern list.** S1 recorded
+`camera.zoom` as "the engine accepted an out-of-range value and nothing clamped it", and this lane
+reported `DiplomacyManager.CloseSession()` as "returned ok and did nothing" — both filed as
+*no-ops reported as success*. **Both were wrong, and the error was in the measurement.** A readback
+issued in the **same tuner command** as the write returns the **pre-call** value. Measured three
+ways: `SetMapZoom(0.5)` → same-command readback 0.0499997, later command 0.50000047683716;
+`CloseSession` → conversation still open in-command, gone on a probe 2 s later; `set_production` →
+`confirmed:false` in-command, verified applied on re-observation. **There is no modal camera freeze
+— that hypothesis is dead**, and `CloseSession` was probably working all along. The general rule:
+**a readback issued in the same tuner command as the write is not a readback**, and every
+verification in the harness with that shape is suspect.
+
+**The next defect, and it is Principle III.** `turn.end_turn` now **dispatches** (the prompt fix
+working; no more `unavailable_to_human_now`) with an identical
+`{"ok":true,"result_is_informative":false,"path":"UI.RequestAction"}` — but is recorded **0 applied
+/ 3 refused, `verification_failed`**, and all three turn cycles carry `game_turn_advanced: False`
+**while the game demonstrably went 56 → 57**. The harness caused three turns and credited itself
+with none. A record that denies an advance it caused is a gap, and `store/completeness.py` excludes
+such a run from trending. Fix delegated: re-read the turn number in a **separate** command after the
+async advance settles, under a bounded wait, with `game_turn_advanced` derived from that read. The
+real latency — how long after `UI.RequestAction(ACTION_ENDTURN)` the turn actually moves — has
+**never been measured**, so any bound is an assumption until it is.
+
+**Process, recorded against this lane.** (1) The Live S1 coordination incident was **misattributed**
+to the headless lane that owns loader/recovery, host-generic, web and store. It was an agent *this
+lane* spawned; that lane did nothing. Corrected above, on #3 entry 13, and here. (2) This lane
+launched a stochastic block into an output directory while another run held the lock — **having
+printed that lock in its own command output** — and the block died `tuner unreachable [Errno 111]`.
+The lane that wrote "check the lock" in the morning is the one that did it. (3) Stage 2 was called
+stalled on absence of *reports*; it had in fact committed the fix and launched the goal run and was
+working the whole time. **Absence of reports is not absence of work** — the same defect as a record
+disagreeing with what happened, applied to an agent instead of a field. Retracted in two minutes.
+
+**Suite.** Not green on the shared tree (90 then 98 failures, varying between runs, in modules no
+lane here touched) because two lanes hold uncommitted `src/` edits and the suite reads them
+mid-write. `c211605` was committed on targeted evidence (78 passed / 2 skipped over its changed
+paths; 134 passed on the prompt and executor tests). New standing rule adopted: **verify a commit in
+a clean detached worktree at the committed hash, with a bare `uv run` — setting
+`UV_PROJECT_ENVIRONMENT` or `PYTHONPATH` silently re-imports the shared tree and destroys the
+isolation** (both the hypervisor and this lane fell into that trap within an hour of each other).

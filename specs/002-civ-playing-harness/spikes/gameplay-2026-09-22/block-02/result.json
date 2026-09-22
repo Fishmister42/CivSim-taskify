@@ -1,0 +1,27 @@
+{
+  "goal": "build_a_builder",
+  "chain": [
+    "build_a_builder"
+  ],
+  "provider": "openrouter",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T13:19:48.483471+00:00",
+  "parts": [],
+  "aborted": "HarnessError: a run already in a terminal lifecycle state cannot be stopped | detail={'run_id': 'run-e9d52051ce7b458c9f06482ae2eabf16', 'lifecycle_state': 'finished'}",
+  "recording": {
+    "frames": 219,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 32404,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t081s.png",
+      "keyframe_2_t161s.png",
+      "keyframe_3_t241s.png"
+    ],
+    "capture_failures": 0
+  },
+  "finished_at": "2026-09-22T13:24:16.130131+00:00",
+  "reached": false
+}

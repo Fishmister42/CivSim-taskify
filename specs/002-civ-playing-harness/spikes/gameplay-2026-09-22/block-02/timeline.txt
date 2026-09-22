@@ -1,0 +1,10 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal build_a_builder: objective written to goal-build_a_builder.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=build_a_builder provider=openrouter provider_policy=uniform turn_cap=3]
+t+001s  goal build_a_builder: run run-e9d52051ce7b458c9f06482ae2eabf16
+t+001s  goal build_a_builder: playing turn=1 step=None
+t+073s  goal build_a_builder: playing turn=2 step=None
+t+152s  goal build_a_builder: playing turn=3 step=None
+t+241s  goal build_a_builder: finished turn=3 step=None
+t+241s  goal build_a_builder: REACHED at recorded turn 3 -- stopping the run
+t+241s  ABORTED: HarnessError: a run already in a terminal lifecycle state cannot be stopped | detail={'run_id': 'run-e9d52051ce7b458c9f06482ae2eabf16', 'lifecycle_state': 'finished'}

@@ -1,0 +1,76 @@
+schema_version: 1
+config_id: goal-build_a_builder-20260922T131948Z
+map_seed: '1745156737'
+civilization: CIVILIZATION_PERSIA
+leader: LEADER_CYRUS
+ruleset: RULESET_EXPANSION_2
+mod_set:
+- id: 02a8bdde-67ea-4d38-9540-26e685e3156e
+  version: null
+- id: 113d9459-0a3b-4fcb-a49c-483f40303575
+  version: null
+- id: 1b28771a-c749-434b-9053-d1380c553de9
+  version: null
+- id: 1b394fe9-23dc-4868-8f0a-5220cb8fb427
+  version: null
+- id: 1f367231-a040-4793-bdbb-088816853683
+  version: null
+- id: 2f6e858a-28ef-46b3-beac-b985e52e9bc1
+  version: null
+- id: 3809975f-263f-40a2-a747-8bfb171d821a
+  version: null
+- id: 382a187f-c8ba-4094-a6a7-0d5315661f33
+  version: null
+- id: 4873eb62-8ccc-4574-b784-dda455e74e68
+  version: null
+- id: 619ac86e-d99d-4bf3-b8f0-8c5b8c402567
+  version: '179'
+- id: 643ea320-8e1a-4cf1-a01c-00d88ddd131a
+  version: null
+- id: 8424840c-92ef-4426-a9b4-b4e0cb818049
+  version: null
+- id: 9de86512-de1a-400d-8c0a-ab46ebbf76b9
+  version: null
+- id: 9e881f4f-017f-29f5-d849-04537424be3f
+  version: null
+- id: a1100fc4-70f2-4129-ac27-2a65a685ed08
+  version: null
+- id: a3f42cd4-6c3e-4f5a-bc81-be29e0c0b87c
+  version: null
+- id: ce5876cd-6900-46d1-9c9c-8dba1f28872e
+  version: null
+- id: e2749e9a-8056-45cd-901b-c368c8e83deb
+  version: null
+- id: e3f53c61-371c-440b-96ce-077d318b36c0
+  version: null
+- id: ffdf4e79-dee2-47bb-919b-f5739106627a
+  version: null
+- id: c88cba8b-8311-4d35-90c3-51a4a5d66542
+  version: 1.39.5
+- id: cb84075d-5007-4207-b662-c35a5f7be260
+  version: '70500'
+map_settings:
+  map_size: MAPSIZE_SMALL
+game_settings:
+  game_speed: GAMESPEED_ONLINE
+  starting_era: ERA_ANCIENT
+difficulty: DIFFICULTY_EMPEROR
+opponents:
+  major_count: 5
+stop_condition:
+  type: turn_reached
+  turn: 3
+model_config:
+  primary:
+    provider: openrouter
+    model: anthropic/claude-sonnet-5
+  fallbacks:
+  - provider: openrouter
+    model: anthropic/claude-opus-5
+  request_params:
+    temperature: 0.7
+no_progress_step_limit: 8
+recovery_attempt_limit: 3
+min_free_disk_gb: 25
+seed_set: civsim-default
+guidance_set: goal-build_a_builder.md
