@@ -232,6 +232,14 @@ there was one partial lookup between them.
   the real defect then sits behind a green metric with a documented cause. **The defence: predict the
   specific observable before making the change.** A movement that matches the prediction counts; a
   movement that merely goes the right way does not.
+- **A NUMBER THAT MOVES ON ARGUMENT IS OSCILLATING, NOT CONVERGING. When a count is challenged,
+  re-derive it from the artefact — do not reason about it.** On 2026-09-22 "actions proven to have
+  landed while scored rejected" went **4 (unverified) → 2 (on a caveat) → 3 (on a relay) → 4
+  (verified by walking unit positions out of each step's own observation)**. Every intermediate move
+  rested on a **locally correct** argument — the move-legality objection was real, the "no later read"
+  objection was reasonable — and **only the last step was a lookup.** The store had the answer
+  throughout, in a column already queried twice for other purposes. Two of the four values were
+  published before anyone read it.
 - **AGREEMENT IS NOT INDEPENDENCE. Ask what each source MEASURES before counting it as corroboration.**
   On 2026-09-22 four sources agreed the 4 s action-confirm bound was wrong by an order of magnitude —
   and a sub-second probe reversed it. **They agreed because every one was a lower bound produced by
