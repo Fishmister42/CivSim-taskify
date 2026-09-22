@@ -205,16 +205,31 @@ def test_an_absent_look_at_accessor_yields_no_plot_and_names_the_missing_accesso
     assert "UI.GetMapLookAtWorldTarget is absent" in state["target_unavailable_reason"]
 
 
-def test_the_legacy_getter_is_still_used_when_a_build_carries_it(lua: tuple[Any, Any]) -> None:
-    """MEASURED absent on 1.0.12.9 (T213), but a build that does carry `UI.GetCameraTargetPlot`
-    needs no fork of this file."""
+def test_there_is_no_legacy_look_at_getter_to_fall_back_to(lua: tuple[Any, Any]) -> None:
+    """This used to assert the opposite: that `UI.GetCameraTargetPlot` would be used "on a build
+    that carries it", so this file needed no per-build fork.
+
+    The 2026-09-21 accessor audit
+    (specs/002-civ-playing-harness/spikes/lua-accessor-audit-2026-09-21.md, finding 35) found
+    there is no such build. `UI.GetCameraTargetPlot` appears in none of Firaxis' 645 shipped Lua
+    files and is not a registered UI binding in any shipped binary -- T213's MEASURED absence on
+    1.0.12.9 was not a build quirk, it was the name being invented. Keeping the fallback cost
+    nothing but it claimed something false, so the branch is gone and the absence of
+    `UI.GetMapLookAtWorldTarget` is now simply the end of the road.
+
+    Asserted here (rather than deleted) so the claim stays retired: a future edit that
+    reintroduces the fallback fails this test, and `lua/ACCESSORS.txt` would reject the name too.
+    """
     runtime, stubs = lua
     runtime.globals()["UI"]["GetMapLookAtWorldTarget"] = None
     stubs.legacy_plot = runtime.eval("{ 11, 12 }")
     state = _read(runtime)
 
-    assert state["target_plot"] == {"x": 11, "y": 12}
-    assert state.get("target_unavailable_reason") is None
+    assert state.get("target_plot") is None
+    assert state["target_is_revealed"] is False
+    assert state["target_unavailable_reason"] == (
+        "UI.GetMapLookAtWorldTarget is absent on this build"
+    )
 
 
 def test_an_erroring_look_at_accessor_reports_the_error_not_a_plot(lua: tuple[Any, Any]) -> None:
