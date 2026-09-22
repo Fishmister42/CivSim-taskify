@@ -1,0 +1,15 @@
+[
+ {
+  "tag": "STEP-0 BASELINE (command 1)",
+  "payload": {
+   "builder_found": false,
+   "plot": null,
+   "is_selected": null,
+   "charges_remaining": null,
+   "movement_remaining": null,
+   "available_builds": null,
+   "available_builds_reason": null,
+   "build_options_disabled": null
+  }
+ }
+]

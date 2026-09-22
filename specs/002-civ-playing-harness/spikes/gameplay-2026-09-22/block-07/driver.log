@@ -1,0 +1,247 @@
+  [10:30:51] recording started: every frame via the production capture_window() (window-scoped)
+  [10:30:51] goal move_unit_to_plot: objective written to goal-move_unit_to_plot.md (objective text only)
+Exception in thread Thread-1 (_loop):
+Traceback (most recent call last):
+  File "/home/matt/CivSolver-live/src/civsim_harness/host/linux/adapter.py", line 252, in find_game_window
+    from Xlib import X
+ModuleNotFoundError: No module named 'Xlib'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/threading.py", line 1073, in _bootstrap_inner
+    self.run()
+  File "/usr/lib/python3.12/threading.py", line 1010, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/matt/CivSolver-live/tests/live/demo_landed_run.py", line 144, in _loop
+    window = civ_window(self.host)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/matt/CivSolver-live/tests/live/demo_landed_run.py", line 194, in civ_window
+    return host.find_game_window(GameProcess(pid=int(out[0]), name="Civ6"))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/matt/CivSolver-live/src/civsim_harness/host/linux/adapter.py", line 255, in find_game_window
+    raise PreflightError(
+civsim_harness.errors.PreflightError: python-xlib is not installed; install the 'linux' extra (`uv sync --extra linux`) to resolve window identity on X11. | detail={'missing_dependency': 'python-xlib'}
+  [10:30:51] PRODUCTION: Runner.start(run-config.yaml) [goal=move_unit_to_plot provider=stochastic provider_policy=coverage turn_cap=2]
+  [10:30:52] goal move_unit_to_plot: run run-5cf209a76e73420d80efae6295cbc83d
+  [10:30:52] goal move_unit_to_plot: playing turn=None step=None
+  [10:30:54] goal move_unit_to_plot: playing turn=1 step=None
+nexus: discarding unmatched output: OnGovernorChanged
+1	5
+OnGovernorChanged
+1	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+1	2
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+City CS property Detected
+table: 0x7892fd41e1e0	trader to	7
+Search Result	1
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	7
+nexus: discarding unmatched output: OnGovernorChanged
+2	2
+OnGovernorChanged
+2	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+2	5
+OnTradeRouteActivityChanged	2	2	65536	4	196610
+2	2	65536	4	196610
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+City CS property Detected
+table: 0x7892fd135a20	trader to	6
+table: 0x7892fd135a20	trader to	13
+Search Result	2
+bTraderToAmani	1
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	13
+nexus: discarding unmatched output: OnGovernorChanged
+3	1
+Amani Established
+amani established -> recalculate amani yields and plot properties
+OnGovernorChanged
+3	2
+OnGovernorChanged
+3	5
+Closing Diplomacy Action View. m_eventID: 0
+PlayerDefeatedData	0	DEFEAT_DEFAULT
+PlayerDefeatedData	Persian Empire
+ViewWinnerPanel
+ViewDefeatedPanel
+Veiw Defeated Player = Yes
+Showing EndGame Menu of MPH
+Request to BulkHide( true, EndGame ), Show on 0 = 1
+OnShow m_isFadeOutGame = true 
+UpdateButtonStates
+OnGameplaySetAmaniProperty called
+Amani_RecalculatePlayer called
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani_RecalculateCity called
+Player AMANI Property Detected
+Amani iMinorID	9
+Amani control Property assigned
+nexus: discarding unmatched output: ShowComplete()
+  [10:34:37] goal move_unit_to_plot: finished turn=1 step=None
+  [10:34:37] goal move_unit_to_plot not reached; the chain stops here (a later part starts from a state that never arrived)
+{
+  "goal": "move_unit_to_plot",
+  "chain": [
+    "move_unit_to_plot"
+  ],
+  "provider": "stochastic",
+  "provider_seed": 71,
+  "provider_policy": "coverage",
+  "store": "/home/matt/CivSolver-live/civsim-match-store.db",
+  "started_at": "2026-09-22T14:30:51.334545+00:00",
+  "parts": [
+    {
+      "goal": "move_unit_to_plot",
+      "title": "Move a unit to a plot it can reach",
+      "run_id": "run-5cf209a76e73420d80efae6295cbc83d",
+      "turn_cap": 2,
+      "reached": false,
+      "reached_at_turn": null,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "player.units.count >= 1",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "player.units.movable_count >= 1",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "finished",
+      "elapsed_s": 225.6,
+      "success_predicate": "observed_applied_units_move_to >= 1",
+      "success_check": {
+        "predicate": "observed_applied_units_move_to >= 1",
+        "met": false,
+        "reason": null
+      },
+      "steps": 7,
+      "turns_recorded": [
+        1
+      ],
+      "actions": {
+        "policies.slot_policy": {
+          "verification_failed": 1
+        },
+        "units.select": {
+          "applied": 1
+        },
+        "diplomacy.send_delegation": {
+          "unavailable_to_human_now": 1
+        },
+        "diplomacy.declare_war": {
+          "verification_failed": 1
+        },
+        "camera.move": {
+          "out_of_parity_camera": 1
+        },
+        "saves.save_game": {
+          "applied": 1
+        },
+        "turn.end_turn": {
+          "verification_failed": 1
+        }
+      },
+      "actions_applied": {
+        "units.select": 1,
+        "saves.save_game": 1
+      },
+      "provider": "stochastic",
+      "provider_policy": "coverage",
+      "game_start_turn": 67,
+      "store": {
+        "run": {
+          "lifecycle_state": "finished",
+          "stop_resolution": "defeat",
+          "host_support_tier": "supported",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "none"
+        },
+        "turn_cycles": 1,
+        "decision_steps": 7,
+        "save_points": 1,
+        "captures": 9,
+        "run_events": 19,
+        "model_calls": 7,
+        "turns_recorded": [
+          1
+        ],
+        "captures_shown_to_agent": 0,
+        "capture_screening": [
+          "withheld"
+        ],
+        "model_calls_served": [
+          "stochastic/coverage-v1"
+        ],
+        "model_cost_usd": 0,
+        "model_input_tokens": 0,
+        "model_output_tokens": 0
+      }
+    }
+  ],
+  "recording": {
+    "frames": 0
+  },
+  "finished_at": "2026-09-22T14:34:37.864254+00:00",
+  "reached": false
+}
