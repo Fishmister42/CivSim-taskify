@@ -243,6 +243,21 @@ there was one partial lookup between them.
   the real defect then sits behind a green metric with a documented cause. **The defence: predict the
   specific observable before making the change.** A movement that matches the prediction counts; a
   movement that merely goes the right way does not.
+- **A MECHANISM THAT EXPLAINS THE EVIDENCE IS NOT THE MECHANISM THAT PRODUCED IT.** On 2026-09-22 a
+  "deterministic suite hang" was escalated as blocking: **byte-identical truncation at ~60% across two
+  runs with different outer budgets (870 s, 890 s)**, presented as ruling out contention. It does not —
+  it rules out *those budgets*. **A fixed inner `timeout 590` kills at 590 s regardless of the outer
+  budget and produces byte-identical truncation every time**, which is also exactly what a deadlock
+  looks like. **The observation could not discriminate and was offered as the evidence that did.**
+  `EXITCODE:143` (128+15, SIGTERM) settled it, and `tests/unit` ran **1294 passed with the suspect file
+  included** — impossible if it deadlocked. A plausible mechanism was supplied and presented as
+  investigation. **Before escalating, reconcile every report you already hold about the same artefact.**
+- **The suite has outgrown a 590 s wrapper.** A clean run is ~250 s; under a live client at ~89% of a
+  core plus concurrent suites it exceeds 590. **My own rules conflicted** — the accepted command says
+  `timeout 900`, the no-waiting rule says foreground commands stay under 600 s, and agents split the
+  difference at 590 and manufactured a hang. **Run it detached with a polled log, or split:
+  `tests/unit` then `tests/integration tests/contract`** (162 s and 173 s clean). **And a figure
+  obtained with `--ignore=<file>` is NOT a full-suite green** — the exclusion is invisible in the number.
 - **A NUMBER THAT MOVES ON ARGUMENT IS OSCILLATING, NOT CONVERGING. When a count is challenged,
   re-derive it from the artefact — do not reason about it.** On 2026-09-22 "actions proven to have
   landed while scored rejected" went **4 (unverified) → 2 (on a caveat) → 3 (on a relay) → 4
