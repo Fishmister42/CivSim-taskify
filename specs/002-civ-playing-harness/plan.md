@@ -107,12 +107,28 @@ spike — runs are visually degraded and marked), *Unsupported* (no verified qui
 refuses to start, since FR-007 makes a turn without its quicksave impossible). Preflight resolves
 the tier and `doctor` prints it with its reason. A platform is Unsupported until probed.
 
-**Storage**: The match-tracking store is **deliverable 3 and does not yet exist**. This feature
+**Storage**: The match-tracking store **was deliverable 3, and landed on 2026-09-21 (`93a9b7e`)**.
+*(This paragraph read "is deliverable 3 and does not yet exist" until 2026-09-22.)* This feature
 defines and depends on a `MatchStore` port — the contract in
-[contracts/match-store-port.md](./contracts/match-store-port.md) — and ships a local reference
+[contracts/match-store-port.md](./contracts/match-store-port.md) — and shipped a local reference
 adapter (SQLite for records, content-addressed files on disk for captures and save-point blobs)
-so the harness is buildable and testable now. Deliverable 3 implements the same port and replaces
-the adapter without harness changes. Game saves themselves remain Civ VI `.Civ6Save` files in the
+so the harness was buildable and testable before the store existed. **Deliverable 3 did not replace
+that adapter; it extended it** — `SqliteMatchStore` is `class SqliteMatchStore(SqliteReadBase)` in
+`store/sqlite_adapter.py`, the same class behind the same port, now carrying schema 1.1 with a
+copy-first migration, model calls as rows, trends and bundles. The plan's "replaces the adapter
+without harness changes" was a prediction about the shape of the landing, and the landing chose
+continuity over replacement.
+
+**Deliverable 3 also brought behaviour this plan did not anticipate: an open-time orphan sweep that
+pauses runs.** Opening the store in write mode sweeps for orphaned runs and pauses them
+(`store/sqlite_adapter.py`, 003 rule W6; `orphans_paused_on_open` reports what the opening did).
+That makes *opening the store* a state-changing act on records this feature owns — a harness that
+simply reads may find runs paused by its own open. It is 003's rule and correct there, but 002's
+plan describes a store whose open is inert, and nothing here would have told a reader otherwise.
+The sweep is documented in [data-model.md](./data-model.md) §"Orphan sweep"; this is the plan
+acknowledging it rather than restating it.
+
+Game saves themselves remain Civ VI `.Civ6Save` files in the
 platform's own save directory — resolved by the host port, never hard-coded — and are referenced by
 addressable save-point records rather than by path (FR-032, R19). That addressing rule, written for
 auditability rather than portability, is what makes the per-platform directory a detail of one
@@ -514,6 +530,6 @@ enforcing it is cheap; the CI matrix catches what the lint rule misses.
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
 | **C1** — *(LIVE, and not where it was planned — corrected 2026-09-22. The R5 spike returned Outcome A, so the **save/load dialog driver** this row was written for was never taken and is now forbidden. But a bespoke synthetic-input path did ship, for a different surface: answering an in-game **prompt**, where the measured gap is that no Lua API reachable from `InGame` fires a control's registered callback. `prompts.orders` is declared `path: bespoke` with that gap. This row previously read DISCHARGED, which was true of the save path and false of the harness.)* A bespoke input-automation path alongside the Firetuner-first rule of Principle II | Reliable named per-turn quicksave is required by Principle IV and FR-007, and no documented Civ VI Lua call performs a save-to-named-file from the tuner contexts (R5). A turn cannot proceed without its quicksave, so this is load-bearing, not convenience. | Pure Firetuner rejected because the capability appears absent, not merely awkward — the spike in R5 keeps the Firetuner-first order by requiring a documented negative result before the bespoke path is enabled. Relying on the game's own autosave rotation rejected because autosaves are neither named nor addressable per turn, which breaks FR-032 and branch identity (FR-034). |
-| **C2** — A local SQLite + blob reference adapter for a store that deliverable 3 owns | FR-013 and FR-051 make persistence a precondition of every turn advance, so the harness cannot be built or tested before deliverable 3 exists. The port keeps the dependency direction correct: the harness depends on a contract, not on an implementation. | Blocking on deliverable 3 rejected because it serializes two deliverables that a published contract lets proceed in parallel. Writing local files directly rejected because it would be exactly the bypassing path Principle III forbids — the adapter is behind the same port the real store will implement, and port conformance tests run against both. |
+| **C2** — *(RESOLVED BY LANDING, not by replacement — annotated 2026-09-22. Deliverable 3 landed on 2026-09-21 (`93a9b7e`) and **extended** this adapter rather than replacing it: `class SqliteMatchStore(SqliteReadBase)` in `store/sqlite_adapter.py` is the same class behind the same port. The dependency direction this row defends held, so the deviation cost nothing — but "deliverable 3 implements the same port and replaces the adapter" did not happen and should not be read as a pending step. One behaviour arrived with it that 002's plan does not otherwise describe: an open-time orphan sweep that pauses runs on write-mode open (003 rule W6), so opening the store is not inert.)* A local SQLite + blob reference adapter for a store that deliverable 3 owns | FR-013 and FR-051 make persistence a precondition of every turn advance, so the harness cannot be built or tested before deliverable 3 exists. The port keeps the dependency direction correct: the harness depends on a contract, not on an implementation. | Blocking on deliverable 3 rejected because it serializes two deliverables that a published contract lets proceed in parallel. Writing local files directly rejected because it would be exactly the bypassing path Principle III forbids — the adapter is behind the same port the real store will implement, and port conformance tests run against both. |
 | **C3** — An operator control surface on a harness whose presentation belongs to deliverable 1 | FR-004 requires lifecycle commands without touching the game client, and deliverable 1 is deliberately read-only (its FR-026), so lifecycle control has nowhere else to live. | A shared surface rejected because FR-053 and Principle VI forbid a second presentation of run state that could diverge. Mitigation is structural rather than a rule: loopback-only binding and a command/diagnostics-only schema that carries no turn records, decisions, metrics, or captures. |
 | **C4** — Three implementations of the host layer, and a support tier that admits some platforms are weaker | No principle requires cross-platform support, so this is complexity taken on deliberately rather than forced. It is justified by what it removes: revision 1's Windows pin was based on a factual error (R1), and leaving it in place would have hard-coded a false constraint into the one deliverable everything else depends on. Capture and synthetic input genuinely differ per OS and cannot be abstracted away, only isolated. | **Windows-only** rejected because the constraint was never real — the tuner interface ships in all three native builds and the harness already bypasses the Windows-only GUI. **A single cross-platform automation framework** rejected because it would pull a large uninspectable surface into the most parity-sensitive path for six narrow capabilities. **Claiming uniform support** rejected as the actively harmful option: Wayland blocks synthetic input and gates capture behind an interactive grant, so a uniform claim would produce silently worse runs on some platforms — the tiers exist so a weaker platform is less capable without being less honest. |
