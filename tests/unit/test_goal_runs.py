@@ -482,6 +482,11 @@ def test_chain_waits_out_leg_1_s_teardown_so_leg_2_still_runs() -> None:
         provider="fake",
         provider_seed=0,
         provider_policy="uniform",
+        # T326: keyword-only and required on purpose. `run_chain`'s only production call site is
+        # three frames inside a live run, and this suite exists because a signature drift there
+        # once aborted on the client instead of in CI (T262). A default here would have hidden
+        # exactly that drift again.
+        provider_script=None,
         turns=None,
         store_path=Path("store.db"),
         host=None,

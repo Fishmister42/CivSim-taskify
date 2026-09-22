@@ -125,6 +125,7 @@ from civsim_harness.provider.port import (
     ModelProvider,
 )
 from civsim_harness.provider.preflight import preflight_chain
+from civsim_harness.provider.scripted import ScriptedModelProvider, load_action_script
 from civsim_harness.provider.stochastic import (
     DEFAULT_MAX_ACTIONS_PER_TURN,
     PROVIDER_POLICIES,
@@ -1223,7 +1224,12 @@ async def _fail_preparation(
 #: every value a `--provider` flag in front of this composition root may accept. `fake`
 #: (``tests/fakes/fake_provider.py``) is deliberately absent: it is a test double that lives in
 #: `tests/`, and production code must not be able to reach for it.
-PROVIDER_NAMES: tuple[str, ...] = ("openrouter", "stochastic")
+PROVIDER_NAMES: tuple[str, ...] = ("openrouter", "stochastic", "scripted")
+
+#: The provider names that require a declared script (``--script PATH``). Selecting one of these
+#: without a script is a :class:`ValueError` from :func:`build_provider`, never a provider that
+#: quietly does nothing -- see ``provider/scripted.py`` on why ``ActionScript`` has no empty form.
+PROVIDER_NAMES_REQUIRING_A_SCRIPT: tuple[str, ...] = ("scripted",)
 
 #: Every sampling policy :func:`build_provider`'s ``policy`` accepts, re-exported from
 #: ``provider/stochastic.py`` so a `--provider-policy` flag in front of this composition root
@@ -1237,6 +1243,8 @@ def build_provider(
     seed: int = 0,
     max_actions_per_turn: int = DEFAULT_MAX_ACTIONS_PER_TURN,
     policy: str = UNIFORM_POLICY,
+    script_path: Path | None = None,
+    catalog_root: Path = DEFAULT_CATALOG_ROOT,
 ) -> ModelProvider:
     """Resolve a provider *name* to the adapter :func:`build_runner_dependencies` should be handed.
 
@@ -1250,15 +1258,35 @@ def build_provider(
     (T262) draws only from the actions the request shows as available right now. All three are
     ignored by every other provider, which has no such knobs.
 
+    ``"scripted"`` (T326) is ``provider/scripted.py``'s declared-sequence executor: it serves
+    each decision from the next step of *script_path*, a YAML action script validated here
+    against the catalog at *catalog_root* **before the provider is built**, so an unknown
+    declaration id or a malformed argument set refuses at composition time rather than on turn
+    nine of a live block. It is a harness capability test, not play, and every call it serves is
+    recorded as ``provider=scripted`` so ``civsim store coverage`` reports it in a tier of its
+    own (see ``models/provenance.py``).
+
     Raises ``ValueError`` naming :data:`PROVIDER_NAMES` for anything else -- a misspelt provider
-    must refuse before a run is prepared, not fall back to spending money on OpenRouter -- and
-    the same for a policy no sampler implements.
+    must refuse before a run is prepared, not fall back to spending money on OpenRouter -- the
+    same for a policy no sampler implements, and the same for a scripted provider selected with
+    no script: there is deliberately no scriptless scripted provider to fall back to, because
+    one would silently end every turn while looking like a capability test that found nothing.
     """
     if name == "openrouter":
         return OpenRouterProvider()
     if name == "stochastic":
         return StochasticModelProvider(
             seed=seed, max_actions_per_turn=max_actions_per_turn, policy=policy
+        )
+    if name == "scripted":
+        if script_path is None:
+            raise ValueError(
+                "provider 'scripted' requires a declared script (--script PATH); a scripted "
+                "provider with no script is not a degraded capability test, it is a provider "
+                "that silently ends every turn"
+            )
+        return ScriptedModelProvider(
+            load_action_script(script_path, catalog=load_catalog(catalog_root))
         )
     raise ValueError(f"unknown provider {name!r}; expected one of {', '.join(PROVIDER_NAMES)}")
 
@@ -1692,6 +1720,7 @@ __all__ = [
     "GAME_OUTCOME_DECLARATION_ID",
     "NexusClientFactory",
     "PROVIDER_NAMES",
+    "PROVIDER_NAMES_REQUIRING_A_SCRIPT",
     "build_provider",
     "build_runner_dependencies",
 ]

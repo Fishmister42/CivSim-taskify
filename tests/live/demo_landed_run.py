@@ -549,20 +549,38 @@ def store_counts(db: Path, run_id: str) -> dict[str, Any]:
     }
 
 
-def resolve_provider(name: str, *, seed: int, policy: str) -> Any:
+def resolve_provider(
+    name: str, *, seed: int, policy: str, script_path: str | Path | None = None
+) -> Any:
     """The provider `--provider NAME` selects, sampling by `--provider-policy POLICY`.
 
     `openrouter` is left to `build_runner_dependencies`' own default (`None` here) so this script
-    never constructs the production adapter itself; `stochastic` goes through the composition
-    root's own `build_provider`, so both flags resolve the same way any other caller's would; and
-    `fake` is the one name that cannot come from production code -- it is a test double under
-    `tests/fakes/`, built here. `policy` is ignored by every provider that has no sampler.
+    never constructs the production adapter itself; `stochastic` and `scripted` go through the
+    composition root's own `build_provider`, so every flag resolves the same way any other
+    caller's would; and `fake` is the one name that cannot come from production code -- it is a
+    test double under `tests/fakes/`, built here. `policy` is ignored by every provider that has
+    no sampler.
+
+    *script_path* (T326) is `--script PATH` for `--provider scripted`. It is keyword-only with a
+    `None` default **only** so that the two existing call sites and every caller of the other
+    three names keep working unchanged; it is emphatically not a safe default. `build_provider`
+    raises `ValueError` when `name == "scripted"` and no script was supplied, so the one shape
+    this project keeps being bitten by -- an optional parameter whose empty default every test
+    supplies and the production call site does not -- fails loudly here rather than producing a
+    provider that silently ends every turn. `tests/unit/test_scripted_provider.py` asserts that
+    refusal through this exact function.
     """
     if name == "fake":
         return fake_provider()
     if name == "openrouter":
         return None
-    return build_provider(name, seed=seed, policy=policy)
+    return build_provider(
+        name,
+        seed=seed,
+        policy=policy,
+        script_path=Path(script_path) if script_path is not None else None,
+        catalog_root=REPO / "catalogs",
+    )
 
 
 def run_it(

@@ -16,6 +16,23 @@ explicit never-demonstrated list):
   recorded an outcome of any kind. The two are reported separately because they are wildly
   different claims, and conflating them is exactly how a coverage number lies.
 
+  **T326 splits the surface once more, and this one is structural rather than a column.** A step
+  served by ``provider/scripted.py`` had its action named by a declared script, not chosen by an
+  agent. That proves the *action* works end to end -- availability predicate, argument
+  normalisation, dispatch, verification, store -- and proves **nothing** about whether an agent
+  would pick it, which is the only thing this scorecard has ever claimed to measure. So a
+  scripted step never enters :class:`ActionCoverage` at all. It is routed, at the one place a
+  step is read (:func:`_walk_run`), into a **separate accumulator** whose rows are
+  :class:`ScriptedActionCoverage` -- a different type with no ``applied``, no ``attempts`` and
+  no ``demonstrated``. The property "a scripted landing is not in the chosen total" therefore
+  holds because **no edge exists** from one to the other, not because a filter at the boundary
+  was written correctly: ``sum(row.applied for row in ...)`` over the scripted tier raises
+  rather than quietly returning a number, and a new headline written next month over
+  ``scorecard.actions`` is correct without its author having heard of scripted runs.
+  The classification itself is :func:`~civsim_harness.models.provenance.provenance_of`, a total
+  function over a field that is required on every record ever written -- see that module for why
+  provenance is derived from ``ModelCall.model_served`` rather than stored as a defaulted flag.
+
   T262 splits *attempted* once more, for the same reason. An attempt the dispatcher refused as
   ``unavailable_to_human_now`` never reached the client at all: the agent chose a command the
   game was not offering, which a human does not do because the button is greyed out. That is
@@ -34,7 +51,17 @@ explicit never-demonstrated list):
   ``unknown_screen`` run events (the recorded ``UnknownScreenEncountered`` stalls).
 - **images** -- captures recorded, captures delivered to the agent, and the decisive number:
   decision steps whose ``ModelCall.image_count`` was greater than zero. A capture record proves
-  a capture was *attempted*; only the model call proves a picture reached the model.
+  a capture was *attempted*; only the model call proves a picture reached the model. Split by
+  provenance for the same reason actions are: "images delivered to the agent" is a claim about
+  an agent reading a picture, and no agent read anything on a scripted step.
+
+**What is deliberately NOT split, and why that is the honest direction.** Observations, screens,
+watched states and the capture records themselves are counted across every step, scripted ones
+included. Those categories are claims about the harness's *read* path -- this declaration
+produced a value, this screen was reported by the identity probe -- and a scripted run exercises
+that path identically to any other. Excluding them would **under-report** what the harness has
+been shown to do, which is the visible, recoverable direction; counting a scripted landing as a
+chosen one would over-report, which is not.
 
 **Attempts, not just authoritative attempts.** Coverage walks every recorded attempt of every
 turn, abandoned ones included: an action applied during an attempt that was later replayed still
@@ -62,6 +89,7 @@ from civsim_harness.errors import StoreReadError
 from civsim_harness.models.catalog import DeclarationKind
 from civsim_harness.models.common import RunId
 from civsim_harness.models.decision import DecisionTrigger, ExecutionOutcome
+from civsim_harness.models.provenance import DecisionProvenance, provenance_of
 from civsim_harness.models.records import RunEventType
 from civsim_harness.models.run import Run
 from civsim_harness.models.turn import ScreeningStatus
@@ -80,6 +108,8 @@ __all__ = [
     "RunCoverage",
     "ScreenCoverage",
     "ScreenSurface",
+    "ScriptedActionCoverage",
+    "ScriptedCoverage",
     "UnattestedSurface",
     "ViewCoverage",
     "WatchedStateCoverage",
@@ -358,6 +388,103 @@ class ActionCoverage:
 
 
 @dataclass(frozen=True)
+class ScriptedActionCoverage:
+    """One catalog action, and what a **declared script** made it do (T326).
+
+    Deliberately not an :class:`ActionCoverage`, and deliberately missing every field name a
+    chosen total reads. There is no ``applied``, no ``attempts``, no ``attempts_while_available``
+    and no ``demonstrated`` here, so the two idioms that produce a coverage headline --
+    ``sum(row.applied for row in rows)`` and ``sum(1 for row in rows if row.demonstrated)`` --
+    raise :class:`AttributeError` against this type instead of silently returning a number that
+    mixes an agent's choices with an operator's. That is the separation held by the absence of an
+    edge rather than by a flag somebody has to pass correctly.
+
+    ``landings`` is the count of ``ExecutionOutcome.APPLIED`` results. It attests that the action
+    chain works -- the predicate allowed it, the arguments normalised, the dispatch reached the
+    client, the verification re-read the board and agreed. It attests nothing about play.
+    """
+
+    declaration_id: str
+    landings: int = 0
+    refusals: int = 0
+    partial_landings: int = 0
+    refusals_by_reason: Mapping[str, int] = field(default_factory=dict)
+    first_landed: Evidence | None = None
+    first_issued: Evidence | None = None
+
+    @property
+    def issued(self) -> int:
+        """How many times a script named this action, whatever came of it."""
+        return self.landings + self.refusals + self.partial_landings
+
+
+@dataclass(frozen=True)
+class ScriptedCoverage:
+    """Everything the scripted tier attests, in one value (T326).
+
+    Reported beside the chosen scorecard and never folded into it. ``run_ids`` names the runs
+    that produced at least one scripted step, so an operator reading a mixed store can see
+    immediately which runs are capability tests rather than play.
+    """
+
+    actions: tuple[ScriptedActionCoverage, ...] = ()
+    run_ids: tuple[str, ...] = ()
+    steps: int = 0
+    steps_with_image: int = 0
+    images_sent: int = 0
+    unclaimed_actions: Mapping[str, int] = field(default_factory=dict)
+    #: Scripted steps recorded inside a turn attempt the harness later ABANDONED and replayed.
+    #: A script's whole point is that step N+1 runs against the board step N left behind; a
+    #: replay splits that chain, so a dependent step can be issued after its setup went to a
+    #: discarded attempt. A refusal in that situation is a **replay artefact, not a finding about
+    #: the harness**, and the two would otherwise produce the same record. Non-zero means the
+    #: scripted result must be read with that in mind -- see :meth:`replay_caveat`.
+    steps_in_abandoned_attempts: int = 0
+
+    @property
+    def landings_total(self) -> int:
+        return sum(row.landings for row in self.actions)
+
+    @property
+    def actions_landed(self) -> int:
+        return sum(1 for row in self.actions if row.landings > 0)
+
+    def replay_caveat(self) -> str:
+        """The warning a scrambled scripted run must carry, or ``""`` when it was clean.
+
+        A declared script guarantees its own preconditions only while its steps run in order
+        against one continuous board. An abandoned-and-replayed turn attempt breaks that: the
+        cursor does not rewind (see ``provider/scripted.py`` on why reconstructing what a fresh
+        attempt "should" have sent would be recording something that did not happen), so a
+        dependent step can be issued after its setup went to the discarded attempt. This says so
+        explicitly rather than letting "the chain does not work" and "the chain was never issued
+        in order" arrive as the same refusal.
+        """
+        if not self.steps_in_abandoned_attempts:
+            return ""
+        return (
+            f"CAVEAT: {self.steps_in_abandoned_attempts} of these {self.steps} scripted step(s) "
+            "were recorded in a turn attempt the harness later abandoned and replayed. A script "
+            "step runs against the board the previous step left behind, and a replay splits that "
+            "chain -- so a refusal below may be a replay artefact rather than a finding about "
+            "the harness. Check each step's own ledger row: a setup step recorded "
+            "'issued_available' followed by a dependent step 'issued_unavailable' IS a finding; "
+            "a dependent step issued in a different attempt from its setup is not."
+        )
+
+    def headline(self) -> str:
+        """One line, worded so it cannot be quoted as a coverage claim."""
+        line = (
+            f"Scripted (capability test): {self.actions_landed} of {len(self.actions)} "
+            f"action(s) landed under a declared script across {self.steps} step(s) in "
+            f"{len(self.run_ids)} run(s) -- proves the action chain works end to end, and "
+            "says nothing about whether an agent would choose it. Never counted above."
+        )
+        caveat = self.replay_caveat()
+        return f"{line} {caveat}" if caveat else line
+
+
+@dataclass(frozen=True)
 class ObservationCoverage:
     """One catalog observation declaration, and the steps at which it carried anything."""
 
@@ -437,7 +564,14 @@ class ImageCoverage:
 
 @dataclass(frozen=True)
 class RunCoverage:
-    """One run's own line of the scorecard."""
+    """One run's own line of the scorecard.
+
+    ``actions_applied`` keeps its name and narrows its meaning to the chosen tier, so a caller
+    that has been reading this field since before scripted runs existed keeps getting the number
+    it always meant. ``scripted_landings`` is the separate count, and ``decision_provenance``
+    names every provenance this run's steps actually carried -- a run that mixed the two says so
+    rather than being filed under whichever came first.
+    """
 
     run_id: str
     lifecycle_state: str
@@ -455,6 +589,11 @@ class RunCoverage:
     capture_path: str
     actions_applied: int
     unknown_screen_events: int
+    #: T326: applied results produced by a declared script. Never part of ``actions_applied``.
+    scripted_landings: int = 0
+    #: Every :class:`~civsim_harness.models.provenance.DecisionProvenance` value this run's steps
+    #: carried, sorted. Empty for a run with no recorded steps.
+    decision_provenance: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -526,16 +665,26 @@ class CoverageScorecard:
     unclaimed_observations: Mapping[str, int] = field(default_factory=dict)
     unclaimed_screens: Mapping[str, int] = field(default_factory=dict)
     screen_surface_available: bool = True
+    #: T326: the separate tier. Never folded into :attr:`actions` or into :meth:`headlines`.
+    scripted: ScriptedCoverage = field(default_factory=ScriptedCoverage)
 
     # -- headline numbers -------------------------------------------------
 
     def headlines(self) -> tuple[Headline, ...]:
+        """The chosen tier's headline numbers, and only those.
+
+        Every line below is computed from :attr:`actions`, :attr:`observations`, :attr:`views`,
+        :attr:`screens` and :attr:`images` -- none of which a scripted step can reach (T326).
+        The scripted tier has its own line, :meth:`ScriptedCoverage.headline`, worded so it
+        cannot be mistaken for one of these.
+        """
         lines = [
             Headline(
                 "Actions demonstrated live",
                 sum(1 for row in self.actions if row.demonstrated),
                 len(self.actions),
-                "applied at least once on the client",
+                "applied at least once on the client, chosen by the agent itself -- a landing "
+                "produced by a declared script is reported separately and never counted here",
             ),
             Headline(
                 "Actions ever attempted",
@@ -692,8 +841,64 @@ def select_runs(
     return every
 
 
+class _ScriptedTally:
+    """The scripted tier's accumulators (T326) -- a separate object, not a mode of :class:`_Tally`.
+
+    Nothing here is named ``applied``, ``attempts`` or ``demonstrated``, and this class has no
+    ``note_action``. That is the point: the two tiers are different objects with different
+    vocabularies, so a step routed here cannot be added to a chosen total by a caller that
+    confused them, and a copy-pasted aggregation over the wrong one fails loudly.
+    """
+
+    def __init__(self) -> None:
+        self.landed: Counter[str] = Counter()
+        self.refused: Counter[str] = Counter()
+        self.partial: Counter[str] = Counter()
+        self.reasons: dict[str, Counter[str]] = {}
+        self.first_landed: dict[str, Evidence] = {}
+        self.first_issued: dict[str, Evidence] = {}
+        self.run_ids: list[str] = []
+        self.steps = 0
+        self.steps_with_image = 0
+        self.images_sent = 0
+        self.steps_in_abandoned_attempts = 0
+
+    def note_landing(
+        self, declaration_id: str, outcome: ExecutionOutcome, reason: str | None, where: Evidence
+    ) -> None:
+        self.first_issued.setdefault(declaration_id, where)
+        if where.run_id not in self.run_ids:
+            self.run_ids.append(where.run_id)
+        if outcome is ExecutionOutcome.APPLIED:
+            self.landed[declaration_id] += 1
+            self.first_landed.setdefault(declaration_id, where)
+        elif outcome is ExecutionOutcome.PARTIALLY_APPLIED:
+            self.partial[declaration_id] += 1
+        else:
+            self.refused[declaration_id] += 1
+            self.reasons.setdefault(declaration_id, Counter())[reason or "unspecified"] += 1
+
+
+@dataclass(frozen=True)
+class _Sinks:
+    """The one place a step's provenance decides where it is counted (T326).
+
+    :func:`_walk_run` resolves :func:`~civsim_harness.models.provenance.provenance_of` once per
+    step and hands the result to exactly one of these two accumulators. There is no third
+    branch, no fall-through and no shared counter: the chosen tally is never reachable from a
+    scripted step and the scripted tally is never reachable from a chosen one.
+    """
+
+    agent_chosen: _Tally
+    scripted: _ScriptedTally
+
+
 class _Tally:
-    """Mutable accumulators, turned into the frozen scorecard rows at the end."""
+    """The chosen tier's accumulators, turned into the frozen scorecard rows at the end.
+
+    Only reached for a step whose provenance is
+    :attr:`~civsim_harness.models.provenance.DecisionProvenance.AGENT_CHOSEN` (T326).
+    """
 
     def __init__(self) -> None:
         self.applied: Counter[str] = Counter()
@@ -762,15 +967,16 @@ def compute_coverage(
     """
     info = store.store_info()
     runs = select_runs(store, run_ids=run_ids, since_run_id=since_run_id)
-    tally = _Tally()
+    sinks = _Sinks(agent_chosen=_Tally(), scripted=_ScriptedTally())
     run_rows: list[RunCoverage] = []
 
     for run in runs:
-        run_rows.append(_walk_run(store, run, tally))
+        run_rows.append(_walk_run(store, run, sinks))
 
     return _assemble(
         claimed=claimed,
-        tally=tally,
+        tally=sinks.agent_chosen,
+        scripted_tally=sinks.scripted,
         run_rows=tuple(run_rows),
         store_path=str(store_path) if store_path is not None else f"store_id {info.store_id}",
         store_schema_version=str(info.schema_version),
@@ -779,13 +985,16 @@ def compute_coverage(
     )
 
 
-def _walk_run(store: MatchTrackingStore, run: Run, tally: _Tally) -> RunCoverage:
+def _walk_run(store: MatchTrackingStore, run: Run, sinks: _Sinks) -> RunCoverage:
+    tally = sinks.agent_chosen
     run_id = RunId(str(run.run_id))
     highest = store.highest_recorded_turn(run_id)
     turns_recorded = 0
     attempts = 0
     steps = 0
     actions_applied = 0
+    scripted_landings = 0
+    provenances: set[str] = set()
 
     for turn in range(1, highest + 1):
         summaries = store.list_turn_attempts(run_id, turn)
@@ -812,13 +1021,31 @@ def _walk_run(store: MatchTrackingStore, run: Run, tally: _Tally) -> RunCoverage
                     if execution.rejection_reason is not None
                     else None
                 )
-                tally.note_action(action_id, execution.outcome, reason, where)
-                if execution.outcome is ExecutionOutcome.APPLIED:
-                    actions_applied += 1
-                if decision.trigger is DecisionTrigger.PROMPT_RESPONSE:
-                    tally.prompt_responses[action_id] += 1
-                    if decision.prompt_type:
-                        tally.prompt_type_steps[decision.prompt_type] += 1
+                # T326: the one place a step's provenance is resolved, and the only fork in this
+                # walk. Everything an agent chose goes left and can never reach the scripted
+                # accumulator; everything a declared script named goes right and can never reach
+                # the chosen one. Derived from the step's own ModelCall (see
+                # models/provenance.py), never from the run's configuration.
+                provenance = provenance_of(bundle.model_call)
+                provenances.add(provenance.value)
+                if provenance is DecisionProvenance.SCRIPTED:
+                    sinks.scripted.note_landing(action_id, execution.outcome, reason, where)
+                    if execution.outcome is ExecutionOutcome.APPLIED:
+                        scripted_landings += 1
+                    if not summary.is_authoritative:
+                        # This step ran inside an attempt the harness later threw away. The
+                        # script's cursor does not rewind, so its chain was split across the
+                        # replay -- say so rather than letting the resulting refusal read as a
+                        # finding about the harness.
+                        sinks.scripted.steps_in_abandoned_attempts += 1
+                else:
+                    tally.note_action(action_id, execution.outcome, reason, where)
+                    if execution.outcome is ExecutionOutcome.APPLIED:
+                        actions_applied += 1
+                    if decision.trigger is DecisionTrigger.PROMPT_RESPONSE:
+                        tally.prompt_responses[action_id] += 1
+                        if decision.prompt_type:
+                            tally.prompt_type_steps[decision.prompt_type] += 1
 
                 observation = bundle.observation
                 seen: set[str] = set()
@@ -840,11 +1067,20 @@ def _walk_run(store: MatchTrackingStore, run: Run, tally: _Tally) -> RunCoverage
                     tally.screen_steps[screen] += 1
                     tally.screen_first.setdefault(screen, where)
 
+                # T326: "images delivered to the agent" is a claim about an agent reading a
+                # picture, so a step where no agent was in the loop is counted in the scripted
+                # tier's own image figures instead of diluting (or inflating) that one.
                 image_count = bundle.model_call.image_count
-                tally.steps += 1
-                tally.images_sent += image_count
-                if image_count > 0:
-                    tally.steps_with_image += 1
+                if provenance is DecisionProvenance.SCRIPTED:
+                    sinks.scripted.steps += 1
+                    sinks.scripted.images_sent += image_count
+                    if image_count > 0:
+                        sinks.scripted.steps_with_image += 1
+                else:
+                    tally.steps += 1
+                    tally.images_sent += image_count
+                    if image_count > 0:
+                        tally.steps_with_image += 1
 
     for capture in store.list_captures(run_id):
         view_id = str(capture.view_declaration_id)
@@ -898,6 +1134,8 @@ def _walk_run(store: MatchTrackingStore, run: Run, tally: _Tally) -> RunCoverage
         capture_path=run.capture_path.value,
         actions_applied=actions_applied,
         unknown_screen_events=unknown_events,
+        scripted_landings=scripted_landings,
+        decision_provenance=tuple(sorted(provenances)),
     )
 
 
@@ -913,6 +1151,7 @@ def _assemble(
     *,
     claimed: ClaimedSurface,
     tally: _Tally,
+    scripted_tally: _ScriptedTally,
     run_rows: tuple[RunCoverage, ...],
     store_path: str,
     store_schema_version: str,
@@ -1007,6 +1246,36 @@ def _assemble(
         for screen_id, count in sorted(tally.screen_steps.items())
         if screen_id not in claimed_screens and screen_id != UNKNOWN_SCREEN
     }
+    scripted = ScriptedCoverage(
+        actions=tuple(
+            ScriptedActionCoverage(
+                declaration_id=action_id,
+                landings=scripted_tally.landed[action_id],
+                refusals=scripted_tally.refused[action_id],
+                partial_landings=scripted_tally.partial[action_id],
+                refusals_by_reason=dict(
+                    sorted(scripted_tally.reasons.get(action_id, Counter()).items())
+                ),
+                first_landed=scripted_tally.first_landed.get(action_id),
+                first_issued=scripted_tally.first_issued.get(action_id),
+            )
+            for action_id in claimed.action_ids
+        ),
+        run_ids=tuple(scripted_tally.run_ids),
+        steps=scripted_tally.steps,
+        steps_with_image=scripted_tally.steps_with_image,
+        images_sent=scripted_tally.images_sent,
+        steps_in_abandoned_attempts=scripted_tally.steps_in_abandoned_attempts,
+        unclaimed_actions={
+            action_id: count
+            for action_id, count in sorted(
+                (
+                    scripted_tally.landed + scripted_tally.refused + scripted_tally.partial
+                ).items()
+            )
+            if action_id not in claimed_actions
+        },
+    )
     return CoverageScorecard(
         generated_at=now,
         store_path=store_path,
@@ -1027,6 +1296,7 @@ def _assemble(
         unclaimed_observations=unclaimed_observations,
         unclaimed_screens=unclaimed_screens,
         screen_surface_available=claimed.screens.source is not None,
+        scripted=scripted,
     )
 
 
@@ -1133,6 +1403,9 @@ def render_markdown(scorecard: CoverageScorecard) -> str:
         suffix = f" -- {headline.note}" if headline.note else ""
         out.append(f"- **{headline.summary}**{suffix}")
     out.append("")
+    if scorecard.scripted.steps:
+        out.append(f"- _{scorecard.scripted.headline()}_")
+        out.append("")
 
     out.append("## Actions")
     out.append("")
@@ -1168,6 +1441,54 @@ def render_markdown(scorecard: CoverageScorecard) -> str:
     else:
         out.append("_No action has ever been issued on this store's record._")
     out.append("")
+
+    scripted_active = [row for row in scorecard.scripted.actions if row.issued > 0]
+    if scripted_active or scorecard.scripted.steps:
+        out.append("## Scripted (capability test) -- not part of any number above")
+        out.append("")
+        out.append(
+            "These actions were named by a **declared script** (`--provider scripted`), not "
+            "chosen by an agent. A landing here proves the action chain works end to end -- the "
+            "availability predicate allowed it, the arguments normalised, the dispatch reached "
+            "the client, the verification predicate re-read the board and agreed. It is **not** "
+            "evidence that an agent would choose the action, and it is never counted in the "
+            "headline figures or in the Actions table above."
+        )
+        out.append("")
+        out.append(
+            f"Runs: {_inline_list(scorecard.scripted.run_ids)} · scripted decision steps: "
+            f"{scorecard.scripted.steps} · landings: {scorecard.scripted.landings_total}"
+        )
+        out.append("")
+        caveat = scorecard.scripted.replay_caveat()
+        if caveat:
+            out.append(f"> **{caveat}**")
+            out.append("")
+        if scripted_active:
+            out.extend(
+                _table(
+                    [
+                        "action",
+                        "landed under a script",
+                        "refused",
+                        "first landed",
+                        "refusals by reason",
+                    ],
+                    [
+                        [
+                            f"`{row.declaration_id}`",
+                            str(row.landings),
+                            str(row.refusals + row.partial_landings),
+                            _evidence(row.first_landed),
+                            _reasons(row.refusals_by_reason),
+                        ]
+                        for row in scripted_active
+                    ],
+                )
+            )
+        else:
+            out.append("_No script has ever named an action on this store's record._")
+        out.append("")
 
     out.append("## Observations")
     out.append("")
@@ -1270,7 +1591,8 @@ def render_markdown(scorecard: CoverageScorecard) -> str:
                 "steps",
                 "calls",
                 "cost usd",
-                "applied",
+                "applied (chosen)",
+                "landed (scripted)",
                 "completeness",
             ],
             [
@@ -1283,6 +1605,7 @@ def render_markdown(scorecard: CoverageScorecard) -> str:
                     str(row.model_calls),
                     f"{row.cost_usd:.6f}" if row.cost_usd is not None else "unpriced",
                     str(row.actions_applied),
+                    str(row.scripted_landings),
                     row.record_completeness,
                 ]
                 for row in scorecard.runs
@@ -1475,9 +1798,42 @@ def render_json(scorecard: CoverageScorecard) -> dict[str, Any]:
                 "capture_path": row.capture_path,
                 "actions_applied": row.actions_applied,
                 "unknown_screen_events": row.unknown_screen_events,
+                "scripted_landings": row.scripted_landings,
+                "decision_provenance": list(row.decision_provenance),
             }
             for row in scorecard.runs
         ],
+        # T326: its own key, with its own vocabulary. Nothing under "actions" or "headlines"
+        # above was produced by a script, and nothing here was chosen by an agent.
+        "scripted": {
+            "note": (
+                "actions named by a declared script (--provider scripted), not chosen by an "
+                "agent; proves the action chain works end to end and says nothing about what an "
+                "agent would choose. Never included in headlines, actions, or images above."
+            ),
+            "run_ids": list(scorecard.scripted.run_ids),
+            "steps": scorecard.scripted.steps,
+            "steps_with_image": scorecard.scripted.steps_with_image,
+            "images_sent": scorecard.scripted.images_sent,
+            "steps_in_abandoned_attempts": scorecard.scripted.steps_in_abandoned_attempts,
+            "replay_caveat": scorecard.scripted.replay_caveat(),
+            "landings_total": scorecard.scripted.landings_total,
+            "actions_landed": scorecard.scripted.actions_landed,
+            "unclaimed_actions": dict(scorecard.scripted.unclaimed_actions),
+            "actions": [
+                {
+                    "declaration_id": row.declaration_id,
+                    "landings": row.landings,
+                    "refusals": row.refusals,
+                    "partial_landings": row.partial_landings,
+                    "issued": row.issued,
+                    "refusals_by_reason": dict(row.refusals_by_reason),
+                    "first_landed": row.first_landed.as_dict() if row.first_landed else None,
+                    "first_issued": row.first_issued.as_dict() if row.first_issued else None,
+                }
+                for row in scorecard.scripted.actions
+            ],
+        },
         "never_demonstrated": {key: list(value) for key, value in never.items()},
         "unattested": [finding.as_dict() for finding in scorecard.unattested],
         "unclaimed_actions": dict(scorecard.unclaimed_actions),

@@ -1079,7 +1079,9 @@ def _demo() -> Any:
     return importlib.import_module(f"{package}.demo_landed_run")
 
 
-def build_goal_provider(name: str, *, seed: int, policy: str) -> Any:
+def build_goal_provider(
+    name: str, *, seed: int, policy: str, script_path: str | Path | None = None
+) -> Any:
     """The provider this driver hands the composition root, resolved as the demo driver does.
 
     Its own named function, rather than an inline call inside :func:`run_goal`, so a unit test can
@@ -1088,8 +1090,47 @@ def build_goal_provider(name: str, *, seed: int, policy: str) -> Any:
     driver's ``resolve_provider`` a new required ``policy`` argument, and this driver -- whose
     only call site was three frames inside a live run -- aborted with a ``TypeError`` on the
     client instead of in CI. A signature drift must fail in the suite now.
+
+    *script_path* (T326) carries ``--script PATH`` through for ``--provider scripted``. The
+    script is loaded and validated against the catalog inside ``build_provider``, so a bad
+    declaration id or a malformed argument set refuses here, before the client is touched.
     """
-    return _demo().resolve_provider(name, seed=seed, policy=policy)
+    return _demo().resolve_provider(name, seed=seed, policy=policy, script_path=script_path)
+
+
+def scripted_result_fields(
+    provider_instance: Any, provider_script: str | Path | None
+) -> dict[str, Any]:
+    """The scripted provider's ledger and its warning, for this goal's ``results.json``.
+
+    Empty for every other provider -- ``ledger()`` is the scripted adapter's own method and
+    nothing else has one, so the presence of these keys is itself the statement that the run was
+    a capability test rather than play.
+
+    The ledger is what keeps "the script never got there" separate from "the script ran it and
+    nothing happened": a step the script halted before produces **no** store record at all, and
+    an absent record would otherwise be indistinguishable from a no-op. Its per-step status says
+    which it was, in as many words.
+    """
+    ledger = getattr(provider_instance, "ledger", None)
+    if not callable(ledger):
+        return {}
+    script = getattr(provider_instance, "script", None)
+    return {
+        "provider_script": str(provider_script) if provider_script is not None else None,
+        "script_id": getattr(script, "script_id", None),
+        "script_on_unavailable": getattr(
+            getattr(script, "on_unavailable", None), "value", None
+        ),
+        "script_ledger": [row.as_dict() for row in ledger()],
+        "script_ledger_summary": provider_instance.ledger_summary(),
+        "scripted_landing_warning": (
+            "Every action in this run was named by a declared script, not chosen by an agent. "
+            "A landing here proves the action chain works end to end and is NO evidence about "
+            "what an agent would choose. `civsim store coverage` reports these in a separate "
+            "tier and never in the demonstrated-action headline."
+        ),
+    }
 
 
 def _patch_config_for_goal(config_path: Path, goal: Goal, guidance_file: str) -> None:
@@ -1126,6 +1167,7 @@ def run_goal(
     provider: str,
     provider_seed: int,
     provider_policy: str = DEFAULT_PROVIDER_POLICY,
+    provider_script: str | Path | None = None,
     turns: int,
     store_path: Path,
     host: Any,
@@ -1160,17 +1202,25 @@ def run_goal(
     _patch_config_for_goal(config_path, goal, guidance_path.name)
 
     store = SqliteMatchStore(store_path)
+    # Kept in a local so the scripted provider's ledger can be read back afterwards. The ledger
+    # is the only place that distinguishes a declared step which was never *reached* from one
+    # that ran and did nothing -- a step the script halted before leaves no record in the store
+    # at all, and an absent record must never be read as "ran, no effect".
+    provider_instance = build_goal_provider(
+        provider, seed=provider_seed, policy=provider_policy, script_path=provider_script
+    )
     deps = build_runner_dependencies(
         store=store,
         host=host,
         catalog_root=catalog_root if catalog_root is not None else CATALOG_ROOT,
         guidance_root=part_dir,
-        provider=build_goal_provider(provider, seed=provider_seed, policy=provider_policy),
+        provider=provider_instance,
     )
     runner = Runner(deps)
     recorder.note(
         f"PRODUCTION: Runner.start({config_path.name}) [goal={goal.goal_id} "
-        f"provider={provider} provider_policy={provider_policy} turn_cap={turns}]"
+        f"provider={provider} provider_policy={provider_policy} "
+        f"provider_script={provider_script} turn_cap={turns}]"
     )
     try:
         run_id = runner.start(config_path)
@@ -1205,6 +1255,7 @@ def run_goal(
     result["provider"] = provider
     result["provider_policy"] = provider_policy
     result["game_start_turn"] = start_turn
+    result.update(scripted_result_fields(provider_instance, provider_script))
     result["store"] = demo.store_counts(store_path, str(run_id))
     if result.get("final_state") == "paused":
         # This process is the run's only holder; a stale run-identity lock would refuse the next
@@ -1700,7 +1751,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("out", nargs="?", help="output directory for this goal run")
     parser.add_argument("--goal", help="goal id from tests/live/goals/")
-    parser.add_argument("--provider", choices=("fake", "openrouter", "stochastic"), default="fake")
+    parser.add_argument(
+        "--provider",
+        choices=("fake", "openrouter", "stochastic", "scripted"),
+        default="fake",
+        help=(
+            "which provider serves decisions. 'scripted' (T326) executes the declared action "
+            "sequence given by --script through the harness's ordinary dispatch path: a HARNESS "
+            "CAPABILITY TEST, not play. Its landings are recorded as provider=scripted and are "
+            "reported by `civsim store coverage` in a separate tier, never as an action an "
+            "agent demonstrated"
+        ),
+    )
     parser.add_argument("--provider-seed", type=int, default=0)
     # T262, same choices and same default as tests/live/demo_landed_run.py: ignored by every
     # provider without a sampler, so a goal run on `openrouter` is unaffected by it.
@@ -1711,6 +1773,19 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "how --provider stochastic samples: 'coverage' draws only from the actions the "
             "request shows as available now; 'uniform' (default) draws from everything it lists"
+        ),
+    )
+    # T326. Required by, and only meaningful to, `--provider scripted`. Validated against the
+    # catalog inside `build_provider` before the client is touched, so a bad declaration id or a
+    # malformed argument set refuses at composition time rather than on turn nine of a live
+    # block. There is deliberately no default: a scripted provider with no script would silently
+    # end every turn while reading like a capability test that found nothing.
+    parser.add_argument(
+        "--script",
+        default=None,
+        help=(
+            "path to a declared action script (YAML) for --provider scripted, e.g. "
+            "tests/live/scripts/builder_from_capital.yaml"
         ),
     )
     parser.add_argument(
@@ -1742,6 +1817,7 @@ def run_chain(
     provider: str,
     provider_seed: int,
     provider_policy: str,
+    provider_script: str | Path | None,
     turns: int | None,
     store_path: Path,
     host: Any,
@@ -1783,6 +1859,7 @@ def run_chain(
             provider=provider,
             provider_seed=provider_seed,
             provider_policy=provider_policy,
+            provider_script=provider_script,
             turns=turns if turns is not None else goal.turn_cap,
             store_path=store_path,
             host=host,
@@ -1806,7 +1883,23 @@ def run_chain(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    # T326, checked here rather than only inside `build_provider`: by the time the composition
+    # root runs, `read_setup()` has already connected to the tuner and the operator is watching a
+    # live client. Both directions are errors, and neither is silent -- a script handed to a
+    # provider that ignores it would read as a scripted capability test in the operator's command
+    # history while the run was actually a sampler's.
+    if args.provider == "scripted" and not args.script:
+        parser.error(
+            "--provider scripted requires --script PATH: a scripted provider with no script is "
+            "not a degraded capability test, it is a provider that silently ends every turn"
+        )
+    if args.script and args.provider != "scripted":
+        parser.error(
+            f"--script is only meaningful with --provider scripted, not {args.provider!r}"
+        )
 
     if args.list:
         for goal in sorted(load_goals().values(), key=lambda g: (g.order, g.goal_id)):
@@ -1844,6 +1937,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "provider": args.provider,
         "provider_seed": args.provider_seed,
         "provider_policy": args.provider_policy,
+        "provider_script": args.script,
         "store": str(args.store),
         "started_at": datetime.now(UTC).isoformat(),
         "parts": [],
@@ -1856,6 +1950,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             provider=args.provider,
             provider_seed=args.provider_seed,
             provider_policy=args.provider_policy,
+            provider_script=args.script,
             turns=args.turns,
             store_path=Path(args.store),
             host=host,

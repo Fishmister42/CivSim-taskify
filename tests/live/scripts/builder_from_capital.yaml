@@ -1,0 +1,85 @@
+# A declared action script for `--provider scripted` (T326).
+#
+#   uv run python -m tests.live.goal_run --goal build_a_builder --provider scripted \
+#       --script tests/live/scripts/builder_from_capital.yaml --turns 12 OUT_DIR
+#
+# WHAT THIS PROVES, AND WHAT IT DOES NOT.
+# It proves the chain `cities.select` -> `cities.set_production` -> `turn.end_turn` works end to
+# end through the harness: each action's availability predicate is evaluated against the live
+# board, its argument is normalised, it is dispatched through the capability executor, its
+# verification predicate re-reads the board, and the result is written to the match store. It
+# proves NOTHING about whether an agent would choose that chain. Every decision it produces is
+# recorded as `provider=scripted` and `civsim store coverage` reports it in a separate tier; it
+# is never counted as a demonstrated, agent-chosen action.
+#
+# WHY THIS SCRIPT EXISTS. MEASURED on the live board, 2026-09-22: `cities.select` was drawn 0
+# times in 133 world-screen steps under the stochastic coverage policy. Nothing in the catalog
+# offers `cities.set_production` until `cities.select` has landed, and nothing produces a unit
+# until production is set -- so the board sat at one city and zero units at game turn 65, and
+# five of thirteen goals (found_second_city, move_unit_to_plot, select_city_then_unit,
+# promote_unit, use_a_builder) were unreachable by any available means. This script is the only
+# instrument that can currently establish whether the chain itself works.
+#
+# NOTE (2026-09-22): a unit appeared on the live board at game turn 70 by some route the harness
+# did not perform -- the capital's production queue read empty at every observation including
+# that turn, and no production action landed. That arrival is NOT evidence this chain works. It
+# is exactly the question this script is here to answer.
+
+script_id: builder_from_capital
+description: >
+  Select the capital, set its production to a Builder, then end turns until the Builder has been
+  produced. The two-step chain the stochastic sampler never draws, declared explicitly.
+
+# Required. What the script does when the request shows the current step's action greyed out.
+# `retry` re-issues the same step on later requests up to `attempts_per_step` times, then halts
+# and says so. Chosen over `halt` because two of the three actions here legitimately need a
+# moment: `cities.set_production` only becomes available once `cities.select`'s effect is visible
+# in the next observation, and `turn.end_turn` is unavailable while the game is showing a
+# blocking prompt.
+#
+# The action is ALWAYS issued at least once regardless, so the harness's own dispatcher records
+# the refusal with the game's own reason. Nothing is ever silently skipped.
+on_unavailable: retry
+attempts_per_step: 6
+
+steps:
+  # ------------------------------------------------------------------
+  # BOARD-SPECIFIC VALUE -- CHECK IT BEFORE EVERY RUN.
+  # `target` is the capital's own `city_id` from the `cities.state` observation. 65536 is the
+  # value observed for LOC_CITY_NAME_PASARGADAE in the frozen store snapshot
+  # `civsim-match-store.db.v1.0.bak-20260921T152108Z`; a different save, a different civ or a
+  # razed-and-refounded capital will have a different id. A wrong id is not silent: the action
+  # is dispatched, its own Lua answers `city_not_found`, and the refusal lands on the record.
+  # ------------------------------------------------------------------
+  - declaration_id: cities.select
+    parameters:
+      target: 65536
+    note: >
+      Open the capital's panel. Every other city order's availability predicate begins
+      `city.is_selected`, so nothing below is reachable until this lands.
+
+  # ------------------------------------------------------------------
+  # BOARD-SPECIFIC VALUE. `target` must be an item from THIS city's `available_productions`.
+  # UNIT_BUILDER is the catalog's own documented example (catalogs/actions/cities.yaml) and the
+  # item build_a_builder's success predicate looks for -- it is NOT a value read back off the
+  # live board, because `available_productions` was empty in every observation of the snapshot
+  # checked on 2026-09-22. If the city is not offering it, this step is refused with the game's
+  # reason, retried per the policy above, and the script halts saying so.
+  # ------------------------------------------------------------------
+  - declaration_id: cities.set_production
+    parameters:
+      target: UNIT_BUILDER
+    note: >
+      Set the capital's production to a Builder -- the first half of the build -> use chain, and
+      the action whose 110 live failures on 2026-09-21 were wrong dispatch parameters rather
+      than a slow confirm.
+
+  # `repeat` is expanded at load into that many identical declared steps, so the ledger and each
+  # decision's recorded reasoning address a concrete ordinal ("declared step 7 of 10") rather
+  # than an iteration count. A Builder costs enough production that several turns pass before it
+  # appears; the goal's own success predicate is what decides whether it did.
+  - declaration_id: turn.end_turn
+    repeat: 8
+    note: >
+      Carry the production across turns. The Builder appears in `units.state` when the city
+      finishes it; build_a_builder's success predicate reads that, not this script.

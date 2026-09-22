@@ -61,7 +61,7 @@ seam pattern already used throughout this codebase (``HostPlatform``,
    ``AppOptions.txt`` -- the same file already located via
    ``HostPlatform.resolve_game_directories()`` for ``EnableTuner`` -- and returns it for the
    caller to record on the run. **The caller does not yet do so** (T280, 2026-09-22):
-   ``run/composition.py:746`` calls this function and discards the return, so no run made to date
+   ``run/composition.py:747`` calls this function and discards the return, so no run made to date
    carries the setting. ``Run.debug_menu_state`` is the field that holds it once that one line
    binds its return; until then, treat this as *read and available*, not *recorded*. A live-client
    spike (``specs/002-civ-playing-harness/spikes/principle-i-debugmenu-linux.md``) found the
@@ -503,7 +503,7 @@ def debug_menu_preflight(
     """Read ``EnableDebugMenu`` from ``AppOptions.txt`` at preflight and return it for the caller
     to record on the run (T204 hardening item 1; ``spikes/principle-i-debugmenu-linux.md``).
 
-    **The caller does not record it yet** (T280, 2026-09-22): ``run/composition.py:746`` calls this
+    **The caller does not record it yet** (T280, 2026-09-22): ``run/composition.py:747`` calls this
     and discards the return, so no run in the store answers "was this made with
     ``EnableDebugMenu 1``?". :attr:`~civsim_harness.models.run.Run.debug_menu_state` is where the
     answer belongs and the store already round-trips it; what is missing is binding this return at

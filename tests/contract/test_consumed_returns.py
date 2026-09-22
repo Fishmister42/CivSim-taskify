@@ -16,7 +16,7 @@ is not: exactly this project's defining defect, one node lower than
 ``test_reachability.py`` can see it, because the symbol does have a caller -- the caller
 simply discards what it came for.
 
-**The worked example, and why it is not a logging problem.** ``run/composition.py:746`` is
+**The worked example, and why it is not a logging problem.** ``run/composition.py:747`` is
 ``debug_menu_preflight(host, home=home)`` as a bare statement, sitting between
 ``:745 catalog_result = catalog_preflight(catalog)`` and
 ``:747 host_gate_result = evaluate_host_gate(support_probe)``. **Both neighbours bind; this
@@ -42,7 +42,7 @@ that was measured on this tree rather than assumed (read-only AST sweep of
 position**; only **28** of them have a non-``None``, non-scalar return annotation at all;
 and the two largest populations are ``execute`` (43 sites) and ``write_run_event`` (40),
 both of which are *supposed* to be discarded -- a cursor and an append-only event id nobody
-downstream needs. ``preflight_chain`` (``run/composition.py:748``) is the instructive near
+downstream needs. ``preflight_chain`` (``run/composition.py:749``) is the instructive near
 miss: its return is discarded too, and correctly so, because its own docstring says callers
 "may log/audit it" while the gate itself is the raise. "Flag every discarded return" would
 therefore produce ~150 findings of which a handful matter, get allowlisted down to nothing,
@@ -358,7 +358,7 @@ LOAD_BEARING_RETURNS: tuple[ConsumedReturn, ...] = (
             "runs; a run whose catalog versions are unknown is not comparable to any other."
         ),
         discarded_means=(
-            "the run records no catalog identity. It binds today at run/composition.py:745 "
+            "the run records no catalog identity. It binds today at run/composition.py:746 "
             "-- this entry exists so that it keeps doing so (T300)."
         ),
     ),
@@ -374,7 +374,7 @@ LOAD_BEARING_RETURNS: tuple[ConsumedReturn, ...] = (
         ),
         discarded_means=(
             "the tier is computed and dropped, and a degraded host is treated as a clean "
-            "one. It binds today at run/composition.py:747 -- the neighbour that made "
+            "one. It binds today at run/composition.py:748 -- the neighbour that made "
             "debug_menu_preflight's bare call visible (T300)."
         ),
     ),
@@ -391,7 +391,7 @@ LOAD_BEARING_RETURNS: tuple[ConsumedReturn, ...] = (
         ),
         discarded_means=(
             "a run that would die at its first quicksave starts anyway. It binds today at "
-            "run/composition.py:759 (T300)."
+            "run/composition.py:760 (T300)."
         ),
     ),
     ConsumedReturn(
@@ -406,7 +406,7 @@ LOAD_BEARING_RETURNS: tuple[ConsumedReturn, ...] = (
         ),
         discarded_means=(
             "runs from different game builds become silently comparable. It binds today at "
-            "run/composition.py:876 (T300)."
+            "run/composition.py:877 (T300)."
         ),
     ),
 )
@@ -460,7 +460,7 @@ def test_the_production_partition_is_being_scanned(harness_sources: dict[str, st
 def test_the_scan_finds_the_worked_example(harness_sources: dict[str, str]) -> None:
     """The load-bearing control on the real tree.
 
-    If ``run/composition.py:746`` is ever fixed, this test fails and must be **deleted**
+    If ``run/composition.py:747`` is ever fixed, this test fails and must be **deleted**
     along with the allowlist entry -- that is the ratchet working, and the failure message
     says so. Until then it pins the fact that the scan sees the one call site that motivated
     the whole file, so a green here is evidence rather than silence.
@@ -471,9 +471,9 @@ def test_the_scan_finds_the_worked_example(harness_sources: dict[str, str]) -> N
         for site in sites.get("debug_menu_preflight", [])
         if site.module != "run/preparation.py"
     ]
-    assert discards == ["run/composition.py:746"], (
+    assert discards == ["run/composition.py:747"], (
         "the worked example moved or was fixed: expected exactly "
-        "['run/composition.py:746'], got "
+        "['run/composition.py:747'], got "
         f"{discards}. If it was FIXED, delete this test and the "
         "'run.debug_menu_preflight' allowlist entry together."
     )
@@ -574,7 +574,7 @@ _CITED = "T300: synthetic. owner: LIVE lane"
 
 
 def test_negative_control_a_discarded_return_is_flagged() -> None:
-    """The load-bearing control: the exact shape of run/composition.py:746 -- a bare call
+    """The load-bearing control: the exact shape of run/composition.py:747 -- a bare call
     between two neighbours that bind -- must fail the check."""
     problems = _consumed_return_problems((_ENTRY,), {}, source_of=_DISCARDED)
     assert len(problems) == 1
