@@ -314,6 +314,15 @@ _NAMED_COLLABORATORS: tuple[Target, ...] = (
     Target("resolve_observable", "called", "parity/filter.py"),
     Target("enforce_parity_boundary", "called", "parity/forbidden.py"),
     Target("assert_no_literal_leaks", "called", "parity/forbidden.py"),
+    # The image chokepoint (T134, T238): `select_screened_images` is the only
+    # function permitted to turn a step's captures into agent-visible images,
+    # and the sole enforcer of the catalog VIEW gate (FR-016, FR-024). It is
+    # here because it is this family's own case study -- T238 found it with
+    # zero callers in `src/` and zero references in `tests/` while production
+    # shipped `images=[]` and the record still claimed the agent had been
+    # shown them. That fix landed the caller; this is the guard that keeps the
+    # caller there, so the chokepoint cannot quietly go dark a second time.
+    Target("select_screened_images", "called", "agent/context.py"),
     # Provider accounting (T232): one definition of "a completed call becomes
     # a ModelCall", with the P2 image-count re-check on the loop's own path.
     Target("build_model_call", "called", "provider/accounting.py"),
