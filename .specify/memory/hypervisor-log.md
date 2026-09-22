@@ -1348,3 +1348,45 @@ paths; 134 passed on the prompt and executor tests). New standing rule adopted: 
 a clean detached worktree at the committed hash, with a bare `uv run` — setting
 `UV_PROJECT_ENVIRONMENT` or `PYTHONPATH` silently re-imports the shared tree and destroys the
 isolation** (both the hypervisor and this lane fell into that trap within an hour of each other).
+
+### Named pattern — "a guard whose scope does not match the scope of the thing it guards" (2026-09-22)
+
+Distinct from the day's other pattern ("a mechanism that exists but is never reached") and sharper,
+because it tells you what to check: **find the guard, find the thing guarded, compare their scopes.**
+Two instances, both found live today, both invisible to a green suite.
+
+1. **A readback scoped to the command; the write settles asynchronously.** `UI.SetMapZoom`,
+   `DiplomacyManager.CloseSession` and `cities.set_production` each report the **pre-call** value when
+   read back inside the same tuner command. The guard ("did it take effect?") is scoped to one
+   command; the effect is scoped to the engine's next frame. This produced two *false* findings that
+   this ledger had to retract — a camera "no-op" and a `CloseSession` "no-op" — and one *true* defect
+   it masked: `turn.end_turn` records `verification_failed` and `game_turn_advanced: False` while the
+   game demonstrably advances.
+
+2. **A first-contact retry rule scoped per client object; the refusal tail is per session.**
+   `nexus/client.py`'s bounded retry over the documented post-close connection-refusal tail (T246)
+   lives only in `reconnect()`, and only for a client that has already held a live connection;
+   `connect()` fails fast by design. A chain leg builds a **fresh** client, so leg 2 lands inside the
+   tail that **leg 1's own close created** and is denied the retry budget that exists for exactly
+   that situation. **Every leg 2 of every chained goal is structurally exposed**; `use_a_builder` is
+   the only chained goal and is therefore unreachable through the driver. Measured, not inferred:
+   leg 2 died on `Errno 111` at 90 s and 91 s after leg 1's "finished" line across two runs, the Civ6
+   listener fd moved 168 → 180, and a manual probe 40 s after the abort connected 3/3 in 0.00 s.
+
+**The trap this category sets, and it caught us today.** The obvious repair for (2) is to give
+`connect()` the same retry budget. That budget is 5 attempts over 5.5 s; the observed window is
+**90 s**. The fix would pass review, read as principled, and never fire in the case it was written
+for. **The contract documents a ~2 s tail and leg 2 is refused at 90 s — those cannot both be right**,
+and the two explanations (a far longer tail on this host vs. leg-2 setup holding the socket) imply
+completely different fixes. So the mitigation is scoped to `tests/live/goal_run.py` (reuse the
+session across legs, or wait out the tail) and **the 90 s is being measured as raw timings with the
+poll interval stated before any bound is written.** Credit for the scope analysis: Stage 3.
+
+### Operating rule adopted 2026-09-22 — conflicting instructions
+
+When two hypervisor instructions conflict, **act on the one that serves the owner, and say that you
+did.** The hypervisor issues orders from a stale picture; the lane holding the client holds the
+current one. A lane that silently picks one is a problem; a lane that stalls waiting for the conflict
+to be resolved is a slower problem. **Flag and proceed.** Instance: the owner's screen was frozen on
+a blocking popup while a "stay idle for the suite window" order was in force; the block needed the
+run lock and tuner, the suite needed CPU, so they did not contend, and the block proceeded.
