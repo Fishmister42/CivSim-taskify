@@ -61,7 +61,7 @@ from civsim_harness.parity.screening import load_screening_profiles
 from civsim_harness.provider.port import Image
 from civsim_harness.provider.stochastic import StochasticModelProvider
 from civsim_harness.run.composition import _to_camera_state
-from fakes.fake_host import FakeHostPlatform
+from fakes.fake_host import DEFAULT_PROCESS, FakeHostPlatform
 
 VIEW_DECLARATION_ID = DeclarationId("views.test_world")
 STEP_ID = DecisionStepId("step-lookat-1")
@@ -70,7 +70,11 @@ _WINDOW = GameWindow(
     handle=1,
     title="Sid Meier's Civilization VI (FAKE)",
     rect=WindowRect(left=0, top=0, width=8, height=8),
-    pid=4_242,
+    # The SAME pid the FakeHostPlatform's own ``locate_game_process()`` reports. The
+    # source gate checks the declared window against the run's located client, so a
+    # fixture whose window belongs to a different process than the host says is running
+    # is not a valid host at all -- it used to pass only because that check never ran.
+    pid=DEFAULT_PROCESS.pid,
 )
 _HOST_INFO = HostInfo(
     os=OperatingSystem.linux, os_version="test", session_type=LinuxSessionType.x11

@@ -30,9 +30,12 @@ port. The *source* gate here is therefore not re-implementing occlusion
 detection (that is the host adapter's job, research R6); it is the
 belt-and-braces check that the attempt in hand really used that one
 legitimate path (a real ``capture_path``, a window with a plausible
-identity, optionally cross-checked against the run's own located game
-process) rather than, say, a stale placeholder slipping through a bug
-upstream. *Geometry* then confirms the frame that came back actually matches
+identity, cross-checked against the run's own located game process)
+rather than, say, a stale placeholder slipping through a bug
+upstream. That process cross-check is mandatory, not optional: it was
+written as "supply one if you have it", no production caller ever did,
+and so the check ran nowhere real until 2026-09-22.
+*Geometry* then confirms the frame that came back actually matches
 that window's own rect -- catching a wrong-target capture or a stale
 surface before any more expensive check runs.
 
@@ -310,6 +313,12 @@ class CaptureAttempt:
     view/camera-state pair the step requested, and the host platform
     identifier for profile resolution.
 
+    ``expected_process`` is the run's own located
+    :class:`~civsim_harness.host.port.GameProcess`, checked against the
+    declared window's pid by the source gate. ``None`` means the run could not
+    identify its client, and the gate withholds: a check that did not run is
+    not a check that passed.
+
     ``detected_text_tokens`` states what a text-evidence source (window-title
     enumeration, OCR) found, and **``None`` means no such source ran** --
     which is emphatically not the same as an empty set, and is the distinction
@@ -349,13 +358,19 @@ def _check_source(attempt: CaptureAttempt) -> str | None:
         return "capture_path is NONE; no legitimate window-capture mechanism was used"
     if attempt.window.pid <= 0 or not attempt.window.title:
         return "the declared game window carries no plausible process/title identity"
-    if (
-        attempt.expected_process is not None
-        and attempt.window.pid != attempt.expected_process.pid
-    ):
+    # A missing expected_process is a missing CHECK, not a passed one. It used to be treated as
+    # optional plumbing and skipped, which meant the process-identity check -- the whole reason
+    # this gate is more than a capture_path assertion -- never ran anywhere in production, since
+    # the production caller never supplied one. ``observe/capture.py`` now locates the process
+    # itself rather than omitting it, so arriving here with None means the run genuinely cannot
+    # say which process it is looking at, and an unidentifiable frame is withheld.
+    if attempt.expected_process is None:
         return (
-            "the declared game window's pid does not match the run's own located game process"
+            "no located game process was supplied, so the declared window's identity could not "
+            "be checked against the run's own client (the check did not run; it did not pass)"
         )
+    if attempt.window.pid != attempt.expected_process.pid:
+        return "the declared game window's pid does not match the run's own located game process"
     return None
 
 
@@ -561,6 +576,30 @@ def _border_ring_is_suspect(image: Image.Image) -> bool:
     return False
 
 
+# PROVENANCE OF THE THREE CONSTANTS BELOW -- stated honestly, because the honest answer is
+# "chosen, then measured afterwards", and a comment inventing a derivation would be worse than
+# none. They were introduced with this module in 63df35a alongside a single positive fixture
+# (a flat frame with one uniform-random corner patch); no measurement, frame size or sample
+# accompanied them in that commit, in research.md, or anywhere else in specs/ -- they are
+# unexplained choices, not tuned values.
+#
+# What they HAVE now been measured against, after the fact:
+# `specs/002-civ-playing-harness/spikes/frame-retro-audit-2026-09-22.md` re-ran this exact
+# technique offline over all 188 distinct blobs the harness had shown a model -- every one a real
+# Civilization VI frame at 1920x1200, PNG/RGB, X11/XComposite. Result: it fires on 5 of 188, all
+# from one run's turn 2, and all five sit at a corner/whole variance ratio of 1.800-1.802 against
+# the 1.8 threshold here -- i.e. decided by float-vs-histogram rounding, not by signal. Visual
+# inspection of those five found ordinary game UI (leader portraits and a tooltip in the
+# top-right), no contaminant. So on real frames this detector is a coin-flip at its own boundary,
+# and `tests/unit/test_image_screening.py`'s realistic-frame negative control (added 2026-09-22,
+# and currently xfail) demonstrates the same false-positive shape from synthetic pixels.
+#
+# That is a finding about the thresholds, NOT a licence to raise them. Moving a number until live
+# frames pass would be tuning the gate to the outcome someone wanted rather than to evidence, and
+# the frames the gate withheld were never stored (same spike, "Unknown: the 421 withheld
+# captures"), so there is no measured negative population to tune against yet. Any future change
+# here needs a real-frame sample on both sides and must be argued against the negative control,
+# not against a guess.
 _CORNER_FRACTION: Final[float] = 0.12
 _CORNER_VARIANCE_RATIO_MIN: Final[float] = 1.8
 _CORNER_VARIANCE_ABS_MIN: Final[float] = 200.0

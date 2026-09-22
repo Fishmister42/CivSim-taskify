@@ -90,7 +90,7 @@ from civsim_harness.run.decision_loop import DecisionLoopContext
 from civsim_harness.run.turn_cycle import TurnCycleDependencies, run_turn_cycle
 from civsim_harness.store.port import MatchStore
 from civsim_harness.store.sqlite_adapter import SqliteMatchStore
-from fakes.fake_host import FakeHostPlatform
+from fakes.fake_host import DEFAULT_PROCESS, FakeHostPlatform
 from fakes.fake_provider import FakeModelProvider
 
 TICK_DECLARATION_ID = DeclarationId("test.tick")
@@ -103,7 +103,11 @@ _WINDOW = GameWindow(
     handle=1,
     title="Sid Meier's Civilization VI (FAKE)",
     rect=WindowRect(left=0, top=0, width=8, height=8),
-    pid=4_242,
+    # The SAME pid the FakeHostPlatform's own ``locate_game_process()`` reports. The
+    # source gate checks the declared window against the run's located client, so a
+    # fixture whose window belongs to a different process than the host says is running
+    # is not a valid host at all -- it used to pass only because that check never ran.
+    pid=DEFAULT_PROCESS.pid,
 )
 
 #: Matches ``views.test_world``'s declared camera requirements below -- what the real

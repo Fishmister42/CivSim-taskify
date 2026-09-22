@@ -299,6 +299,16 @@ def capture_for_step(
     capture_path = CapturePath.NONE
     attempts_made = 0
 
+    # The source gate's process-identity check needs the run's own located client. Callers that
+    # already hold one pass it; the rest used to pass nothing, which made that check dead code in
+    # production -- the gate silently skipped it on every real capture. Locating it here, through
+    # the ``HostPlatform`` port this function already holds, is what makes the check actually run:
+    # one process lookup per capture, against a port method every adapter already implements. A
+    # host that cannot find its own client leaves this ``None``, and the gate withholds.
+    resolved_process = (
+        expected_process if expected_process is not None else host.locate_game_process()
+    )
+
     if window is None:
         outcome = _host_failure_outcome("no game window is currently resolved to capture")
         attempts_made = 1
@@ -316,7 +326,7 @@ def capture_for_step(
                 registry=registry,
                 profiles=profiles,
                 detector=detector,
-                expected_process=expected_process,
+                expected_process=resolved_process,
                 detected_text_tokens=detected_text_tokens,
             )
             if outcome.is_clean:

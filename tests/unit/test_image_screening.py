@@ -155,6 +155,84 @@ def _in_frame_overlay_frame(*, background: tuple[int, int, int] = (30, 70, 140))
     return _frame_from_image(image)
 
 
+#: The one geometry every real frame the harness has ever shown a model was captured at
+#: (frame-retro-audit-2026-09-22.md: 188 distinct blobs, all 1920x1200 PNG/RGB, X11/XComposite).
+#: The corner heuristic's thresholds are ratios and absolute variances, both of which depend on
+#: frame size, so the negative control is built at the real size rather than at this file's
+#: convenient 640x480.
+LIVE_WIDTH = 1920
+LIVE_HEIGHT = 1200
+
+
+def _realistic_gameplay_frame() -> CaptureFrame:
+    """The negative control the corner heuristic never had: an ordinary, uncontaminated frame.
+
+    Every ``SCREENED_CLEAN`` assertion in this file runs against ``_solid_frame`` -- a uniformly
+    flat image -- and the single positive fixture ``_in_frame_overlay_frame`` is flat background
+    plus uniform random noise in one corner. That pair is the best possible case for a
+    corner-variance detector in both directions: nothing in it demonstrates the gate passes a
+    frame that looks like Civilization VI.
+
+    This fixture is built from what the frame-retro audit actually found in those 188 real
+    frames: low-variance terrain over the middle, the game's own resource bar from row 0, leader
+    portraits and a tooltip in the top-right, a minimap panel bottom-left and a unit panel
+    bottom-right. It is *synthetic* and says so -- its corners come out busier relative to the
+    whole frame (ratios ~2.3-5.0) than the real flagged frames did (1.800-1.802), because real
+    game UI also lines the edges between the corners and lifts whole-frame variance. It is
+    therefore a harder case than live, not a replica of one; the authoritative real-frame numbers
+    are in the spike, not here.
+    """
+    rng = random.Random(20260922)
+    image = Image.new("RGB", (LIVE_WIDTH, LIVE_HEIGHT), (58, 96, 62))
+    pixels = image.load()
+    for y in range(0, LIVE_HEIGHT, 2):
+        for x in range(0, LIVE_WIDTH, 2):
+            jitter = rng.randint(-9, 9)
+            colour = (58 + jitter, 96 + jitter, 62 + jitter)
+            for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+                pixels[x + dx, y + dy] = colour
+
+    draw = ImageDraw.Draw(image)
+    # The game's own resource bar, which begins at row 0 on every real frame.
+    draw.rectangle([0, 0, LIVE_WIDTH, 46], fill=(18, 20, 26))
+    for index in range(14):
+        left = 20 + index * 120
+        draw.rectangle([left, 10, left + 18, 34], fill=(214, 190, 120))
+        draw.rectangle([left + 24, 14, left + 92, 20], fill=(232, 232, 226))
+        draw.rectangle([left + 24, 26, left + 70, 31], fill=(160, 168, 176))
+    # Top-right: the leader portraits and tooltip the audit found behind its five flagged frames.
+    draw.rectangle([LIVE_WIDTH - 300, 54, LIVE_WIDTH - 12, 250], fill=(24, 26, 32))
+    for index in range(4):
+        left = LIVE_WIDTH - 290 + index * 70
+        draw.ellipse([left, 64, left + 56, 120], fill=(190, 140, 90))
+        draw.rectangle([left, 126, left + 56, 134], fill=(206, 60, 60))
+    draw.rectangle([LIVE_WIDTH - 290, 150, LIVE_WIDTH - 24, 238], fill=(40, 44, 54))
+    for row in range(7):
+        draw.rectangle(
+            [LIVE_WIDTH - 280, 158 + row * 11, LIVE_WIDTH - 40 - (row % 3) * 40, 164 + row * 11],
+            fill=(228, 228, 222),
+        )
+    # Bottom-left: the minimap panel.
+    draw.rectangle([12, LIVE_HEIGHT - 260, 330, LIVE_HEIGHT - 12], fill=(20, 22, 28))
+    for _ in range(240):
+        left = rng.randrange(24, 318)
+        top = rng.randrange(LIVE_HEIGHT - 248, LIVE_HEIGHT - 24)
+        draw.rectangle(
+            [left, top, left + 6, top + 6],
+            fill=(rng.randrange(60, 220), rng.randrange(60, 220), rng.randrange(60, 200)),
+        )
+    # Bottom-right: the unit panel and its action buttons.
+    draw.rectangle([LIVE_WIDTH - 340, LIVE_HEIGHT - 220, LIVE_WIDTH - 12, LIVE_HEIGHT - 12],
+                   fill=(22, 24, 30))
+    for index in range(10):
+        left = LIVE_WIDTH - 326 + (index % 5) * 62
+        top = LIVE_HEIGHT - 206 + (index // 5) * 70
+        draw.rectangle([left, top, left + 50, top + 58], fill=(52, 58, 70))
+        draw.ellipse([left + 12, top + 12, left + 38, top + 38], fill=(206, 186, 130))
+
+    return _frame_from_image(image, width=LIVE_WIDTH, height=LIVE_HEIGHT)
+
+
 def _window(*, pid: int = 1234, title: str = "Sid Meier's Civilization VI") -> GameWindow:
     return GameWindow(handle=1, title=title, rect=WindowRect(0, 0, WIDTH, HEIGHT), pid=pid)
 
@@ -224,13 +302,28 @@ def test_source_gate_withholds_on_process_identity_mismatch(registry, profiles) 
     assert outcome.withheld_reason is WithheldReason.CAPTURE_FAILED
 
 
-def test_source_gate_skips_process_check_when_none_supplied(registry, profiles) -> None:
-    """expected_process is optional plumbing; omitting it must not fail the run closed."""
+def test_source_gate_withholds_when_no_located_process_is_supplied(registry, profiles) -> None:
+    """Rewritten from ``test_source_gate_skips_process_check_when_none_supplied``.
+
+    That test asserted SCREENED_CLEAN for ``expected_process=None`` -- which was *exactly* the
+    shape every production capture had, because ``run/decision_loop.py`` never supplied a
+    process. So the one test covering the production configuration of this gate certified it, and
+    the process-identity check ran nowhere but in the tests that passed a process. A test that
+    green-lights the broken configuration is worse than no test: it converts a defect into a
+    documented guarantee and defends it against being fixed.
+
+    The behaviour it described was wrong, not just under-covered. A capture whose window cannot
+    be tied to the run's own client is a capture of *something*, and the gate exists to say which
+    something. Not knowing is withholding.
+    """
     outcome = screening.screen_capture(
         _attempt(expected_process=None), registry=registry, profiles=profiles
     )
 
-    assert outcome.status is ScreeningStatus.SCREENED_CLEAN
+    assert outcome.status is ScreeningStatus.WITHHELD
+    assert outcome.failed_gate is screening.ScreeningGate.SOURCE
+    assert outcome.withheld_reason is WithheldReason.CAPTURE_FAILED
+    assert "did not run" in (outcome.detail or "")
 
 
 # --------------------------------------------------------------------------
@@ -378,6 +471,66 @@ def test_content_gate_withholds_on_in_frame_overlay_general_finding(registry, pr
     assert outcome.failed_gate is screening.ScreeningGate.CONTENT
     assert outcome.withheld_reason is WithheldReason.NON_PLAYER_UI
     assert "debug_overlay" in (outcome.detail or "")
+
+
+def test_the_corner_heuristic_fires_on_an_ordinary_gameplay_frame(registry, profiles) -> None:
+    """The measurement, recorded so it cannot be lost: real-looking game UI trips the detector.
+
+    Measured on this fixture, 1920x1200, ``_CORNER_FRACTION=0.12`` (a 230x144 corner box):
+    whole-frame variance ~591, and all four corners over threshold -- top-left ~1937 (ratio
+    3.28), top-right ~2964 (5.02), bottom-left ~1680 (2.85), bottom-right ~1362 (2.31) -- against
+    ``_CORNER_VARIANCE_RATIO_MIN=1.8`` and ``_CORNER_VARIANCE_ABS_MIN=200.0``. Every corner of an
+    ordinary Civ VI frame carries HUD, so "one corner is busier than the whole frame" describes
+    the game, not an intruder.
+
+    This is deliberately separate from the xfail below: this test pins *what the detector does*,
+    so a future change to the technique or the thresholds shows up here as an explicit edit with
+    a number attached, instead of silently moving the boundary.
+    """
+    image = screening._decode_frame(_realistic_gameplay_frame())  # noqa: SLF001 - whitebox
+    assert image is not None
+    assert screening._corner_overlay_is_suspect(image) is True  # noqa: SLF001
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "KNOWN DEFECT, not an accepted outcome: the corner-variance technique false-positives on "
+        "ordinary gameplay frames. Corroborated on real pixels by "
+        "specs/002-civ-playing-harness/spikes/frame-retro-audit-2026-09-22.md, where it fired on "
+        "5 of 188 uncontaminated live frames, all at ratio 1.800-1.802 against a 1.8 threshold. "
+        "strict=True on purpose: whoever makes this pass must come back and justify how, because "
+        "the wrong way to make it pass -- raising _CORNER_VARIANCE_ABS_MIN or the ratio until "
+        "live frames get through, dropping debug_overlay from a profile, deleting the technique "
+        "-- weakens the one in-frame-chrome defence the harness has. The right way needs a "
+        "real-frame sample of both contaminated and clean frames, which does not exist yet: the "
+        "421 withheld captures were stored with blob_ref NULL, so their pixels are gone."
+    ),
+)
+def test_a_realistic_gameplay_frame_should_pass_the_content_gate(registry, profiles) -> None:
+    """The outcome a clean frame is entitled to, written down before anyone tunes anything.
+
+    The three thresholds had a positive control and no negative one; this is the negative one.
+    Its job is to exist and be red, so that the cost of the current thresholds is visible and any
+    future adjustment is measured against a frame that looks like the game rather than against a
+    flat rectangle.
+    """
+    outcome = screening.screen_capture(
+        _attempt(
+            frame=_realistic_gameplay_frame(),
+            window=GameWindow(
+                handle=1,
+                title="Sid Meier's Civilization VI",
+                rect=WindowRect(0, 0, LIVE_WIDTH, LIVE_HEIGHT),
+                pid=1234,
+            ),
+            platform="linux",
+        ),
+        registry=registry,
+        profiles=profiles,
+    )
+
+    assert outcome.status is ScreeningStatus.SCREENED_CLEAN
 
 
 def test_content_gate_withholds_on_declared_text_token_match(registry, profiles) -> None:
