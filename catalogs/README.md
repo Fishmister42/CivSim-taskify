@@ -171,6 +171,9 @@ spy.is_available` rather than needing a separate existence check bolted on.
 - `player.religion_founded` (boolean)
 - `player.available_beliefs` (list<string>) — beliefs currently choosable by the local player
 - `player.diplomatic_favor` (number)
+- `player.city_count` (number or null) — how many `cities.state` entries are the local player's
+  own (`owner_is_local_player == true`); `null` when `cities.state` was not observed or its
+  `cities` field is missing/not a list, never coerced to `0` (T313, `units.found_city`)
 
 `unit.*` (subject unit of a unit action)
 - `unit.exists` (boolean)
@@ -250,10 +253,19 @@ spy.is_available` rather than needing a separate existence check bolted on.
   `observed_<flattened field>`, e.g. `observed_turn_number` for `game.turn_number`. Only the
   snapshots an actual predicate in this catalog uses need exist; this catalog uses
   `observed_turn_number` (`catalogs/actions/turn.yaml`), `observed_diplomatic_favor` for
-  `player.diplomatic_favor` (`catalogs/actions/congress.yaml`), and `observed_charges_remaining`
-  for `unit.charges_remaining` (`units.build_improvement`, `catalogs/actions/units.yaml`). The
-  snapshot's `unit` namespace is bound with no `target`, so it is the selected unit's counter —
-  the same unit the order acts on.
+  `player.diplomatic_favor` (`catalogs/actions/congress.yaml`), `observed_charges_remaining`
+  for `unit.charges_remaining` (`units.build_improvement`, `catalogs/actions/units.yaml`), and
+  `observed_city_count` for `player.city_count` (`units.found_city`, `catalogs/actions/units.yaml`,
+  T313). The snapshot's `unit` namespace is bound with no `target`, so it is the selected unit's
+  counter — the same unit the order acts on.
+  - **`observed_city_count` KNOWN GAP (2026-09-22, T313):** the predicate that reads it is landed,
+    but the name is not yet registered in `act/verify.py`'s `_OBSERVED_FIELD_SOURCES` table — the
+    one place a pre-execution `observed_*` snapshot is actually flattened from bindings into this
+    namespace — because that file was out of scope for the task that landed the predicate. Until a
+    one-line addition there registers it, `units.found_city`'s verification raises
+    `PredicateEvaluationError` on this unbound name whenever `player.city_count` itself resolves
+    (the ordinary case), which `act/verify.py` maps identically to `False`/`rejected` — never a
+    fabricated `applied`, but also never a confirmed one, until the follow-up lands.
 
 This vocabulary is deliberately small. A predicate that needs a symbol not listed here is a sign
 the declaration belongs to a different observation, not a reason to widen the evaluator ad hoc.

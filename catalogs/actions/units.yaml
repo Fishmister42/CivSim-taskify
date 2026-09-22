@@ -50,6 +50,39 @@
     a destination plot from the selected unit's reachable_plots -- the plot, never the unit's id
   introduced_in_version: "2026.09.1"
 
+# T313 (2026-09-22, live lane): the verification used to be `not unit.exists` -- whether the
+# Settler disappeared. That fabricates: a Settler also disappears when it is captured or killed,
+# not only when it founds a city (MEASURED the same day: Georgia captured five Builders and a
+# capital on the previous board). `run-f9aea1fc1c7346eca0e72cf6d8492882` proved it landed on a real
+# founding -- `n_cities` walks 0 -> 1 -> `LOC_CITY_NAME_PASARGADAE`, persisting across a turn
+# boundary -- while the 4.0 s confirm bound (owned by a separate task, not touched here) expired at
+# 7.291 s and the step was recorded `rejected`. Fixing the bound alone would leave a captured
+# Settler indistinguishable from a founded city: both make `unit.exists` false.
+#
+# Per the owner's own fix ("You can programmatically interface with multiple cities right? Just
+# count those."): verification now reads `player.city_count`, a real, positive count of the local
+# player's own cities from `cities.state` (`act/predicates.py`'s `_local_player_city_count`,
+# T313), compared before/after through the same `observed_*` pre-execution-snapshot mechanism
+# `turn.end_turn`'s own `observed_turn_number + 1` already uses (catalogs/README.md §4) -- not a
+# new mechanism. The leading `player.city_count != null` conjunct is the documented polarity
+# guard: `cities.state` absent or its `cities` field null/missing binds `player.city_count` to
+# `None`, and this conjunct short-circuits the `and` to `False` before the `>` comparison -- which
+# would otherwise raise on `None > observed_city_count` -- ever runs. Either way the result is
+# `False`/unevaluable, never a fabricated `True` (FR-011). See
+# `tests/unit/test_predicates.py`'s `units.found_city` tests for the capture-case, real-shape, and
+# polarity proofs.
+#
+# KNOWN GAP, explicitly not closed here (out of this task's scope, see its own report):
+# `observed_city_count` is not yet registered in `act/verify.py`'s `_OBSERVED_FIELD_SOURCES` table
+# -- the one place a pre-execution `observed_*` snapshot is actually flattened -- and that file is
+# off-limits to this task. Until a one-line addition there
+# (`"observed_city_count": ("player", "city_count")`) lands, evaluating this predicate against a
+# real pre/post observation pair raises `PredicateEvaluationError` on the unbound name whenever
+# `player.city_count` itself resolves (the ordinary case, since `cities.state` is read every step);
+# `verify_execution` maps that identically to `False`/`rejected`, per its own module docstring --
+# so this fails closed, never applied, until the follow-up wiring lands. That is a strict
+# improvement over the fabrication this replaces (a captured Settler recorded as a founded city),
+# at the cost of `units.found_city` being unable to confirm `applied` at all in the meantime.
 - declaration_id: units.found_city
   kind: action
   summary: >
@@ -62,7 +95,7 @@
   availability_predicate: >
     unit.is_selected and unit.owner_is_local_player and unit.can_found_city
   verification_predicate: >
-    not unit.exists
+    player.city_count != null and player.city_count > observed_city_count
   target_kind: none
   target_hint: >
     acts on the selected settler; send no target, or that settler's unit_id

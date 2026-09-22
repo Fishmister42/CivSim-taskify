@@ -336,6 +336,37 @@ _PLAYER_SOURCES: tuple[DeclarationId, ...] = (
 _PLAYER_FIELD_RENAMES: Mapping[str, str] = {"gold_balance": "gold", "faith_balance": "faith"}
 _CONGRESS_DECLARATION_ID = DeclarationId("congress.state")
 
+#: T313 (2026-09-22, live lane): `units.found_city`'s verification used to read `not unit.exists`
+#: -- whether the Settler disappeared -- which fabricates: a Settler also disappears when it is
+#: captured or killed (MEASURED same day: Georgia captured five Builders and a capital on the
+#: previous board; `run-f9aea1fc1c7346eca0e72cf6d8492882` shows the predicate rejecting a founding
+#: step whose own later observations prove the city was founded). Per the owner's own fix
+#: ("count [cities], programmatically") this binds a real, positive count -- the number of
+#: `cities.state` entries that are the local player's own -- as `player.city_count`, so a
+#: verification predicate can compare it before/after through the same `observed_*` mechanism
+#: `turn.end_turn` already uses, rather than inferring success from the Settler's absence.
+_CITIES_STATE_DECLARATION_ID = DeclarationId("cities.state")
+
+
+def _local_player_city_count(index: Mapping[DeclarationId, Any]) -> int | None:
+    """How many cities `cities.state` reports as the local player's own, or ``None`` when
+    `cities.state` was not observed or its `cities` field is missing/not a list -- never coerced
+    to ``0``, because ``0`` legitimately means "no cities yet" while ``None`` means "we do not
+    know". `cities.state` also lists other civilizations' currently-visible cities
+    (`catalogs/observations/cities.yaml`), so this counts only entries whose own
+    `owner_is_local_player` is `True` -- an enemy city entering or leaving vision must never move
+    this count.
+    """
+    source = index.get(_CITIES_STATE_DECLARATION_ID)
+    cities = source.get("cities") if isinstance(source, Mapping) else None
+    if not isinstance(cities, list):
+        return None
+    return sum(
+        1
+        for city in cities
+        if isinstance(city, Mapping) and city.get("owner_is_local_player") is True
+    )
+
 # T221/T308: `camera.read_state`'s own `output_schema` (catalogs/observations/camera.yaml) already
 # names its fields exactly as the three camera actions' predicates reference them (`mode`, `zoom`,
 # `target_plot`, `target_is_revealed`) -- no rename table needed, unlike `game`/`player` above.
@@ -446,6 +477,11 @@ def build_predicate_bindings(
     congress_source = index.get(_CONGRESS_DECLARATION_ID)
     if isinstance(congress_source, Mapping) and "local_player_favor" in congress_source:
         player["diplomatic_favor"] = congress_source["local_player_favor"]
+    # T313: `player.city_count`, from `cities.state` -- see `_local_player_city_count`'s own
+    # docstring. Explicitly set even when `None` (rather than merely absent), so
+    # `player.city_count != null` -- the guard `units.found_city`'s verification predicate opens
+    # with -- reads a real key, never a missing-name evaluation error.
+    player["city_count"] = _local_player_city_count(index)
 
     prompt = _bind_prompt_namespace(index)
     camera = _merge_fields(index, _CAMERA_SOURCES)
@@ -782,7 +818,10 @@ _DERIVED_NAMESPACE_FIELDS: Mapping[str, frozenset[str]] = {
     "game": frozenset({"active_prompt_type"}),
     # `build_predicate_bindings`: `diplomatic_favor` is merged in from `congress.state`'s
     # `local_player_favor`, a cross-namespace rename the schema tables below do not express.
-    "player": frozenset({"diplomatic_favor"}),
+    # T313: `city_count` is computed from `cities.state`'s `cities` list length (local-player
+    # entries only, see `_local_player_city_count`) -- a derived scalar, not a field either
+    # source schema declares by that name.
+    "player": frozenset({"diplomatic_favor", "city_count"}),
     # `_bind_prompt_namespace`: built as a literal `{"type": ..., "is_active": ..., "options":
     # ...}`, never sourced from an `output_schema` at all.
     "prompt": frozenset({"type", "is_active", "options"}),

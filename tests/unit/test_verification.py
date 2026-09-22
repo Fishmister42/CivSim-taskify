@@ -22,6 +22,8 @@ import pytest
 from pydantic import ValidationError
 
 from civsim_harness.act.verify import ExecutionVerification, observed_snapshot, verify_execution
+from civsim_harness.capability.loader import load_catalog
+from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration
 from civsim_harness.models.common import (
     CatalogVersionRef,
@@ -33,6 +35,7 @@ from civsim_harness.models.decision import ActionExecution, ExecutionOutcome, Re
 from civsim_harness.models.turn import Observation, ObservationEntry, StepProgress
 
 VERIFIED_AT = datetime(2026, 1, 1, 12, 0, 0)
+CATALOG_ROOT = Path(__file__).resolve().parents[2] / "catalogs"
 
 _HARNESS_ROOT = Path(__file__).resolve().parents[2] / "src" / "civsim_harness"
 
@@ -376,3 +379,76 @@ def test_exactly_one_module_in_the_harness_derives_an_applied_outcome() -> None:
         "a second producer is how an action gets recorded as applied without verification "
         f"(FR-011). Producers found: {producers}"
     )
+
+
+# --------------------------------------------------------------------------
+# T313 (2026-09-22, live lane) -- KNOWN GAP, recorded as a test rather than left to drift.
+#
+# `units.found_city`'s verification predicate was rewritten
+# (`player.city_count != null and player.city_count > observed_city_count`, see
+# `tests/unit/test_predicates.py`'s T313 block for the fix itself and the rationale) to compare a
+# real, positive city count before and after, through the same `observed_*` pre-execution-snapshot
+# mechanism `turn.end_turn` already uses. That mechanism's snapshot is built by this module's own
+# `observed_snapshot`, from the `_OBSERVED_FIELD_SOURCES` table -- and registering a new
+# `observed_*` name there is this module's job. This task's scope explicitly put `act/verify.py`
+# off limits (a concurrent task owns it), so `observed_city_count` is NOT in that table today.
+#
+# The test below proves, against the REAL shipped catalog declaration and a real pre/post
+# `Observation` pair showing an actual, correct founding (city count 0 -> 1), that this predicate
+# still cannot resolve `applied` today: `player.city_count` itself resolves (a real int), so the
+# evaluator reaches the second conjunct, asks for `observed_city_count`, and finds no such
+# binding -- `PredicateEvaluationError`, which this module maps identically to `rejected`, never a
+# free pass to `applied` (FR-011; see `test_unevaluable_verification_predicate_is_rejected_not_applied`
+# above for the same shape with a synthetic predicate). That is a strict improvement over the
+# fabrication this replaces (a captured Settler recorded as a founded city, proven live in
+# `run-f9aea1fc1c7346eca0e72cf6d8492882`) -- it fails closed instead of fabricating -- but
+# `units.found_city` cannot confirm `applied` at all until `_OBSERVED_FIELD_SOURCES` gains
+# `"observed_city_count": ("player", "city_count")`. This test is the ratchet for that follow-up:
+# it is EXPECTED to start failing (turning `APPLIED`) the moment that one line lands, and should be
+# deleted then, not "fixed" -- the same staleness discipline
+# `act.predicates.KNOWN_PHANTOM_PREDICATE_FIELDS`'s own docstring already applies to its table.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_real_found_city_predicate_fails_closed_today_pending_observed_city_count_wiring() -> None:
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("units.found_city")
+    assert declaration.verification_predicate is not None
+
+    pre = _observation(
+        [_entry("cities.state", {"cities": []})],
+        observation_id="obs-pre",
+    )
+    post = _observation(
+        [
+            _entry(
+                "cities.state",
+                {
+                    "cities": [
+                        {
+                            "city_id": 1,
+                            "name": "LOC_CITY_NAME_PASARGADAE",
+                            "owner_player_id": 0,
+                            "owner_is_local_player": True,
+                            "plot": {"x": 1, "y": 1},
+                            "population": 1,
+                        }
+                    ]
+                },
+            )
+        ],
+        observation_id="obs-post",
+    )
+
+    result = verify_execution(
+        declaration=declaration, pre_observation=pre, post_observation=post, verified_at=VERIFIED_AT
+    )
+
+    # Not applied -- even though the city genuinely, correctly appeared -- because
+    # observed_city_count is not yet wired. Fails closed (rejected), never fabricates.
+    assert result.execution.outcome is ExecutionOutcome.REJECTED
+    assert result.progress is StepProgress.REJECTED
+    assert "could not be evaluated" in result.execution.verification["reason"]
+    assert result.execution.verification.get("name") == "observed_city_count"

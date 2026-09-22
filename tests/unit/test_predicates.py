@@ -964,3 +964,109 @@ def test_camera_move_polarity_absent_target_is_revealed_is_false_not_true() -> N
     assert bindings["camera"].get("target_is_revealed") is None
 
     assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+
+
+# --------------------------------------------------------------------------
+# T313 (2026-09-22, live lane): `units.found_city`'s verification used to be `not unit.exists` --
+# whether the Settler disappeared -- which fabricates, because a Settler also disappears when it
+# is captured or killed, not only when it founds a city. `run-f9aea1fc1c7346eca0e72cf6d8492882`
+# proved it live: `n_cities` walks 0 -> 1 (`LOC_CITY_NAME_PASARGADAE`, persisting across a turn
+# boundary) while the confirm bound (a separate, out-of-scope concern) expired first and the
+# founding step was recorded `rejected` -- but fixing the bound alone would leave a captured
+# Settler indistinguishable from a founded city, since both make `unit.exists` false.
+#
+# The fix, verbatim from the owner: count cities. Verification now reads
+# `player.city_count != null and player.city_count > observed_city_count` -- a real count from
+# `cities.state`, compared before/after through the same `observed_*` mechanism
+# `turn.end_turn`'s own `observed_turn_number + 1` already uses (catalogs/README.md §4), not a new
+# one. These tests bind the REAL predicate text, loaded from the shipped catalog, exactly as the
+# `turn.end_turn` tests above do -- so a future catalog or evaluator regression is caught here,
+# not only in prose.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_real_found_city_verification_predicate_capture_case_is_rejected_not_applied() -> None:
+    """THE CASE THAT MATTERS. The Settler vanished (`unit.exists` false, e.g. captured or killed
+    by Georgia, MEASURED the same day on the live board) and no city appeared (`city_count`
+    unchanged, 1 -> 1). The new predicate must reject this. Confirmed FAILING against the unfixed
+    predicate below (`not unit.exists` reads the `unit.exists: False` also present in these
+    bindings and returns `True` -- exactly the fabrication this replaces)."""
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("units.found_city")
+    assert declaration.verification_predicate is not None
+    assert declaration.verification_predicate.strip() == (
+        "player.city_count != null and player.city_count > observed_city_count"
+    )
+
+    bindings = {
+        "unit": {"exists": False},  # the settler is gone -- captured, not founding
+        "player": {"city_count": 1},
+        "observed_city_count": 1,  # unchanged: no city appeared
+    }
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_real_found_city_verification_predicate_real_recorded_shape_0_to_1_is_applied() -> None:
+    """The real recorded shape from `run-f9aea1fc1c7346eca0e72cf6d8492882`: `n_cities` 0 -> 1
+    across consecutive observations. Must be `applied`."""
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("units.found_city")
+    assert declaration.verification_predicate is not None
+
+    bindings = {
+        "unit": {"exists": False},
+        "player": {"city_count": 1},
+        "observed_city_count": 0,
+    }
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is True
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_found_city_verification_predicate_polarity_absent_city_count_is_false_not_true() -> None:
+    """Polarity: `cities.state` was not observed (or its `cities` field was missing/null), so
+    `player.city_count` binds to `None` (never coerced to `0`). The predicate's leading
+    `player.city_count != null` conjunct must short-circuit this straight to `False` -- never
+    `True`, and never an unhandled `TypeError` from comparing `None > observed_city_count` (Python
+    raises on that; the guard exists so this predicate never reaches it)."""
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("units.found_city")
+    assert declaration.verification_predicate is not None
+
+    bindings = {"player": {"city_count": None}, "observed_city_count": 0}
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+
+
+def test_build_bindings_computes_player_city_count_from_cities_state() -> None:
+    """The binder half of T313: `player.city_count` counts only `cities.state` entries that are
+    the local player's own -- another civilization's city currently in vision must never move it
+    -- and is `None`, not `0`, when `cities.state` carries no usable `cities` list at all."""
+    observation = _observation(
+        [
+            _entry(
+                "cities.state",
+                {
+                    "cities": [
+                        {"city_id": 1, "owner_is_local_player": True},
+                        {"city_id": 2, "owner_is_local_player": True},
+                        {"city_id": 3, "owner_is_local_player": False},  # a met civ's city, visible
+                    ]
+                },
+            ),
+        ]
+    )
+    bindings = build_predicate_bindings(observation=observation)
+    assert bindings["player"]["city_count"] == 2
+
+    empty_local_only = _observation([_entry("cities.state", {"cities": []})])
+    assert build_predicate_bindings(observation=empty_local_only)["player"]["city_count"] == 0
+
+    no_entry = _observation([])
+    assert build_predicate_bindings(observation=no_entry)["player"]["city_count"] is None
+
+    null_cities_field = _observation([_entry("cities.state", {"cities": None})])
+    assert build_predicate_bindings(observation=null_cities_field)["player"]["city_count"] is None
