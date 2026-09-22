@@ -48,6 +48,7 @@ from civsim_harness.host.port import (
     InputResult,
     InputStatus,
     WindowRect,
+    WindowTitleListing,
 )
 
 # --------------------------------------------------------------------------
@@ -66,6 +67,18 @@ DEFAULT_WINDOW = GameWindow(
     pid=DEFAULT_PROCESS.pid,
 )
 """SYNTHETIC: a plausible-looking window, not sampled from a real machine."""
+
+DEFAULT_WINDOW_TITLES = (DEFAULT_WINDOW.title,)
+"""SYNTHETIC: the desktop this fake presents to `list_window_titles` (T265) -- the game's own
+window and nothing else.
+
+Deliberately a desktop that trips **no** reject category in
+`catalogs/screening_profiles.yaml`, so the default fake is a host on which a clean frame is
+genuinely deliverable. That default matters: with `available=False` the content gate has no
+technique for eight of its ten reject categories and withholds every frame, so a fake that
+defaulted to "cannot enumerate" would quietly make the entire image-delivery path
+unreachable from tests while every assertion about withholding still passed.
+"""
 
 _DEFAULT_SAVES_SUBDIR = ("FakeCivSaves", "Saves")
 _DEFAULT_APP_OPTIONS_SUBDIR = ("FakeCivSaves",)
@@ -92,6 +105,11 @@ class FakeHostPlatform:
         self._find_window_error: PreflightError | None = None
         self._capture_override: CaptureResult | None = None
         self._capture_preconditions_override: CapturePreconditionResult | None = None
+        self._window_titles: WindowTitleListing = WindowTitleListing(
+            available=True,
+            reason="fake host: scripted desktop (T055/T265 default)",
+            titles=DEFAULT_WINDOW_TITLES,
+        )
         self._input_override: InputResult | None = None
         self._directories_override: GameDirectories | None = None
         self._disk_space_override: DiskSpace | None = None
@@ -104,6 +122,7 @@ class FakeHostPlatform:
         self.focus_calls: list[GameWindow] = []
         self._focus_override: InputResult | None = None
         self.locate_process_calls = 0
+        self.window_title_calls = 0
         self.find_window_calls: list[GameProcess] = []
         self.resolve_directories_calls: list[Path | None] = []
         self.free_disk_space_calls: list[Path] = []
@@ -218,6 +237,29 @@ class FakeHostPlatform:
         """Script `resolve_game_directories()`'s return value."""
         self._directories_override = directories
 
+    def set_window_titles(self, titles: Sequence[str]) -> None:
+        """Script the desktop `list_window_titles()` reports (T265).
+
+        This is the content gate's only text evidence, so it is how a scenario puts
+        non-player chrome on the desktop: a title of `"Developer Console"` makes the gate
+        match the `developer_console` reject id and withhold the frame.
+        """
+        self._window_titles = WindowTitleListing(
+            available=True,
+            reason=f"fake host: scripted desktop of {len(titles)} window(s)",
+            titles=tuple(titles),
+        )
+
+    def set_window_titles_unavailable(self, reason: str) -> None:
+        """Present a host that cannot enumerate window titles at all -- the real state of the
+        Windows and macOS adapters, and of any Wayland session (T265).
+
+        The content gate then has no technique for most of its reject categories and must
+        withhold every frame: this is how a test drives "image delivery is closed on this
+        platform" through the production loop rather than asserting it about a docstring.
+        """
+        self._window_titles = WindowTitleListing(available=False, reason=reason)
+
     def set_disk_space(self, disk_space: DiskSpace) -> None:
         """Script `free_disk_space()`'s return value (R17 disk-headroom guard tests)."""
         self._disk_space_override = disk_space
@@ -242,6 +284,10 @@ class FakeHostPlatform:
             passed=True,
             reason="fake host: capture preconditions scripted to pass (T055 default)",
         )
+
+    def list_window_titles(self) -> WindowTitleListing:
+        self.window_title_calls += 1
+        return self._window_titles
 
     def capture_window(self, window: GameWindow) -> CaptureResult:
         self.capture_calls.append(window)

@@ -501,6 +501,26 @@ async def _observe(
     # checks it against the view's declared ``camera_requirements`` (FR-026), and an empty camera
     # state fails that gate on its first check.
     camera_state = await _resolve_camera_state(ctx) if window is not None else {}
+    # T265 -- the content gate's text evidence, gathered on the production path at last.
+    #
+    # Eight of the ten shipped reject categories (catalogs/screening_profiles.yaml) have
+    # exactly one technique available to them: matching the category's own tokens against
+    # text observed on the desktop. This call site passed nothing, so on every real run that
+    # technique had not run, those categories were *unaddressed*, and the gate -- correctly,
+    # since a check that did not run clears nothing -- withheld every frame. Image delivery
+    # was closed on all three platforms as a result. It is reopened by supplying the evidence,
+    # never by relaxing the gate.
+    #
+    # PRINCIPLE I: `.text_tokens()` and never `.titles`. The listing holds the operator's own
+    # window titles -- their browser tabs, their mail -- and they are bound to this one
+    # screening decision. What crosses into portable code is an unordered set of lower-cased
+    # words with no association back to a window, it is consumed by the gate and discarded,
+    # and nothing here stores it. `tests/contract/test_window_title_boundary.py` enforces
+    # that structurally and end to end. `text_tokens()` also returns None -- never
+    # frozenset() -- when the host cannot enumerate (the Windows and macOS adapters report
+    # exactly that today), which is what keeps "no source ran" distinguishable from "a source
+    # ran and the desktop was clean": the first withholds, the second can clear a frame.
+    detected_text_tokens = ctx.host.list_window_titles().text_tokens()
     step_capture = capture_for_step(
         host=ctx.host,
         host_info=ctx.host_info,
@@ -514,6 +534,7 @@ async def _observe(
         captured_at=ctx.clock(),
         registry=ctx.registry,
         profiles=ctx.screening_profiles,
+        detected_text_tokens=detected_text_tokens,
     )
     if step_capture.visually_degraded:
         # T240, FR-050, SC-013: capture degradation is a *run*-level comparability fact, not

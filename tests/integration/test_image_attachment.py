@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -113,6 +114,20 @@ _WINDOW = GameWindow(
 #: Matches ``views.test_world``'s declared camera requirements below -- what the real
 #: composition would read live through ``camera.read_state``.
 _CAMERA_STATE: dict[str, Any] = {"mode": "world", "zoom": 0.5}
+
+
+#: A one-word, unmistakable stand-in for a private window title the operator would be
+#: horrified to find in a run record. Used by the Principle I scan in
+#: ``test_a_reject_category_named_on_the_desktop_withholds_the_frame`` (T265).
+_PRIVATE_TITLE_SENTINEL = "zqxprivatebanking7f3a"
+
+
+def _jsonable(value: Any) -> Any:
+    """Whatever a record or request is, as something ``json.dumps`` can walk."""
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json")
+    return str(value)
 
 
 def _png_bytes() -> bytes:
@@ -323,37 +338,6 @@ def _no_real_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
 
 
-@pytest.fixture
-def text_evidence_plumbed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Supply the text evidence ``run/decision_loop.py`` does not yet gather.
-
-    **This fixture is a marker for a known production gap, not a convenience.** The content gate
-    screens most reject categories (``firetuner_window``, ``developer_console``,
-    ``harness_owned_ui``, the per-platform panel/taskbar/dock ids) with exactly one technique --
-    matching the category's tokens against text observed on the desktop -- and that technique
-    cannot run unless a caller enumerates window titles and passes the result. The production
-    call site (``run/decision_loop.py``'s ``capture_for_step(...)``) passes nothing, so on the
-    real harness every capture is now withheld: see
-    ``test_the_unplumbed_production_path_withholds_every_frame`` below, which asserts exactly
-    that, deliberately without this fixture.
-
-    The tests that use this fixture are about *attachment* -- that a clean frame's bytes reach
-    the provider and the records agree -- not about whether the loop gathers evidence. Patching
-    the evidence in keeps that coverage alive and localises the gap to one named place. **Delete
-    this fixture the moment the loop supplies ``detected_text_tokens`` itself**; the tests should
-    then pass untouched.
-    """
-    import civsim_harness.run.decision_loop as decision_loop
-
-    real_capture_for_step = decision_loop.capture_for_step
-
-    def _with_text_evidence(**kwargs: Any) -> Any:
-        kwargs.setdefault("detected_text_tokens", frozenset())
-        return real_capture_for_step(**kwargs)
-
-    monkeypatch.setattr(decision_loop, "capture_for_step", _with_text_evidence)
-
-
 def _make_deps(
     *,
     tmp_path: Path,
@@ -421,9 +405,7 @@ def _tick(*, is_end_turn: bool = False) -> RawDecision:
 # --------------------------------------------------------------------------
 
 
-async def test_screened_clean_capture_bytes_reach_the_provider_request(
-    tmp_path: Path, text_evidence_plumbed: None
-) -> None:
+async def test_screened_clean_capture_bytes_reach_the_provider_request(tmp_path: Path) -> None:
     """T238's forward half, asserted on the far side of the port: the step's screened-clean
     frame's exact bytes arrive in the ``DecisionRequest`` the provider received, and every piece
     of the record -- ``shown_to_agent``, the observation's capture listing, the model call's
@@ -504,18 +486,30 @@ async def test_screened_clean_capture_bytes_reach_the_provider_request(
         store.close()
 
 
-async def test_the_unplumbed_production_path_withholds_every_frame(tmp_path: Path) -> None:
-    """The Principle I hole, asserted end to end on the real loop -- deliberately *without*
-    ``text_evidence_plumbed``.
+async def test_a_host_that_cannot_enumerate_window_titles_withholds_every_frame(
+    tmp_path: Path,
+) -> None:
+    """T265's negative control, end to end on the real loop: **this test goes red the moment
+    the loop stops supplying ``detected_text_tokens``.**
 
-    ``run/decision_loop.py`` does not enumerate window titles, so the content gate has no
-    technique for most of its own reject categories and cannot certify any frame. Every capture
-    must therefore come back withheld and no image may reach the provider -- on a VALIDATED host
-    serving a frame that is, pixel for pixel, the same one the test above delivers. This is the
-    intended consequence of the gate failing closed, and this test is what will go red when the
-    loop finally supplies the evidence (delete it then, together with the fixture).
+    It is the same run as ``test_screened_clean_capture_bytes_reach_the_provider_request``
+    above -- same VALIDATED host, same frame, pixel for pixel -- with exactly one difference:
+    this host reports that it cannot enumerate window titles, which is the real state of the
+    Windows and macOS adapters and of any Wayland session today. The content gate then has no
+    technique for eight of its ten reject categories, cannot certify the frame against its own
+    profile, and must withhold every capture. No image reaches the provider.
+
+    That makes it the control the plumbing needed: delete the ``detected_text_tokens``
+    argument from ``run/decision_loop.py`` and the *other* test fails instead, because the
+    production path would be feeding the gate nothing on every host. One of these two is red
+    for any wiring other than the correct one -- which is what "prove it, do not assert it"
+    means here. (Verified by doing exactly that: see this task's report.)
+
+    This replaces ``test_the_unplumbed_production_path_withholds_every_frame``, which asserted
+    the same withholding as a property of the *unwired call site* rather than of the host's
+    own reported capability.
     """
-    run_id = RunId("run-image-unplumbed")
+    run_id = RunId("run-image-no-text-evidence")
     run, config = _build_run_and_config(
         run_id, tier=HostSupportTier.VALIDATED, comparability=ComparabilityStatus.COMPARABLE
     )
@@ -525,6 +519,64 @@ async def test_the_unplumbed_production_path_withholds_every_frame(tmp_path: Pat
 
     host = FakeHostPlatform()
     host.set_capture_result(_clean_capture_result(_png_bytes()))
+    host.set_window_titles_unavailable(
+        "fake host: this platform has no window-title enumeration (as Windows and macOS "
+        "report today, and as every Wayland session does)"
+    )
+
+    provider = FakeModelProvider()
+    provider.queue_decision(_tick(is_end_turn=True))
+
+    deps = _make_deps(
+        tmp_path=tmp_path, run_id=run_id, store=spy, game=_FakeGame(), provider=provider, host=host
+    )
+
+    try:
+        await run_turn_cycle(deps, run=run)
+
+        assert host.window_title_calls > 0, (
+            "the loop never asked the host for text evidence at all -- the call site is "
+            "unwired again and every gate verdict below is vacuous"
+        )
+        assert provider.calls
+        assert all(call.images == [] for call in provider.calls)
+        assert spy.capture_writes
+        for capture, blob in spy.capture_writes:
+            assert capture.screening_status is ScreeningStatus.WITHHELD
+            assert capture.withheld_reason is WithheldReason.NON_PLAYER_UI
+            assert capture.shown_to_agent is False
+            assert capture.blob_ref is None
+            assert blob is None
+    finally:
+        store.close()
+
+
+async def test_a_reject_category_named_on_the_desktop_withholds_the_frame(
+    tmp_path: Path,
+) -> None:
+    """The anti-vacuity control: the evidence the loop now gathers is *decisive*, not decorative.
+
+    Supplying tokens makes the gate's declared-text technique available, which is what stops it
+    withholding everything -- but "available" would be worthless if no desktop could ever make it
+    fire. So: the same VALIDATED host and the same clean frame as the delivery test above, with
+    one window open called "Developer Console". Its tokens are exactly the ``developer_console``
+    reject id's own, the gate matches it, and the frame is withheld with no image reaching the
+    provider. A gate that cannot fail on any input is not a gate; this is the input it fails on.
+    """
+    run_id = RunId("run-image-chrome-on-desktop")
+    run, config = _build_run_and_config(
+        run_id, tier=HostSupportTier.VALIDATED, comparability=ComparabilityStatus.COMPARABLE
+    )
+    store = SqliteMatchStore(tmp_path / "match.db")
+    store.create_run(run, config)
+    spy = _SpyStore(store)
+
+    host = FakeHostPlatform()
+    host.set_capture_result(_clean_capture_result(_png_bytes()))
+    # The second title is a Principle I sentinel: a private-looking window that is on the
+    # desktop, is genuinely in the evidence the gate decided on, and must appear in nothing
+    # this run writes down. One word, so its raw and tokenised forms are the same string.
+    host.set_window_titles([_WINDOW.title, _PRIVATE_TITLE_SENTINEL, "Developer Console"])
 
     provider = FakeModelProvider()
     provider.queue_decision(_tick(is_end_turn=True))
@@ -543,14 +595,27 @@ async def test_the_unplumbed_production_path_withholds_every_frame(tmp_path: Pat
             assert capture.screening_status is ScreeningStatus.WITHHELD
             assert capture.withheld_reason is WithheldReason.NON_PLAYER_UI
             assert capture.shown_to_agent is False
-            assert capture.blob_ref is None
             assert blob is None
+
+        # PRINCIPLE I, over a whole turn cycle: the desktop the gate read is the operator's,
+        # and none of it may be written down or sent anywhere. Everything this run persisted,
+        # plus every request that left the harness, scanned for the sentinel title. The
+        # structural half of this boundary (and its negative controls) lives in
+        # tests/contract/test_window_title_boundary.py.
+        written = json.dumps(
+            [capture.model_dump(mode="json") for capture, _ in spy.capture_writes]
+            + [_jsonable(call) for call in provider.calls],
+            default=str,
+        )
+        assert _PRIVATE_TITLE_SENTINEL not in written, (
+            "a window title reached a persisted record or a provider request"
+        )
     finally:
         store.close()
 
 
 async def test_no_image_reaches_the_agent_on_a_platform_without_a_passed_r6_spike(
-    tmp_path: Path, text_evidence_plumbed: None
+    tmp_path: Path,
 ) -> None:
     """T099's rule, enforced in production: ``Run.host_support_tier`` is ``VALIDATED`` exactly
     when this platform's own R6 capture-hygiene spike passed, and on any other tier no image may
@@ -613,9 +678,7 @@ async def test_no_image_reaches_the_agent_on_a_platform_without_a_passed_r6_spik
 # --------------------------------------------------------------------------
 
 
-async def test_mid_run_capture_degradation_downgrades_run_comparability(
-    tmp_path: Path, text_evidence_plumbed: None
-) -> None:
+async def test_mid_run_capture_degradation_downgrades_run_comparability(tmp_path: Path) -> None:
     """A run that starts ``COMPARABLE`` on a validated host and loses its images mid-run must
     serve a downgraded ``comparability_status`` from the record -- not just per-step
     ``visually_degraded`` flags. Asserted on what the store received: exactly one
@@ -739,7 +802,7 @@ class _ProviderInterruptedMidDispatch(FakeModelProvider):
 
 
 async def test_a_dispatch_that_never_returns_leaves_the_capture_recorded_not_shown(
-    tmp_path: Path, text_evidence_plumbed: None
+    tmp_path: Path,
 ) -> None:
     """T260, FR-015, SC-019 -- the case that produced every bad row on the live store, and the
     one the suite had no test for.

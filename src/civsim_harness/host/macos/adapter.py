@@ -45,6 +45,7 @@ from civsim_harness.host.port import (
     InputResult,
     InputStatus,
     WindowRect,
+    WindowTitleListing,
 )
 
 # UNVERIFIED: exact process name as it appears for the binary inside the
@@ -241,6 +242,43 @@ class MacOSHostPlatform:
             reason=(
                 "CGWindowListCreateImage produced an image but pixel extraction "
                 "(CGImageGetDataProvider) is not implemented"
+            ),
+        )
+
+    def list_window_titles(self) -> WindowTitleListing:
+        """NOT IMPLEMENTED -- reports `unavailable` rather than pretending (T265).
+
+        Same reasoning as the Windows half, with the same consequence
+        stated plainly: the content gate's declared-text technique is the
+        only technique for eight of the ten shipped reject categories, so
+        an unavailable listing **closes image delivery on macOS** -- every
+        capture is withheld with a reason rather than shown. A stub that
+        returned `available=True` with no titles would be worse than this
+        one: it would assert that the desktop was examined and found clean.
+
+        For whoever implements it: `Quartz.CGWindowListCopyWindowInfo`
+        with `kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktop
+        Elements` is the same call `find_game_window` above already makes;
+        this method is that call without the pid filter, reading
+        `kCGWindowName`. The non-obvious part is that **`kCGWindowName` is
+        withheld unless the process holds Screen Recording permission** --
+        the dictionary still comes back, with the name key simply absent,
+        so an implementation that has not checked
+        `CGPreflightScreenCaptureAccess` (this adapter already has a
+        `_preflight_screen_recording` helper) will silently report an empty
+        desktop and must report `available=False` instead. Read
+        `host/port.py::WindowTitleListing` first: the titles are the
+        operator's private data, bound to the screening decision alone.
+        """
+        return WindowTitleListing(
+            available=False,
+            reason=(
+                "list_window_titles is not implemented on macOS: the Linux peer added this "
+                "port method (T265) and has no macOS host to verify a "
+                "CGWindowListCopyWindowInfo implementation against -- least of all one whose "
+                "window names are silently withheld without Screen Recording permission. "
+                "Until it lands the content gate has no text evidence on this platform, so "
+                "every capture is withheld and no image is delivered."
             ),
         )
 

@@ -51,6 +51,7 @@ from civsim_harness.host.port import (
     InputResult,
     InputStatus,
     WindowRect,
+    WindowTitleListing,
 )
 
 # UNVERIFIED: exact Windows executable name/casing shipped by the Steam
@@ -586,6 +587,44 @@ class WindowsHostPlatform:
             if mtime > best_mtime:
                 best, best_mtime = candidate, mtime
         return best if best is not None else candidates[0]
+
+    def list_window_titles(self) -> WindowTitleListing:
+        """NOT IMPLEMENTED -- reports `unavailable` rather than pretending (T265).
+
+        Same rule as `focus_window` below, and with a sharper consequence:
+        this listing is the content gate's only text evidence, so reporting
+        `available=False` **closes image delivery on Windows entirely** --
+        eight of the ten shipped reject categories have no other technique,
+        the gate cannot certify a frame against them, and every capture is
+        withheld with a reason. That is the honest state until someone with
+        a Windows host implements and verifies this, and it is strictly
+        safer than the alternative: a stub returning an empty listing with
+        `available=True` would tell the gate "a source ran and the desktop
+        is clean", which is how a gate fails open.
+
+        For whoever implements it: `win32gui.EnumWindows` with
+        `IsWindowVisible` and `GetWindowText` is the same enumeration
+        `find_game_window` above already performs -- this method is
+        essentially that walk without the pid filter, and the two should
+        share it. Two things that will not be obvious: `GetWindowText`
+        deadlocks against a hung window (it sends `WM_GETTEXT`), so
+        `SendMessageTimeout`/`InternalGetWindowText` is the robust form;
+        and the desktop's own chrome (the taskbar, `Shell_TrayWnd`) is a
+        window like any other and is exactly what `windows_taskbar` is
+        about. Read `host/port.py::WindowTitleListing` before returning
+        anything: the titles are the operator's private data and are bound
+        to the screening decision alone.
+        """
+        return WindowTitleListing(
+            available=False,
+            reason=(
+                "list_window_titles is not implemented on Windows: the Linux peer added this "
+                "port method (T265) and will not ship an unverified EnumWindows walk whose "
+                "output decides whether an image is shown to the agent. Until it lands the "
+                "content gate has no text evidence on this platform, so every capture is "
+                "withheld and no image is delivered."
+            ),
+        )
 
     def focus_window(self, window: GameWindow) -> InputResult:
         """NOT IMPLEMENTED -- reports `unavailable` rather than pretending (T248).

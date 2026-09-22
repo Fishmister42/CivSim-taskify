@@ -301,17 +301,15 @@ GATE_INPUTS: list[GateInput] = [
 #: Each entry says why the gap is tolerated *and for how long*. Empty or uncited
 #: justifications fail on their own (see ``_allowlist_problems``).
 GATE_INPUT_ALLOWLIST: dict[str, str] = {
-    "capture_for_step.detected_text_tokens": (
-        "UNRESOLVED - hypervisor review: C0, found 2026-09-22. HALF DONE as of a395325: "
-        "the gate now fails CLOSED on this gap -- an absent value (None, and None is the "
-        "default) means the declared-text technique did not run, so every category it is "
-        "the only technique for is withheld rather than passed. Nothing escapes any more, "
-        "but nothing is delivered either: image delivery is closed on all platforms until "
-        "the tokens exist. Producing them needs desktop-wide window-title enumeration, "
-        "which no HostPlatform port method exposes -- adding it means editing host/port.py "
-        "and host/<platform>/adapter.py, another lane's files. STALE -- delete it -- the "
-        "moment run/decision_loop.py passes the tokens."
-    ),
+    # RESOLVED and deleted, T265 (2026-09-22): "capture_for_step.detected_text_tokens".
+    # `HostPlatform.list_window_titles` now exposes desktop-wide window-title enumeration
+    # (implemented on Linux/X11; Windows and macOS report unavailable with a reason, so image
+    # delivery stays closed there, which is correct), and `run/decision_loop.py` passes
+    # `detected_text_tokens=ctx.host.list_window_titles().text_tokens()`. The entry went STALE
+    # exactly as it said it would, and this check now guards the wiring from here on: remove
+    # that argument and `test_every_gate_input_is_supplied_on_the_production_path` fails with
+    # UNFED GATE. Kept as a comment, not an entry, because the history is why the roster entry
+    # above exists at all.
     "capture_for_step.expected_process": (
         "UNRESOLVED - hypervisor review: C0b, found 2026-09-22. RESOLVED IN SUBSTANCE as "
         "of a395325, but kept because this check reads the CALL SITE and the call site has "

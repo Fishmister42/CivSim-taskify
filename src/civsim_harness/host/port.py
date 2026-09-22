@@ -3,16 +3,19 @@
 Covers **exactly six** capabilities the harness needs from an operating
 system (research R19): locate the game process, identify its window,
 capture that window, resolve game directories (saves + `AppOptions.txt`),
-optional synthetic input, and free disk space. One cross-cutting hook rides
+optional synthetic input, and free disk space. Two cross-cutting hooks ride
 on the capture capability rather than being a seventh:
 `check_capture_preconditions` (T249), the cheap per-capture hygiene
-preflight the capture path consults before ever taking a frame. Nothing
-else belongs here -- process liveness beyond "is it running right now",
-camera control, and everything else the harness does is portable and lives
-outside `host/`.
+preflight the capture path consults before ever taking a frame, and
+`list_window_titles` (T265), the desktop-wide text evidence the capture's
+own content-screening gate needs to decide its text-dependent reject
+categories. Both exist only to serve a capture decision, and neither is a
+capability the harness uses for anything else. Nothing else belongs here --
+process liveness beyond "is it running right now", camera control, and
+everything else the harness does is portable and lives outside `host/`.
 
 This module itself imports nothing platform-specific: it is pure `typing`,
-`dataclasses`, `enum`, and stdlib `pathlib`. Only `host/windows`,
+`dataclasses`, `enum`, and stdlib `pathlib`/`re`. Only `host/windows`,
 `host/macos`, and `host/linux` may reach for an OS-specific library, and
 only inside the methods that need one (see those packages' adapters).
 
@@ -28,11 +31,12 @@ enforces that a non-`ok` outcome always carries an actionable reason -- see
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 # --------------------------------------------------------------------------
 # Value types
@@ -147,6 +151,108 @@ class CapturePreconditionResult:
                 "a pass must name what was checked (or say nothing could be), and a "
                 "failure must name the unmet condition"
             )
+
+
+#: Everything that is not a letter or a digit separates one title word from the next. The
+#: vocabulary the content gate matches against is `catalogs/screening_profiles.yaml`'s own
+#: reject ids split on `"_"` (`parity/screening.py::_category_tokens`), so the token form here
+#: has to be the same shape: lower-cased, alphanumeric, unpunctuated.
+_TITLE_WORD_SEPARATORS: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
+
+
+@dataclass(frozen=True)
+class WindowTitleListing:
+    """The tagged outcome of `list_window_titles` (T265): desktop text evidence, or a reason.
+
+    Like `CaptureResult` and `InputResult`, this is a tagged value rather
+    than a raised exception: a platform or session that cannot enumerate
+    another application's windows says so, with a reason, and the content
+    gate then treats its text-dependent reject categories as **unaddressed**
+    and withholds. `available=False` is therefore never a quiet pass -- it
+    closes image delivery on that platform, which is the correct reading of
+    "no evidence was gathered".
+
+    **PRINCIPLE I -- `titles` is desktop data, not harness data.** These are
+    the titles of the operator's own windows: their browser tabs, their mail
+    client, their documents. They exist for exactly one purpose, deciding the
+    content-screening gate, and they may never be persisted into an
+    agent-visible record, enter an `Observation`, or reach
+    `assemble_context`. That is why the evidence the rest of the harness
+    consumes is :meth:`text_tokens` -- a lower-cased word set with no
+    ordering, no punctuation and no association back to a particular window
+    -- and why no caller outside `host/` reads `titles` at all.
+    `tests/contract/test_window_title_boundary.py` enforces both halves
+    structurally and end to end, rather than trusting this paragraph.
+    """
+
+    available: bool
+    reason: str
+    titles: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.reason.strip():
+            raise ValueError(
+                "WindowTitleListing requires a reason whether or not enumeration was "
+                "available: an unavailable listing must name what stopped it (it becomes "
+                "the withheld capture's recorded reason), and an available one must say "
+                "what was enumerated"
+            )
+        if not self.available and self.titles:
+            raise ValueError(
+                "WindowTitleListing.available is False but titles were supplied: a source "
+                "that did not run cannot have found anything"
+            )
+
+    def text_tokens(self) -> frozenset[str] | None:
+        """This listing as the content gate's `detected_text_tokens`, or `None` if none ran.
+
+        `None` -- never an empty set -- is what an unavailable listing
+        yields, because the gate distinguishes "a text-evidence source ran
+        and found nothing" from "no source ran" and fails closed on the
+        second (see `parity/screening.py::CaptureAttempt`). Returning the
+        two cases from one method is deliberate: a caller that had to write
+        `tokens if listing.available else None` itself could write
+        `frozenset()` by accident, and that single character is the
+        difference between a gate that withholds and a gate that passes
+        every frame unscreened.
+
+        **What this deliberately does NOT emit.** Only words that actually
+        appear in a title. It would be easy to enrich the set with tokens
+        that describe the *source* rather than the text -- `"window"`
+        (everything here is a window title) or the platform name -- and
+        because matching is subset containment, any extra token can only
+        add matches, never remove them. It is still wrong: `firetuner_
+        window` would then match whenever a FireTuner window exists
+        anywhere on the desktop, and FireTuner is running on every host this
+        harness supports, by construction (`contracts/nexus-protocol.md`).
+        Every frame would be withheld forever on a capture path that is
+        window-scoped and structurally cannot contain another application's
+        window. "FireTuner is somewhere on this desktop" is not "FireTuner
+        is in this frame", and a gate that cannot tell those apart is not
+        screening, it is refusing.
+
+        KNOWN RESIDUAL, for the screening lane (T265, 2026-09-22): the
+        consequence of the above is that a reject id whose tokens include a
+        word no window title supplies -- `firetuner_window`'s `"window"`,
+        `harness_owned_ui`'s `"owned"`/`"ui"`, `linux_panel`'s `"linux"` --
+        is *addressable* by this technique but will not match in practice.
+        The technique genuinely runs and genuinely fires (a window titled
+        "Developer Console" matches `developer_console`); its discriminating
+        power is bounded by the reject ids doubling as their own keyword
+        list. Fixing that needs either an explicit per-category keyword
+        vocabulary in `catalogs/screening_profiles.yaml`, or evidence that
+        is frame-scoped rather than desktop-scoped (which windows actually
+        overlap the captured rectangle, and in what stacking order). Both
+        are screening-lane decisions; neither is fixable from the host port.
+        """
+        if not self.available:
+            return None
+        return frozenset(
+            word
+            for title in self.titles
+            for word in _TITLE_WORD_SEPARATORS.split(title.lower())
+            if word
+        )
 
 
 @dataclass(frozen=True)
@@ -281,6 +387,40 @@ class HostPlatform(Protocol):
         records exactly that (see `CapturePreconditionResult` -- the reason
         is structurally required in both directions). An honest no-op is
         acceptable; a silent hard-coded pass is not.
+        """
+        ...
+
+    def list_window_titles(self) -> WindowTitleListing:
+        """Enumerate the titles of the desktop's top-level windows (T265).
+
+        The second cross-cutting hook on the capture capability, and the
+        content-screening gate's only source of text evidence. The gate's
+        declared-text technique decides eight of the ten shipped reject
+        categories (`catalogs/screening_profiles.yaml`), and it cannot run
+        at all unless something enumerates what is on the desktop: with no
+        evidence, those categories are *unaddressed* and every frame is
+        withheld (`parity/screening.py::unaddressed_reject_categories`).
+        That is why this is a port method rather than a portable helper --
+        "what windows exist" is irreducibly an operating-system question.
+
+        Never raises: a platform or session that cannot enumerate other
+        applications' windows -- Wayland without a compositor-specific
+        protocol, a missing optional dependency, an unimplemented adapter --
+        returns `WindowTitleListing(available=False, reason=...)`, exactly
+        as `capture_window` reports `unavailable`. A missing capability
+        **closes** image delivery on that platform; it never opens it.
+
+        **PRINCIPLE I -- this is the only harness call that reads outside
+        the game's own window.** Every other host capability is scoped to
+        the Civ VI process, its window, or the harness's own directories.
+        This one reads the operator's desktop, so what comes back is the
+        operator's private data and is bound to one use: the screening
+        decision. Implementations must not log titles, and callers outside
+        `host/` must consume `WindowTitleListing.text_tokens()` rather than
+        `titles`. No window title may be persisted, enter an `Observation`,
+        or reach `assemble_context`; anything durable records a redacted or
+        hashed form. Enforced by
+        `tests/contract/test_window_title_boundary.py`.
         """
         ...
 
