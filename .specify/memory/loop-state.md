@@ -54,6 +54,29 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
 - `pwsh` is absent: hand-derive the speckit helper JSON; do not edit `.specify/feature.json` while
   lanes run different features concurrently (it still points at 003).
 
+## 🛑 Release-blocking, open (found 2026-09-22) — images are gated OFF by design
+**The content screening gate cannot detect the FireTuner window in production, on any platform.**
+`parity/screening.py`'s declared-text technique fires only when a category's tokens are a subset of
+`detected_text_tokens`, which defaults to `frozenset()` and which **no production caller ever
+supplies** — the one production call site is `run/decision_loop.py:486-498`. On the live Linux
+profile only `debug_overlay` is detectable; `firetuner_window`, `developer_console`,
+`harness_owned_ui`, `linux_panel` and `linux_notification_toast` are structurally invisible. This is
+the enforcement path for FR-025, FR-030, SC-009 and SC-019, and SC-009 makes any finding
+release-blocking. **287 model calls already carry an image, delivered through that gate.**
+Sibling (HIGH): the source gate's process-identity check sits behind `expected_process is not None`,
+also never supplied, so "this frame came from the game's own window" never runs on a real capture.
+
+**Standing order until cleared by the hypervisor: the gate fails closed and images do not reach the
+agent. Nobody re-enables image delivery by any route.** Play continues without frames; the harness
+ran for weeks without them. A retro-audit of the 287 delivered frames runs from a read-only copy of
+the store (`spikes/frame-retro-audit-2026-09-22.md`). T194 against the real client proves future
+frames are clean; it does **not** absolve the delivered backlog — keep the two claims separate.
+
+**Root cause adopted as a project rule:** *an optional parameter with a safe-looking empty default
+(`frozenset()`, `None`) that every unit test supplies and the single production call site does not.*
+Three of the day's four most serious findings have exactly that shape and all converge on one call
+site. A structural check over `src/` for it is being added beside the reachability roster.
+
 ## Lanes running now (2026-09-22)
 1. **002 LIVE** (opus mini-hypervisor) — owns the client. Bring-up → load `…-end2` (t56) → one
    crash-watched turn at head → `cities.set_production` → builder chain → Settler/second city →
