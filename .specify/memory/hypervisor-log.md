@@ -1390,3 +1390,57 @@ current one. A lane that silently picks one is a problem; a lane that stalls wai
 to be resolved is a slower problem. **Flag and proceed.** Instance: the owner's screen was frozen on
 a blocking popup while a "stay idle for the suite window" order was in force; the block needed the
 run lock and tuner, the suite needed CPU, so they did not contend, and the block proceeded.
+
+### Headless 002 — 2026-09-22, implement phase (NOT CONVERGED; suite green and observed)
+
+**Suite at `8992cf6`, observed by this lane in a private clean worktree with the lock directory
+empty and nothing else running: `2200 passed, 19 skipped, 41 deselected, 1 xfailed, 0 failed`
+(224.95 s).** The verifier was verified first — `civsim_harness.__file__` resolving into the
+worktree, `jinja2` importable — because three successive versions of the clean-worktree rule had
+each failed to isolate what they claimed to.
+
+**Landed from Phase 14** (T264–T294 appended; T261/T262 remain unallocated): the screening gate
+now **fails closed** — image delivery is stopped on **all three platforms**, which is the correct
+outcome, not a regression — plus the source gate's process-identity check running in production
+for the first time, the category→technique mapping pinned as data with the detector partitioning
+on that same function, and a strict-xfail negative control. FR-011 has a validator and a
+sole-producer scan. `prompts.orders` is re-declared `bespoke` with its measured gap written down,
+and a new check fires on the **real condition** (any in-harness `send_input` call site) rather than
+on the label. The camera refusal, the `shown_to_agent` two-phase write, the lock-side orphan scan,
+the `OSError`→`NexusError` transport wrap, the `client` marker, the gate-input roster, and the
+records/contracts corrections all landed.
+
+**Three findings arrived as corrections to this pass's own claims, which is the point.**
+`city_count`/`unit_count` were never missing — they are derived from the last observation rather
+than from `TurnCycle.yields`, so grepping the producer made them look absent; only `production` and
+`food` are a real gap, and FR-018 was amended for **those two** with the Principle I reason (Civ VI
+publishes no empire-wide figure for either) recorded in the spec. The `UI.SetMapZoom` and
+`DiplomacyManager.CloseSession()` "no-ops" were **withdrawn**: both calls worked, and the tuner
+returns the pre-call value when the readback is inlined with the write. And the broad structural
+check was built, run in three formulations, and **rejected on evidence** before shipping.
+
+**The day's pattern, and this lane's own instances.** *A mechanism that exists, is well built, and
+is never reached in the case it was written for, with the suite green throughout.* Ten-plus
+instances. Two were ours and both are recorded rather than softened: three successive versions of
+the clean-worktree verification rule that did not isolate the tree, and — worse — **nine parallel
+suites saturating the machine we were measuring.** "The suite is green" was measuring a box this
+lane was itself loading, so its failures carried no information and its passes carried less. That
+is the same error as an inline readback: **measuring through a channel the measurement perturbs.**
+It cost a paid live run (`tuner unreachable`, 90 s into its second leg) before it was caught.
+Corrected: one suite at a time lane-wide, gated through the lane lead, and yield to any run lock.
+**On the quiet box `/compare` passed** — so the "known flake" was us, and T282 survives as a real
+finding about a 1.39× margin where the rest of the module has 7×.
+
+**Operational facts worth keeping.** A broadcast stop is asynchronous — an instruction reaches an
+agent only at its next tool round, so a lane keeps acting on stale orders for minutes; it took
+repeated kill sweeps plus per-agent messages to reach quiet. And **a path-scoped `git add` is
+scoped to the path, not to your changes to it**: on a shared tree that swept a half-landed import
+into a commit and briefly made HEAD unimportable, and swept a whole-file line-ending conversion
+into another. Check `git diff --stat <path>` against HEAD before staging.
+
+**Still open and owned elsewhere**: T269 (Principle VII's resilience half is *unimplementable* —
+no lifecycle method on any platform), T277 (the cross-view camera measurement), T293 (inline
+readbacks — three turn cycles recorded `game_turn_advanced: False` while the game advanced 56→57),
+the `detected_text_tokens` plumbing (blocked on a `HostPlatform` window-enumeration method), and
+the production lock leak in `run/composition.py`, which needs one context manager rather than a
+fixture guard.
