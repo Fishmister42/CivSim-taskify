@@ -46,6 +46,27 @@ own docstring for the specific, honestly-stated gaps (as of T308, ``camera.*`` I
 README's vocabulary but not yet produced by any authored ``output_schema``). Those are
 catalog-authoring gaps outside this wave's file ownership (``catalogs/**``), not evaluator bugs, and
 are called out in this wave's report.
+
+**Absence is not a value to compare (T314).** ``_resolve_attribute`` resolves a field no
+observation body carries to ``None`` rather than raising -- deliberately, so an action can be
+reported "not available right now" instead of crashing -- and ``build_predicate_bindings`` binds
+``target`` to ``None`` whenever the decision carried no ``target`` parameter. Python's comparison
+operators are total over ``None``, so before T314 every one of those absences silently produced a
+truth value, and in roughly half the catalog's verification predicates that value was ``True``:
+``None == None`` (``player.current_civic == target``), ``None != "war"``
+(``other_player.diplomatic_state != "war"``, ``game.current_screen != "prompt.*"``), ``None not in
+[...]`` (``target not in prompt.options``). A ``True`` verification is recorded ``applied``, so
+each of those was a no-op recorded as a success -- the failure direction nothing downstream can
+detect, as distinct from an under-report, which is merely wrong. :func:`_refuse_unresolved_operand`
+removes the edge rather than asking each declaration to remember a guard conjunct: **a comparison
+whose left or right operand resolved to ``None`` is unevaluable**, for every operator, unless the
+predicate's own source writes the literal ``null`` there (``spy.mission != null``,
+``player.city_count != null``) -- which is an author asking about absence on purpose. Unevaluable
+was already a fail-closed state at both call sites (``act.verify`` records ``rejected``,
+``act.dispatch``/``act.availability`` report "not available now"), and it survives a surrounding
+``not`` where a ``False`` would have been negated straight back into the fabricated ``True``.
+:func:`_eval_bool_op` keeps ``and``/``or`` three-valued so this cannot cost a genuinely-decided
+answer: ``unknown or true`` is still ``true``, ``unknown and false`` is still ``false``.
 """
 
 from __future__ import annotations
@@ -238,25 +259,136 @@ def _eval_binop(node: ast.BinOp, bindings: Mapping[str, Any], predicate: str) ->
 
 
 def _eval_bool_op(node: ast.BoolOp, bindings: Mapping[str, Any], predicate: str) -> Any:
+    """``and``/``or`` over three values, not two: true, false, and *unevaluable*.
+
+    T314: :func:`_refuse_unresolved_operand` below turns "one side of this comparison is a value
+    the observation does not carry" into a raised :class:`PredicateEvaluationError` rather than a
+    fabricated answer -- which means an operand of a boolean expression can now genuinely be
+    *unknown*. Propagating that unknown straight out would be wrong in the one direction that
+    matters: ``unknown or true`` is ``true`` (``turn.end_turn``'s own
+    ``game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players`` must
+    still confirm off its second operand when the first will not evaluate), and
+    ``unknown and false`` is ``false``. So an unevaluable operand is *held*, not raised, and the
+    remaining operands are still read; the held error is re-raised only if no other operand
+    decides the expression on its own. This can only ever make an unknown *less* contagious --
+    it never converts an unknown into a ``True``, which is the whole point of the change.
+    """
     is_and = isinstance(node.op, ast.And)
+    held: PredicateEvaluationError | None = None
     result: Any = None
     for value_node in node.values:
-        result = _eval_node(value_node, bindings, predicate)
+        try:
+            result = _eval_node(value_node, bindings, predicate)
+        except PredicateEvaluationError as exc:
+            held = held or exc
+            result = None
+            continue
         if is_and and not result:
             return result
         if not is_and and result:
             return result
+    if held is not None:
+        raise held
     return result
 
 
 def _eval_compare(node: ast.Compare, bindings: Mapping[str, Any], predicate: str) -> bool:
-    left = _eval_node(node.left, bindings, predicate)
+    left_node: ast.AST = node.left
+    left = _eval_node(left_node, bindings, predicate)
     for op, comparator in zip(node.ops, node.comparators, strict=True):
         right = _eval_node(comparator, bindings, predicate)
+        _refuse_unresolved_operand(
+            op,
+            left_node=left_node,
+            left=left,
+            right_node=comparator,
+            right=right,
+            predicate=predicate,
+        )
         if not _apply_comparison(op, left, right, predicate):
             return False
-        left = right
+        left_node, left = comparator, right
     return True
+
+
+def _is_null_literal(node: ast.AST) -> bool:
+    """Whether *node* is the catalog grammar's own ``null`` written out in the predicate source.
+
+    ``null`` parses as an :class:`ast.Name` (see :data:`_LITERAL_NAMES`); ``ast.Constant(None)``
+    is accepted too so a predicate that spells it Python's way is treated identically. This is
+    the ONLY way a ``None`` is allowed to reach a comparison: an author who writes ``null`` is
+    asking about absence on purpose (``espionage.assign_mission``'s ``spy.mission != null``,
+    ``units.found_city``'s ``player.city_count != null``), whereas a ``None`` that merely fell out
+    of resolving ``target`` or an observation field is absence pretending to be a value.
+    """
+    return (isinstance(node, ast.Name) and node.id == "null") or (
+        isinstance(node, ast.Constant) and node.value is None
+    )
+
+
+def _refuse_unresolved_operand(
+    op: ast.cmpop,
+    *,
+    left_node: ast.AST,
+    left: Any,
+    right_node: ast.AST,
+    right: Any,
+    predicate: str,
+) -> None:
+    """Refuse a comparison either of whose operands resolved to ``None`` by absence (T314).
+
+    **The defect this closes, structurally.** ``_resolve_attribute`` resolves an absent field to
+    ``None`` and never raises, and ``build_predicate_bindings`` binds ``target`` to whatever the
+    decision carried -- ``None`` when the model sent ``parameters: {}`` (MEASURED 56 times for
+    ``units.found_city``, 2026-09-21). Python's ``==``/``!=``/``in``/``not in`` are total over
+    ``None``, so every such comparison silently answered a question nobody could actually answer:
+    ``None == None`` is ``True`` (``research.set_civic``'s ``player.current_civic == target``,
+    ``policies.change_government``'s ``player.current_government == target``, and the five other
+    ``<field> == target`` verifications), ``None != "war"`` is ``True``
+    (``diplomacy.make_peace``, the eleven ``prompts.*`` screen checks), and ``None not in [...]``
+    is ``True`` (``prompts.ai_diplomatic_approach``, CONFIRMED LIVE once in the merged store).
+    Each of those ``True``s is read by :func:`civsim_harness.act.verify.verify_execution` as
+    ``applied`` -- a no-op recorded as a success that nothing in the data could ever reveal.
+
+    T310 enumerated this for the observation field, T311 for the left operand of ``in``/``not in``;
+    both were left for a per-declaration fix, and a per-declaration guard conjunct is a rule every
+    future author must remember, not a control. This is the control: there is no longer an edge
+    from "absent" to "a comparison result", for any operator, in any declaration, present or
+    future. Absence is *unevaluable*, which
+    :func:`~civsim_harness.act.verify.verify_execution` already maps to ``rejected`` and
+    ``act.dispatch``/``act.availability`` already map to "not available now" -- the fail-closed
+    direction both already had for a predicate that will not evaluate.
+
+    Wrapping matters, which is why this raises rather than returning ``False``: ``False`` inside
+    ``not (target in X)`` is negated back into a fabricated ``True``, while an unevaluable
+    comparison propagates out through the ``not`` unchanged.
+    """
+    if _is_null_literal(left_node) or _is_null_literal(right_node):
+        # An explicit `null` on EITHER side makes the whole comparison a presence test, and the
+        # other operand being absent is that test's ANSWER, not an error: `spy.mission != null`
+        # and `units.found_city`'s `player.city_count != null` both exist precisely to be
+        # evaluated when the field is missing (`None != None` -> False -> the action is not
+        # confirmed). Refusing per-operand instead of per-comparison would take away the one
+        # idiom this grammar has for asking about absence on purpose -- MEASURED while building
+        # this change: it turned `units.found_city`'s own T313 guard, and `espionage
+        # .assign_mission`, from a decided `False` into an unevaluable predicate.
+        return
+    for side, operand_node, value in (
+        ("left", left_node, left),
+        ("right", right_node, right),
+    ):
+        if value is None and not _is_null_literal(operand_node):
+            raise PredicateEvaluationError(
+                "predicate compared against a value the observation does not carry: the "
+                f"{side} operand resolved to null. Absence is not a value to compare -- "
+                "write an explicit `null` literal to ask about absence on purpose.",
+                detail={
+                    "predicate": predicate,
+                    "operator": type(op).__name__,
+                    "unresolved_operand": ast.unparse(operand_node),
+                    "operand_side": side,
+                },
+            )
 
 
 def _apply_comparison(op: ast.cmpop, left: Any, right: Any, predicate: str) -> bool:
@@ -273,10 +405,19 @@ def _apply_comparison(op: ast.cmpop, left: Any, right: Any, predicate: str) -> b
             return bool(left > right)
         if isinstance(op, ast.GtE):
             return bool(left >= right)
+        # T314: these two used to carry their own `right is None` special cases -- `bool(right is
+        # not None and left in right)` and `bool(right is None or left not in right)`. The second
+        # of those is exactly the fabrication T311 confirmed live (an absent collection read as
+        # "the target is not in it", i.e. success). Both are now subsumed by
+        # `_refuse_unresolved_operand`, which has already rejected either operand being an
+        # absence-`None` before this is reached, and did so for EVERY operator rather than these
+        # two. A `None` that survives to here can only be an explicit `null` literal the author
+        # wrote, and `left in null` has no honest answer -- the TypeError below turns it into the
+        # same PredicateEvaluationError, never into a truth value.
         if isinstance(op, ast.In):
-            return bool(right is not None and left in right)
+            return bool(left in right)
         if isinstance(op, ast.NotIn):
-            return bool(right is None or left not in right)
+            return bool(left not in right)
     except TypeError as exc:
         # A predicate comparing incompatible types (e.g. an absent numeric field, bound to `None`,
         # against a number) is an evaluation-time failure, not a Python crash -- this is what keeps

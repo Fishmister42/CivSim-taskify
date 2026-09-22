@@ -880,6 +880,25 @@ def test_real_camera_verification_predicates_evaluate_correctly(
 # --------------------------------------------------------------------------
 
 
+def _assert_never_confirms(predicate: str, bindings: dict[str, Any]) -> None:
+    """*predicate* must not confirm against *bindings* -- and must not do so by any route.
+
+    T314 widened what "not confirmed" can look like. These polarity tests were written (T308)
+    when an absent field always produced a decided ``False``; a comparison against an absent
+    operand is now *unevaluable* instead, which
+    :func:`~civsim_harness.act.verify.verify_execution` maps to the same ``rejected`` and
+    ``act.dispatch``/``act.availability`` map to the same "not available now". The invariant these
+    tests exist to pin is unchanged and is stated directly here -- **never ``True``** -- rather
+    than being pinned to the particular falsy route the evaluator happened to take in 2026-09,
+    which is what a bare ``is False`` was really asserting.
+    """
+    try:
+        result = evaluate_predicate(predicate, bindings)
+    except PredicateEvaluationError:
+        return
+    assert result is False
+
+
 @pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
 @pytest.mark.parametrize(
     ("declaration_id", "target"),
@@ -903,7 +922,7 @@ def test_camera_verification_predicate_polarity_no_capture_is_false_not_true(
     bindings = build_predicate_bindings(observation=observation, target=target)
     assert bindings["camera"] == {}
 
-    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+    _assert_never_confirms(declaration.verification_predicate, bindings)
 
 
 @pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
@@ -917,7 +936,7 @@ def test_camera_zoom_polarity_explicit_null_zoom_is_false_not_true() -> None:
     bindings = build_predicate_bindings(observation=observation, target=0.5)
     assert bindings["camera"]["zoom"] is None
 
-    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+    _assert_never_confirms(declaration.verification_predicate, bindings)
 
 
 @pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
@@ -931,7 +950,7 @@ def test_camera_set_view_mode_polarity_explicit_null_mode_is_false_not_true() ->
     bindings = build_predicate_bindings(observation=observation, target="world")
     assert bindings["camera"]["mode"] is None
 
-    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+    _assert_never_confirms(declaration.verification_predicate, bindings)
 
 
 @pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
@@ -947,7 +966,7 @@ def test_camera_move_polarity_explicit_null_target_plot_is_false_not_true() -> N
     bindings = build_predicate_bindings(observation=observation, target={"x": 1, "y": 2})
     assert bindings["camera"]["target_plot"] is None
 
-    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+    _assert_never_confirms(declaration.verification_predicate, bindings)
 
 
 @pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
@@ -963,7 +982,7 @@ def test_camera_move_polarity_absent_target_is_revealed_is_false_not_true() -> N
     bindings = build_predicate_bindings(observation=observation, target={"x": 1, "y": 2})
     assert bindings["camera"].get("target_is_revealed") is None
 
-    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+    _assert_never_confirms(declaration.verification_predicate, bindings)
 
 
 # --------------------------------------------------------------------------
@@ -1070,3 +1089,219 @@ def test_build_bindings_computes_player_city_count_from_cities_state() -> None:
 
     null_cities_field = _observation([_entry("cities.state", {"cities": None})])
     assert build_predicate_bindings(observation=null_cities_field)["player"]["city_count"] is None
+
+
+# --------------------------------------------------------------------------
+# T314 (2026-09-22, live lane): `==` against a NULL `target`. T310 enumerated the fabrication
+# axis for the observation field (`X != <literal>`, `not X`, `not (target in X)`); T311 extended
+# it to the LEFT operand of `in`/`not in`. Neither asked about `==` with a null `target`, where
+# `None == None` is `True` -- so `research.set_civic`'s `player.current_civic == target` and
+# `policies.change_government`'s `player.current_government == target` both recorded a no-op as
+# `applied` (MEASURED through the real `verify_execution` before the fix:
+# `outcome=applied progress=changed_state`). Both were reachable only because their availability
+# predicates read collections that happen to be empty today -- an accident, not a control, and
+# commit `0989e3b` (landed today) removes it for `researchable_civics`.
+#
+# The fix is central, in `_refuse_unresolved_operand`: a comparison either of whose operands
+# resolved to `None` by ABSENCE is unevaluable, for every operator and every declaration --
+# unless the predicate's own source writes the literal `null` there, which is an author asking
+# about absence on purpose. The tests below vary **target presence/absence while holding the
+# action identity and the observation content fixed**, which is the axis the defect lives on; a
+# twin that varied the action would encode these fixtures rather than the contract.
+# --------------------------------------------------------------------------
+
+#: (declaration_id, backing observation declaration, its state field, a real value for it).
+_EQUALITY_TARGET_ACTIONS = [
+    ("research.set_civic", "research.state", "current_civic", "CIVIC_CODE_OF_LAWS"),
+    ("policies.change_government", "government.state", "current_government", "GOVERNMENT_CHIEFDOM"),
+]
+
+
+def _equality_action_bindings(
+    backing: str, field: str, field_value: Any, *, target: Any, present: bool = True
+) -> dict[str, Any]:
+    body: dict[str, Any] = {field: field_value} if present else {}
+    observation = _observation([_entry(backing, body)])
+    return build_predicate_bindings(observation=observation, target=target)
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+@pytest.mark.parametrize(("declaration_id", "backing", "field", "value"), _EQUALITY_TARGET_ACTIONS)
+def test_t314_equality_verification_positive_control_still_confirms(
+    declaration_id: str, backing: str, field: str, value: str
+) -> None:
+    """THE POSITIVE CONTROL. A correctly-supplied, non-null target that genuinely matches what the
+    game reports must still confirm -- otherwise the action has been broken, not fixed."""
+    catalog = load_catalog(CATALOG_ROOT)
+    declaration = CapabilityRegistry(catalog=catalog).resolve(declaration_id)
+    assert declaration.verification_predicate is not None
+
+    bindings = _equality_action_bindings(backing, field, value, target=value)
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is True
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+@pytest.mark.parametrize(("declaration_id", "backing", "field", "value"), _EQUALITY_TARGET_ACTIONS)
+def test_t314_equality_verification_null_target_never_confirms(
+    declaration_id: str, backing: str, field: str, value: str
+) -> None:
+    """THE DEFECT. Identical action, identical observation content to the positive control above
+    -- only the target's PRESENCE varies. A null target must never confirm. Before the fix this
+    resolved `True` whenever the field was also absent, and `verify_execution` recorded
+    `applied`."""
+    catalog = load_catalog(CATALOG_ROOT)
+    declaration = CapabilityRegistry(catalog=catalog).resolve(declaration_id)
+    assert declaration.verification_predicate is not None
+
+    # (a) the game reports a real value, the decision carried no target.
+    _assert_never_confirms(
+        declaration.verification_predicate,
+        _equality_action_bindings(backing, field, value, target=None),
+    )
+    # (b) the field is present-but-null AND the decision carried no target -- `None == None`.
+    _assert_never_confirms(
+        declaration.verification_predicate,
+        _equality_action_bindings(backing, field, None, target=None),
+    )
+    # (c) the field is ABSENT from the body entirely AND the decision carried no target.
+    _assert_never_confirms(
+        declaration.verification_predicate,
+        _equality_action_bindings(backing, field, None, target=None, present=False),
+    )
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+@pytest.mark.parametrize(("declaration_id", "backing", "field", "value"), _EQUALITY_TARGET_ACTIONS)
+def test_t314_equality_verification_absent_field_with_real_target_never_confirms(
+    declaration_id: str, backing: str, field: str, value: str
+) -> None:
+    """The other half of the same comparison: target PRESENT, observation field absent. This was
+    already safe (`None == "CIVIC_..."` is `False`) and must stay that way -- the fix must not
+    have turned an under-report into a confirmation."""
+    catalog = load_catalog(CATALOG_ROOT)
+    declaration = CapabilityRegistry(catalog=catalog).resolve(declaration_id)
+    assert declaration.verification_predicate is not None
+
+    _assert_never_confirms(
+        declaration.verification_predicate,
+        _equality_action_bindings(backing, field, None, target=value),
+    )
+    _assert_never_confirms(
+        declaration.verification_predicate,
+        _equality_action_bindings(backing, field, None, target=value, present=False),
+    )
+    # A real value that simply is not the one asked for stays a decided, readable `False`.
+    bindings = _equality_action_bindings(backing, field, "SOMETHING_ELSE", target=value)
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+@pytest.mark.parametrize(("declaration_id", "backing", "field", "value"), _EQUALITY_TARGET_ACTIONS)
+def test_t314_verify_execution_records_rejected_not_applied_for_a_null_target(
+    declaration_id: str, backing: str, field: str, value: str
+) -> None:
+    """End to end through the real `verify_execution` -- the function that turns a predicate's
+    verdict into the ledger row. Same action, same observations; only the target varies."""
+    from civsim_harness.act.verify import verify_execution
+    from civsim_harness.models.decision import ExecutionOutcome
+
+    catalog = load_catalog(CATALOG_ROOT)
+    declaration = CapabilityRegistry(catalog=catalog).resolve(declaration_id)
+    observation = _observation([_entry(backing, {field: value})])
+
+    null_target = verify_execution(
+        declaration=declaration,
+        pre_observation=observation,
+        post_observation=observation,
+        target=None,
+        verified_at=datetime(2026, 9, 22),
+    )
+    assert null_target.execution.outcome is ExecutionOutcome.REJECTED
+
+    real_target = verify_execution(
+        declaration=declaration,
+        pre_observation=observation,
+        post_observation=observation,
+        target=value,
+        verified_at=datetime(2026, 9, 22),
+    )
+    assert real_target.execution.outcome is ExecutionOutcome.APPLIED
+
+
+# -- the general mechanism, not just these two declarations -------------------------------------
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "player.current_civic == target",  # T314's own shape
+        "player.current_civic != target",
+        "target in player.available_policies",  # T311's left-operand axis
+        "target not in player.available_policies",
+        "not (target in player.available_policies)",  # the wrapped form a `False` would negate
+    ],
+)
+def test_t314_null_target_is_unevaluable_for_every_comparison_operator(predicate: str) -> None:
+    bindings = {
+        "player": {"current_civic": "CIVIC_X", "available_policies": ["POLICY_X"]},
+        "target": None,
+    }
+    with pytest.raises(PredicateEvaluationError):
+        evaluate_predicate(predicate, bindings)
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        'game.current_screen != "prompt.era_transition"',  # T310's field axis
+        'game.current_screen == "prompt.era_transition"',
+        "not (target in city.purchasable_with_gold)",
+    ],
+)
+def test_t314_absent_observation_field_is_unevaluable_for_every_comparison_operator(
+    predicate: str,
+) -> None:
+    bindings: dict[str, Any] = {"game": {}, "city": {}, "target": "SOMETHING"}
+    with pytest.raises(PredicateEvaluationError):
+        evaluate_predicate(predicate, bindings)
+
+
+def test_t314_explicit_null_literal_stays_an_answerable_presence_test() -> None:
+    """The one idiom this grammar has for asking about absence ON PURPOSE must keep working, in
+    both directions -- `espionage.assign_mission`'s `spy.mission != null` and
+    `units.found_city`'s `player.city_count != null` are exactly that, and a per-operand refusal
+    would have destroyed both (it did, in the first draft of this fix)."""
+    assert evaluate_predicate("spy.mission != null", {"spy": {"mission": "MISSION_X"}}) is True
+    assert evaluate_predicate("spy.mission != null", {"spy": {}}) is False
+    assert evaluate_predicate("spy.mission == null", {"spy": {}}) is True
+
+    found_city = "player.city_count != null and player.city_count > observed_city_count"
+    assert (
+        evaluate_predicate(found_city, {"player": {"city_count": None}, "observed_city_count": 1})
+        is False
+    )
+    assert (
+        evaluate_predicate(found_city, {"player": {"city_count": 2}, "observed_city_count": 1})
+        is True
+    )
+
+
+def test_t314_or_still_confirms_off_a_decidable_branch_when_the_other_is_unevaluable() -> None:
+    """`turn.end_turn`'s shape. An unevaluable operand must not swallow an `or` that some other
+    branch genuinely satisfies -- the fix must cost no answer the evaluator could already give."""
+    predicate = "game.turn_number == observed_turn_number and game.is_waiting_for_other_players"
+    assert (
+        evaluate_predicate(
+            predicate.replace(" and ", " or "),
+            {"game": {"is_waiting_for_other_players": True}, "observed_turn_number": 5},
+        )
+        is True
+    )
+    # ...and `unknown and false` is still `false`, not unevaluable.
+    assert (
+        evaluate_predicate(
+            predicate,
+            {"game": {"is_waiting_for_other_players": False}, "observed_turn_number": 5},
+        )
+        is False
+    )
