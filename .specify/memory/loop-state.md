@@ -431,6 +431,22 @@ there was one partial lookup between them.
   `UnicodeDecodeError`, leaving the run `lifecycle_state: playing` forever with its driver polling a
   status that would never change. **"Still playing" and "died and could not say why" must not share a
   representation.**
+- **🛑 Naming a test path on the command line overrides `--ignore`, and that is how the live board
+  gets driven by a headless lane.** `pyproject.toml` sets
+  `addopts = ["--ignore=tests/live", "-m", "not client"]`, and its own comment already states the
+  reasoning: *absence of the client is not what makes these tests unsafe; presence of it is.*
+  **The guards in `tests/live/*` are present and correct** — `test_branch_identity.py:242-243` has
+  the identical `_civ6_pid` / `_tuner_reachable` pair as `test_build_pin.py:133-134` — **and they
+  protect you only when the client is DOWN.** On this box the client is up, so the guard passes and
+  the test drives the tuner.
+  **How it actually happened (2026-09-22): two correct mechanisms, wrong outcome in the gap.**
+  Something SIGTERMs pytest at ~180 s, so a lane split the suite by naming directories to get any
+  measurement at all; naming directories defeated the `--ignore`; a real `NexusClient` opened, a run
+  reached `playing`, and it polled the live board for 300 s. **Every step was reasonable.**
+  **Rule: run the accepted command form VERBATIM, with no paths.** It is safe precisely because it
+  inherits `addopts`. When you must narrow, narrow with `-k` or a marker — **never by naming
+  `tests/live`.** And after any such crossing, **treat the board position as unverified and re-probe
+  rather than assuming where the last runner left it.**
 - **`nm -DC` silence is not evidence that an accessor is unbound.** No `l*Favor*` symbol exists on any
   player interface, yet `strings -a` finds `GetFavor` and Firaxis' own shipped XP2 UI calls
   `Players[id]:GetFavor()`. **Some Lua bindings exist only as name strings with no exported
