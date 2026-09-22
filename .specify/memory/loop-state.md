@@ -132,6 +132,12 @@ there was one partial lookup between them.
   **where the remedy is already precedent** — a category no technique addressed used to read as *clean*
   and now **withholds**. **The mechanical test: could this check ever return "I do not know"?** If not,
   it is an allowlist read as a detector and it will produce confident false all-clears.
+  **The remedy, in all three: MAKE THE UNKNOWN EXPLICIT.** The gate now withholds a category no
+  technique addresses; the probe must answer `unknown` rather than `world`; and **every observation body
+  that `pcall`s an accessor must emit a `<field>_reason` when it could not answer, instead of omitting
+  the field** — a nil Lua value vanishes from the JSON, and an absent field is indistinguishable from
+  "legitimately not applicable". `882758e` already set that precedent, reporting
+  `government_rows_without_hash` rather than a silent `[]`. A phantom becomes a stated gap.
 - **Grade every close-out claim by evidence tier, never present them flat**: applied-and-verified
   (store record + reproduction) / applied-but-resting-on-an-assumption / not demonstrated / in flight
   and unproven / **retracted**. A summary that gives them the same confidence is this project's own
