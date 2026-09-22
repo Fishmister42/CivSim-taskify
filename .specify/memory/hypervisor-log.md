@@ -957,3 +957,22 @@ on a timer instead. Client left up at game turn 53 on the dedication chooser; Li
 Suite on head `5361afe`: **not green** — the full suite hangs at about 40 % on head `5361afe` (two independent runs, 14:39 and 16:06, both stuck at the same point with four failure marks showing); the last green full run was 1989 passed / 9 skipped / 0 failed at `7b7eb04`, so the hang entered with `05766af` or `c795039`; diagnosis running, result to #1.
 Next: full-suite gate; map the dedication chooser; fill `city.available_productions`; verify the
 greeting click and the pre-save clearance live; T177/T191–T194/T198/T200 remain client-gated.
+
+### Live S4 — 2026-09-21 (18:00–20:05 EDT)
+
+Blocks 21–25 and goal runs 01–05 from the detached worktree; entries 8, 9, 10 on #3. Game turn 54 →
+59 (defeat) → reload 42 → 53. New live actions: `prompts.era_transition`, `prompts.era_dedication`,
+`prompts.natural_disaster` → **11 of 41** applied (from 9); images 277 of 592 steps. First game-over:
+Persia taken by Georgia at t59, recorded as SaveVerificationError (no game-over detection; fixed
+headless f31fb5b, unverified live). First defeat-to-reload recovery, ~17 min: post-defeat MainMenu
+refuses Network.LoadGame (3 saves); the exit modal ignores synthetic input (xdotool, harness XTest);
+killed at the empty menu, relaunched, fresh menu loaded t42 in 38.0 s. Production: the LIST fix
+verified live (8 options); the SET never lands — 9× then 80× rejected "verification false" even after
+59af4a2, while a direct API probe had CanStartOperation=true and RequestOperation accepted → next
+suspect is head-selection / InGame state for the BUILD op. First-meeting greeting statement answer
+fails verification on the reloaded board (48/48 across three goals) — distinct from the Goodbye/Exit
+case. Congress: `WorldCongressIntro` unmapped (block 21); the session does not block end turn.
+Operator interventions all recorded, none counted. End save `civsim-gameplay-2026-09-21-end`
+(t53, size-stable). Client left InGame t53, city panel open, tuner free, no lock. Lessons: keep every
+foreground command < 600 s (my own poll loop backgrounded twice); goal driver needs secrets in the
+worktree; `git add` with one missing path stages nothing.
