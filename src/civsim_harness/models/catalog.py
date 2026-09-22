@@ -12,6 +12,7 @@ against.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Any
 
@@ -221,6 +222,18 @@ class CapabilityPath(StrEnum):
     BESPOKE = "bespoke"
 
 
+#: One relative Lua path, nothing else -- no whitespace, no separator, no sentence.
+#: Module scope rather than a class attribute because pydantic claims leading-underscore
+#: class attributes as private attrs.
+#:
+#: Deliberately does NOT mandate a ``lua/`` prefix. The executor resolves this against a
+#: configurable ``_lua_root``, so the prefix is a property of the *shipped catalog*, not of
+#: the field -- encoding it here would have rejected the executor's own tests, which is how
+#: a validator starts describing one caller's convention instead of the contract. That the
+#: shipped refs resolve on disk is checked separately, over the real catalog.
+_IMPLEMENTATION_REF = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_/]*\.lua$")
+
+
 class IntegrationCapability(HarnessModel):
     """The implementation behind one or more declarations (FR-027-FR-029).
 
@@ -244,6 +257,40 @@ class IntegrationCapability(HarnessModel):
     # restatement and, like the declaration-level field, must be non-empty --
     # never an empty string standing in for "absent".
     parity_basis: str | None = Field(default=None, min_length=1)
+
+    #: ``implementation_ref`` is resolved as a path, not read as prose:
+    #: ``capability/executor.py::_load_dispatch_table`` does
+    #: ``self._lua_root / implementation_ref`` and raises ``CatalogError`` when the
+    #: result is not a file. That resolution is **lazy and cached**, so it happens the
+    #: first time a capability is dispatched *inside a live run* -- which is why a
+    #: sentence in this field is not a documentation defect but a run-killer, and why it
+    #: must be rejected at catalog load instead.
+    #:
+    #: MEASURED 2026-09-22: ``prompts.orders`` shipped
+    #: ``lua/ingame/screens.lua + src/civsim_harness/capability/executor.py`` here. Every
+    #: run that met a prompt paused on ``implementation_ref does not resolve to a file on
+    #: disk``; runs that drew no ``prompts.*`` never touched it. **The harness could not
+    #: answer any prompt at all**, and the board had to be cleared by hand.
+    @model_validator(mode="after")
+    def _implementation_ref_is_a_resolvable_path(self) -> IntegrationCapability:
+        """One relative Lua path, never a sentence, never a list (T314).
+
+        The composite that caused this must fail here rather than at dispatch time. A
+        capability that spans a Lua file and a Python mechanism says so in
+        ``firetuner_gap`` -- which is what ``prompts.orders`` already did, in full, while
+        *also* putting the Python path in this field, where nothing read it as anything
+        but a path.
+        """
+        ref = self.implementation_ref
+        if not _IMPLEMENTATION_REF.match(ref):
+            raise ValueError(
+                "implementation_ref must be a single relative Lua path "
+                f"(e.g. lua/ingame/screens.lua) -- got {ref!r}. "
+                "It is resolved as a path at dispatch time, so prose here pauses a live "
+                "run instead of failing the load. Describe a bespoke mechanism in "
+                "firetuner_gap, not here."
+            )
+        return self
 
     @model_validator(mode="after")
     def _bespoke_requires_gap(self) -> IntegrationCapability:

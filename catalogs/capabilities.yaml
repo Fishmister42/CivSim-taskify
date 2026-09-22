@@ -215,7 +215,7 @@
 
 - capability_id: prompts.orders
   path: bespoke
-  implementation_ref: lua/ingame/screens.lua + src/civsim_harness/capability/executor.py
+  implementation_ref: lua/ingame/screens.lua
   reads: [currently open prompt and its offered options]
   writes: [prompt responses]
   firetuner_gap: >-

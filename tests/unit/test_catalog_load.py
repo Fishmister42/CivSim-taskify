@@ -319,3 +319,73 @@ def test_unregistered_declaration_id_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(CatalogError):
         registry.authorize("no.such.declaration", LuaContext.IN_GAME)
+
+
+def test_implementation_ref_must_be_a_resolvable_lua_path_not_prose() -> None:
+    """T314: a sentence in `implementation_ref` killed every run that met a prompt.
+
+    `capability/executor.py::_load_dispatch_table` resolves this field with
+    `self._lua_root / implementation_ref` and raises `CatalogError` when the result is not
+    a file. That resolution is **lazy and cached** -- it happens the first time the
+    capability is dispatched, *inside a live run*. So `prompts.orders` shipping
+    `lua/ingame/screens.lua + src/civsim_harness/capability/executor.py` did not fail the
+    catalog load; it paused every run that met a prompt, and only those. Runs that drew no
+    `prompts.*` never touched it.
+
+    The field was introduced by the commit that made the *bespoke-path* declaration
+    honest -- a commit about a validator that could only ever agree, which added a field
+    nothing validated. Hence this test: the guard has to be able to fail.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    from civsim_harness.models.catalog import IntegrationCapability
+    from civsim_harness.models.common import CapabilityId
+
+    # The exact value that shipped, verbatim.
+    with pytest.raises(ValidationError, match="single relative Lua path"):
+        IntegrationCapability(
+            capability_id=CapabilityId("prompts.orders"),
+            path="bespoke",
+            implementation_ref=(
+                "lua/ingame/screens.lua + src/civsim_harness/capability/executor.py"
+            ),
+            firetuner_gap="measured gap",
+        )
+
+    # Neighbouring prose shapes are refused too, so the fix is not keyed to one separator.
+    for prose in (
+        "lua/ingame/screens.lua, src/civsim_harness/capability/executor.py",
+        "lua/ingame/screens.lua and the host click path",
+        "src/civsim_harness/capability/executor.py",
+        "",
+    ):
+        with pytest.raises(ValidationError):
+            IntegrationCapability(
+                capability_id=CapabilityId("x.y"),
+                path="firetuner",
+                implementation_ref=prose,
+            )
+
+    # Positive twin: the shape every other capability uses is accepted.
+    ok = IntegrationCapability(
+        capability_id=CapabilityId("x.y"),
+        path="firetuner",
+        implementation_ref="lua/ingame/screens.lua",
+    )
+    assert ok.implementation_ref == "lua/ingame/screens.lua"
+
+
+def test_every_shipped_implementation_ref_resolves_to_a_file_on_disk() -> None:
+    """The load-time twin of the dispatch-time check, so it cannot fail in a run first."""
+    from pathlib import Path
+
+    from civsim_harness.capability.loader import load_catalog
+
+    catalog = load_catalog(Path("catalogs"))
+    unresolved = [
+        cap.capability_id
+        for cap in catalog.capabilities.values()
+        if not (Path(".") / cap.implementation_ref).is_file()
+    ]
+    assert unresolved == [], f"implementation_ref does not resolve on disk: {unresolved}"
