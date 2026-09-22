@@ -1,0 +1,244 @@
+{
+  "goal": "build_a_builder",
+  "chain": [
+    "build_a_builder"
+  ],
+  "provider": "scripted",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "provider_script": "tests/live/scripts/builder_from_capital.yaml",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T21:13:25.981272+00:00",
+  "parts": [
+    {
+      "goal": "build_a_builder",
+      "title": "Build a Builder in your capital",
+      "run_id": "run-8becab23703d40c1b1525df4be892b36",
+      "turn_cap": 12,
+      "reached_at_turn": 2,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": "success",
+      "reached": true,
+      "evaluated": true,
+      "reached_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "player.cities.count >= 1",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "player.cities.available_productions != []",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "paused",
+      "elapsed_s": 278.8,
+      "success_predicate": "player.units.builder_count >= observed_start_builder_count + 1",
+      "success_check": {
+        "predicate": "player.units.builder_count >= observed_start_builder_count + 1",
+        "met": true,
+        "reason": null
+      },
+      "steps": 21,
+      "turns_recorded": [
+        1,
+        2,
+        3
+      ],
+      "actions": {
+        "cities.select": {
+          "applied": 2
+        },
+        "cities.set_production": {
+          "applied": 1
+        },
+        "turn.end_turn": {
+          "applied": 1,
+          "verification_failed": 1,
+          "unavailable_to_human_now": 16
+        }
+      },
+      "actions_applied": {
+        "cities.select": 2,
+        "cities.set_production": 1,
+        "turn.end_turn": 1
+      },
+      "provider": "scripted",
+      "provider_policy": "uniform",
+      "game_start_turn": 85,
+      "provider_script": "tests/live/scripts/builder_from_capital.yaml",
+      "script_id": "builder_from_capital",
+      "script_on_unavailable": "retry",
+      "script_ledger": [
+        {
+          "ordinal": 1,
+          "declaration_id": "cities.select",
+          "parameters": {
+            "target": 65536
+          },
+          "status": "issued_available",
+          "issues": 2,
+          "reason": "",
+          "note": "Open the capital's panel. Every other city order's availability predicate begins `city.is_selected`, so nothing below is reachable until this lands.",
+          "sequence_epoch": 0,
+          "step_index": 2
+        },
+        {
+          "ordinal": 2,
+          "declaration_id": "cities.set_production",
+          "parameters": {
+            "target": "UNIT_BUILDER"
+          },
+          "status": "issued_available",
+          "issues": 1,
+          "reason": "",
+          "note": "Set the capital's production to a Builder -- the first half of the build -> use chain, and the action whose 110 live failures on 2026-09-21 were wrong dispatch parameters rather than a slow confirm.",
+          "sequence_epoch": 0,
+          "step_index": 3
+        },
+        {
+          "ordinal": 3,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "issued_available",
+          "issues": 1,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": 0,
+          "step_index": 4
+        },
+        {
+          "ordinal": 4,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "issued_available",
+          "issues": 1,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": 1,
+          "step_index": 1
+        },
+        {
+          "ordinal": 5,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "issued_unavailable",
+          "issues": 6,
+          "reason": "a prompt is blocking play",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": 2,
+          "step_index": 6
+        },
+        {
+          "ordinal": 6,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        },
+        {
+          "ordinal": 7,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        },
+        {
+          "ordinal": 8,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        },
+        {
+          "ordinal": 9,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        },
+        {
+          "ordinal": 10,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        }
+      ],
+      "script_ledger_summary": "script 'builder_from_capital' HALTED at declared step 5 of 10 (turn.end_turn) because it was not available on any of its 6 declared attempt(s); the request last said: a prompt is blocking play; 5 later step(s) were never reached, and nothing was observed about them",
+      "scripted_landing_warning": "Every action in this run was named by a declared script, not chosen by an agent. A landing here proves the action chain works end to end and is NO evidence about what an agent would choose. `civsim store coverage` reports these in a separate tier and never in the demonstrated-action headline.",
+      "store": {
+        "run": {
+          "lifecycle_state": "paused",
+          "stop_resolution": null,
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 3,
+        "decision_steps": 21,
+        "save_points": 3,
+        "captures": 27,
+        "run_events": 66,
+        "model_calls": 21,
+        "turns_recorded": [
+          1,
+          2,
+          3
+        ],
+        "captures_shown_to_agent": 5,
+        "capture_screening": [
+          "screened_clean",
+          "withheld"
+        ],
+        "model_calls_served": [
+          "scripted/declared-sequence-v1"
+        ],
+        "model_cost_usd": 0,
+        "model_input_tokens": 0,
+        "model_output_tokens": 0
+      }
+    }
+  ],
+  "finished_at": "2026-09-22T21:18:24.535217+00:00",
+  "reached": true,
+  "evaluated": true,
+  "reached_reason": null,
+  "recording": {
+    "frames": 257,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 6448,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t093s.png",
+      "keyframe_2_t186s.png",
+      "keyframe_3_t278s.png"
+    ],
+    "capture_failures": 0
+  }
+}

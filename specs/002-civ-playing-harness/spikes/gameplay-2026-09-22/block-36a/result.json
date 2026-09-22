@@ -1,0 +1,160 @@
+{
+  "goal": "set_capital_production",
+  "chain": [
+    "set_capital_production"
+  ],
+  "provider": "scripted",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "provider_script": "/home/matt/CivSolver/tests/live/scripts/camera_to_world_view.yaml",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T21:03:19.745216+00:00",
+  "parts": [
+    {
+      "goal": "set_capital_production",
+      "title": "Set the capital's production",
+      "run_id": "run-344a1bfc483e493f8bf687bef62b18b3",
+      "turn_cap": 2,
+      "reached_at_turn": null,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": null,
+      "reached": false,
+      "evaluated": true,
+      "reached_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "player.cities.count >= 1",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "player.cities.available_productions != []",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "paused",
+      "elapsed_s": 40.4,
+      "success_predicate": "observed_applied_cities_set_production >= 1 and player.cities.production_queue != []",
+      "success_check": {
+        "predicate": "observed_applied_cities_set_production >= 1 and player.cities.production_queue != []",
+        "met": false,
+        "reason": null
+      },
+      "steps": 18,
+      "turns_recorded": [
+        1
+      ],
+      "actions": {
+        "camera.set_view_mode": {
+          "applied": 1
+        },
+        "camera.zoom": {
+          "applied": 1
+        },
+        "turn.end_turn": {
+          "unavailable_to_human_now": 16
+        }
+      },
+      "actions_applied": {
+        "camera.set_view_mode": 1,
+        "camera.zoom": 1
+      },
+      "provider": "scripted",
+      "provider_policy": "uniform",
+      "game_start_turn": 85,
+      "provider_script": "/home/matt/CivSolver/tests/live/scripts/camera_to_world_view.yaml",
+      "script_id": "camera_to_world_view",
+      "script_on_unavailable": "retry",
+      "script_ledger": [
+        {
+          "ordinal": 1,
+          "declaration_id": "camera.set_view_mode",
+          "parameters": {
+            "target": "world"
+          },
+          "status": "issued_available",
+          "issues": 1,
+          "reason": "",
+          "note": "Leave strategic view. `views.world` is the only view whose zoom_range the board can satisfy without depending on the un-toleranced 0.05 boundary that strategic's lower bound sits on.",
+          "sequence_epoch": 0,
+          "step_index": 1
+        },
+        {
+          "ordinal": 2,
+          "declaration_id": "camera.zoom",
+          "parameters": {
+            "target": 0.5
+          },
+          "status": "issued_available",
+          "issues": 1,
+          "reason": "",
+          "note": "Land inside `views.world`'s declared zoom_range [0.2, 1.0].",
+          "sequence_epoch": 0,
+          "step_index": 2
+        },
+        {
+          "ordinal": 3,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "issued_unavailable",
+          "issues": 4,
+          "reason": "a prompt is blocking play",
+          "note": "One turn so the block produces an ordinary turn cycle around the captures rather than a camera-only record.",
+          "sequence_epoch": 0,
+          "step_index": 6
+        }
+      ],
+      "script_ledger_summary": "script 'camera_to_world_view' HALTED at declared step 3 of 3 (turn.end_turn) because it was not available on any of its 4 declared attempt(s); the request last said: a prompt is blocking play; 0 later step(s) were never reached, and nothing was observed about them",
+      "scripted_landing_warning": "Every action in this run was named by a declared script, not chosen by an agent. A landing here proves the action chain works end to end and is NO evidence about what an agent would choose. `civsim store coverage` reports these in a separate tier and never in the demonstrated-action headline.",
+      "store": {
+        "run": {
+          "lifecycle_state": "paused",
+          "stop_resolution": null,
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 1,
+        "decision_steps": 18,
+        "save_points": 1,
+        "captures": 20,
+        "run_events": 27,
+        "model_calls": 18,
+        "turns_recorded": [
+          1
+        ],
+        "captures_shown_to_agent": 16,
+        "capture_screening": [
+          "screened_clean",
+          "withheld"
+        ],
+        "model_calls_served": [
+          "scripted/declared-sequence-v1"
+        ],
+        "model_cost_usd": 0,
+        "model_input_tokens": 0,
+        "model_output_tokens": 0
+      }
+    }
+  ],
+  "finished_at": "2026-09-22T21:04:05.537102+00:00",
+  "reached": false,
+  "evaluated": true,
+  "reached_reason": null,
+  "recording": {
+    "frames": 38,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 6613,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t013s.png",
+      "keyframe_2_t027s.png",
+      "keyframe_3_t040s.png"
+    ],
+    "capture_failures": 0
+  }
+}

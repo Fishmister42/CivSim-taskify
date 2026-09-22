@@ -1,0 +1,9 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal set_capital_production: objective written to goal-set_capital_production.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=set_capital_production provider=scripted provider_policy=uniform provider_script=/home/matt/CivSolver/tests/live/scripts/camera_to_world_view.yaml turn_cap=2]
+t+000s  goal set_capital_production: run run-344a1bfc483e493f8bf687bef62b18b3
+t+000s  goal set_capital_production: playing turn=1 step=None
+t+041s  goal set_capital_production: paused turn=1 step=None
+t+041s  goal set_capital_production: run paused -- this part's terminal state
+t+041s  goal set_capital_production: stale run-identity lock cleared (run-344a1bfc483e493f8bf687bef62b18b3.lock.json)
+t+041s  goal set_capital_production not reached; the chain stops here (a later part starts from a state that never arrived)

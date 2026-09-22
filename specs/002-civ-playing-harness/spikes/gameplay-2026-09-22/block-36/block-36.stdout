@@ -1,0 +1,326 @@
+  [17:13:25] recording started: every frame via the production capture_window() (window-scoped)
+  [17:13:25] goal build_a_builder: objective written to goal-build_a_builder.md (objective text only)
+  [17:13:26] PRODUCTION: Runner.start(run-config.yaml) [goal=build_a_builder provider=scripted provider_policy=uniform provider_script=tests/live/scripts/builder_from_capital.yaml turn_cap=12]
+  [17:13:26] goal build_a_builder: run run-8becab23703d40c1b1525df4be892b36
+  [17:13:26] goal build_a_builder: playing turn=1 step=None
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	43	30	0	true	false
+{"extra": {"attempt": 1, "declaration_id": "cities.select", "elapsed_s": 0.0, "poll_s": 1.0, "predicate": "city.is_selected\n", "timeout_s": 4.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:13:33.194108+00:00"}
+{"extra": {"attempt": 1, "declaration_id": "cities.select", "elapsed_s": 0.0, "poll_s": 1.0, "predicate": "city.is_selected\n", "timeout_s": 4.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:13:34.848059+00:00"}
+{"extra": {"attempt": 1, "declaration_id": "cities.set_production", "elapsed_s": 0.0, "poll_s": 1.0, "predicate": "target in city.production_queue\n", "timeout_s": 4.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:13:36.621085+00:00"}
+{"extra": {"attempt": 1, "declaration_id": "turn.end_turn", "elapsed_s": 0.0, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:13:38.493356+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnGovernorChanged\n1\t2\nOnGovernorChanged\n1\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n1\t5\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani control Property assigned", "timestamp": "2026-09-22T21:13:39.880020+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnGovernorChanged\n2\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n2\t2\nOnGovernorChanged\n2\t5\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7", "timestamp": "2026-09-22T21:13:41.311055+00:00"}
+{"extra": {"attempt": 2, "declaration_id": "turn.end_turn", "elapsed_s": 3.996, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:13:42.489832+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnGovernorChanged\n3\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n3\t5\nOnGovernorChanged\n3\t2\nOnGovernorChanged\n3\t6\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9", "timestamp": "2026-09-22T21:13:44.546335+00:00"}
+{"extra": {"attempt": 3, "declaration_id": "turn.end_turn", "elapsed_s": 7.792, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:13:46.284875+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnGovernorChanged\n4\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n4\t2\nOnGovernorChanged\n4\t5\nOnGovernorChanged\n4\t6\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nCity CS property Detected\ntable: 0x7892fd26e790\ttrader to\t11\nSearch Result\t1\nbTraderToAmani\t1\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nOnGovernorChanged\n5\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n5\t5\nOnGovernorChanged\n5\t2\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nCity CS property Detected\ntable: 0x7892fe7254c0\ttrader to\t12\nSearch Result\t1\nbTraderToAmani\t1\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12", "timestamp": "2026-09-22T21:13:48.466969+00:00"}
+{"extra": {"attempt": 4, "declaration_id": "turn.end_turn", "elapsed_s": 11.72, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:13:50.212961+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnTradeRouteActivityChanged\t12\t12\t65536\t5\t262147\n12\t12\t65536\t5\t262147", "timestamp": "2026-09-22T21:13:50.248332+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnGameTurnStarted: Turn\t86\tLocal State:\t22\t2026-09-22 17:13:51\nPlayer\tLEADER_CYRUS\t forgot to pick a tech: Adjust. Turn\t86\nResolving Buffered Parameters\nShoud Terminate", "timestamp": "2026-09-22T21:13:52.279702+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged\t0\t65536\t0\t0\t0\tfalse\tfalse", "timestamp": "2026-09-22T21:13:52.845003+00:00"}
+{"extra": {"attempt": 5, "declaration_id": "turn.end_turn", "elapsed_s": 15.64, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:13:54.133842+00:00"}
+  [17:13:55] goal build_a_builder: playing turn=2 step=None
+{"extra": {"attempt": 1, "declaration_id": "turn.end_turn", "elapsed_s": 0.0, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:01.200005+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnGovernorChanged\n1\t2\nOnGovernorChanged\n1\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n1\t5\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nOnGovernorChanged\n2\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n2\t2\nOnGovernorChanged\n2\t5\nOnTradeRouteActivityChanged\t2\t2\t458757\t2\t65536\n2\t2\t458757\t2\t65536\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t7", "timestamp": "2026-09-22T21:14:03.542900+00:00"}
+{"extra": {"attempt": 2, "declaration_id": "turn.end_turn", "elapsed_s": 4.342, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:05.541780+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnGovernorChanged\n3\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n3\t5\nOnGovernorChanged\n3\t2\nOnGovernorChanged\n3\t6\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t9", "timestamp": "2026-09-22T21:14:07.137244+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnGovernorChanged\n4\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n4\t2\nOnGovernorChanged\n4\t5\nOnGovernorChanged\n4\t6\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nCity CS property Detected\ntable: 0x7892fd26e790\ttrader to\t11\nSearch Result\t1\nbTraderToAmani\t1\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t11", "timestamp": "2026-09-22T21:14:08.412628+00:00"}
+{"extra": {"attempt": 3, "declaration_id": "turn.end_turn", "elapsed_s": 8.767, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:09.966844+00:00"}
+{"level": "WARNING", "logger": "civsim_harness.nexus.client", "message": "nexus: discarding unmatched output: OnGovernorChanged\n5\t1\nAmani Established\namani established -> recalculate amani yields and plot properties\nOnGovernorChanged\n5\t5\nOnGovernorChanged\n5\t2\nOnTradeRouteActivityChanged\t5\t5\t65536\t8\t65536\n5\t5\t65536\t8\t65536\nRecalculating plot properties\nAmani Trader Property Found => Is Trader to Amani Active Checks\nCity Owner\t8\tbControl\tfalse\nCity Owner\t8\tbControl\tfalse\nCity Owner\t8\tbControl\ttrue\nbControl Final\ttrue\nSending Add trader req\nRequest to BulkHide( true, Diplomacy ), Show on 0 = 1\n AddIntelAlliance(tabContainer:table)\ndiplo stmt type=1092515808\nOnGameplaySetAmaniProperty called\nAmani_RecalculatePlayer called\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nCity CS property Detected\ntable: 0x7892fe7254c0\ttrader to\t12\nSearch Result\t1\nbTraderToAmani\t1\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nOnGameplaySetCSTrader called\ntable: 0x7892fe7254c0\ttrader to\t12\nAdding CS ID to trader list\ntable: 0x7892fe7254c0\ttrader to\t12\ntable: 0x7892fe7254c0\ttrader to\t8\nAmani_RecalculateCity called\nPlayer AMANI Property Detected\nAmani iMinorID\t12\nCity CS property Detected\ntable: 0x7892fe7254c0\ttrader to\t12\ntable: 0x7892fe7254c0\ttrader to\t8\nSearch Result\t1\nbTraderToAmani\t1", "timestamp": "2026-09-22T21:14:12.029125+00:00"}
+{"extra": {"attempt": 4, "declaration_id": "turn.end_turn", "elapsed_s": 12.817, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:14.016682+00:00"}
+{"extra": {"attempt": 5, "declaration_id": "turn.end_turn", "elapsed_s": 16.883, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:18.082954+00:00"}
+{"extra": {"attempt": 6, "declaration_id": "turn.end_turn", "elapsed_s": 20.902, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:22.101998+00:00"}
+{"extra": {"attempt": 7, "declaration_id": "turn.end_turn", "elapsed_s": 24.931, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:26.131517+00:00"}
+{"extra": {"attempt": 8, "declaration_id": "turn.end_turn", "elapsed_s": 29.025, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:30.225389+00:00"}
+{"extra": {"attempt": 9, "declaration_id": "turn.end_turn", "elapsed_s": 33.098, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:34.298122+00:00"}
+{"extra": {"attempt": 10, "declaration_id": "turn.end_turn", "elapsed_s": 37.15, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:38.350370+00:00"}
+{"extra": {"attempt": 11, "declaration_id": "turn.end_turn", "elapsed_s": 41.157, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:42.357151+00:00"}
+{"extra": {"attempt": 12, "declaration_id": "turn.end_turn", "elapsed_s": 45.183, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:46.382681+00:00"}
+{"extra": {"attempt": 13, "declaration_id": "turn.end_turn", "elapsed_s": 49.3, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:50.500050+00:00"}
+{"extra": {"attempt": 14, "declaration_id": "turn.end_turn", "elapsed_s": 53.33, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:54.529941+00:00"}
+{"extra": {"attempt": 15, "declaration_id": "turn.end_turn", "elapsed_s": 57.382, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:14:58.582136+00:00"}
+{"extra": {"attempt": 16, "declaration_id": "turn.end_turn", "elapsed_s": 61.442, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:02.641744+00:00"}
+{"extra": {"attempt": 17, "declaration_id": "turn.end_turn", "elapsed_s": 65.561, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:06.761155+00:00"}
+{"extra": {"attempt": 18, "declaration_id": "turn.end_turn", "elapsed_s": 69.616, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:10.816262+00:00"}
+{"extra": {"attempt": 19, "declaration_id": "turn.end_turn", "elapsed_s": 73.65, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:14.850096+00:00"}
+{"extra": {"attempt": 20, "declaration_id": "turn.end_turn", "elapsed_s": 77.684, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:18.883624+00:00"}
+{"extra": {"attempt": 21, "declaration_id": "turn.end_turn", "elapsed_s": 81.75, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:22.950148+00:00"}
+{"extra": {"attempt": 22, "declaration_id": "turn.end_turn", "elapsed_s": 85.835, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:27.034897+00:00"}
+{"extra": {"attempt": 23, "declaration_id": "turn.end_turn", "elapsed_s": 89.881, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:31.081404+00:00"}
+{"extra": {"attempt": 24, "declaration_id": "turn.end_turn", "elapsed_s": 93.929, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:35.129165+00:00"}
+{"extra": {"attempt": 25, "declaration_id": "turn.end_turn", "elapsed_s": 97.972, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:39.171534+00:00"}
+{"extra": {"attempt": 26, "declaration_id": "turn.end_turn", "elapsed_s": 102.018, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:43.218158+00:00"}
+{"extra": {"attempt": 27, "declaration_id": "turn.end_turn", "elapsed_s": 106.129, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:47.329234+00:00"}
+{"extra": {"attempt": 28, "declaration_id": "turn.end_turn", "elapsed_s": 110.202, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:51.401532+00:00"}
+{"extra": {"attempt": 29, "declaration_id": "turn.end_turn", "elapsed_s": 114.233, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:55.433187+00:00"}
+{"extra": {"attempt": 30, "declaration_id": "turn.end_turn", "elapsed_s": 118.275, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:15:59.474495+00:00"}
+{"extra": {"attempt": 31, "declaration_id": "turn.end_turn", "elapsed_s": 122.335, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:03.534708+00:00"}
+{"extra": {"attempt": 32, "declaration_id": "turn.end_turn", "elapsed_s": 126.415, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:07.614724+00:00"}
+{"extra": {"attempt": 33, "declaration_id": "turn.end_turn", "elapsed_s": 130.462, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:11.661741+00:00"}
+{"extra": {"attempt": 34, "declaration_id": "turn.end_turn", "elapsed_s": 134.502, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:15.701626+00:00"}
+{"extra": {"attempt": 35, "declaration_id": "turn.end_turn", "elapsed_s": 138.522, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:19.722096+00:00"}
+{"extra": {"attempt": 36, "declaration_id": "turn.end_turn", "elapsed_s": 142.587, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:23.787457+00:00"}
+{"extra": {"attempt": 37, "declaration_id": "turn.end_turn", "elapsed_s": 146.608, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:27.808179+00:00"}
+{"extra": {"attempt": 38, "declaration_id": "turn.end_turn", "elapsed_s": 150.632, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:31.831843+00:00"}
+{"extra": {"attempt": 39, "declaration_id": "turn.end_turn", "elapsed_s": 154.667, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:35.867379+00:00"}
+{"extra": {"attempt": 40, "declaration_id": "turn.end_turn", "elapsed_s": 158.682, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:39.882179+00:00"}
+{"extra": {"attempt": 41, "declaration_id": "turn.end_turn", "elapsed_s": 162.744, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:43.944152+00:00"}
+{"extra": {"attempt": 42, "declaration_id": "turn.end_turn", "elapsed_s": 166.836, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:48.036016+00:00"}
+{"extra": {"attempt": 43, "declaration_id": "turn.end_turn", "elapsed_s": 170.875, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:52.074511+00:00"}
+{"extra": {"attempt": 44, "declaration_id": "turn.end_turn", "elapsed_s": 174.921, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:16:56.121104+00:00"}
+{"extra": {"attempt": 45, "declaration_id": "turn.end_turn", "elapsed_s": 178.95, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:17:00.150041+00:00"}
+{"extra": {"attempt": 46, "declaration_id": "turn.end_turn", "elapsed_s": 182.973, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:17:04.172551+00:00"}
+{"extra": {"attempt": 47, "declaration_id": "turn.end_turn", "elapsed_s": 186.999, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:17:08.198781+00:00"}
+{"extra": {"attempt": 48, "declaration_id": "turn.end_turn", "elapsed_s": 191.065, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:17:12.265390+00:00"}
+{"extra": {"attempt": 49, "declaration_id": "turn.end_turn", "elapsed_s": 195.138, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:17:16.337871+00:00"}
+{"extra": {"attempt": 50, "declaration_id": "turn.end_turn", "elapsed_s": 199.188, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:17:20.387867+00:00"}
+{"extra": {"attempt": 51, "declaration_id": "turn.end_turn", "elapsed_s": 203.256, "poll_s": 2.0, "predicate": "game.turn_number == observed_turn_number + 1 or game.is_waiting_for_other_players\n", "timeout_s": 200.0}, "level": "INFO", "logger": "civsim_harness", "message": "act.confirm_execution.waiting", "timestamp": "2026-09-22T21:17:24.456102+00:00"}
+  [17:17:25] goal build_a_builder: playing turn=3 step=None
+  [17:17:25] goal build_a_builder: REACHED at recorded turn 2 -- stopping the run
+  [17:18:05] goal build_a_builder: paused turn=3 step=None
+  [17:18:05] goal build_a_builder: run paused -- this part's terminal state
+  [17:18:05] goal build_a_builder: stale run-identity lock cleared (run-8becab23703d40c1b1525df4be892b36.lock.json)
+{
+  "goal": "build_a_builder",
+  "chain": [
+    "build_a_builder"
+  ],
+  "provider": "scripted",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "provider_script": "tests/live/scripts/builder_from_capital.yaml",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T21:13:25.981272+00:00",
+  "parts": [
+    {
+      "goal": "build_a_builder",
+      "title": "Build a Builder in your capital",
+      "run_id": "run-8becab23703d40c1b1525df4be892b36",
+      "turn_cap": 12,
+      "reached_at_turn": 2,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": "success",
+      "reached": true,
+      "evaluated": true,
+      "reached_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "player.cities.count >= 1",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "player.cities.available_productions != []",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "paused",
+      "elapsed_s": 278.8,
+      "success_predicate": "player.units.builder_count >= observed_start_builder_count + 1",
+      "success_check": {
+        "predicate": "player.units.builder_count >= observed_start_builder_count + 1",
+        "met": true,
+        "reason": null
+      },
+      "steps": 21,
+      "turns_recorded": [
+        1,
+        2,
+        3
+      ],
+      "actions": {
+        "cities.select": {
+          "applied": 2
+        },
+        "cities.set_production": {
+          "applied": 1
+        },
+        "turn.end_turn": {
+          "applied": 1,
+          "verification_failed": 1,
+          "unavailable_to_human_now": 16
+        }
+      },
+      "actions_applied": {
+        "cities.select": 2,
+        "cities.set_production": 1,
+        "turn.end_turn": 1
+      },
+      "provider": "scripted",
+      "provider_policy": "uniform",
+      "game_start_turn": 85,
+      "provider_script": "tests/live/scripts/builder_from_capital.yaml",
+      "script_id": "builder_from_capital",
+      "script_on_unavailable": "retry",
+      "script_ledger": [
+        {
+          "ordinal": 1,
+          "declaration_id": "cities.select",
+          "parameters": {
+            "target": 65536
+          },
+          "status": "issued_available",
+          "issues": 2,
+          "reason": "",
+          "note": "Open the capital's panel. Every other city order's availability predicate begins `city.is_selected`, so nothing below is reachable until this lands.",
+          "sequence_epoch": 0,
+          "step_index": 2
+        },
+        {
+          "ordinal": 2,
+          "declaration_id": "cities.set_production",
+          "parameters": {
+            "target": "UNIT_BUILDER"
+          },
+          "status": "issued_available",
+          "issues": 1,
+          "reason": "",
+          "note": "Set the capital's production to a Builder -- the first half of the build -> use chain, and the action whose 110 live failures on 2026-09-21 were wrong dispatch parameters rather than a slow confirm.",
+          "sequence_epoch": 0,
+          "step_index": 3
+        },
+        {
+          "ordinal": 3,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "issued_available",
+          "issues": 1,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": 0,
+          "step_index": 4
+        },
+        {
+          "ordinal": 4,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "issued_available",
+          "issues": 1,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": 1,
+          "step_index": 1
+        },
+        {
+          "ordinal": 5,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "issued_unavailable",
+          "issues": 6,
+          "reason": "a prompt is blocking play",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": 2,
+          "step_index": 6
+        },
+        {
+          "ordinal": 6,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        },
+        {
+          "ordinal": 7,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        },
+        {
+          "ordinal": 8,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        },
+        {
+          "ordinal": 9,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        },
+        {
+          "ordinal": 10,
+          "declaration_id": "turn.end_turn",
+          "parameters": {},
+          "status": "not_reached",
+          "issues": 0,
+          "reason": "",
+          "note": "Carry the production across turns. The Builder appears in `units.state` when the city finishes it; build_a_builder's success predicate reads that, not this script.",
+          "sequence_epoch": null,
+          "step_index": null
+        }
+      ],
+      "script_ledger_summary": "script 'builder_from_capital' HALTED at declared step 5 of 10 (turn.end_turn) because it was not available on any of its 6 declared attempt(s); the request last said: a prompt is blocking play; 5 later step(s) were never reached, and nothing was observed about them",
+      "scripted_landing_warning": "Every action in this run was named by a declared script, not chosen by an agent. A landing here proves the action chain works end to end and is NO evidence about what an agent would choose. `civsim store coverage` reports these in a separate tier and never in the demonstrated-action headline.",
+      "store": {
+        "run": {
+          "lifecycle_state": "paused",
+          "stop_resolution": null,
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 3,
+        "decision_steps": 21,
+        "save_points": 3,
+        "captures": 27,
+        "run_events": 66,
+        "model_calls": 21,
+        "turns_recorded": [
+          1,
+          2,
+          3
+        ],
+        "captures_shown_to_agent": 5,
+        "capture_screening": [
+          "screened_clean",
+          "withheld"
+        ],
+        "model_calls_served": [
+          "scripted/declared-sequence-v1"
+        ],
+        "model_cost_usd": 0,
+        "model_input_tokens": 0,
+        "model_output_tokens": 0
+      }
+    }
+  ],
+  "finished_at": "2026-09-22T21:18:24.535217+00:00",
+  "reached": true,
+  "evaluated": true,
+  "reached_reason": null,
+  "recording": {
+    "frames": 257,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 6448,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t093s.png",
+      "keyframe_2_t186s.png",
+      "keyframe_3_t278s.png"
+    ],
+    "capture_failures": 0
+  }
+}

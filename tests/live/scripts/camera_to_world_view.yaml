@@ -1,0 +1,56 @@
+# A declared action script for `--provider scripted`.
+#
+# WHAT THIS PROVES, AND WHAT IT DOES NOT.
+# It establishes whether a CAPTURE REACHES THE AGENT on this board. It proves nothing about play
+# and nothing about what an agent would choose; every decision is recorded as `provider=scripted`
+# and reported in a separate tier.
+#
+# WHY IT EXISTS. MEASURED on the live board, 2026-09-22 ~17:00 EDT: `camera.read_state` answered
+# `mode: strategic, zoom: 0.049999713897705`. NO view declaration in catalogs/observations/views.yaml
+# matches that camera state:
+#   * `views.world`     requires mode world      and zoom in [0.2, 1.0]  -- mode is wrong;
+#   * `views.strategic` requires mode strategic  and zoom in [0.05, 0.3] -- and the zoom check at
+#     parity/screening.py tests `low <= zoom <= high` with NO tolerance, so
+#     `0.05 <= 0.049999713897705` is False, short by 2.861e-07.
+# With no matching view the capture has no view to be delivered under, so it is withheld. Blocks 34
+# and 35 got zero frames for exactly this reason: 65 captures, every one at strategic/0.0499997, and
+# nothing in 51 steps ever requested `world`. That is a BOARD state, not a code defect.
+#
+# The two steps below put the camera in a state a view does declare. If a capture then comes back
+# with shown_to_agent true, frame delivery is open on this board and the head it ran at.
+script_id: camera_to_world_view
+description: >
+  Put the camera into world mode at a zoom `views.world` declares, so a capture has a view to be
+  delivered under.
+
+# `retry` rather than `halt`: `camera.zoom`'s availability predicate is board-independent
+# (`target >= 0.05 and target <= 1.0`), but the mode change must be visible in the next observation
+# before a world-range zoom is anything but a strategic-view zoom, and a queued prompt can occupy a
+# request. The action is always issued at least once regardless, so a refusal lands on the record
+# with the game's own reason.
+on_unavailable: retry
+attempts_per_step: 4
+
+steps:
+  - declaration_id: camera.set_view_mode
+    parameters:
+      target: world
+    note: >
+      Leave strategic view. `views.world` is the only view whose zoom_range the board can satisfy
+      without depending on the un-toleranced 0.05 boundary that strategic's lower bound sits on.
+
+  # 0.5 is deliberately mid-range, not an endpoint. Every requested zoom in the store was an
+  # endpoint (0.05 or 1.0), so the engine's float error on a mid-range request is UNMEASURED -- this
+  # step measures it. It also sits clear of both ends of `views.world`'s [0.2, 1.0] with margin, so
+  # a delivery failure here cannot be blamed on a boundary comparison.
+  - declaration_id: camera.zoom
+    parameters:
+      target: 0.5
+    note: >
+      Land inside `views.world`'s declared zoom_range [0.2, 1.0].
+
+  - declaration_id: turn.end_turn
+    repeat: 1
+    note: >
+      One turn so the block produces an ordinary turn cycle around the captures rather than a
+      camera-only record.

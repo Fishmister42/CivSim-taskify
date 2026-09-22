@@ -1,0 +1,11 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal build_a_builder: objective written to goal-build_a_builder.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=build_a_builder provider=scripted provider_policy=uniform provider_script=tests/live/scripts/builder_from_capital.yaml turn_cap=12]
+t+000s  goal build_a_builder: run run-8becab23703d40c1b1525df4be892b36
+t+000s  goal build_a_builder: playing turn=1 step=None
+t+028s  goal build_a_builder: playing turn=2 step=None
+t+239s  goal build_a_builder: playing turn=3 step=None
+t+239s  goal build_a_builder: REACHED at recorded turn 2 -- stopping the run
+t+279s  goal build_a_builder: paused turn=3 step=None
+t+279s  goal build_a_builder: run paused -- this part's terminal state
+t+279s  goal build_a_builder: stale run-identity lock cleared (run-8becab23703d40c1b1525df4be892b36.lock.json)
