@@ -293,13 +293,42 @@ schema makes `firetuner_gap` a required field when `path: bespoke`, so an undocu
 cannot validate. One bespoke capability is planned at the outset — save/load dialog driving (R5) —
 and is recorded in Complexity Tracking C1.
 
-**Resolved by the R5 spike (T077): there is now no bespoke capability at all.**
-`spikes/r5-save-path.md` recorded **Outcome A** against a real client — `Network.SaveGame(gameFile)`
-in the `InGame` context writes a real, named `.Civ6Save`. Under Principle II a working Firetuner
-path means the planned dialog driver is **forbidden rather than merely unnecessary**; it was never
-written, `catalogs/` carries zero `path: bespoke` entries, and every `firetuner_gap` in
-`catalogs/capabilities.yaml` is `null`. Complexity Tracking **C1 is therefore discharged**, and is
-kept below as the record of a deviation that was planned for and then did not have to be taken.
+**The R5 spike (T077) closed the save half.** `spikes/r5-save-path.md` recorded **Outcome A**
+against a real client — `Network.SaveGame(gameFile)` in the `InGame` context writes a real, named
+`.Civ6Save`. Under Principle II a working Firetuner path means the planned save/load **dialog
+driver** is *forbidden rather than merely unnecessary*; it was never written, and `saves.save_game`
+is declared `path: firetuner`.
+
+**But C1 was not discharged — it moved, and this plan said otherwise until 2026-09-22.** The text
+here previously read "there is now no bespoke capability at all … C1 is therefore discharged". That
+was true of the *save* path and false of the harness. A bespoke synthetic-input path shipped
+elsewhere: answering an in-game **prompt**. Measured 2026-09-21 (blocks 13-15), no Lua API reachable
+from `InGame` fires a control's registered callback — `control:CallCallback(Mouse.eLClick)` returns
+without error and does nothing, and the generic `UI.RespondToPrompt` this once fell through to
+exists in none of Firaxis' 645 shipped Lua files (`spikes/lua-accessor-audit-2026-09-21.md`). So
+`lua/ingame/screens.lua`'s `respond` returns the button's own on-screen rectangle and
+`capability/executor.py` clicks its centre through `HostPlatform.send_input` (XTest on Linux). That
+is a bespoke path in exactly the sense Principle II means, and until 2026-09-22 it was declared
+`path: firetuner` with `firetuner_gap: null` — the measured gap recorded only in a Python comment.
+
+**Corrected, not excused.** `prompts.orders` is now declared `path: bespoke` in
+`catalogs/capabilities.yaml` and carries the measured gap verbatim, together with what the bespoke
+path does. It was **not** split into a Firetuner capability plus a bespoke one, because every
+answerable prompt family in `CivSim_Screens_RespondToPrompt` — the acknowledge-only popups, the
+diplomatic approach, the era dedication chooser, the congress page — can return a host-click
+request, so a split would leave no declaration on the pure-Firetuner side and would be a fiction.
+Firetuner-first still holds *within* the capability: where a direct call exists
+(`DiplomacyManager.AddResponse` / `CloseSession`, `UIManager:DequeuePopup`) it is the primary route,
+the click is the fallback, and every result records `path` / `path_reason` saying which ran and why.
+**C1 is therefore live, not discharged** (see Complexity Tracking below).
+
+**The load-time validator could not have caught this, and now something can.**
+`models/catalog.py`'s `_bespoke_requires_gap` only fires on `path: bespoke`, so a mislabelled
+bespoke path passed it vacuously — the check was structurally blind to the one failure that
+matters. `tests/contract/test_synthetic_input_declaration.py` closes that hole: it pins every
+in-harness `HostPlatform.send_input` call site as data, re-derives the set from the source with
+`ast` so a new synthetic-input path cannot ship without being declared, and asserts the capability
+each one serves is `path: bespoke` with a non-empty `firetuner_gap`.
 
 **Revision 3 strengthens rather than weakens this.** Firetuner-first is now also the *portability*
 argument: everything on the FireTuner path is portable for free, because the tuner interface exists
@@ -370,6 +399,16 @@ more than one model and SC-016's distinguishability resolves at step granularity
 violations. Four justified items are recorded in Complexity Tracking — C1–C3 unchanged by the
 clarifications, which strengthened compliance with Principles III and IV rather than requiring any
 new deviation, plus C4 for revision 3's host layer.
+
+**2026-09-22 re-check — this gate should not have read PASS on Principle II, and now does again for
+a different reason.** Between the prompt host-click landing and this correction, a bespoke
+synthetic-input path was shipping declared `path: firetuner`; Principle II's requirement is not
+that the bespoke path be avoided but that it be *declared and its gap recorded*, and it was not.
+The gate reads PASS now because the declaration was corrected to match what ships — not because the
+principle was relaxed to fit it. C1 is live rather than discharged, which is a justified deviation
+recorded in Complexity Tracking, not a violation. **Every statement in this Constitution Check is
+now a statement about what shipped**, which is the standard it failed at on Principle II: the
+Principle I surfaces table (below) and the requirement count were both still describing the design.
 
 **Revision 3 re-check**: no principle is weakened by going cross-platform, and two are better
 served. Principle I is unaffected because the catalog and filter contain no OS-specific concept —
@@ -474,7 +513,7 @@ enforcing it is cheap; the CI matrix catches what the lint rule misses.
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| **C1** — *(DISCHARGED — the R5 spike returned Outcome A: `Network.SaveGame` works from `InGame`, so this deviation was never taken and the bespoke driver is now forbidden. Retained as the planning record.)* A bespoke input-automation path (save/load dialog driving) alongside the Firetuner-first rule of Principle II | Reliable named per-turn quicksave is required by Principle IV and FR-007, and no documented Civ VI Lua call performs a save-to-named-file from the tuner contexts (R5). A turn cannot proceed without its quicksave, so this is load-bearing, not convenience. | Pure Firetuner rejected because the capability appears absent, not merely awkward — the spike in R5 keeps the Firetuner-first order by requiring a documented negative result before the bespoke path is enabled. Relying on the game's own autosave rotation rejected because autosaves are neither named nor addressable per turn, which breaks FR-032 and branch identity (FR-034). |
+| **C1** — *(LIVE, and not where it was planned — corrected 2026-09-22. The R5 spike returned Outcome A, so the **save/load dialog driver** this row was written for was never taken and is now forbidden. But a bespoke synthetic-input path did ship, for a different surface: answering an in-game **prompt**, where the measured gap is that no Lua API reachable from `InGame` fires a control's registered callback. `prompts.orders` is declared `path: bespoke` with that gap. This row previously read DISCHARGED, which was true of the save path and false of the harness.)* A bespoke input-automation path alongside the Firetuner-first rule of Principle II | Reliable named per-turn quicksave is required by Principle IV and FR-007, and no documented Civ VI Lua call performs a save-to-named-file from the tuner contexts (R5). A turn cannot proceed without its quicksave, so this is load-bearing, not convenience. | Pure Firetuner rejected because the capability appears absent, not merely awkward — the spike in R5 keeps the Firetuner-first order by requiring a documented negative result before the bespoke path is enabled. Relying on the game's own autosave rotation rejected because autosaves are neither named nor addressable per turn, which breaks FR-032 and branch identity (FR-034). |
 | **C2** — A local SQLite + blob reference adapter for a store that deliverable 3 owns | FR-013 and FR-051 make persistence a precondition of every turn advance, so the harness cannot be built or tested before deliverable 3 exists. The port keeps the dependency direction correct: the harness depends on a contract, not on an implementation. | Blocking on deliverable 3 rejected because it serializes two deliverables that a published contract lets proceed in parallel. Writing local files directly rejected because it would be exactly the bypassing path Principle III forbids — the adapter is behind the same port the real store will implement, and port conformance tests run against both. |
 | **C3** — An operator control surface on a harness whose presentation belongs to deliverable 1 | FR-004 requires lifecycle commands without touching the game client, and deliverable 1 is deliberately read-only (its FR-026), so lifecycle control has nowhere else to live. | A shared surface rejected because FR-053 and Principle VI forbid a second presentation of run state that could diverge. Mitigation is structural rather than a rule: loopback-only binding and a command/diagnostics-only schema that carries no turn records, decisions, metrics, or captures. |
 | **C4** — Three implementations of the host layer, and a support tier that admits some platforms are weaker | No principle requires cross-platform support, so this is complexity taken on deliberately rather than forced. It is justified by what it removes: revision 1's Windows pin was based on a factual error (R1), and leaving it in place would have hard-coded a false constraint into the one deliverable everything else depends on. Capture and synthetic input genuinely differ per OS and cannot be abstracted away, only isolated. | **Windows-only** rejected because the constraint was never real — the tuner interface ships in all three native builds and the harness already bypasses the Windows-only GUI. **A single cross-platform automation framework** rejected because it would pull a large uninspectable surface into the most parity-sensitive path for six narrow capabilities. **Claiming uniform support** rejected as the actively harmful option: Wayland blocks synthetic input and gates capture behind an interactive grant, so a uniform claim would produce silently worse runs on some platforms — the tiers exist so a weaker platform is less capable without being less honest. |

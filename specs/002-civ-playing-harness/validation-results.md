@@ -31,7 +31,7 @@ open items below that block calling this deliverable fully compliant.
 | Principle | Status | Headline |
 |---|---|---|
 | I — Human-Parity Information & Action Boundary | **Partially evidenced** | Structural boundary is real and tested; the `EnableDebugMenu` question is resolved with no constitutional tension; capture pixel extraction now works on Linux/X11 through the harness itself, but is still stubbed on Windows/macOS/Wayland and has never run against a real Civ VI frame |
-| II — Firetuner-First, Skill-Extensible Harness | **Compliant** | All 23 capabilities are `path: firetuner`; `Network.SaveGame` is now live-verified 4/4, so the one candidate bespoke path is not merely unneeded but **forbidden** |
+| II — Firetuner-First, Skill-Extensible Harness | **Compliant, after a correction (2026-09-22)** | `Network.SaveGame` is live-verified 4/4, so the planned *save-dialog* bespoke path is not merely unneeded but **forbidden** — but a bespoke path did ship for prompts (a real synthetic click at a control's rectangle) and was declared `path: firetuner` with a null gap until 2026-09-22. `prompts.orders` is now `path: bespoke` carrying its measured gap; 26 of 27 capabilities are `path: firetuner` |
 | III — Complete Match Telemetry | **Compliant (structurally enforced)** | `TurnPersistedToken` still makes end-turn unreachable without a durably-acknowledged write; two real defects that would have violated this principle's spirit were found by the integration tier and fixed |
 | IV — Reproducible, Seeded Experimentation | **Partially evidenced** | FR-034's identical-position guarantee is now verified field-for-field across a save/load round trip; but `Network.LoadGame` itself refuses from Lua, so the *automated* load path does not exist — only the UI path does |
 | V — Guidebook-Before-Optimization Gate | **Correctly gated, not satisfied** | `GUIDEBOOK.md` does not exist, which is the gate working as intended, not a defect |
@@ -69,9 +69,14 @@ open items below that block calling this deliverable fully compliant.
   half that feeds capability results with extra undeclared properties a buggy Lua implementation
   could return — proving the forbidden-field guard actually catches what schema validation alone
   does not.
-- **All 23 capabilities** in `catalogs/capabilities.yaml` are `path: firetuner` (see Principle II
-  below) — there is currently no bespoke integration path in the codebase to audit for a
-  Principle-I leak in the first place.
+- **26 of the 27 capabilities** in `catalogs/capabilities.yaml` are `path: firetuner` (see
+  Principle II below). *(Corrected 2026-09-22: this read "all 23 … are `path: firetuner` — there is
+  currently no bespoke integration path in the codebase to audit".)* The one bespoke path,
+  `prompts.orders`, writes only: it clicks a button the prompt itself is already offering, and the
+  options it may click come from `screens.probe`, a declared observation that the parity filter
+  sees like any other. A synthetic click carries no information back into the agent's context, so
+  it is not a Principle-I leak surface — but the claim above should not have been that there was
+  nothing to audit.
 - **`EnableDebugMenu` is resolved, and there is no constitutional tension.** The concern going in
   was real: if the tuner depended on debug mode, every run would be non-parity by construction.
   `spikes/principle-i-debugmenu-linux.md` diffed a genuine before/after on one host across three
@@ -128,9 +133,38 @@ audit.
 
 **Evidence.**
 
-- `catalogs/capabilities.yaml` currently declares 23 capabilities; all 23 are `path: firetuner`,
-  and `path: bespoke` appears zero times in the file.
-- **The one candidate bespoke path is now live-verified, and the evidence upgrades the verdict from
+- **CORRECTED 2026-09-22.** This bullet read: "`catalogs/capabilities.yaml` currently declares 23
+  capabilities; all 23 are `path: firetuner`, and `path: bespoke` appears zero times in the file."
+  The file now declares **27** capabilities, **26** `path: firetuner` and **one** `path: bespoke`.
+  The bespoke one is `prompts.orders`, and it was shipping as `path: firetuner` while issuing a real
+  synthetic mouse click. **The audit statement was true of the file and false of the harness**, which
+  is the failure mode this document exists to catch: `lua/ingame/screens.lua`'s `respond` returns a
+  control's on-screen rectangle and `capability/executor.py` clicks its centre through
+  `HostPlatform.send_input` (XTest on Linux). The gap was measured on 2026-09-21 (blocks 13-15) —
+  no Lua API reachable from `InGame` fires a control's registered callback,
+  `control:CallCallback(Mouse.eLClick)` returns without error and fires nothing, and the generic
+  `UI.RespondToPrompt` exists in none of Firaxis' 645 shipped Lua files
+  (`spikes/lua-accessor-audit-2026-09-21.md`) — but was recorded only in a Python comment. It now
+  lives in the capability's `firetuner_gap`, which is what Principle II asks for.
+- **The hole in the enforcement, and what closes it.** `models/catalog.py`'s `_bespoke_requires_gap`
+  fires only on `path: bespoke`, so a mislabelled bespoke path satisfied it *vacuously* — the
+  validator could not have caught this, and neither could the "`path: bespoke` appears zero times"
+  check above, which is the same blind spot written as evidence.
+  `tests/contract/test_synthetic_input_declaration.py` (new, 2026-09-22) pins every in-harness
+  `HostPlatform.send_input` call site as data, re-derives the set from the source with `ast` so a
+  new synthetic-input path cannot ship without being declared, and asserts the capability each one
+  serves is `path: bespoke` with a non-empty `firetuner_gap`. Confirmed by reverting
+  `prompts.orders` to `path: firetuner` / `firetuner_gap: null` and observing the new check fail
+  with the capability named, then restoring (file checksum verified identical).
+- **Firetuner-first still holds inside the corrected capability.** Where a direct Lua call exists it
+  is the primary route and the click is the fallback, with `path` / `path_reason` recorded on every
+  result: the diplomatic approach answers through `DiplomacyManager.AddResponse` / `CloseSession`
+  keyed off the game's own `DiplomacySelections` rows; the acknowledge-only popups fall back to
+  `UIManager:DequeuePopup` / `ContextPtr:SetHide`. The era dedication chooser and the congress page
+  have no direct call at all. The capability was deliberately **not** split into a Firetuner half
+  and a bespoke half, because every answerable prompt family can return a host-click request, so no
+  declaration would have been left on the pure-Firetuner side.
+- **The one candidate bespoke path on the save side is live-verified, and the evidence upgrades the verdict from
   "unneeded" to "forbidden."** T077 (research R5, `spikes/r5-save-path.md`) probed
   `Network.SaveGame` under `pcall` against a live Linux client and got **Outcome A**:
   `Network.SaveGame(gameFile)`, called from `InGame`, writes a real, valid `.Civ6Save` — four
@@ -149,13 +183,25 @@ audit.
 
 **Not yet covered.**
 
-- **The load half is a live, open question that belongs to this principle as much as Principle
-  IV.** `spikes/load-path-linux.md` found `Network.LoadGame` refuses from Lua (see
-  [Principle IV](#principle-iv--reproducible-seeded-experimentation) for the full account). If that
-  gap is never closed, the harness may eventually need a documented `firetuner_gap` and a bespoke
-  UI-driven load driver — the *first* legitimate bespoke path under this principle's own ordering
-  rule. Not due yet: no `load_game` capability is declared and no code path invokes
-  `Network.LoadGame` today, so there is nothing to audit for a premature bespoke path.
+- **The load half — this bullet is also stale, flagged 2026-09-22.** It read: "no `load_game`
+  capability is declared and no code path invokes `Network.LoadGame` today, so there is nothing to
+  audit for a premature bespoke path." `src/civsim_harness/saves/load_game.py` (T217) invokes
+  `Network.LoadGame` from the front end and is wired into `run/composition.py`; the T217 spike
+  (`spikes/t217-RESOLVED-frontend-loadgame.md`) retracts the "refuses from Lua" finding of
+  `spikes/load-path-linux.md`. So the Firetuner load path exists and the bespoke UI-driven load
+  driver is, like the save-dialog driver, forbidden rather than merely undue.
+- **One synthetic-input path remains outside the catalog entirely, and needs a ruling rather than
+  a claim here.** That same loader presses `Escape` through `HostPlatform.send_input` to dismiss
+  the leader-intro screen a load can stop on — necessarily while the tuner port is closed *by the
+  load*, which is exactly why the screen can be neither observed nor dismissed through the tuner.
+  The gap is measured and recorded in the module docstring, and the press refuses outright unless
+  `focus_window` succeeds. But save loading is operator/branch lifecycle (FR-033, FR-045/FR-046),
+  not an agent-facing action: there is no load declaration in `catalogs/actions/` and no capability
+  for it, so Principle II's capability-path rule has nothing to bind to. **Open question for the
+  hypervisor: should a lifecycle path that drives synthetic input outside the catalog carry a
+  declaration of its own?** Pinned as data in
+  `tests/contract/test_synthetic_input_declaration.py` with its reason, so it cannot go quiet while
+  the question is open.
 - Otherwise no known gap. Assurance is bounded by the same live-tier caveat as Principle I.
 
 ---

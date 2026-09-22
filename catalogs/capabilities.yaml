@@ -2,15 +2,32 @@
 # T094 (US1). IntegrationCapability declarations binding every declaration_id in
 # catalogs/observations/ and catalogs/actions/ to its lua/ implementation.
 #
-# Every entry below is path: firetuner. Nothing in this assignment's scope (T082-T094, T100,
-# T130-T131) needed a bespoke capability: every declared observation, view, and action this
-# author wrote has a Lua implementation reachable through the Nexus contexts (Principle II,
-# Firetuner-first, is satisfied by default here, not as an exception). The one bespoke capability
-# named in contracts/capability-catalog.md's own worked example — saves.save_game — belonged to
-# T077/T078, gated on the R5 save-path spike: T077 has since run against a real client and found
-# Outcome A (a verified Firetuner Lua save path), so T078 declared it below as path: firetuner
-# too, not bespoke — see catalogs/actions/saves.yaml and
+# Every entry below is path: firetuner EXCEPT prompts.orders, which is path: bespoke. Nothing in
+# the original assignment's scope (T082-T094, T100, T130-T131) needed a bespoke capability: every
+# declared observation, view, and action that author wrote had a Lua implementation reachable
+# through the Nexus contexts (Principle II, Firetuner-first, satisfied by default there, not as an
+# exception). The one bespoke capability named in contracts/capability-catalog.md's own worked
+# example — saves.save_game — belonged to T077/T078, gated on the R5 save-path spike: T077 has
+# since run against a real client and found Outcome A (a verified Firetuner Lua save path), so
+# T078 declared it below as path: firetuner too, not bespoke — see catalogs/actions/saves.yaml and
 # specs/002-civ-playing-harness/spikes/r5-save-path.md.
+#
+# CORRECTED 2026-09-22 — prompts.orders was path: firetuner and shipped a real synthetic click.
+# The measurement of 2026-09-21 (blocks 13-15) found that no Lua API reachable from InGame fires a
+# control's registered callback, so lua/ingame/screens.lua's `respond` now hands the harness a
+# control rectangle and src/civsim_harness/capability/executor.py clicks it at its centre through
+# HostPlatform.send_input (XTest on Linux). That is a bespoke synthetic-input path in the sense
+# Principle II means, and declaring it `firetuner` meant the load-time bespoke/firetuner_gap rule
+# (src/civsim_harness/models/catalog.py) passed over it vacuously — it only fires on
+# `path: bespoke`. The declaration below is now what the code does. NOT split into a Firetuner
+# capability plus a bespoke one, because a split would be a fiction: every answerable prompt
+# family in CivSim_Screens_RespondToPrompt (the acknowledge-only popups, the diplomatic approach,
+# the era dedication chooser and the congress page) can return a host-click request, so no
+# declaration in catalogs/actions/prompts.yaml would be left on the pure-Firetuner side. Where a
+# Firetuner call does exist it is still tried first, and the gap statement below says so.
+# Guarded against recurrence by tests/contract/test_synthetic_input_declaration.py, which pins
+# every in-harness HostPlatform.send_input call site as data and requires the capability it serves
+# to be declared bespoke.
 
 - capability_id: map.read
   path: firetuner
@@ -197,11 +214,32 @@
   firetuner_gap: null
 
 - capability_id: prompts.orders
-  path: firetuner
-  implementation_ref: lua/ingame/screens.lua
+  path: bespoke
+  implementation_ref: lua/ingame/screens.lua + src/civsim_harness/capability/executor.py
   reads: [currently open prompt and its offered options]
   writes: [prompt responses]
-  firetuner_gap: null
+  firetuner_gap: >-
+    Measured Firetuner gap, 2026-09-21: no Lua API reachable from InGame fires a control's
+    registered callback. A prompt is answered by the callback its own button registered in the
+    popup's own Lua state (base/assets/ui/popups/popupdialog.lua:215-217 releases the engine hold
+    only after that callback runs), and nothing in the InGame context can invoke it:
+    `control:CallCallback(Mouse.eLClick)` returned without error and fired nothing (blocks 13-15),
+    and `UI.RespondToPrompt` — the generic primitive this once fell through to — appears in none
+    of Firaxis' 645 shipped Lua files and in none of the shipped binaries' UI binding tables
+    (spikes/lua-accessor-audit-2026-09-21.md). What this does instead: lua/ingame/screens.lua's
+    `respond` returns the button's own on-screen rectangle (`GetScreenOffset` + `GetSizeVal`, the
+    accessors diplomacyactionview.lua:1876 itself uses) plus the UI's own screen size, and
+    src/civsim_harness/capability/executor.py `_perform_host_click_if_requested` scales it onto
+    the game window and issues one mouse_move + one left mouse_click at its centre through
+    HostPlatform.send_input — the same button, the same click, one click per dispatch, exactly
+    what the human does. Firetuner-first still holds within the capability: where a direct call
+    exists it is the primary route and the click is the fallback, with the reason the direct call
+    was unavailable recorded on every result as `path` / `path_reason` — the diplomatic approach
+    answers through `DiplomacyManager.AddResponse` / `CloseSession` keyed off the game's own
+    `DiplomacySelections` rows and only clicks when that key is not directly answerable or the
+    open-session count is not one; the acknowledge-only popups fall back to
+    `UIManager:DequeuePopup` / `ContextPtr:SetHide` when the close control cannot be located or
+    measured. The era dedication chooser and the congress page have no direct call at all.
 
 - capability_id: camera.control
   path: firetuner
