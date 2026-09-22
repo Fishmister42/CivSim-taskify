@@ -291,15 +291,23 @@ The turn no longer carries an `observation_id`: observations are per decision st
 quicksaving ──> ┌───────────────── decision-step loop ─────────────────┐ ──> persisting ──> ending_turn
      │          │  observing ──> deciding ──> executing ──> verifying  │         │              │
      │          │      ^                                        │      │         │              ├──> ended_by_agent
-     │          │      └────────────── next step ───────────────┘      │         │              └──> ended_on_no_progress
-     │          └──────────────────────────────────────────────────────┘         │
+     │          │      └────────────── next step ───────────────┘      │         │              ├──> end_turn_unconfirmed
+     │          └──────────────────────────────────────────────────────┘         │              └──> ended_on_no_progress
      │                                                                           │
      └───────────────────────── any phase, on interruption ─────────────────────────> abandoned
 ```
 
-Exits from the loop: `verifying` yields the agent's end-turn decision ⇒ `ended_by_agent`; the
-no-progress counter reaches `no_progress_step_limit` ⇒ `ended_on_no_progress`. There is no timed
-exit.
+Exits from the loop: `verifying` yields the agent's end-turn decision, and the game confirms the
+turn advanced within the bound ⇒ `ended_by_agent`; **that same decision, dispatched but never
+confirmed ⇒ `end_turn_unconfirmed`** (with `game_turn_advanced = false`); the no-progress counter
+reaches `no_progress_step_limit` ⇒ `ended_on_no_progress`. There is no timed exit.
+
+*(Amended 2026-09-22: the diagram and this sentence showed only the first and third leaves, having
+never been updated when `end_turn_unconfirmed` was added — the enum above, invariant 4's own
+amendment, and `models/turn.py`'s `TurnOutcome` have carried all four since 2026-09-21. The third
+leaf is not cosmetic: it exists so a record cannot falsely claim the agent ended a turn, which is
+the exact failure `run-480aa573` recorded five consecutive times at game turn 35. An implementer
+building from a two-exit diagram rebuilds that bug.)*
 
 **Where failures go, which is not uniform and matters:**
 
@@ -480,12 +488,25 @@ at one decision step (FR-012).
 | `outcome` | enum | `applied` \| `rejected` \| `partially_applied` |
 | `rejection_reason` | enum? | `not_in_catalog` \| `unavailable_to_human_now` \| `illegal_in_context` \| `out_of_parity_camera` \| `verification_failed` |
 | `verification` | object | The predicate declared on the action entry, and its observed result |
+| `dispatch_result` | object? | **The dispatched action's own Lua answer** (typically `{ok, reason}`), verbatim. Recorded but **never authoritative**: a truthy `ok` attests only that the call *returned without error*, not that the board changed. `outcome` is still derived from the verification predicate and never from this field. Null when the decision was rejected before execution, or when the capability returned nothing |
 | `verified_at` | timestamp | |
 
 **Validation**:
 
 - **No action is recorded `applied` without verification** against resulting game state (FR-011).
   `outcome` is derived from the verification predicate, never asserted by the executor.
+- **The dispatch answer and the verification result are different facts about a step, and neither
+  substitutes for the other.** "The game refused this order, and here is the game's word for why"
+  and "the effect was not visible on the board afterwards" are separate claims;
+  `dispatch_result` carries the first, verbatim, alongside — never instead of — `verification`.
+  Recording only the second is what hid `cities.set_production` arriving with the item name in the
+  city-id parameter through 24 Lua refusals in `run-ba3ad80d`, each reaching the ledger as a bare
+  `verification_failed`. *(Added 2026-09-22: the field has been on `models/decision.py`'s
+  `ActionExecution` and in the generated `ActionExecution.schema.json` since `454b2f8` — this table
+  documented four of its five fields. A live measurement the same morning is why the wording above
+  is careful: `UI.SetMapZoom(0.5, 0.0, 0.0)` returned cleanly while `UI.GetMapZoom()` still read
+  0.0499997 afterwards in the same tuner session. Produces a value is not produces the right
+  value — and that now applies to this field itself.)*
 - A requested action absent from the catalog, or unavailable to a human in the current context, is
   rejected and recorded with its reason — and not performed (FR-017).
 - Contradictory or self-cancelling decisions execute in step order; the resulting state is what is

@@ -50,22 +50,37 @@ noted; only the process-kill in Scenario 4 differs.
 `doctor` must report all green before anything else is worth trying:
 
 ```text
-platform          : ok  (macos 15.3, tier VALIDATED)
-tuner connection  : ok  (GameCore_Tuner=2, InGame=5)
-client            : ok  (pid 18244, build mac/1.0.12.9)
+platform          : ok  (linux/x11 <os_version>, tier VALIDATED)
+tuner connection  : ok  (GameCore_Tuner=<gc_index>, InGame=<ingame_index>)
+client            : ok  (pid <pid>, build linux/<version>)
 store             : ok
-catalog           : ok  (version 2026.09.1, 215 declarations, 0 undeclared)
-capture path      : ok  (screencapturekit, hygiene spike PASSED)
+catalog           : ok  (version <catalog_version>, <N> declarations, 0 undeclared)
+capture path      : ok  (xcomposite, hygiene spike PASSED)
 provider key      : present
-disk headroom     : 41.2 GB free
+disk headroom     : <G> GB free
 ```
+
+**The angle-bracket values are placeholders, deliberately.** Every one of them is computed at
+run time — the catalog version and declaration count from `catalogs/` (`operator/doctor.py`'s
+`declaration_count=len(catalog.declarations)`), the tuner context indices by resolving the live
+state table, the pid, build, and free space from the host. Pinning today's values here is the exact
+defect spec 001 shipped (`167/91/49` written down where the tool printed `180/103/50`), and the
+catalog version alone moved fourteen revisions in about ten days. Run `civsim doctor` for the
+numbers; read this block for the **shape**.
+
+**Why Linux/X11 is the worked example.** It is the one platform that today resolves to
+`VALIDATED`: `host/detect.py`'s `_QUICKSAVE_EVIDENCE` records a passed R5/T077 save-path spike for
+Linux, and `_capture_hygiene_evidence` returns a pass only for Linux/X11 with compositing verified.
+macOS has **no** R5 evidence (`passed=False`), so `resolve_support_tier` returns `unsupported`
+there and a run is refused at preflight — a macOS "all green" block would describe a run that
+cannot start.
 
 The same run on another host reports its own host layer, and the tier is the line that tells you
 what you will actually get:
 
 ```text
-platform          : ok  (linux/wayland, tier SUPPORTED — runs will be visually degraded)
-capture path      : none (portal grant unavailable for unattended capture)
+platform          : ok  (linux/wayland <os_version>, tier SUPPORTED)
+capture path      : none (runs will be visually degraded)
 ```
 
 Four lines deserve attention rather than a glance:
@@ -75,10 +90,10 @@ Four lines deserve attention rather than a glance:
 - **`capture path: hygiene spike PASSED`** — until the R6 spike passes, this reads
   `none (runs will be visually degraded)`. That is a legitimate operating state, not a blocker; what
   it must never read is a capture path in use without a passing spike.
-- **`client: build mac/1.0.12.9`** — the build is a composite of **platform and version**, compared
-  against the seed set's pin at every run's preflight. A differing build *or platform* fails the run
-  before turn 1 unless an operator has accepted that exact transition for the set (FR-002, research
-  R18, R20).
+- **`client: build linux/<version>`** — the build is a composite of **platform and version**,
+  compared against the seed set's pin at every run's preflight. A differing build *or platform*
+  fails the run before turn 1 unless an operator has accepted that exact transition for the set
+  (FR-002, research R18, R20).
 - **`platform: tier VALIDATED`** — the harness resolves its own capability rather than trusting
   documentation. `VALIDATED` means full capability with a passing capture-hygiene spike;
   `SUPPORTED` means it will run and record honestly but visually degraded; `UNSUPPORTED` means
@@ -122,17 +137,24 @@ sixty. Nothing bounds a turn by time, step count, or cost (FR-014).
 
 ```bash
 uv run civsim audit completeness <run_id>    # expect: 0 turn gaps, 0 step gaps, 50/50 authoritative
-uv run civsim audit saves <run_id>           # expect: 50/50 verified quicksaves
 uv run civsim audit decisions <run_id>       # expect: 0 decisions without a model_call_id
 uv run civsim audit steps <run_id>           # expect: 1 decision + 1 model call + 1 observation per step
-uv run civsim audit endings <run_id>         # expect: every turn ended_by_agent or ended_on_no_progress
 ```
 
-The third catches the failure mode SC-012 cares about — a turn ended on a fabricated or defaulted
-action recorded as if the agent had decided it. The fourth catches the one the clarification
-introduced: a step that batched several decisions, or reused the previous step's observation instead
-of assembling a fresh one, both of which would look like a working run while quietly defeating
-FR-008.
+*(Corrected 2026-09-22: this block previously also invoked `civsim audit saves` and `civsim audit
+endings`. **Neither subcommand exists** — `operator/cli.py` registers exactly thirteen: `parity`,
+`prompts`, `decisions`, `steps`, `loop`, `capabilities`, `recovery`, `completeness`, `lineage`,
+`immutability`, `builds`, `models`, `secrets` — so an operator following this script hit two hard
+failures. The two steps are **removed rather than remapped**, because no shipped subcommand covers
+either check: quicksave verification and per-turn ending outcomes are read straight off the
+`SavePoint.verified` and `TurnCycle.outcome` fields, not through an audit. They remain expectations
+of the record — see the Expected list above — just not CLI-checkable ones.)*
+
+`audit decisions` catches the failure mode SC-012 cares about — a turn ended on a fabricated or
+defaulted action recorded as if the agent had decided it. `audit steps` catches the one the
+clarification introduced: a step that batched several decisions, or reused the previous step's
+observation instead of assembling a fresh one, both of which would look like a working run while
+quietly defeating FR-008.
 
 **On SC-001's 90 %**: every started attempt counts in the denominator, and any attempt that did not
 reach its stop condition is a failure — including one that stopped in a correctly recorded failed
@@ -350,9 +372,14 @@ is the precise thing the loop exists to prevent.
 nothing intervenes:
 
 ```bash
-uv run civsim audit endings <run_id>
+uv run civsim audit completeness <run_id>
+# then read each TurnCycle.outcome off the store
 # expect: 0 turns ended by the harness while the agent was still making progress
 ```
+
+*(Corrected 2026-09-22: `civsim audit endings` does not exist — see the note in Scenario 1's
+verification block. `TurnCycle.outcome` is the field that answers this, read from the store
+directly.)*
 
 There is no wall-clock bound, no step cap, and no cost ceiling. A turn of several hundred steps
 running for hours is a valid turn (FR-014). If a turn ends for any reason other than the agent's
