@@ -27,6 +27,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO / "tests") not in sys.path:
     sys.path.insert(0, str(REPO / "tests"))
 
+from civsim_harness.errors import PreflightError  # noqa: E402
 from civsim_harness.models.run import LifecycleState  # noqa: E402
 from civsim_harness.provider.openrouter import OpenRouterProvider  # noqa: E402
 from civsim_harness.provider.stochastic import (  # noqa: E402
@@ -45,6 +46,7 @@ from live.goal_run import (  # noqa: E402
     RunRecords,
     StepRecord,
     assess_feasibility,
+    await_tuner_reachable,
     build_bindings,
     check_predicate,
     check_prerequisites,
@@ -54,6 +56,7 @@ from live.goal_run import (  # noqa: E402
     load_goals,
     parse_goal,
     resolve_chain,
+    run_chain,
     summarize,
     write_goal_guidance,
 )
@@ -355,6 +358,147 @@ def test_the_builder_chain_loads_unblocked_and_validates_end_to_end() -> None:
         )
     )
     assert check_predicate(use.success, build_bindings(spent, start_facts=built)).met
+
+
+# --------------------------------------------------------------------------
+# T296: leg 2 must not land inside leg 1's post-close refusal tail (T246)
+# --------------------------------------------------------------------------
+
+
+class _NoteRecorder:
+    """Enough of the live `Recorder` for `run_chain`: it only ever calls `.note(...)`."""
+
+    def __init__(self) -> None:
+        self.notes: list[str] = []
+
+    def note(self, message: str) -> None:
+        self.notes.append(message)
+
+
+def test_await_tuner_reachable_polls_a_refused_probe_until_it_succeeds() -> None:
+    """The load-bearing retry loop, isolated: a probe that raises `PreflightError` (the exact
+    shape `NexusClient.connect()` raises for a refused/unreachable client) twice before
+    succeeding is waited out, not raised through -- and the wait is a poll (bounded sleeps), never
+    a single fixed sleep for the whole budget.
+    """
+    refusals_left = 2
+    probe_calls = 0
+
+    def flaky_probe() -> None:
+        nonlocal refusals_left, probe_calls
+        probe_calls += 1
+        if refusals_left > 0:
+            refusals_left -= 1
+            raise PreflightError("Could not connect to the Nexus tuner interface")
+
+    slept: list[float] = []
+    await_tuner_reachable(
+        timeout_s=100.0,
+        poll_interval_s=5.0,
+        probe=flaky_probe,
+        sleep=slept.append,
+        clock=lambda: 0.0,
+        note=lambda _message: None,
+    )
+
+    assert probe_calls == 3  # refused, refused, then connected
+    assert slept == [5.0, 5.0]  # one poll interval per refusal, never a single 100s sleep
+
+
+def test_await_tuner_reachable_raises_once_its_bounded_timeout_is_exhausted() -> None:
+    """A tuner that never comes back is a real failure, not an infinite wait: the poll is
+    bounded, so a probe that always refuses must eventually raise rather than hang.
+    """
+    clock_value = [0.0]
+
+    def always_refuses() -> None:
+        raise PreflightError("Could not connect to the Nexus tuner interface")
+
+    def fake_sleep(seconds: float) -> None:
+        clock_value[0] += seconds
+
+    with pytest.raises(GoalError, match="tuner still refused"):
+        await_tuner_reachable(
+            timeout_s=10.0,
+            poll_interval_s=5.0,
+            probe=always_refuses,
+            sleep=fake_sleep,
+            clock=lambda: clock_value[0],
+            note=lambda _message: None,
+        )
+
+
+def test_chain_waits_out_leg_1_s_teardown_so_leg_2_still_runs() -> None:
+    """T296 reproduced at the orchestration level: leg 1's own teardown makes a fresh connect
+    refuse for a while (simulated here exactly as it was measured live -- `ECONNREFUSED`,
+    `PreflightError`, for a bounded stretch after leg 1 finishes), and leg 2 must still run once
+    that clears -- not abort the chain.
+
+    Without T296's fix, `run_chain` (and `await_tuner_reachable`) do not exist at all and this
+    test fails on import; with the fix present but *miswired* (e.g. a chain loop that never waits
+    between legs), `fake_run_goal` reproduces the live failure directly: it raises the same
+    `PreflightError` a leg-2 connect attempted before the tuner recovered would raise. Either way,
+    the chain never reaching `use_a_builder` successfully is what this test is written to catch.
+    """
+    refusals_left = 2  # shared "the tuner is still refusing" clock between the probe and leg 2
+
+    def flaky_probe() -> None:
+        nonlocal refusals_left
+        if refusals_left > 0:
+            refusals_left -= 1
+            raise PreflightError("Could not connect to the Nexus tuner interface")
+
+    calls: list[str] = []
+
+    def fake_run_goal(goal: Goal, part_dir: Path, **_kwargs: Any) -> dict[str, Any]:
+        if goal.goal_id == "use_a_builder" and refusals_left > 0:
+            # Exactly what an un-waited leg 2 hits live: a fresh connect() landing inside leg
+            # 1's own post-close refusal tail (T246).
+            raise PreflightError("Could not connect to the Nexus tuner interface")
+        calls.append(goal.goal_id)
+        return {"goal": goal.goal_id, "reached": True}
+
+    slept: list[float] = []
+    recorder = _NoteRecorder()
+    goals = load_goals()
+    chain = resolve_chain(goals["use_a_builder"], goals)
+    parts: list[dict[str, Any]] = []
+
+    def waiting(*, note: Any) -> None:
+        await_tuner_reachable(
+            timeout_s=30.0,
+            poll_interval_s=1.0,
+            probe=flaky_probe,
+            sleep=slept.append,
+            clock=lambda: 0.0,
+            note=note,
+        )
+
+    run_chain(
+        chain,
+        parts,
+        out=Path("out"),
+        provider="fake",
+        provider_seed=0,
+        provider_policy="uniform",
+        turns=None,
+        store_path=Path("store.db"),
+        host=None,
+        recorder=recorder,
+        use_seed_set=True,
+        force=False,
+        run_goal=fake_run_goal,
+        await_tuner=waiting,
+    )
+
+    # The load-bearing assertion: leg 2 (`use_a_builder`) ran, and reached, despite the fresh
+    # connect it would have made being refused twice first.
+    assert calls == ["build_a_builder", "use_a_builder"]
+    assert [p["goal"] for p in parts] == ["build_a_builder", "use_a_builder"]
+    assert all(p["reached"] for p in parts)
+    # The wait actually happened (it is not a no-op the test would pass without): two refusals,
+    # each backed off by one poll interval.
+    assert slept == [1.0, 1.0]
 
 
 def test_the_last_charge_case_the_action_s_own_verification_cannot_confirm() -> None:

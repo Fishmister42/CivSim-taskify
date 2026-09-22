@@ -73,7 +73,9 @@ from civsim_harness.act.predicates import (  # noqa: E402
     evaluate_predicate,
 )
 from civsim_harness.capability.loader import load_catalog  # noqa: E402
+from civsim_harness.errors import PreflightError  # noqa: E402
 from civsim_harness.models.catalog import DeclarationKind  # noqa: E402
+from civsim_harness.nexus.client import NexusClient  # noqa: E402
 from civsim_harness.run.composition import PROVIDER_POLICY_NAMES  # noqa: E402
 
 #: The sampling policy `--provider-policy` defaults to, kept identical to
@@ -82,6 +84,29 @@ from civsim_harness.run.composition import PROVIDER_POLICY_NAMES  # noqa: E402
 #: the decision request shows as available right now. Both are ignored by every provider without
 #: a sampler (`openrouter`, `fake`).
 DEFAULT_PROVIDER_POLICY = "uniform"
+
+#: T296 (live defect, 2026-09-22, issue #1): a chain's leg 2 opens a **fresh** `NexusClient` and
+#: `connect()`s it (both in `run_goal`'s own `build_runner_dependencies` wiring and in
+#: `demo_landed_run.read_setup`, which `run_goal` calls first) -- landing inside the post-close
+#: connection-refusal tail (T246, `nexus/client.py`) that leg 1's own teardown just created.
+#: `connect()` is a single attempt by design and its retry budget is out of scope for this fix
+#: (`nexus/client.py` belongs to another lane; ruled). So `run_chain` (below) blocks between legs
+#: on `await_tuner_reachable` -- a bounded *poll* of the tuner's own public connect()/close(),
+#: never a fixed sleep -- so a leg's own connect lands only once the tuner is already accepting
+#: connections again.
+#:
+#: ASSUMPTION, not a measurement: reproduced live twice, 2026-09-22
+#: (specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/block-03/timeline.txt,
+#: .../block-04/timeline.txt), the gap between leg 1's "finished" line and leg 2's connection
+#: being refused was 90s and 91s. Whether that gap *is* the refusal tail's true duration, or is
+#: instead leg 2's own setup cost racing a much shorter tail, has not been directly measured (see
+#: the T296 issue's open question) -- so this bound is chosen with a >2.5x margin over the larger
+#: observed gap (91s) rather than derived from it, and must not be read as "the tail is 240s".
+CHAIN_LEG_TUNER_POLL_TIMEOUT_S: float = 240.0
+
+#: Reuses `drive_goal`'s own `poll_interval_s` default below (an existing project convention, not
+#: a new number) as the interval between tuner-reachability probes.
+CHAIN_LEG_TUNER_POLL_INTERVAL_S: float = 2.0
 
 GOALS_DIR: Path = Path(__file__).resolve().parent / "goals"
 CATALOG_ROOT: Path = REPO / "catalogs"
@@ -1179,6 +1204,76 @@ def drive_goal(
     return result
 
 
+# --------------------------------------------------------------------------
+# 3b. T296 -- waiting out the post-close refusal tail between chain legs
+# --------------------------------------------------------------------------
+
+
+async def _connect_and_close() -> None:
+    """One throwaway `NexusClient` connect + close -- the real tuner-reachability probe.
+
+    Exactly the public `connect()`/`close()` surface every other collaborator here already uses
+    (`demo_landed_run.connect`, `build_runner_dependencies`'s own client) -- nothing about
+    `nexus/client.py`'s retry budget is touched. A refused connect leaves the client unconnected
+    (`connect()`'s own contract), so only a *successful* connect needs closing here.
+    """
+    client = NexusClient()
+    try:
+        await client.connect()
+    finally:
+        if client.is_connected:
+            await client.close()
+
+
+def _probe_tuner_connection() -> None:
+    """Sync wrapper so `await_tuner_reachable` stays a plain, injectable, synchronous function --
+    matching `drive_goal`'s own `sleep: Callable[[float], None] = time.sleep` style rather than
+    asking every caller (and every test) to run an event loop."""
+    asyncio.run(_connect_and_close())
+
+
+def await_tuner_reachable(
+    *,
+    timeout_s: float = CHAIN_LEG_TUNER_POLL_TIMEOUT_S,
+    poll_interval_s: float = CHAIN_LEG_TUNER_POLL_INTERVAL_S,
+    probe: Callable[[], None] = _probe_tuner_connection,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    note: Callable[[str], None] = lambda _message: None,
+) -> None:
+    """Block until *probe* connects once without being refused, or raise after *timeout_s*.
+
+    T296: the fix for "leg 2 can never connect" is to never let leg 2's own `connect()` land
+    inside the refusal tail leg 1's close just opened, by polling here first -- never a fixed
+    sleep, and never a wider retry budget on `connect()` itself (out of scope; see
+    `CHAIN_LEG_TUNER_POLL_TIMEOUT_S`). *probe* raising :class:`PreflightError` is treated as "not
+    yet, keep polling" (the exact shape `connect()` raises for a refused/unreachable client,
+    `nexus/client.py`); any other exception is a genuine, unexpected failure and is left to
+    propagate immediately rather than being silently retried.
+    """
+    deadline = clock() + timeout_s
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            probe()
+        except PreflightError as exc:
+            if clock() >= deadline:
+                raise GoalError(
+                    f"tuner still refused a new connection after {timeout_s:g}s "
+                    f"({attempt} probe(s)); last error: {exc}"
+                ) from exc
+            note(
+                f"tuner not yet accepting connections (probe {attempt}, {exc}); "
+                f"retrying in {poll_interval_s:g}s"
+            )
+            sleep(poll_interval_s)
+            continue
+        if attempt > 1:
+            note(f"tuner reachable again after {attempt} probe(s)")
+        return
+
+
 def summarize(results: Mapping[str, Any]) -> str:
     """A Markdown block ready to paste into a GitHub issue entry."""
     lines: list[str] = []
@@ -1326,6 +1421,71 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run_chain(
+    chain: Sequence[Goal],
+    parts: list[dict[str, Any]],
+    *,
+    out: Path,
+    provider: str,
+    provider_seed: int,
+    provider_policy: str,
+    turns: int | None,
+    store_path: Path,
+    host: Any,
+    recorder: Any,
+    use_seed_set: bool,
+    force: bool,
+    run_goal: Callable[..., dict[str, Any]] = run_goal,
+    await_tuner: Callable[..., None] = await_tuner_reachable,
+) -> None:
+    """Play *chain* leg by leg, appending each leg's result dict to *parts* as it completes.
+
+    Split out from :func:`main` so the orchestration -- in particular T296's tuner wait between
+    legs -- is exercised against fakes rather than only against a live client, the same reason
+    :func:`drive_goal` was split out from :func:`run_goal`.
+
+    T296 (live defect, 2026-09-22): a chain's second and later legs each build a fresh
+    `NexusClient` (both `run_goal`'s own composition-root wiring and the `demo_landed_run.
+    read_setup` it calls first) and `connect()` it -- landing inside the post-close
+    connection-refusal tail leg 1's own teardown just opened (T246), reproduced live twice as a
+    hard `ECONNREFUSED` roughly 90s after leg 1 finished. `connect()` is a single attempt by
+    design and out of scope to widen here (`nexus/client.py`), so *this* function blocks on
+    *await_tuner* before every leg but the first -- a bounded poll, never a fixed sleep -- so the
+    leg's own connect always lands after the tuner is already accepting connections again.
+    ``--force`` (the *prerequisites* bypass) is unaffected: this wait runs regardless of it, since
+    the connection problem it works around has nothing to do with whether a goal's prerequisites
+    held at its first observation.
+    """
+    for index, goal in enumerate(chain, start=1):
+        if index > 1:
+            recorder.note(
+                f"goal {goal.goal_id}: chain leg {index}/{len(chain)} -- waiting for the tuner "
+                "to accept a new connection before starting (T296: leg 1's close opened the "
+                "post-close refusal tail, T246)"
+            )
+            await_tuner(note=recorder.note)
+        part = run_goal(
+            goal,
+            out / f"{index:02d}-{goal.goal_id}",
+            provider=provider,
+            provider_seed=provider_seed,
+            provider_policy=provider_policy,
+            turns=turns if turns is not None else goal.turn_cap,
+            store_path=store_path,
+            host=host,
+            recorder=recorder,
+            use_seed_set=use_seed_set,
+            force=force,
+        )
+        parts.append(part)
+        if not part.get("reached"):
+            recorder.note(
+                f"goal {goal.goal_id} not reached; the chain stops here "
+                f"(a later part starts from a state that never arrived)"
+            )
+            break
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -1370,27 +1530,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         "parts": [],
     }
     try:
-        for index, goal in enumerate(chain, start=1):
-            part = run_goal(
-                goal,
-                out / f"{index:02d}-{goal.goal_id}",
-                provider=args.provider,
-                provider_seed=args.provider_seed,
-                provider_policy=args.provider_policy,
-                turns=args.turns if args.turns is not None else goal.turn_cap,
-                store_path=Path(args.store),
-                host=host,
-                recorder=recorder,
-                use_seed_set=not args.no_seed_set,
-                force=args.force,
-            )
-            results["parts"].append(part)
-            if not part.get("reached"):
-                recorder.note(
-                    f"goal {goal.goal_id} not reached; the chain stops here "
-                    f"(a later part starts from a state that never arrived)"
-                )
-                break
+        run_chain(
+            chain,
+            results["parts"],
+            out=out,
+            provider=args.provider,
+            provider_seed=args.provider_seed,
+            provider_policy=args.provider_policy,
+            turns=args.turns,
+            store_path=Path(args.store),
+            host=host,
+            recorder=recorder,
+            use_seed_set=not args.no_seed_set,
+            force=args.force,
+        )
     except BaseException as exc:  # noqa: BLE001 - the record must be written whatever happened
         recorder.note(f"ABORTED: {type(exc).__name__}: {exc}")
         results["aborted"] = f"{type(exc).__name__}: {exc}"
