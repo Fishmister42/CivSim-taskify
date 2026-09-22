@@ -884,7 +884,13 @@ def test_audit_parity_cli_passes_against_a_well_formed_run(
                 "reasoning": "r",
                 "trigger": "proactive",
                 "model_call_id": "call-1",
-                "execution": {"outcome": "applied", "verified_at": now},
+                "execution": {
+                    "outcome": "applied",
+                    # FR-011: an applied execution must carry the predicate verdict that
+                    # confirmed it; an empty verification means nothing re-read the board.
+                    "verification": {"declaration_id": "units.move_to", "result": True},
+                    "verified_at": now,
+                },
             }
         )
         model_call = ModelCall.model_validate(

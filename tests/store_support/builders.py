@@ -217,7 +217,14 @@ def make_step_bundle(
             "reasoning": "test reasoning",
             "trigger": "proactive",
             "model_call_id": call_id,
-            "execution": {"outcome": "applied", "verified_at": NOW},
+            # An `applied` execution must carry the predicate verdict that confirmed it
+            # (FR-011, enforced on ActionExecution) -- a fixture recording "applied" over an
+            # empty verification is the very record the model now refuses.
+            "execution": {
+                "outcome": "applied",
+                "verification": {"declaration_id": action, "result": True},
+                "verified_at": NOW,
+            },
         }
     )
     cost: dict[str, Any] = {}

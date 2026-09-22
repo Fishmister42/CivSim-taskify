@@ -194,6 +194,9 @@ _register(
     "ActionExecution",
     MODEL_REGISTRY["ActionExecution"],
     outcome="applied",
+    # FR-011: `applied` is only constructible with the predicate verdict that confirmed it.
+    verification={"declaration_id": "turn.end_turn", "predicate": "game.turn_number > 0",
+                  "result": True},
     verified_at=NOW,
 )
 
@@ -207,7 +210,11 @@ _register(
     trigger="proactive",
     is_end_turn=True,
     model_call_id="mc1",
-    execution={"outcome": "applied", "verified_at": NOW.isoformat()},
+    execution={
+        "outcome": "applied",
+        "verification": {"declaration_id": "turn.end_turn", "result": True},
+        "verified_at": NOW.isoformat(),
+    },
 )
 
 _register(

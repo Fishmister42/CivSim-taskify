@@ -81,7 +81,8 @@ def _model_config(primary: ModelRef, *fallbacks: ModelRef) -> ModelConfig:
 def _execution() -> ActionExecution:
     return ActionExecution(
         outcome=ExecutionOutcome.APPLIED,
-        verification={},
+        # FR-011: an applied execution must carry the predicate verdict that confirmed it.
+        verification={"declaration_id": "units.move_to", "result": True},
         verified_at=datetime(2026, 9, 20, tzinfo=UTC),
     )
 

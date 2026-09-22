@@ -46,12 +46,23 @@ class ActionExecution(HarnessModel):
     """The outcome of dispatching one decision's action, and how it was verified.
 
     ``outcome`` is derived from the action's declared verification predicate
-    and must never be asserted directly by an executor (FR-011) -- this
-    model cannot enforce *that* on its own (it has no access to the
-    predicate evaluator), but it does enforce the one thing it can:
-    ``rejection_reason`` is present exactly when ``outcome == rejected`` or
-    ``partially_applied`` is not itself a rejection, so a reason is
-    meaningless there too. ``applied`` never carries a rejection reason.
+    and must never be asserted directly by an executor (FR-011). This model
+    has no predicate evaluator, so it cannot re-derive the verdict; what it
+    *can* enforce -- and does, below -- is that ``applied`` never exists
+    without the confirming evidence: an ``applied`` execution must carry a
+    non-empty ``verification`` whose ``result`` is ``True``. That is FR-011's
+    checkable half. "No action is recorded as applied without verification"
+    stops being a property of how :mod:`civsim_harness.act.verify` happens to
+    be written today and becomes something the record itself refuses to hold;
+    a fast path answering ``applied`` straight off a ``{ok=true}`` dispatch,
+    skipping the post-observation re-read, cannot be constructed at all.
+    Which *one* module may derive that verdict is asserted structurally
+    alongside it, in ``tests/unit/test_verification.py``.
+
+    The second rule is bookkeeping: ``rejection_reason`` is present exactly
+    when ``outcome == rejected``. ``partially_applied`` is not itself a
+    rejection, so a reason is meaningless there too, and ``applied`` never
+    carries one.
     """
 
     outcome: ExecutionOutcome
@@ -79,6 +90,24 @@ class ActionExecution(HarnessModel):
             raise ValueError("a rejected ActionExecution must record its rejection_reason")
         if self.outcome != ExecutionOutcome.REJECTED and self.rejection_reason is not None:
             raise ValueError("rejection_reason must be unset unless outcome == rejected")
+        return self
+
+    @model_validator(mode="after")
+    def _applied_carries_its_confirming_verification(self) -> ActionExecution:
+        if self.outcome != ExecutionOutcome.APPLIED:
+            return self
+        if not self.verification:
+            raise ValueError(
+                "an applied ActionExecution must record the verification that confirmed it; "
+                "an empty verification means nothing re-read the board (FR-011)"
+            )
+        if self.verification.get("result") is not True:
+            raise ValueError(
+                "an applied ActionExecution must record verification['result'] is True -- the "
+                "declared predicate's own verdict, evaluated against the post-action "
+                "observation; got "
+                f"{self.verification.get('result')!r} (FR-011)"
+            )
         return self
 
 

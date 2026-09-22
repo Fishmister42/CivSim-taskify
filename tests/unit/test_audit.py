@@ -231,7 +231,13 @@ def _make_step_bundle(
             "trigger": trigger,
             "prompt_type": prompt_type,
             "model_call_id": call_id,
-            "execution": {"outcome": "applied", "verified_at": verified_at},
+            "execution": {
+                "outcome": "applied",
+                # FR-011: an applied execution must carry the predicate verdict that
+                # confirmed it; an empty verification means nothing re-read the board.
+                "verification": {"declaration_id": ACTION_DECLARATION, "result": True},
+                "verified_at": verified_at,
+            },
         }
     )
     model_call = ModelCall.model_validate(
@@ -572,7 +578,13 @@ def test_audit_decisions_flags_a_model_call_mismatch_via_a_fabricated_record() -
             "reasoning": "r",
             "trigger": "proactive",
             "model_call_id": "some-other-call-id",
-            "execution": {"outcome": "applied", "verified_at": NOW},
+            "execution": {
+                "outcome": "applied",
+                # FR-011: an applied execution must carry the predicate verdict that
+                # confirmed it; an empty verification means nothing re-read the board.
+                "verification": {"declaration_id": ACTION_DECLARATION, "result": True},
+                "verified_at": NOW,
+            },
         }
     )
     model_call2 = ModelCall.model_validate(

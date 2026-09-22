@@ -148,7 +148,13 @@ def _make_step_bundle(run_id: str, turn_cycle_id: str, step_index: int) -> Decis
             "reasoning": "test reasoning",
             "trigger": "proactive",
             "model_call_id": call_id,
-            "execution": {"outcome": "applied", "verified_at": NOW},
+            "execution": {
+                "outcome": "applied",
+                # FR-011: an applied execution must carry the predicate verdict that
+                # confirmed it; an empty verification means nothing re-read the board.
+                "verification": {"declaration_id": "units.move_to", "result": True},
+                "verified_at": NOW,
+            },
         }
     )
     model_call = ModelCall.model_validate(

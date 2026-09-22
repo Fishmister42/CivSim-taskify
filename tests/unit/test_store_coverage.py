@@ -106,7 +106,13 @@ def _bundle(
     """One decision step, with the outcome and observation shape this suite needs."""
     step_id = f"{turn_cycle_id}-step{step_index}"
     call_id = f"{step_id}-call"
-    execution: dict[str, Any] = {"outcome": outcome, "verified_at": NOW}
+    # The predicate verdict travels with the outcome: FR-011 makes an `applied` record
+    # unconstructible without a verification that confirmed it.
+    execution: dict[str, Any] = {
+        "outcome": outcome,
+        "verification": {"declaration_id": action, "result": outcome == "applied"},
+        "verified_at": NOW,
+    }
     if rejection_reason is not None:
         execution["rejection_reason"] = rejection_reason
     return DecisionStepBundle(
