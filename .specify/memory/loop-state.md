@@ -30,6 +30,11 @@ explicit `model`: `opus` for orchestration and judgment, `sonnet` for bounded co
 itself was switched to Opus 5. Separate from the OpenRouter budget, which funds in-game model calls.
 
 ## Standing rules for every agent (learned the hard way)
+**How to write one of these so it works** (2026-09-22): **a rule earns its place by replacing a
+judgement with a lookup.** "Do you believe the lock fix is good?" gets a yes — the guard *is* good.
+"Which line releases it on each exit path?" found the gap. The second question is narrower, duller,
+and answerable without talking yourself into anything. Prefer the dull lookup; a rule that asks for an
+assessment is a rule that returns the assessor's priors.
 - **Never wait on a background-task notification.** Run long steps in the foreground under
   `timeout` (< 600 s per command), or poll a detached process's log in a bounded loop. Live stages
   send the hypervisor a heartbeat (SendMessage) at least every 20 minutes.
