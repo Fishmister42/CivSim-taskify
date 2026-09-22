@@ -137,7 +137,7 @@ local CIVSIM_KNOWN_SCREENS = {
     "prompt.congress_intro", "prompt.congress_vote", "prompt.era_transition",
     "prompt.era_dedication",
     "prompt.tech_civic_completed", "prompt.boost_unlocked", "prompt.great_work_created",
-    "prompt.natural_disaster",
+    "prompt.natural_disaster", "prompt.historic_moment",
 }
 
 -- T253 (MEASURED 2026-09-21, attempt 5 of the first model-driven runs): the civic "Code of Laws"
@@ -261,6 +261,39 @@ local CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS = {
         fallback = "dequeue_popup",
         option = "accept",
     },
+    -- MEASURED 2026-09-22 by the hypervisor through the tuner: two consecutive blocks (44 at
+    -- 19:06:42, 45 at 19:24:54) died four seconds after launch, `paused turn=1`, with
+    -- `UIManager:GetPopupStack()` answering depth 2 -- `TechCivicCompletedPopup` and
+    -- `DLC/expansion2/UI/Additions/HistoricMoments`. The history card was unmapped, so the probe
+    -- correctly refused to name the board (FR-049) and every run stalled at its first observation
+    -- while the game's own AI played on from turn 98 to 115.
+    --
+    -- ACKNOWLEDGE-ONLY, established by enumeration rather than by impression: `Initialize`
+    -- (historicmoments.lua:548-572) registers exactly two click callbacks on the entire screen --
+    -- `Controls.Close:RegisterCallback(Mouse.eLClick, OnClose)` (:552) and
+    -- `Controls.RightClickCloser:RegisterCallback(Mouse.eRClick, OnClose)` (:553) -- and both run
+    -- the same `OnClose` -> `Close()` (:455-457, :446-452). The only other registration is a
+    -- scroll callback on the timeline (:554). Everything the card shows is a read-only timeline of
+    -- moments that have already happened, so there is no second outcome an acknowledge could be
+    -- standing in for.
+    --
+    -- Its `Close()` IS `UIManager:DequeuePopup(ContextPtr)` plus a sound and
+    -- `LuaEvents.HistoricMoments_Closed()`, so unlike the congress welcome card the dequeue
+    -- fallback here is the whole of what the button does apart from that event.
+    --
+    -- DUAL-ORIGIN, SINGLE-INTERACTION, and that is why it CAN carry a state mapping where
+    -- `ReligionScreen` and `WorldCongressPopup` cannot. The timeline can also be opened
+    -- deliberately from the launch bar or the advisor (`PrideMoments_ToggleTimeline` /
+    -- `Advisor_ToggleTimeline`, :563-564) and from the end-game menu (:565). But every one of
+    -- those raises the SAME modal with the SAME one way out, so `IsHidden() == false` on it means
+    -- "a modal whose only move is Close is up" in every case -- which is exactly what this
+    -- declaration claims. The dual-purpose screens differ because browsing them offers a different
+    -- set of interactions from answering them; this one does not.
+    ["prompt.historic_moment"] = {
+        state = "HistoricMoments",
+        close_control = "Close",
+        fallback = "dequeue_popup",
+    },
 }
 local CIVSIM_ACKNOWLEDGE_OPTION = "continue"
 
@@ -324,7 +357,24 @@ local CIVSIM_SCREEN_WATCHLIST = {
     "DiplomacyActionView", "DiplomacyDealView", "DeclareWarPopup", "UnitPromotionPopup",
     "PantheonChooser", "GreatPeoplePopup", "GreatWorkShowcase", "WorldCongressIntro",
     "WorldCongressPopup", "WorldCongressBetweenTurns", "EventPopup", "EraCompletePopup",
-    "NaturalWonderPopup", "LeaderScene", "TechCivicCompletedPopup", "BoostUnlockedPopup",
+    "NaturalWonderPopup", "LeaderScene",
+    -- MEASURED 2026-09-22: `HistoricMoments` is placed BEFORE `TechCivicCompletedPopup` because
+    -- the live stack held both at once and the game's own priorities say which one the human is
+    -- looking at: the history card queues at `PopupPriority.Medium` (historicmoments.lua:95,
+    -- :430) and the tech/civic card at `PopupPriority.Low` (techciviccompletedpopup.lua:245). The
+    -- higher-priority card is the one on top, so it is the one whose close button a click can
+    -- reach. Z-order itself is still not exposed (header limitation 1); the priorities are.
+    --
+    -- Watched by CONTEXT ID and not by a path, deliberately: `Show()` reparents the context when
+    -- it is raised -- to `/InGame/Screens` during ordinary play and to
+    -- `/InGame/AdditionalUserInterfaces` when it is opened from the end-game menu
+    -- (historicmoments.lua:433) -- so any path written down here would be right in one of those
+    -- cases and wrong in the other. `/InGame/<id>` resolves either way, which is already how
+    -- `NaturalDisasterPopup` is reached: it sits inside `<Container ID="WorldPopups" Hidden="1">`
+    -- (dlc/expansion2/ui/replacements/ingame.xml:97) and was measured live resolving as
+    -- `/InGame/NaturalDisasterPopup` with that container hidden above it.
+    "HistoricMoments",
+    "TechCivicCompletedPopup", "BoostUnlockedPopup",
     "Civilopedia", "InGamePopup", "TopOptionsMenu", "PausePanel", "Options", "SaveGameMenu",
     "LoadGameMenu", "NaturalDisasterPopup", "DedicationPopup", "EraReviewPopup",
 }
@@ -462,6 +512,11 @@ local CIVSIM_SCREEN_ID_BY_STATE = {
     -- path and the read are both live-measured. What is UNVERIFIED LIVE is everything below it:
     -- the per-instance label read and the two clicks.
     ["prompt.era_dedication"] = "DedicationPopup",
+    -- MEASURED 2026-09-22 (live, through the tuner): the "Era Makes History" card was on the
+    -- engine's popup stack while two consecutive blocks died at turn 1, four seconds after launch.
+    -- See CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS above for the enumeration that establishes it offers no
+    -- choice, and CIVSIM_SCREEN_WATCHLIST for why it is watched by context id rather than by path.
+    ["prompt.historic_moment"] = "HistoricMoments",
 }
 
 -- MEASURED 2026-09-21 (gameplay day, block 7, game turn 35): play stalled for five harness turns
@@ -903,6 +958,31 @@ local function CivSim_ContextIsHidden(control)
     return nil
 end
 
+-- The context id a popup-stack entry names.
+--
+-- MEASURED 2026-09-22 (live, through the tuner, while two blocks died at turn 1): an entry loaded
+-- as an add-in appears on the stack under its CONTENT PATH, not under the id the rest of the probe
+-- speaks --
+--     "TechCivicCompletedPopup"
+--     "DLC/expansion2/UI/Additions/HistoricMoments"
+-- in one and the same `UIManager:GetPopupStack()` read. A context declared in a shipped
+-- `ingame.xml` carries its bare `<LuaContext>` ID; an add-in carries the path it was loaded from.
+--
+-- The tail of that path IS the context id, and not by our choice: Firaxis's own loader takes it
+-- that way. `dlc/expansion2/ui/replacements/ingame.lua:348-353` walks
+-- `Modding.GetUserInterfaces("InGame")` and computes the context id as the segment after the last
+-- '/' ("grab id from end of path", :350) before handing it to `ContextPtr:LoadNewContext`. So
+-- normalising here reads the same id the engine assigned, rather than inventing a correspondence.
+--
+-- This is a positive claim about what the id IS, not a way of matching more loosely: an entry
+-- whose tail is a context the probe does not account for still fails closed below, and the stack
+-- ids are reported unnormalised so the record keeps what the engine actually said.
+local function CivSim_PopupStackContextId(stackId)
+    local tail = string.match(stackId, "([^/\\]+)$")
+    if tail == nil or tail == "" then return stackId end
+    return tail
+end
+
 -- Is this context id one the probe already accounts for? A watchlisted name that maps to no
 -- catalog id still counts as accounted for: the sweep below sees it open and answers `unknown`
 -- through the existing path, so treating it as unknown here too would only change which branch
@@ -969,7 +1049,12 @@ end
 -- the `HistoricMoments` case, and a context that cannot be resolved or whose hidden flag cannot
 -- be read is unobservable, which is not the same as absent.
 local function CivSim_Screens_UnaccountedPopup(ids)
-    for _, id in ipairs(ids) do
+    for _, stackId in ipairs(ids) do
+        -- The id the ENGINE gave the context, which for an add-in entry is the tail of the content
+        -- path it is listed under (see CivSim_PopupStackContextId). Reported as `id` too, because
+        -- a stall naming a path the probe cannot look up tells the operator nothing they can act
+        -- on -- the context id is what `/InGame/<id>` takes and what the watchlist speaks.
+        local id = CivSim_PopupStackContextId(stackId)
         if not CivSim_ContextIsAccountedFor(id) then
             local ctx = CivSim_LookUp(id, nil)
             if ctx == nil then

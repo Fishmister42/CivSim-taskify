@@ -53,6 +53,9 @@ local CLOSE_CONTROLS = {
     EraReviewPopup = "Continue",
     -- worldcongressintro.xml:13 -- the one button on the "Begin Voting" welcome card.
     WorldCongressIntro = "AcceptButton",
+    -- historicmoments.xml:42 (`<Button ID="Close" Style="CloseButtonLarge"/>`), bound to `OnClose`
+    -- at historicmoments.lua:552.
+    HistoricMoments = "Close",
 }
 
 local function make_control(name, hidden)
@@ -447,26 +450,34 @@ def test_the_plain_world_view_is_recognised_with_no_prompt(lua: tuple[Any, Any])
 #
 # The dimension the rule constrains is NAMEABILITY, not which screen it is, so the positive twin
 # below varies exactly that: the same mechanism, the same stack, a popup the probe CAN name.
+#
+# The unnameable card in these tests USED TO BE `HistoricMoments`. It was mapped on 2026-09-22
+# (`prompt.historic_moment`, below) after it stalled two consecutive blocks four seconds after
+# launch, so it is no longer an example of anything unnameable and would make every test here pass
+# for the wrong reason. It is replaced by `WorldCrisisPopup`, which is still unmapped and is the
+# same kind of card reaching the board the same way: a Gathering Storm addin context raised with
+# `UIManager:QueuePopup(ContextPtr, PopupPriority.Low, { DelayShow = true })`
+# (`dlc/expansion2/ui/additions/worldcrisispopup.lua:221`), present in no shipped `ingame.xml`.
 
 
 def test_a_popup_the_probe_cannot_name_is_not_the_world_view(lua: tuple[Any, Any]) -> None:
-    """The defect, in its third and most dangerous instance. `HistoricMoments` is showing and is
-    on the engine's popup stack; nothing the probe watches is open. The old fall-through answered
-    `world`/`recognized = true` and authorised actions into it."""
+    """The defect, in its third and most dangerous instance. An unmapped Gathering Storm card is
+    showing and is on the engine's popup stack; nothing the probe watches is open. The old
+    fall-through answered `world`/`recognized = true` and authorised actions into it."""
     runtime, stubs = lua
     state = _state(
         runtime,
         stubs,
-        open=["HistoricMoments"],
+        open=["WorldCrisisPopup"],
         hidden=["CityPanel", "TechCivicCompletedPopup"],
-        popup_stack=["HistoricMoments"],
+        popup_stack=["WorldCrisisPopup"],
     )
     assert state["screen"] == "unknown"
     assert state["recognized"] is False
     assert state["has_blocking_prompt"] is False
     assert state["prompt_options"] == []
     # The stall must SAY what it saw, or the operator is back to guessing.
-    assert state["raw_screen_id"] == "HistoricMoments"
+    assert state["raw_screen_id"] == "WorldCrisisPopup"
     assert state["screen_probe_reason"] == "unnamed_popup_showing"
 
 
@@ -476,7 +487,7 @@ def test_a_popup_the_probe_can_name_is_still_named_from_the_same_stack(
     """The positive control, varying NAMEABILITY and nothing else: identical mechanism, identical
     stack shape, a popup that IS in the catalog vocabulary. The real one this is modelled on is
     the same probe naming `TechCivicCompletedPopup` correctly on the same board minutes after it
-    had answered `world` over `HistoricMoments` -- the machinery was never the gap."""
+    had answered `world` over an unmapped card -- the machinery was never the gap."""
     runtime, stubs = lua
     state = _state(
         runtime,
@@ -502,13 +513,13 @@ def test_an_unnamed_popup_outranks_a_named_screen_that_is_also_open(
     state = _state(
         runtime,
         stubs,
-        open=["TechCivicCompletedPopup", "HistoricMoments"],
+        open=["TechCivicCompletedPopup", "WorldCrisisPopup"],
         hidden=["CityPanel"],
-        popup_stack=["TechCivicCompletedPopup", "HistoricMoments"],
+        popup_stack=["TechCivicCompletedPopup", "WorldCrisisPopup"],
     )
     assert state["screen"] == "unknown"
     assert state["recognized"] is False
-    assert state["raw_screen_id"] == "HistoricMoments"
+    assert state["raw_screen_id"] == "WorldCrisisPopup"
 
 
 def test_a_queued_popup_that_is_not_displayed_does_not_stall_the_board(
@@ -523,14 +534,14 @@ def test_a_queued_popup_that_is_not_displayed_does_not_stall_the_board(
         runtime,
         stubs,
         open=[],
-        hidden=["HistoricMoments", "CityPanel"],
-        popup_stack=["HistoricMoments"],
+        hidden=["WorldCrisisPopup", "CityPanel"],
+        popup_stack=["WorldCrisisPopup"],
     )
     assert state["screen"] == "world"
     assert state["recognized"] is True
     # The evidence is still carried, so an auditor can see the entry was considered and why it
     # did not count -- absence of a stall is not absence of the entry.
-    assert state["popup_stack_ids"] == ["HistoricMoments"]
+    assert state["popup_stack_ids"] == ["WorldCrisisPopup"]
     assert state["popup_stack_depth"] == 1
 
 
@@ -578,14 +589,14 @@ def test_a_popup_stack_entry_whose_visibility_cannot_be_read_fails_closed(
     unobservable, and unobservable is not absent."""
     runtime, stubs = lua
     stubs.reset(runtime.table(), runtime.table("CityPanel"))
-    stubs.set_unreadable_context("HistoricMoments")
-    stubs.set_popup_stack(runtime.table("HistoricMoments"))
+    stubs.set_unreadable_context("WorldCrisisPopup")
+    stubs.set_popup_stack(runtime.table("WorldCrisisPopup"))
     result = runtime.globals()["CivSim_Screens"]["probe"]()
     state = {k: (list(v.values()) if k in _LIST_FIELDS else v) for k, v in result.items()}
 
     assert state["screen"] == "unknown"
     assert state["recognized"] is False
-    assert state["raw_screen_id"] == "HistoricMoments"
+    assert state["raw_screen_id"] == "WorldCrisisPopup"
     assert state["screen_probe_reason"] == "popup_stack_id_unreadable"
 
 
@@ -612,6 +623,117 @@ def test_an_unreadable_popup_stack_is_unobservable_not_an_empty_board(
     assert state["screen_probe_reason"] == "popup_stack_unreadable"
     # And it must not silently claim a depth it never read.
     assert "popup_stack_depth" not in state
+
+
+# ---------------------------------------------------------------------------
+# The "Era Makes History" card (`prompt.historic_moment`)
+# ---------------------------------------------------------------------------
+#
+# MEASURED 2026-09-22 by the hypervisor through the tuner, on the live board, while two
+# consecutive blocks died four seconds after launch (block 44 at 19:06:42, block 45 at 19:24:54,
+# both `paused turn=1`):
+#
+#     UIManager:GetPopupStack()  ->  depth 2
+#        "TechCivicCompletedPopup"
+#        "DLC/expansion2/UI/Additions/HistoricMoments"
+#
+# Two facts came out of that read, and both are asserted below.
+#
+# 1. An ADDIN context appears on the stack under its CONTENT PATH, not under the context id the
+#    rest of the probe speaks. `dlc/expansion2/ui/replacements/ingame.lua:348-353` loads every
+#    `Modding.GetUserInterfaces("InGame")` addin and takes the context's id from exactly the tail
+#    of that path ("grab id from end of path", :350), so the last segment IS the id -- which is why
+#    the probe now compares on that segment rather than on the whole string. Before this, every
+#    such card resolved as `popup_stack_id_unresolvable` and stalled every run at step one.
+# 2. The card is ACKNOWLEDGE-ONLY. `historicmoments.lua:548-572` registers exactly two click
+#    callbacks on the whole screen -- `Controls.Close` (`Mouse.eLClick`, :552) and
+#    `Controls.RightClickCloser` (`Mouse.eRClick`, :553) -- and both run the same `OnClose` ->
+#    `Close()`, which is `UIManager:DequeuePopup(ContextPtr)` (:446-452). Everything else on it is
+#    a read-only timeline. There is no second thing a human can decide here, so acknowledging it
+#    is not standing in for a choice.
+
+
+def test_the_historic_moment_card_is_a_recognised_acknowledge_only_prompt(
+    lua: tuple[Any, Any],
+) -> None:
+    """The card that stalled blocks 44 and 45 at turn 1. `/InGame/HistoricMoments` resolves by
+    context id whichever container it is parented to -- `Show()` reparents it to `/InGame/Screens`
+    during play and to `/InGame/AdditionalUserInterfaces` from the end-game menu
+    (historicmoments.lua:433) -- so the probe watches the id, not a path."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=["HistoricMoments"],
+        hidden=["CityPanel"],
+        popup_stack=["DLC/expansion2/UI/Additions/HistoricMoments"],
+    )
+    assert state["screen"] == "prompt.historic_moment"
+    assert state["raw_screen_id"] == "HistoricMoments"
+    assert state["recognized"] is True
+    assert state["has_blocking_prompt"] is True
+    assert state["prompt_options"] == ["continue"]
+    assert "screen_probe_reason" not in state
+
+
+def test_an_addin_stack_entry_is_accounted_for_by_the_id_the_loader_gives_it(
+    lua: tuple[Any, Any],
+) -> None:
+    """The stack id measured live is a content path; the context id is its last segment. Stalling
+    on the path while watching the id is a false stall, and it cost two blocks."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=[],
+        hidden=["HistoricMoments", "CityPanel"],
+        popup_stack=["DLC/expansion2/UI/Additions/HistoricMoments"],
+    )
+    assert state["screen"] == "world"
+    assert state["recognized"] is True
+    assert state["popup_stack_ids"] == ["DLC/expansion2/UI/Additions/HistoricMoments"]
+    assert "screen_probe_reason" not in state
+
+
+def test_an_addin_path_whose_last_segment_is_unknown_still_fails_closed(
+    lua: tuple[Any, Any],
+) -> None:
+    """The positive control for the rule above, varying exactly the dimension it constrains --
+    whether the tail names a context the probe accounts for -- and holding the path shape fixed.
+    Taking the last segment must not turn every addin path into an all-clear."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=[],
+        hidden=["CityPanel"],
+        popup_stack=["DLC/expansion2/UI/Additions/SomeCardNobodyHasMappedYet"],
+    )
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["raw_screen_id"] == "SomeCardNobodyHasMappedYet"
+    assert state["screen_probe_reason"] == "popup_stack_id_unresolvable"
+
+
+def test_the_historic_moment_card_outranks_the_lower_priority_card_beneath_it(
+    lua: tuple[Any, Any],
+) -> None:
+    """Both were on the live stack together. Z-order is not exposed, but the game's own priorities
+    are: `HistoricMoments` queues at `PopupPriority.Medium` (historicmoments.lua:95, :430) and
+    `TechCivicCompletedPopup` at `PopupPriority.Low` (techciviccompletedpopup.lua:245), so the
+    history card is the one on top and the one whose close button a click can reach. The watchlist
+    order encodes that."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=["TechCivicCompletedPopup", "HistoricMoments"],
+        hidden=["CityPanel"],
+        popup_stack=["TechCivicCompletedPopup", "DLC/expansion2/UI/Additions/HistoricMoments"],
+    )
+    assert state["screen"] == "prompt.historic_moment"
+    assert state["raw_screen_id"] == "HistoricMoments"
+    assert state["prompt_options"] == ["continue"]
 
 
 @pytest.mark.parametrize(
@@ -874,6 +996,9 @@ def test_an_unmapped_watchlist_state_is_still_unknown_never_guessed(lua: tuple[A
         ("prompt.tech_civic_completed", "TechCivicCompletedPopup", "CloseButton"),
         ("prompt.boost_unlocked", "BoostUnlockedPopup", "ContinueButton"),
         ("prompt.great_work_created", "GreatWorkShowcase", "ModalScreenClose"),
+        # historicmoments.xml:42 declares `<Button ID="Close" Style="CloseButtonLarge"/>`, bound to
+        # `OnClose` at historicmoments.lua:552.
+        ("prompt.historic_moment", "HistoricMoments", "Close"),
     ],
 )
 def test_acknowledging_drives_the_popups_own_close_control_first(
@@ -912,6 +1037,10 @@ def test_acknowledging_drives_the_popups_own_close_control_first(
         # EraReviewPopup's Continue and Close both run UIManager:DequeuePopup (erareviewpopup.lua
         # :241-246), so its fallback is the dequeue.
         ("prompt.era_transition", "EraReviewPopup", "UIManager:DequeuePopup"),
+        # HistoricMoments' own `Close()` IS `UIManager:DequeuePopup(ContextPtr)`
+        # (historicmoments.lua:446-452), so for this one the fallback is the whole of what the
+        # button does rather than half of it.
+        ("prompt.historic_moment", "HistoricMoments", "UIManager:DequeuePopup"),
     ],
 )
 def test_a_build_whose_controls_report_no_rect_falls_back_to_that_popups_own_primitive(

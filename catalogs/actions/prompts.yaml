@@ -446,6 +446,63 @@
     the single offered option, "continue" (prompt_options)
   introduced_in_version: "2026.09.6"
 
+# MEASURED live 2026-09-22, through the tuner, while the board was frozen: two consecutive blocks
+# died four seconds after launch (block 44 at 19:06:42, block 45 at 19:24:54, both `paused turn=1`)
+# and `UIManager:GetPopupStack()` answered depth 2 --
+#     "TechCivicCompletedPopup"
+#     "DLC/expansion2/UI/Additions/HistoricMoments"
+# The second is Gathering Storm's "Era Makes History" timeline card, and it was mapped to no screen
+# id, so the probe correctly refused to name the board (FR-049) and every run stalled at its first
+# observation. The game's own AI played on from turn 98 to 115 while the harness could not move.
+#
+# ACKNOWLEDGE-ONLY, established by enumerating the screen's callbacks rather than by looking at it:
+# `historicmoments.lua`'s `Initialize` (:548-572) registers exactly two click callbacks in the
+# whole context -- `Controls.Close` on `Mouse.eLClick` (:552) and `Controls.RightClickCloser` on
+# `Mouse.eRClick` (:553) -- and both run the same `OnClose` -> `Close()` (:455-457, :446-452),
+# which is `UIManager:DequeuePopup(ContextPtr)`. The only other registration on the screen is a
+# scroll callback for the timeline (:554). Everything the card shows is a record of moments that
+# have already happened. There is no second outcome here for an acknowledge to stand in for.
+#
+# The button is `<Button ID="Close" Anchor="R,T" Style="CloseButtonLarge" Offset="-8,-5"/>`
+# (historicmoments.xml:42).
+#
+# The verification predicate is a POSITIVE claim in both of its branches, deliberately, and is not
+# the `game.current_screen != "prompt.X"` shape the other acknowledge-only prompts still carry
+# (see `capability/verification_shape.py`'s KNOWN_NEGATIVE_VERIFICATIONS, which grandfathers those
+# twelve). The two endings the live board actually produces are:
+#   1. the board is back -- the card closed and nothing was queued under it; or
+#   2. a DIFFERENT blocking prompt is now up -- the card closed and revealed the one beneath it,
+#      which is exactly what the measured stack of depth 2 above means will happen here:
+#      `TechCivicCompletedPopup` is next.
+# Neither branch can be satisfied by the card still being up, and -- unlike the bare negative --
+# neither can be satisfied by the probe losing the screen, because every `unknown` answer
+# `lua/ingame/screens.lua` returns carries `has_blocking_prompt = false` and a screen that is not
+# `world`.
+
+- declaration_id: prompts.historic_moment
+  kind: action
+  summary: >
+    Acknowledge Gathering Storm's "Era Makes History" timeline card ({"target": "continue"}); it
+    appears when a historic moment is recorded and blocks play until dismissed.
+  parity_basis: >
+    The card fills the screen with the era's timeline of historic moments -- one illustrated node
+    per moment, with its description and what it earned -- under a title banner, with a close
+    button in the banner's top-right corner; a human clicks that button (or right-clicks the card,
+    or presses Escape) to dismiss it and carry on. The timeline itself is a record, not a choice:
+    the screen offers nothing else to click.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.historic_moment"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen == "world" or (game.has_blocking_prompt and
+    game.current_screen != "prompt.historic_moment")
+  target_kind: option
+  target_hint: >
+    "continue" -- the card offers nothing else
+  introduced_in_version: "2026.09.22"
+
 - declaration_id: prompts.great_work_created
   kind: action
   summary: >

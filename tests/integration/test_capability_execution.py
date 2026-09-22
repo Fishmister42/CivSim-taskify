@@ -46,7 +46,9 @@ async def test_the_real_catalog_loads_with_the_documented_shape() -> None:
     # prompts.city_state_quest and prompts.religion_selection -- see catalogs/README.md §6.
     # 59 -> 61 (catalog 2026.09.8): prompts.era_dedication and prompts.congress_intro.
     # 61 -> 62 (catalog 2026.09.9): units.build_improvement, the first charge-spending action.
-    assert len(catalog.declarations) == 62
+    # 62 -> 63 (catalog 2026.09.22): prompts.historic_moment, Gathering Storm's "Era Makes History"
+    # card -- measured on the engine's popup stack while two blocks died at turn 1.
+    assert len(catalog.declarations) == 63
     # +cities.selection, +yields.read, +selection.orders (2026-09-21)
     assert len(catalog.capabilities) == 27
     assert _UNITS_STATE in catalog.declarations

@@ -54,7 +54,14 @@ CATALOGS_ROOT = _REPO_ROOT / "catalogs"
 # (tests/live/goals/use_a_builder.yaml) was authored blocked on exactly this gap. Backed by the
 # existing `units.orders` capability (lua/ingame/unit_orders.lua), so the capability count is
 # unchanged.
-EXPECTED_DECLARATION_COUNT = 62
+#
+# 62 -> 63, 2026-09-22 (catalog `2026.09.22`): `prompts.historic_moment` -- Gathering Storm's
+# "Era Makes History" timeline card. Measured live on the engine's own popup stack
+# (`DLC/expansion2/UI/Additions/HistoricMoments`) while two consecutive blocks died four seconds
+# after launch at turn 1, because the card was mapped to no screen id and the probe correctly
+# refused to name the board. Backed by the existing `prompts.orders` capability
+# (lua/ingame/screens.lua), so the capability count is unchanged.
+EXPECTED_DECLARATION_COUNT = 63
 EXPECTED_CAPABILITY_COUNT = 27
 
 
