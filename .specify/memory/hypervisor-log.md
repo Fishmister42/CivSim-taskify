@@ -1606,3 +1606,49 @@ load" reading, which was right for a weaker reason. **No wall-clock margin is ev
 on this box.** Count reads, operations or allocations instead (`125a74f` already does this for the
 `/compare` budget case). The timing-or-budget clause in the verification rule stands, but its
 justification is now this number rather than an impression of load.
+
+### Stating a rule does not produce compliance with it (2026-09-22) — evidence from the author
+
+The lookup rule was written today, by this lane, after a misattribution: *run the lookup on each thing
+you are about to claim, not on one and then generalise.* **This lane then made the same error twice
+more, the third time after writing the rule**, attributing a suite running in `CivSolver-chainverify`
+to itself in a state check without reading whose process it was. It was another lane's.
+
+That is the strongest evidence available for a claim the project has been making all day about its own
+code, now made about its authors: **a rule is not a control.** The instances are not a failure of
+memory or of care — the rule was fresh, self-authored, and had just been cited. They are what happens
+because remembering is an input the system cannot guarantee.
+
+**So: prefer the mechanical gate over the remembered principle.** A pre-slot scan that reads diffs
+rather than filenames is a control. "Remember to read the diff" is not, and today it demonstrably was
+not, three times, once by the person who wrote it down.
+
+The same asymmetry runs through every finding today. The zero-caller helper, the discarded return, the
+docstring standing in for a mechanism, the predicate referencing an absent field — each was a case
+where the correct behaviour was **known and written down somewhere**, and nothing made it happen.
+
+### Chain leg 2: the 90-second gap was a retry budget, resolved by reading rather than measuring
+
+The abort is **not** `_prepare_run`'s `connect()`. It is `tests/live/demo_landed_run.py::read_setup()`,
+called by `run_goal` **before** `build_runner_dependencies`, which already carries its own bounded
+retry: `connect(retries=30)`, **3.0 s apart** (`demo_landed_run.py:206-216`). **30 x 3.0 s = 87-90 s;
+the observed aborts were at 90 s and 91 s.** The gap was never a tail duration and never slow leg-2
+setup — **it is a retry budget running out**, to the second. Every one of the 30 attempts failed with
+the **refusal** signature rather than a slow-response timeout, which rules out slow setup and points
+at a tail **longer than 90 s** — the opposite of what the raw gap suggested. A live probe approved to
+measure this was cancelled; **reading beat measuring, for the third time today.**
+
+Consequence for the landed fix: `CHAIN_LEG_TUNER_POLL_TIMEOUT_S = 240.0`'s comment **understates its
+own evidence**. The honest statement is clearance over a tail that **exceeded 90 s of continuous
+refusals** — not clearance over an observed 91 s gap, which is a measurement of *when we stopped
+asking*, not of the tail.
+
+**Session reuse was established impossible with the object and the line, not inferred from a plausible
+seam** (`build_runner_dependencies`'s client factory *looks* like one): `_prepare_run` calls
+`connect()` **unconditionally** on whatever the factory returns (`composition.py:783`), so identity
+does not change what is called on it; and `evaluate_stop_facts` schedules
+`_close_quietly(ctx.nexus_client)` (`composition.py:1616`) the instant a stop resolves, so production
+has already closed leg 1's client before `run_goal()` regains control. The fix would be
+**parameterising a production close for a test driver's convenience** — a worse dependency than the
+one it removes. **The probe is therefore the correct answer, not a fallback.** Reuse is appended as a
+task with this analysis attached so it reopens from here rather than from scratch.
