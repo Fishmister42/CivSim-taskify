@@ -71,11 +71,19 @@ the entry/exit lines. The check must fail on `bracketing_only`. Restore, then bu
 and flush at exit. The check must fail on `streaming_verified`. A check that survives either break
 is rejected.
 
-**Current expected state** (working tree at `0187345`): the confirm loop satisfies all three
-clauses; the provider call satisfies periodicity and streaming and **fails work-derived**, so it is
-registered with `presence_does_not_establish: "that the provider call is progressing"` and provider
-silence yields *undetermined*. That is the honest interim state, and it must be visible in the
-record.
+**Current expected state** (re-verified against `HEAD`): the roster has **six** entries and
+**three are still silent** — `run.backstop_end_turn_confirm` (a *second*, hand-rolled 200 s confirm
+loop the `act/verify.py` fix never reached; owner: LIVE lane), `saves.load_await_phase` (**300 s,
+1.67× the whole budget**, in a package with no logging at all; owner: **unresolved**), and
+`resilience.recover` (**this feature's own rung 4**; owner: **unresolved**). Each is allowlisted with
+a task id and an owning lane, and the allowlist **fails the moment its phase starts emitting**, so
+it can only tighten. `act.confirm_execution` satisfies all three clauses. `provider.in_flight_call`
+satisfies periodicity and streaming and **fails work-derived**, so provider silence yields
+*undetermined*. That is the honest interim state, and it must be visible in the record.
+
+**Two things this roster proves that no per-phase care could have.** A *second copy* of an
+already-fixed loop was found only by enumeration. And rung 4 is itself a long silent phase — so an
+un-emitting rung is **detected as a stall while it is recovering from one**.
 
 ---
 

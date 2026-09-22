@@ -146,32 +146,48 @@ three from this project's own record:
 
 ---
 
-## 6. Current state of the contract, stated because two lanes are building against it
+## 6. Current state of the contract
 
-Verified against the working tree at `0187345`. Both new modules are **untracked and uncommitted**.
+**Re-verified against `HEAD`** (revision 1). The emitters have **landed**: `act/liveness.py` and
+`provider/liveness.py` are tracked and committed, `tests/contract/test_long_phase_liveness.py` is in
+`HEAD` at 561 lines (added by `33348e3`), and the work carries task id `T302` — 21 citations across
+7 files, excluding `tasks.md`'s own allocation line.
 
-| Phase | Emitter | Clause 1.1 periodic | Clause 1.2 streams | Clause 1.3 work-derived | Verdict |
+### 6.1 The roster
+
+Six phases, three of them still silent. The allowlist requires a task id **and** an owning lane per
+entry, and **fails the moment its phase starts emitting**, so it can only tighten.
+
+| Phase | Bound | 1.1 periodic | 1.2 streams | 1.3 work-derived | Verdict |
 |---|---|---|---|---|---|
-| End-turn confirm poll (`act/verify.py::confirm_execution`, ~200 s bound, 2 s poll) | `act/liveness.py::emit_confirm_liveness` → `act.confirm_execution.waiting`, emitted per attempt before evaluating it | **Yes** — rides the existing 2 s poll | To verify | **Yes** — each iteration completes a real tuner round trip, so an emitted iteration *proves* the tuner answered within the last poll | **Satisfies the contract** |
-| Model-provider call (`provider/openrouter.py::OpenRouterProvider.complete`, 120 s per attempt, chained) | `provider/liveness.py::provider_call_liveness` → `started` / `waiting` / `finished`, daemon ticker at 15 s | **Yes** | To verify | **No** — a thread beside a blocking `httpx.Client.post` | **Adequate for clause 1.1–1.2; fails 1.3.** Register it honestly and **supplement** it |
+| `provider.in_flight_call` | 120 s nominal — **`httpx` applies it per socket operation, not to the whole call**; measured 146 s | yes | yes | **no** | **Adequate for 1.1–1.2; fails 1.3.** Registered as observer-derived |
+| `provider.chain` | unbounded in aggregate | yes | yes | yes | satisfies |
+| `act.confirm_execution` | 200 s | yes — rides the existing 2 s poll | yes | **yes** — each iteration completes a real tuner round trip | **satisfies** |
+| `run.backstop_end_turn_confirm` | 200 s | **no** | — | — | **silent.** A *second, hand-rolled* confirm loop that does not route through `confirm_execution`, so the `act/liveness.py` fix never reached it. Owner: **LIVE lane** |
+| `saves.load_await_phase` | **300 s — 1.67× the whole budget**, longest explicit bound in `src/` | **no** | — | — | **silent**, in a package with no logging at all. Owner: **UNRESOLVED**. Highest-value entry |
+| `resilience.recover` | unbounded; up to 300 s per attempt | **no** | — | — | **silent.** Publishes `RunEvent`s, which reach the store and not the log a watchdog polls. Owner: **UNRESOLVED** |
 
-**What "supplement" means, concretely**: request the completion as a **stream** and emit on chunk
-arrival, carrying cumulative bytes, chunk count, and time since the last chunk. FR-003 names
-"provider bytes actually arriving on an in-flight call" as an acceptable signal, and it is the only
-listed one that observes the work. The provider port's contract is untouched — exactly one decision
-per call; streaming changes how the bytes arrive, not what the call returns.
+### 6.2 What the roster proved about itself
 
-**Until that lands, provider silence yields `undetermined`, not `stalled`.** That is correct under
-FR-015 and it means the 85% case is *reported* rather than *acted on*. It must be visible in the
-record as an interim state, not implicit.
+- **`run.backstop_end_turn_confirm` is this contract's justification in one row.** The
+  `confirm_execution` fix looked complete. A *second copy of the same loop* elsewhere was untouched
+  by it, and no amount of care on the first loop finds the second — only enumeration does.
+- **`resilience.recover` is spec 004's own rung 4.** The ladder's rungs are themselves long phases,
+  so an un-emitting rung is **detected as a stall while it is recovering from one**. Every rung must
+  emit a work-derived tick for its duration, and the classifier must treat *a rung of this run is in
+  flight* as a recorded state rather than as silence.
+- **`provider.chain`'s own note** — that a `RunEvent` reaches the store and not the driver log —
+  is §2's transport reasoning arrived at independently.
 
-**Three coordination items, for whoever owns them** — not fixable inside this contract:
+### 6.3 The supplement still owed
 
-1. The in-flight modules cite task id **`T290`**, which in `specs/002-civ-playing-harness/tasks.md`
-   is a different task ("record honestly which success criteria are unobserved"). The highest
-   allocated id there is T294 and the emission work has **no task of its own**, so it is invisible
-   to every tally.
-2. The modules are **uncommitted**, so under the standing clean-worktree rule nothing about them is
-   verified yet, and this feature's phase-1 gate cannot read as satisfied.
-3. `tests/contract/test_long_phase_liveness.py` is **named by both shipped docstrings and does not
-   exist in the tree** — a documentation claim ahead of its artifact.
+`provider.in_flight_call` is observer-derived. `provider/liveness.py`'s docstring now opens
+**"OBSERVER-DERIVED, NOT WORK-DERIVED. Read this before treating a tick as progress"**, states the
+clear-a-bound rule as normative, and names the successor: **stream the provider completion so that a
+chunk arriving is the event.** FR-003 names "provider bytes actually arriving on an in-flight call",
+and it is the only candidate that observes the work. The port's contract is untouched — exactly one
+decision per call; streaming changes how the bytes arrive, not what the call returns.
+
+**Until it lands, provider silence yields `undetermined`, not `stalled`.** Correct under FR-015, and
+it means the 85% case is *reported* rather than *acted on*. That is the honest interim state, and it
+is not the feature working.

@@ -37,8 +37,9 @@ somebody outside this feature builds against it — in two cases, **concurrently
 
 ## The two-lane note
 
-Two of these contracts describe things that are **being built in the shared tree while this plan is
-written**, uncommitted. [liveness-signal.md](./liveness-signal.md) records what has landed, what it
-is adequate for, and the one clause it does not yet satisfy. It is written as a contract rather than
-as a description on purpose: the point is what the emitters owe the reader, not what any particular
-module currently does.
+The emitters **landed on 002 under `T302`** while this plan was being written, and the SC-026 roster
+came with them. [liveness-signal.md](./liveness-signal.md) §6 records the verified state: six
+rostered phases, three still silent, and the one clause the provider emitter does not yet satisfy.
+It is written as a contract rather than as a description on purpose — the point is what the emitters
+owe the reader, not what any particular module currently does, and §6 is the part that will go stale
+while §§1–5 do not.

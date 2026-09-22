@@ -10,7 +10,8 @@ questions the spec deliberately left to the plan:
 
 1. **What does a phase have to do to "emit", such that the emission is evidence about the work and
    not about the emitter?** (R2 — the sharpest finding here, and it contradicts the obvious
-   implementation, including the one currently in flight.)
+   implementation, including the one that had just landed. It has since been adopted into that
+   emitter's own docstring; see R14.)
 2. **Where does a liveness signal go, and who reads it**, given one tuner connection, a
    no-delete/no-edit store, and FR-008's requirement that a dead monitor be distinguishable from a
    quiet run? (R3, R4)
@@ -53,10 +54,33 @@ accommodate.
 phases found so far were found *by searching their loops for a logging call and finding none* — not
 by anyone noticing. SC-026 requires that every phase which can outlast the ceiling be enumerated and
 audited, per release. That is a standing roster, not a one-time sweep, and a phase absent from it is
-a phase nobody checked. The candidate set to audit in Phase 1 is wider than the two known entries:
-save and load round trips, capture, the tuner heartbeat's own bounded wait, `ProviderChain`
-fallback across attempts, the orphan sweep that runs on a write-mode store open (003 rule W6), and
-any `time.sleep` or `while` in `run/`, `act/`, `saves/` and `nexus/`.
+a phase nobody checked.
+
+**This prediction was tested immediately, and the roster came back larger than the guess.**
+*(Verified against `HEAD` for revision 1 — `tests/contract/test_long_phase_liveness.py`, 561 lines,
+landed by `33348e3` under `T302`.)* The sweep found **six** entries, not two, and **three of them
+are still silent**:
+
+| Phase | Bound | Emits? |
+|---|---|---|
+| `provider.in_flight_call` | 120 s nominal — **`httpx` applies it per socket operation, not to the whole call**; measured wall clock **146 s** | yes, observer-derived |
+| `provider.chain` | unbounded in aggregate; its backoff sleeps published only `RunEvent`s, *"which reach the store and not the driver log a watchdog polls"* | yes |
+| `act.confirm_execution` | 200 s | yes, work-derived |
+| `run.backstop_end_turn_confirm` | 200 s | **no** — a *second, hand-rolled* 200 s confirm loop that does not route through `confirm_execution` |
+| `saves.load_await_phase` | **300 s — 1.67× the whole watchdog budget**, the longest explicit bound in `src/`; `saves/` has no logging at all | **no** |
+| `resilience.recover` | unbounded; dominated by the save load, up to 300 s per attempt | **no** |
+
+Three things this vindicates, and one it costs:
+
+- **The two known entries were not the set.** `saves.load_await_phase` alone exceeds the ceiling by
+  1.67× and nobody had looked at it.
+- **`run.backstop_end_turn_confirm` is the roster's whole justification in one row.** The
+  `confirm_execution` fix looked complete; a *second copy of the same loop* elsewhere was untouched
+  by it. No amount of care on the first loop finds the second — only enumeration does.
+- **`provider.chain`'s note is R3's reasoning arrived at independently**: a `RunEvent` is durable
+  evidence and is not something a log-polling watchdog can read.
+- **The cost**: `resilience.recover` is *this feature's own rung 4*, so the ladder's rungs are
+  themselves long phases. See R9.
 
 **Alternatives rejected.**
 
@@ -398,7 +422,7 @@ verification, host availability). Escalation is monotonic within one stall; the 
 | **1** Dismiss a registered blocking view as a human would | *blocked by the game* | registry entry matched **and** its dismissal reachable on this host | nothing | New; depends on R7's declared action |
 | **2** Re-derive the harness's belief from the engine | *blocked by the harness* | belief and engine answer disagree, read independently (R6) | the stale belief only | New |
 | **3** Re-establish the path to the game | *unreachable*, selected by FR-012 cause | the specific cause is established | nothing (a lock is never force-taken from a live owner) | Partly exists — the ~2 s post-close refusal-tail re-probe already ships |
-| **4** Reload the run's last named save and replay the turn | *unreachable* or an unresolved *blocked by the game* | the game is in a context that **accepts a load** | the in-progress turn attempt, retained as abandoned; discarded model spend attributed to the stall | **Exists** — `resilience/recovery.py` is this rung today and becomes one rung rather than the whole ladder |
+| **4** Reload the run's last named save and replay the turn | *unreachable* or an unresolved *blocked by the game* | the game is in a context that **accepts a load** | the in-progress turn attempt, retained as abandoned; discarded model spend attributed to the stall | **Exists** — `resilience/recovery.py` is this rung today and becomes one rung rather than the whole ladder. **It is also on the SC-026 long-phase roster and is currently silent** (R1) |
 | **5** Restart the game client | *unreachable*, cause = client absent/unresponsive | — | the client process | **UNAVAILABLE. Declared as a dependency, not assumed** |
 
 **Rung 5 is a stated dependency and the plan may not assume it.** Verified independently for this
@@ -417,6 +441,14 @@ and the three refusals on record were all on a menu reached by exiting or losing
 "Post-defeat" is a correlate. A precondition named for the correlate fires in the wrong place — and
 this is the third instance in this plan of *a guard whose scope does not match the thing it guards*,
 which is why it is being called out rather than transcribed.
+
+**The ladder's own rungs are long phases, and that is a recursion hazard the roster found before
+the code could.** `resilience.recover` is rung 4; it is unbounded, dominated by a save load whose
+own bound is 300 s, and it publishes `RunEvent`s to the store but nothing to the driver log a
+watchdog polls. An un-emitting rung would be **detected as a stall while it is recovering from
+one** — escalating the ladder against its own action and burning the attempt limit on a recovery
+that was working. So every rung MUST emit a work-derived tick for its duration, and the classifier
+MUST treat *a rung of this run is in flight* as a recorded state rather than as silence.
 
 **Why ordering by destructiveness is the whole safety argument.** The classifier will sometimes be
 wrong. If it calls a class-2 block a class-1 block, rung 1 fires, costs a wasted Escape, verifies
@@ -587,7 +619,8 @@ was removed.**
 | **3** unproductive replays | `run/decision_loop.py::MAX_UNPRODUCTIVE_REPLAYS` | Existing guard against `RecoveryEngine` resetting its counter on every successful-but-unproductive reload | Inherited — and it is the **existing** answer to FR-035's "a stall that recurs identically must escalate rather than repeat". The ladder's escalation must compose with it, not duplicate it |
 | **~2 s** post-close refusal tail | rung 3's cause discrimination | Measured on this build | Measured |
 | **~146 s** model wait; **85%** of turn wall clock; **1,017 s of ~1,170 s** over 12 turns; **56–146 s** per-turn range; **2 s** fake-provider turn | the case for the whole feature | Measured, Linux node, 2026-09-21/22 | Measured |
-| **120 s** provider per-attempt bound | `openrouter.DEFAULT_REQUEST_TIMEOUT_S` | Inherited configuration | Inherited — note a **chain** of attempts can legitimately exceed 180 s in aggregate, which is why R2's per-attempt work-derived signal matters |
+| **120 s** provider per-attempt bound | `openrouter.DEFAULT_REQUEST_TIMEOUT_S` | Inherited configuration — **and it does not bound what its name suggests.** `httpx` applies it **per socket operation**, not to the whole call, so a call can exceed it without ever tripping it; the measured wall clock was **146 s**. Recorded in the SC-026 roster | Inherited, **and it is itself a value whose name asserts something it does not mean.** A chain of attempts can legitimately exceed 180 s in aggregate, which is why R2's per-attempt work-derived signal matters |
+| **300 s** save-load await bound | `saves/load_game.py::DEFAULT_LOAD_TIMEOUT_S`, polled every 1 s | Inherited configuration; **the longest explicit bound in `src/`** | Inherited, and **the most consequential number in the roster: 1.67× the watchdog's whole budget on its own, in a package with no logging at all.** It is also the wait rung 4 is built on |
 | **~10 s** detection cadence | existing detector pass interval | Inherited from spec 002 R12 | Inherited |
 | **60 s** crash budget | spec 002 SC-010 | Inherited. Not in tension with 180 s: a dead client is directly observable, a stall is an inference — and the record says which question it answered (SC-002) | Inherited |
 | **~38 s** fresh-menu return | rung 4/5 reasoning | Measured | Measured |
@@ -632,42 +665,53 @@ human rescues it, which is backwards.
 
 ---
 
-## R14 — Reconciling with the work already in flight on spec 002
+## R14 — Reconciling with spec 002's emission work (LANDED)
 
 **Decision**: **this feature does not re-implement the emission; it adopts it, registers it, and
-supplies the half that is missing.** The reconciliation is stated here so the two lanes do not build
-it twice or, worse, build two emitters.
+supplies the half that is missing.** Stated here so the two lanes do not build it twice or, worse,
+build two emitters.
 
-**What is in flight right now** (working tree at `0187345`, uncommitted, both modules untracked):
+**Revision 1, 2026-09-22 — corrected against `HEAD`, not against a report.** This section originally
+described work in flight at `0187345` and raised three coordination findings. **All three were
+correct then and all three are now discharged**, which is recorded rather than deleted, because the
+findings are what produced the fixes:
 
-| Artifact | State | This feature's disposition |
-|---|---|---|
-| `src/civsim_harness/act/liveness.py` — `emit_confirm_liveness` / `emit_harness_liveness`, publishing `act.confirm_execution.waiting` per attempt, wired into `act/verify.py::confirm_execution` | New, untracked | **Adopt as-is.** Work-derived under R2 and a correct FR-003 signal. Register it in the FR-002 signal registry |
-| `src/civsim_harness/provider/liveness.py` — `provider_call_liveness` context manager, daemon ticker at `PROVIDER_TICK_INTERVAL_S = 15.0`, publishing `provider.call.started/waiting/finished`, wired into `provider/openrouter.py` | New, untracked | **Adopt, and supplement.** Observer-derived under R2. Register it honestly with `presence_does_not_establish: "that the provider call is progressing"`, and add the work-derived byte-arrival signal before FR-005 may act on provider silence |
-| `act/verify.py` — `confirm_execution[ReadT]` at `:257`, whose `while True` at `:296` now calls `emit_confirm_liveness(...)` at `:312` before evaluating each attempt | Modified | Adopt. `timeout_s`, `poll_s` and the fail-closed behaviour are untouched, which is the right shape |
-| `provider/chain.py`, `run/decision_loop.py` | Modified | Adopt; these are the wiring |
-| `tests/contract/test_long_phase_liveness.py` (referenced by both new modules' docstrings) | **Does not exist in the tree** | **Becomes the SC-026 roster's home**, extended from two entries to the full enumeration |
+| Original finding | State now, re-verified |
+|---|---|
+| The work cites task id `T290`, which already means a different task; it has no id of its own | **Fixed.** `T302` allocated and closed in `specs/002-civ-playing-harness/tasks.md`, carrying **22 occurrences across 8 files — 21 citations across 7 files** once `tasks.md`'s own allocation line is excluded, which is the counting rule. Zero surviving `T290` citations in the liveness modules |
+| Both modules are uncommitted, so nothing about them is verified | **Fixed.** `git status --porcelain` on all four paths returns empty; `act/liveness.py` and `provider/liveness.py` are in `HEAD` |
+| `tests/contract/test_long_phase_liveness.py` is named by two shipped docstrings and does not exist | **Fixed.** In `HEAD` at **561 lines**, added by `33348e3` |
 
-**Three coordination findings to settle before Phase 1 starts, none of which this plan may fix
-unilaterally:**
+*(These were verified here rather than accepted, and that is the point of re-checking them: the
+relay that carried them was itself correcting an earlier relay. A claim passed along is the claim
+nobody re-checks, which is exactly where this project's standing rule bites hardest.)*
 
-1. **The work cites task id `T290`, which already means something else.** Spec 002's T290 is
-   "Record honestly which success criteria are unobserved"; the highest allocated id is T294. The
-   emission work has **no task of its own** in `specs/002-civ-playing-harness/tasks.md`. Whichever
-   lane owns it needs a real id, or the claim "T290 landed" is true of a different task and the
-   emission work is invisible to every tally.
-2. **The modules are uncommitted.** Under the standing rule that a commit is verified in a clean
-   detached worktree at the committed hash, nothing about them is verified yet, and this feature's
-   Phase 1 gate cannot read as satisfied until they are.
-3. **`test_long_phase_liveness.py` does not exist in the tree yet** while two shipped docstrings
-   name it. That is a documentation claim ahead of its artifact — small, but it is the shape this
-   project keeps removing.
+**What landed, and this feature's disposition:**
 
-**Where the boundary sits.** Spec 002 owns making its own phases emit — it owns the provider layer,
-the turn cycle and the confirm loop. This feature owns **the obligation** (FR-003), **the
-enumeration** (SC-026), **the registry** (FR-002), and **the reader** (FR-004). Stated as a rule:
-*002 writes the emitters; 004 says which phases must have one, what each signal may be read to mean,
-and refuses to enable the bound until the roster is clean.*
+| Artifact | This feature's disposition |
+|---|---|
+| `act/liveness.py` — `emit_confirm_liveness` / `emit_harness_liveness`, publishing `act.confirm_execution.waiting` per attempt from `act/verify.py::confirm_execution` | **Adopt as-is.** Work-derived under R2 and a correct FR-003 signal |
+| `provider/liveness.py` — `provider_call_liveness`, daemon ticker at `PROVIDER_TICK_INTERVAL_S = 15.0`, wired into `provider/openrouter.py` and `provider/chain.py` | **Adopt and register as-is.** Its docstring now opens **"OBSERVER-DERIVED, NOT WORK-DERIVED. Read this before treating a tick as progress"**, states the clear-a-bound rule as normative, and names streaming as the approved successor. **R2's finding is already adopted in 002's code**, so the only work owed is the streaming fix itself |
+| `tests/contract/test_long_phase_liveness.py` | **Is the SC-026 roster.** Six entries, with an allowlist that requires a task id **and** an owning lane per entry and **fails the moment its phase starts emitting** — so it can only tighten |
+
+**Where the boundary sits, unchanged and now demonstrated.** Spec 002 owns making its own phases
+emit — it owns the provider layer, the turn cycle and the confirm loop. This feature owns **the
+obligation** (FR-003), **the enumeration** (SC-026), **the registry** (FR-002), and **the reader**
+(FR-004). Stated as a rule: *002 writes the emitters; 004 says which phases must have one, what each
+signal may be read to mean, and refuses to enable the bound until the roster is clean.* That
+division is what produced a six-entry roster and a self-tightening allowlist without either lane
+duplicating the other.
+
+**What still qualifies the phase-1 gate** — three items, none a coordination defect:
+
+1. `provider.in_flight_call` is **observer-derived**; the streaming fix is approved and unbuilt.
+   Until it lands, provider silence yields *undetermined*, not *stalled*.
+2. **Three roster entries are still silent, and two have no owning lane** —
+   `run.backstop_end_turn_confirm` (LIVE lane), `saves.load_await_phase` (UNRESOLVED),
+   `resilience.recover` (UNRESOLVED).
+3. `saves.load_await_phase` is the highest-value of those: **300 s, 1.67× the ceiling on its own**,
+   in a package with no logging at all — and it is the wait rung 4 is built on.
+
 
 ---
 
