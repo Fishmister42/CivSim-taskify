@@ -111,7 +111,7 @@ end
 -- Both are gone from here and from catalogs/actions/prompts.yaml. Do not re-add either: the probe
 -- reporting one would be a fabricated prompt, which is exactly what FR-049 exists to prevent.
 local CIVSIM_KNOWN_SCREENS = {
-    "world", "strategic", "city_screen", "diplomacy", "congress",
+    "world", "strategic", "city_screen", "diplomacy", "congress", "game_over",
     "prompt.unit_promotion", "prompt.pantheon_selection",
     "prompt.great_person_selection", "prompt.diplomatic_approach", "prompt.declare_war_response",
     "prompt.congress_intro", "prompt.congress_vote", "prompt.era_transition",
@@ -292,7 +292,14 @@ end
 --   * `DedicationPopup` before `EraReviewPopup` -- the era card's own Continue dequeues itself
 --     before raising `EraReviewPopup_MakeDedication` (`erareviewpopup.lua:241-247`), so in
 --     practice only one is up; the order makes the outcome deterministic if both ever are.
+--
+-- MEASURED 2026-09-22 14:53Z (live stage 5, game turn 67, Persia eliminated by Georgia):
+-- `EndGameMenu` is FIRST, and that position is load-bearing. It is the terminal-state screen and
+-- nothing that is open behind it should be able to name the view instead of it -- at game over
+-- the board is finished, so no other open context describes the player's situation. See
+-- CIVSIM_SCREEN_ID_BY_STATE's `game_over` entry for the measurement that added it.
 local CIVSIM_SCREEN_WATCHLIST = {
+    "EndGameMenu",
     "CityPanel", "ProductionPanel", "TechTree", "CivicsTree", "GovernmentScreen", "ReligionScreen",
     "DiplomacyActionView", "DiplomacyDealView", "DeclareWarPopup", "UnitPromotionPopup",
     "PantheonChooser", "GreatPeoplePopup", "GreatWorkShowcase", "WorldCongressIntro",
@@ -339,6 +346,46 @@ local CIVSIM_SCREEN_WATCHLIST = {
 --     as control visibility, so the probe answers this id directly (see CIVSIM_DIPLOMACY_STATE
 --     below) and it must stay out of this table.
 local CIVSIM_SCREEN_ID_BY_STATE = {
+    -- MEASURED 2026-09-22 14:53Z (live stage 5, game turn 67; evidence in
+    -- specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/block-04/). Persia was eliminated
+    -- by Georgia and Firaxis's full-screen `EndGameMenu` came up -- ribbon label "DEFEAT", tabs
+    -- Results/Ranking/Graphs, bottom bar Replay Movie / Main Menu / Just One More Turn. It was on
+    -- NO watchlist, so `CivSim_Screens_State()` found nothing open and took the `#open == 0`
+    -- branch: the production chain answered
+    --   {screen = "world", raw_screen_id = "InGame", recognized = TRUE,
+    --    has_blocking_prompt = false, prompt_options = {}}
+    -- with a modal demonstrably up. That is worse than the `WorldCongressIntro` and
+    -- `DiplomacyActionView` holes before it: those answered `unknown`/`world` with
+    -- `recognized = false` or stalled, so the harness knew it did not know. `recognized = true`
+    -- while wrong is the shape every consumer treats as settled, and a harness in it dispatches
+    -- actions into a modal and records them as action failures rather than as a blocked board.
+    --
+    -- `game_over` is NOT a `prompt.*` id, deliberately. There is nothing to answer here: the
+    -- production probe read `has_blocking_prompt = false` and `prompt_options = {}`, and those
+    -- stay false and empty because the id does not start with "prompt.". This is a terminal-state
+    -- screen and the GAME-OVER path owns it (`lua/ingame/game_over.lua`, `run/game_over.py`), not
+    -- the prompt watchlist. Do not add it to CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS: acknowledging it
+    -- would be a fabricated interaction, and its real buttons (Main Menu, Just One More Turn) are
+    -- run-lifecycle decisions, not in-game moves.
+    --
+    -- `<LuaContext ID="EndGameMenu" FileName="EndGameMenu" Hidden="1"/>` (base/assets/ui/
+    -- ingame.xml:120), queued at `endgamemenu.lua:755 UIManager:QueuePopup(ContextPtr,
+    -- PopupPriority.EndGameMenu)`; `base/assets/ui/menus/hotseatbackground.lua:12` is shipped code
+    -- reaching it as `ContextPtr:LookUpControl("/InGame/EndGameMenu")`, the same path used here.
+    -- `lua/ingame/game_over.lua` already predicted this name from the shipped source on
+    -- 2026-09-21; 2026-09-22 measured it open. Confirmed live: `/InGame/EndGameMenu`:IsHidden() ==
+    -- false while every other watchlist entry read hidden in the SAME sweep -- which also proves
+    -- the hidden-check mechanism itself is sound and the defect was coverage, not the read.
+    --
+    -- STRUCTURAL LIMIT, NOT FIXED HERE: the watchlist is an ALLOWLIST, so a screen not on it reads
+    -- as no screen at all, and the probe still cannot tell "nothing is blocking" from "nothing I
+    -- know about is blocking" -- it reports the first when it means the second. This entry fixes
+    -- this screen; the next unwatched modal reproduces the same false negative. Written up in
+    -- block-04/screen-identity-false-negative.md with two follow-ups: give the probe a positive
+    -- "something is up that I cannot name" signal, and cross-check
+    -- `game.outcome_state.is_game_over` against `game.screen_state.screen` at assembly time (both
+    -- were in the same sweep, contradicting each other, and nothing compared them).
+    game_over = "EndGameMenu",
     city_screen = "CityPanel",
     congress = "WorldCongressPopup",
     diplomacy = "DiplomacyActionView",

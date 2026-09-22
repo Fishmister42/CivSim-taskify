@@ -1,0 +1,1167 @@
+{
+  "probed_at": "2026-09-22T14:54:02.786230+00:00",
+  "catalog_version": "version='2026.09.14' content_hash='e56b29d1b118af84087099d8919e8ff6e53df23a398e1f7aabd6ffabc0a7e6b3' declaration_ids=['camera.move', 'camera.read_state', 'camera.set_view_mode', 'camera.zoom', 'cities.purchase_with_faith', 'cities.purchase_with_gold', 'cities.select', 'cities.selection', 'cities.set_production', 'cities.state', 'congress.cast_vote', 'congress.state', 'diplomacy.declare_war', 'diplomacy.make_peace', 'diplomacy.send_delegation', 'diplomacy.state', 'espionage.assign_mission', 'espionage.state', 'game.outcome_state', 'game.screen_state', 'game.turn_state', 'government.state', 'great_people.recruit', 'great_people.state', 'map.state', 'player.yields', 'policies.assign_governor', 'policies.change_government', 'policies.slot_policy', 'prompts.ai_diplomatic_approach', 'prompts.boost_unlocked', 'prompts.congress_intro', 'prompts.congress_vote', 'prompts.declare_war_response', 'prompts.era_dedication', 'prompts.era_transition', 'prompts.great_person_selection', 'prompts.great_work_created', 'prompts.natural_disaster', 'prompts.pantheon_selection', 'prompts.tech_civic_completed', 'prompts.unit_promotion', 'religion.found_religion', 'religion.select_belief', 'religion.select_pantheon', 'religion.state', 'research.set_civic', 'research.set_tech', 'research.state', 'saves.save_game', 'turn.end_turn', 'units.build_improvement', 'units.found_city', 'units.move_to', 'units.promote', 'units.select', 'units.state', 'views.city_screen', 'views.congress', 'views.diplomacy', 'views.strategic', 'views.world']",
+  "results": [
+    {
+      "declaration_id": "camera.read_state",
+      "context": "InGame",
+      "capability_id": "camera.control",
+      "status": "OK",
+      "value": {
+        "zoom": 0.049999713897705,
+        "target_plot": {
+          "x": 43,
+          "y": 30
+        },
+        "mode": "strategic",
+        "target_is_revealed": true
+      },
+      "elapsed_ms": 66
+    },
+    {
+      "declaration_id": "cities.selection",
+      "context": "InGame",
+      "capability_id": "cities.selection",
+      "status": "OK",
+      "value": {
+        "has_selection": false
+      },
+      "elapsed_ms": 32
+    },
+    {
+      "declaration_id": "cities.state",
+      "context": "InGame",
+      "capability_id": "cities.read",
+      "status": "OK",
+      "value": {
+        "cities": []
+      },
+      "elapsed_ms": 83
+    },
+    {
+      "declaration_id": "congress.state",
+      "context": "InGame",
+      "capability_id": "congress.read",
+      "status": "OK",
+      "value": {
+        "local_player_favor": 0,
+        "is_in_session": false,
+        "active_resolutions": []
+      },
+      "elapsed_ms": 50
+    },
+    {
+      "declaration_id": "diplomacy.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "diplomacy.read",
+      "status": "OK",
+      "value": {
+        "relations": [
+          {
+            "player_id": 1,
+            "has_met": true,
+            "has_delegation": false,
+            "civilization": "CIVILIZATION_AUSTRALIA"
+          },
+          {
+            "player_id": 2,
+            "has_met": false
+          },
+          {
+            "player_id": 3,
+            "has_met": true,
+            "has_delegation": false,
+            "civilization": "CIVILIZATION_GEORGIA"
+          },
+          {
+            "player_id": 4,
+            "has_met": false
+          },
+          {
+            "player_id": 5,
+            "has_met": false
+          }
+        ]
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "espionage.state",
+      "context": "InGame",
+      "capability_id": "espionage.read",
+      "status": "OK",
+      "value": {
+        "spies": []
+      },
+      "elapsed_ms": 50
+    },
+    {
+      "declaration_id": "game.outcome_state",
+      "context": "GameCore_Tuner",
+      "capability_id": "game.outcome",
+      "status": "OK",
+      "value": {
+        "outcome": "defeat",
+        "is_game_over": true
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "game.screen_state",
+      "context": "InGame",
+      "capability_id": "screens.probe",
+      "status": "OK",
+      "value": {
+        "has_blocking_prompt": false,
+        "prompt_options": [],
+        "screen": "world",
+        "raw_screen_id": "InGame",
+        "recognized": true
+      },
+      "elapsed_ms": 200
+    },
+    {
+      "declaration_id": "game.turn_state",
+      "context": "InGame",
+      "capability_id": "turn.control",
+      "status": "OK",
+      "value": {
+        "turn_number": 67,
+        "is_local_player_turn": true,
+        "is_waiting_for_other_players": false
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "government.state",
+      "context": "InGame",
+      "capability_id": "government.read",
+      "status": "OK",
+      "value": {
+        "available_governors": [],
+        "available_governments": [],
+        "available_policies": [
+          "POLICY_DISCIPLINE",
+          "POLICY_SURVEY",
+          "POLICY_GOD_KING",
+          "POLICY_URBAN_PLANNING",
+          "POLICY_ILKUM",
+          "POLICY_AGOGE",
+          "POLICY_CARAVANSARIES",
+          "POLICY_MARITIME_INDUSTRIES",
+          "POLICY_MANEUVER",
+          "POLICY_CORVEE",
+          "POLICY_CONSCRIPTION",
+          "POLICY_LAND_SURVEYORS",
+          "POLICY_COLONIZATION",
+          "POLICY_LIMITANEI",
+          "POLICY_MONASTICISM",
+          "POLICY_TWILIGHT_VALOR",
+          "POLICY_INQUISITION",
+          "POLICY_ISOLATIONISM"
+        ],
+        "current_government": "GOVERNMENT_CHIEFDOM",
+        "governors": []
+      },
+      "elapsed_ms": 49
+    },
+    {
+      "declaration_id": "great_people.state",
+      "context": "InGame",
+      "capability_id": "great_people.read",
+      "status": "OK",
+      "value": {
+        "recruitable_individuals": [
+          {
+            "individual_id": 59,
+            "name": "\u00c6thelfl\u00e6d",
+            "class_type": "GREAT_PERSON_CLASS_GENERAL",
+            "is_recruitable": false,
+            "points_required": 60
+          },
+          {
+            "individual_id": 1,
+            "name": "Gaius Duilius",
+            "class_type": "GREAT_PERSON_CLASS_ADMIRAL",
+            "is_recruitable": false,
+            "points_required": 30
+          },
+          {
+            "individual_id": 38,
+            "name": "Bi Sheng",
+            "class_type": "GREAT_PERSON_CLASS_ENGINEER",
+            "is_recruitable": false,
+            "points_required": 60
+          },
+          {
+            "individual_id": 76,
+            "name": "Marcus Licinius Crassus",
+            "class_type": "GREAT_PERSON_CLASS_MERCHANT",
+            "is_recruitable": false,
+            "points_required": 30
+          },
+          {
+            "individual_id": 135,
+            "name": "Isaac Newton",
+            "class_type": "GREAT_PERSON_CLASS_SCIENTIST",
+            "is_recruitable": false,
+            "points_required": 305
+          },
+          {
+            "individual_id": 155,
+            "name": "Murasaki Shikibu",
+            "class_type": "GREAT_PERSON_CLASS_WRITER",
+            "is_recruitable": false,
+            "points_required": 60
+          },
+          {
+            "individual_id": 20,
+            "name": "Donatello",
+            "class_type": "GREAT_PERSON_CLASS_ARTIST",
+            "is_recruitable": false,
+            "points_required": 120
+          },
+          {
+            "individual_id": 203,
+            "name": "Dimitrie Cantemir",
+            "class_type": "GREAT_PERSON_CLASS_MUSICIAN",
+            "is_recruitable": false,
+            "points_required": 210
+          }
+        ],
+        "points_by_class": [
+          {
+            "class_type": "GREAT_PERSON_CLASS_GENERAL",
+            "points_per_turn": 0,
+            "points": 0
+          },
+          {
+            "class_type": "GREAT_PERSON_CLASS_ADMIRAL",
+            "points_per_turn": 0,
+            "points": 0
+          },
+          {
+            "class_type": "GREAT_PERSON_CLASS_ENGINEER",
+            "points_per_turn": 0,
+            "points": 0
+          },
+          {
+            "class_type": "GREAT_PERSON_CLASS_MERCHANT",
+            "points_per_turn": 0,
+            "points": 0
+          },
+          {
+            "class_type": "GREAT_PERSON_CLASS_PROPHET",
+            "points_per_turn": 0,
+            "points": 0
+          },
+          {
+            "class_type": "GREAT_PERSON_CLASS_SCIENTIST",
+            "points_per_turn": 0,
+            "points": 0
+          },
+          {
+            "class_type": "GREAT_PERSON_CLASS_WRITER",
+            "points_per_turn": 0,
+            "points": 0
+          },
+          {
+            "class_type": "GREAT_PERSON_CLASS_ARTIST",
+            "points_per_turn": 0,
+            "points": 0
+          },
+          {
+            "class_type": "GREAT_PERSON_CLASS_MUSICIAN",
+            "points_per_turn": 0,
+            "points": 0
+          },
+          {
+            "class_type": "GREAT_PERSON_CLASS_COMANDANTE_GENERAL",
+            "points_per_turn": 0,
+            "points": 0
+          }
+        ]
+      },
+      "elapsed_ms": 50
+    },
+    {
+      "declaration_id": "map.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "map.read",
+      "status": "OK",
+      "value": {
+        "width": 74,
+        "revealed_plots": [
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 27,
+            "x": 41,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 27,
+            "x": 42,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 28,
+            "x": 41,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 28,
+            "x": 42,
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_GRASS_MOUNTAIN",
+            "y": 28,
+            "x": 43,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_MOUNTAIN",
+            "y": 28,
+            "x": 44,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 28,
+            "x": 45,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 29,
+            "x": 40,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 29,
+            "x": 41,
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 29,
+            "x": 42,
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 29,
+            "x": 43,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 29,
+            "x": 44,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 29,
+            "x": 45,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 30,
+            "x": 40,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 30,
+            "x": 41,
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 30,
+            "x": 42,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 30,
+            "x": 43,
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 30,
+            "x": 44,
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 30,
+            "x": 45,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 30,
+            "x": 46,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 31,
+            "x": 40,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 31,
+            "x": 41,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 31,
+            "x": 42,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 31,
+            "x": 43,
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 31,
+            "x": 44,
+            "feature": "FEATURE_VOLCANIC_SOIL",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 32,
+            "x": 41,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 32,
+            "x": 42,
+            "is_currently_visible": false,
+            "owner_player_id": 3
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 32,
+            "x": 43,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 32,
+            "x": 44,
+            "feature": "FEATURE_VOLCANIC_SOIL",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_MOUNTAIN",
+            "y": 32,
+            "x": 45,
+            "feature": "FEATURE_VOLCANO",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 32,
+            "x": 46,
+            "feature": "FEATURE_VOLCANIC_SOIL",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 32,
+            "x": 47,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 33,
+            "x": 41,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 33,
+            "x": 42,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 33,
+            "x": 43,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 33,
+            "x": 44,
+            "feature": "FEATURE_VOLCANIC_SOIL",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_MOUNTAIN",
+            "y": 33,
+            "x": 45,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 33,
+            "x": 46,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 33,
+            "x": 47,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 34,
+            "x": 42,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 34,
+            "x": 43,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 34,
+            "x": 44,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 34,
+            "x": 45,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 34,
+            "x": 46,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 34,
+            "x": 47,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 34,
+            "x": 48,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 35,
+            "x": 41,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 35,
+            "x": 42,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 35,
+            "x": 43,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 35,
+            "x": 44,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_GRASS",
+            "y": 35,
+            "x": 45,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_DESERT_HILLS",
+            "y": 35,
+            "x": 46,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_DESERT_HILLS",
+            "y": 35,
+            "x": 47,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 35,
+            "x": 48,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 36,
+            "x": 42,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 36,
+            "x": 43,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 36,
+            "x": 44,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 36,
+            "x": 45,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 36,
+            "x": 46,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS",
+            "y": 36,
+            "x": 47,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 36,
+            "x": 48,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_PLAINS_HILLS",
+            "y": 37,
+            "x": 44,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 37,
+            "x": 45,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 37,
+            "x": 46,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 37,
+            "x": 47,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA_HILLS",
+            "y": 37,
+            "x": 48,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 38,
+            "x": 45,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA_HILLS",
+            "y": 38,
+            "x": 46,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 38,
+            "x": 47,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 38,
+            "x": 48,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 38,
+            "x": 49,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 39,
+            "x": 36,
+            "is_currently_visible": false,
+            "owner_player_id": 14
+          },
+          {
+            "terrain": "TERRAIN_GRASS_HILLS",
+            "y": 39,
+            "x": 37,
+            "is_currently_visible": false,
+            "improvement": "IMPROVEMENT_MINE",
+            "owner_player_id": 14
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 39,
+            "x": 45,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 39,
+            "x": 46,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 39,
+            "x": 47,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA_HILLS",
+            "y": 39,
+            "x": 48,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 40,
+            "x": 29,
+            "is_currently_visible": false,
+            "owner_player_id": 9
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 40,
+            "x": 30,
+            "is_currently_visible": false,
+            "owner_player_id": 9
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA_HILLS",
+            "y": 40,
+            "x": 36,
+            "is_currently_visible": false,
+            "improvement": "IMPROVEMENT_MINE",
+            "owner_player_id": 14
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 40,
+            "x": 37,
+            "is_currently_visible": false,
+            "owner_player_id": 14
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 40,
+            "is_currently_visible": false,
+            "x": 38,
+            "feature": "FEATURE_FOREST",
+            "improvement": "IMPROVEMENT_CAMP",
+            "owner_player_id": 14
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA_HILLS",
+            "y": 40,
+            "x": 46,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 40,
+            "x": 47,
+            "is_currently_visible": false,
+            "owner_player_id": -1
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA_HILLS",
+            "y": 41,
+            "x": 28,
+            "is_currently_visible": false,
+            "improvement": "IMPROVEMENT_MINE",
+            "owner_player_id": 9
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 41,
+            "x": 29,
+            "is_currently_visible": false,
+            "owner_player_id": 9
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA_HILLS",
+            "y": 41,
+            "x": 30,
+            "is_currently_visible": false,
+            "improvement": "IMPROVEMENT_MINE",
+            "owner_player_id": 9
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 41,
+            "x": 36,
+            "is_currently_visible": false,
+            "owner_player_id": 14
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 41,
+            "x": 37,
+            "is_currently_visible": false,
+            "improvement": "IMPROVEMENT_CAMP",
+            "owner_player_id": 14
+          },
+          {
+            "terrain": "TERRAIN_TUNDRA",
+            "y": 42,
+            "x": 29,
+            "feature": "FEATURE_FOREST",
+            "is_currently_visible": false,
+            "owner_player_id": 9
+          },
+          {
+            "terrain": "TERRAIN_COAST",
+            "y": 42,
+            "x": 30,
+            "is_currently_visible": false,
+            "owner_player_id": 9
+          }
+        ],
+        "height": 46
+      },
+      "elapsed_ms": 34
+    },
+    {
+      "declaration_id": "player.yields",
+      "context": "InGame",
+      "capability_id": "yields.read",
+      "status": "OK",
+      "value": {
+        "gold_per_turn": 0,
+        "faith_balance": 183.5,
+        "gold_balance": 263,
+        "tourism_per_turn": 4,
+        "turn_number": 67,
+        "faith_per_turn": 4.5,
+        "culture_per_turn": 1.6171875,
+        "science_per_turn": 4.5
+      },
+      "elapsed_ms": 32
+    },
+    {
+      "declaration_id": "religion.state",
+      "context": "InGame",
+      "capability_id": "religion.read",
+      "status": "OK",
+      "value": {
+        "available_beliefs": [
+          "BELIEF_DANCE_OF_THE_AURORA",
+          "BELIEF_DESERT_FOLKLORE",
+          "BELIEF_RIVER_GODDESS",
+          "BELIEF_MONUMENT_TO_THE_GODS",
+          "BELIEF_DIVINE_SPARK",
+          "BELIEF_LADY_OF_THE_REEDS_AND_MARSHES",
+          "BELIEF_GOD_OF_THE_SEA",
+          "BELIEF_GOD_OF_THE_OPEN_SKY",
+          "BELIEF_GODDESS_OF_THE_HUNT",
+          "BELIEF_STONE_CIRCLES",
+          "BELIEF_RELIGIOUS_IDOLS",
+          "BELIEF_GOD_OF_CRAFTSMEN",
+          "BELIEF_GODDESS_OF_FESTIVALS",
+          "BELIEF_GOD_OF_HEALING",
+          "BELIEF_GOD_OF_WAR",
+          "BELIEF_FERTILITY_RITES",
+          "BELIEF_CITY_PATRON_GODDESS",
+          "BELIEF_GODDESS_OF_FIRE"
+        ],
+        "religion_founded": false,
+        "pantheon_selected": false,
+        "city_majority_religions": []
+      },
+      "elapsed_ms": 49
+    },
+    {
+      "declaration_id": "research.state",
+      "context": "GameCore_Tuner",
+      "capability_id": "research.read",
+      "status": "OK",
+      "value": {
+        "current_civic": "CIVIC_MYSTICISM",
+        "researchable_civics": [],
+        "researchable_techs": [
+          "TECH_IRRIGATION",
+          "TECH_ARCHERY",
+          "TECH_MASONRY",
+          "TECH_BRONZE_WORKING",
+          "TECH_THE_WHEEL",
+          "TECH_CELESTIAL_NAVIGATION",
+          "TECH_SHIPBUILDING",
+          "TECH_MATHEMATICS"
+        ],
+        "current_research": "TECH_SHIPBUILDING"
+      },
+      "elapsed_ms": 33
+    },
+    {
+      "declaration_id": "units.state",
+      "context": "InGame",
+      "capability_id": "units.read",
+      "status": "OK",
+      "value": {
+        "units": [
+          {
+            "is_fortified": false,
+            "max_movement": 4,
+            "unit_id": 4456449,
+            "is_selected": false,
+            "owner_is_local_player": false,
+            "movement_remaining": 0,
+            "plot": {
+              "x": 43,
+              "y": 30
+            },
+            "unit_type": "UNIT_BUILDER",
+            "owner_player_id": 3
+          },
+          {
+            "is_fortified": false,
+            "max_movement": 4,
+            "unit_id": 4390914,
+            "is_selected": false,
+            "owner_is_local_player": false,
+            "movement_remaining": 0,
+            "plot": {
+              "x": 43,
+              "y": 30
+            },
+            "unit_type": "UNIT_BUILDER",
+            "owner_player_id": 3
+          },
+          {
+            "is_fortified": false,
+            "max_movement": 2,
+            "unit_id": 2097159,
+            "is_selected": false,
+            "owner_is_local_player": false,
+            "movement_remaining": 0,
+            "plot": {
+              "x": 42,
+              "y": 29
+            },
+            "unit_type": "UNIT_SWORDSMAN",
+            "owner_player_id": 3
+          },
+          {
+            "is_fortified": false,
+            "max_movement": 4,
+            "unit_id": 4325387,
+            "is_selected": false,
+            "owner_is_local_player": false,
+            "movement_remaining": 0,
+            "plot": {
+              "x": 43,
+              "y": 30
+            },
+            "unit_type": "UNIT_BUILDER",
+            "owner_player_id": 3
+          },
+          {
+            "is_fortified": false,
+            "max_movement": 4,
+            "unit_id": 4587534,
+            "is_selected": false,
+            "owner_is_local_player": false,
+            "movement_remaining": 0,
+            "plot": {
+              "x": 43,
+              "y": 30
+            },
+            "unit_type": "UNIT_BUILDER",
+            "owner_player_id": 3
+          },
+          {
+            "is_fortified": false,
+            "max_movement": 2,
+            "unit_id": 1769489,
+            "is_selected": false,
+            "owner_is_local_player": false,
+            "movement_remaining": 2,
+            "plot": {
+              "x": 42,
+              "y": 30
+            },
+            "unit_type": "UNIT_HEAVY_CHARIOT",
+            "owner_player_id": 3
+          },
+          {
+            "is_fortified": false,
+            "max_movement": 2,
+            "unit_id": 2228247,
+            "is_selected": false,
+            "owner_is_local_player": false,
+            "movement_remaining": 2,
+            "plot": {
+              "x": 41,
+              "y": 30
+            },
+            "unit_type": "UNIT_SWORDSMAN",
+            "owner_player_id": 3
+          },
+          {
+            "is_fortified": false,
+            "max_movement": 4,
+            "unit_id": 4522012,
+            "is_selected": false,
+            "owner_is_local_player": false,
+            "movement_remaining": 0,
+            "plot": {
+              "x": 43,
+              "y": 30
+            },
+            "unit_type": "UNIT_BUILDER",
+            "owner_player_id": 3
+          }
+        ]
+      },
+      "elapsed_ms": 66
+    }
+  ],
+  "ok": 16,
+  "total": 16
+}
