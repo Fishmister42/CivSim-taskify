@@ -34,8 +34,16 @@ turn**. So the spread between "a normal turn" and "a normal turn" is already 70�
 board is considered.
 
 A naive timeout therefore does not detect stalls; it kills legitimate planning and throws away paid
-work. Any mechanism built here must be able to sit quietly through a forty-minute think and still
-notice a board that has been frozen for four hours.
+work.
+
+**The resolution is not to wait longer. It is to require the work to speak.** A long think and a
+wedged board are indistinguishable only so long as neither is saying anything, so this feature
+obliges every long-running phase to emit a liveness signal and obliges the watchdog to go and read
+it. Health is then established **affirmatively** — a positive signal that work is happening — rather
+than inferred from the absence of a result. Under that rule the bound can be short (three minutes)
+without endangering a forty-minute think, because the bound measures **silence, not duration**. See
+FR-001 and FR-005, and note that the longest legitimate operation in this system currently fails
+that obligation.
 
 **Killing a healthy run is a worse failure than tolerating a slow one.** That asymmetry is not a
 tuning preference; it is the governing constraint, and every threshold, default, and tie-break in
@@ -275,11 +283,15 @@ fresh observation — with the whole sequence on the run timeline.
    verification is an independent re-read showing the view closed — never the return value of the
    call that performed the dismissal.
 3. **Given** a blocking view carries a player choice, **When** it is encountered, **Then** it is
-   routed to the agent as a declared prompt and answered as a recorded decision; the watchdog MUST
-   NOT answer it on the agent's behalf.
-4. **Given** a blocking view that is not registered, **When** it is encountered, **Then** the run
+   routed to the agent as a declared prompt first, and answered as a recorded decision if the agent
+   acts.
+4. **Given** the agent has been offered such a view and does not act within the bounded window, or is
+   unavailable, **When** the window expires, **Then** the harness dismisses the view itself and
+   records a labelled watchdog intervention that counts as nothing toward the agent's decision
+   coverage — never as an agent decision.
+5. **Given** a blocking view that is not registered, **When** it is encountered, **Then** the run
    stalls visibly with the unknown view recorded, and nothing is dismissed by guesswork.
-5. **Given** a view whose registered dismissal is known not to be reachable by the harness's input
+6. **Given** a view whose registered dismissal is known not to be reachable by the harness's input
    path — such as the post-defeat exit-confirm modal, which ignores synthetic input — **When** the
    rung is considered, **Then** its precondition is observably unsatisfiable, the rung is skipped
    with that reason recorded, and escalation continues.
@@ -404,7 +416,28 @@ play was not interrupted, and that **no existing record was amended**.
 ### Edge Cases
 
 - **A legitimately enormous think.** The agent's model call runs for an hour on a late-game board.
-  Nothing fires. The call is recorded as long, and the run's measured distribution absorbs it.
+  Nothing fires — **provided the call is emitting**. Today it is not: the provider package logs
+  nothing at all, so this is the case the feature must fix before it can watch anything (FR-005,
+  Dependencies).
+- **A phase that emits only at its boundaries.** A wait logs "started", goes quiet for 200 seconds,
+  and logs "finished". It satisfies a naive reading of "the phase emits" and is indistinguishable
+  from a wedged phase throughout the only interval anyone cares about.
+- **An emission that never leaves the buffer.** The tick is written on every iteration but flushed
+  only at exit, so the watchdog sees nothing until the phase completes — at which point it did not
+  need a watchdog. This is why FR-003 requires streaming to be verified by observation rather than
+  inferred from the presence of an emit call.
+- **A phase that is busy and silent.** A bounded poll loop spins correctly for 200 seconds and writes
+  nothing anywhere. It is alive by every internal measure and dead by every external one. This is the
+  normal case for tight loops, it is the state of the end-turn confirmation today, and it is why
+  FR-001 says *active is not emitting*.
+- **The watchdog reaches past its remit.** Applied to an arbitrary command rather than a harness game
+  run, the same rule would kill the project's own test suite, which is silent by construction for up
+  to 270 seconds — and the kill would be filed as a flaky test rather than as a watchdog action.
+  FR-005's scope clause exists to prevent exactly that, and the misfiling is the worse half.
+- **The agent is the thing that is stuck.** A blocking view is routed to it and no answer comes back,
+  because the agent is itself wedged or unreachable. The bounded window expires and the watchdog
+  dismisses the view, labelled as an intervention — the board is freed without the play record
+  claiming the agent made a choice it never made.
 - **A model call that hangs with the socket open and no bytes arriving.** The transport is alive but
   the call is not progressing — a distinct condition from both "thinking" and "the game is stuck",
   and it belongs to the provider layer's own timeout and fallback behaviour (spec 002 FR-041), not
@@ -472,17 +505,42 @@ play was not interrupted, and that **no existing record was amended**.
   toward reporting.** "Undetermined" is a first-class recorded disposition, and only report-only is
   eligible under it. Never escalate on uncertainty; the asymmetry between killing a healthy run and
   tolerating a slow one is the whole design.
-- Q: May the recovery ladder answer a blocking view that carries a player choice? → A: **No.** A view
-  with no player choice may be dismissed by the harness; a view that carries a choice is a declared
-  prompt routed to the agent and answered as a recorded decision (spec 002 FR-010). Otherwise the
-  watchdog silently becomes a second, undeclared player, which Principle I does not permit at any
-  quality of intent.
-- Q: Should the stall threshold be a constant? → A: **No — it is derived per run from that run's own
-  measured progress intervals, with an absolute detection ceiling.** With model calls at ~85% of
-  wall-clock and measured per-turn times spanning 2 s (fake provider) to 146 s (live, late board), a
-  fixed constant either trips on normal thinking or sleeps through a real freeze. The ceiling bounds
-  how long a genuine freeze can go unnoticed; the derived floor is what keeps a long think from
-  being killed.
+- Q: May the recovery ladder answer a blocking view that carries a player choice? → A: **Agent
+  first, then watchdog** (owner ruling, 2026-09-22). The view is routed to the agent as a declared
+  prompt first; if the agent does not act within a bounded window, or is unavailable, the watchdog
+  dismisses it and records a labelled intervention that counts as nothing toward the agent's
+  coverage (FR-047). This supersedes the drafted "never" — parity is preserved by first refusal in
+  the normal case, and the indefinite freeze that cost hours on the day of specification is
+  prevented. The rationale is written in both directions so it is not later collapsed to either
+  extreme.
+- Q: Should the stall threshold be a constant, and how long? → A: **Three minutes of silence,
+  derived tighter per run — and the mechanism changes with it** (owner ruling, 2026-09-22). Verbatim:
+  *"The watchdog can check the logs and interface with the agent run, if it can't receive a proper
+  response implying thinking vs being stuck in any way we kill it."* That is not a tighter timer; it
+  is an **affirmative-liveness** requirement. The watchdog must obtain a positive signal that the run
+  is working and must **interrogate** to get it (FR-004), every long phase must **emit** one
+  (FR-003), and the bound is on **silence, not duration** (FR-005). Absence of completion is not
+  evidence of a stall; absence of a signal is (FR-001). This supersedes the drafted 10-minute
+  passive-observation ceiling.
+- Q: Does "the run is active" satisfy the affirmative-liveness requirement? → A: **No — active is not
+  emitting** (FR-001). The signal must be published by the waiting phase itself, never inferred from
+  a live process, a live thread, or an open socket. This was nearly got wrong in this spec: the
+  end-turn confirm loop was first written up as the example of a phase that *signals* because it
+  polls every two seconds, and a check of the loop for any logging call found none. It polls
+  silently, so it is the example of the **defect** — externally indistinguishable from a wedged one,
+  and among the first healthy things a naive ceiling would kill.
+- Q: Do today's long phases emit anything? → A: **No, and this reorders the work.** The provider
+  package contains no logging call in any module, so the ~146-second model wait publishes nothing;
+  the confirm loop is silent too. FR-005's criterion is therefore **unimplementable against today's
+  code in the most common case in the system**, and making those phases emit is a precondition of the
+  feature rather than a task beside it (see Dependencies). This supersedes the draft's framing of the
+  provider wait as an open question.
+- Q: Is "the phase emits" sufficient as written? → A: **No — it needs two clauses, or it passes
+  review and fails in production** (FR-003). A phase that logs at entry and exit is silent for
+  exactly the interval that matters, so emission must be a **periodic tick while waiting**, not
+  bracketing. And an emission that buffers and flushes at completion is the same defect wearing a
+  fix, so the mechanism must be **verified empirically to stream** — observed growing while the phase
+  runs — rather than assumed to.
 - Q: Is an independent re-read enough to verify a recovery, or does the re-read itself need
   constraints? → A: **It needs constraints, and this was nearly missed.** A readback issued in the
   same command as the write returns the pre-call value; that artifact produced a retracted finding on
@@ -499,33 +557,133 @@ play was not interrupted, and that **no existing record was amended**.
 
 **Progress signals, and what each one actually measures**
 
-- **FR-001**: Liveness MUST be defined in terms of observable progress signals. Elapsed time MAY be
-  an input to a signal but MUST NOT, on its own, be sufficient to classify a run as stalled or to
-  make any recovery rung above report-only eligible.
+- **FR-001**: Liveness MUST be established **affirmatively**. The harness MUST obtain a positive
+  signal that the run is working; it MUST NOT infer health from the fact that the run has not yet
+  finished. The two propositions this rests on are not symmetric and MUST be implemented as stated:
+  - **Absence of completion is NOT evidence of a stall.** A turn that has run for 146 seconds has
+    told you nothing.
+  - **Absence of an affirmative liveness signal IS evidence of a stall**, and after the bound in
+    FR-005 it is sufficient evidence to act on.
+  - **Active is not emitting.** The liveness signal MUST be emitted **by the waiting phase itself**.
+    It MUST NOT be inferred from the process still existing, from a thread being alive, from a socket
+    being open, or from work being "in progress" in any sense the phase does not publish. A phase can
+    be doing exactly the right thing, continuously, and still be indistinguishable from a wedged one
+    from the outside — and on this codebase the single longest legitimate operation is exactly that
+    (FR-005). Without this clause, "no proper response implying thinking" collapses back into a
+    timer, which is the one thing the owner did not ask for.
+
+  Elapsed time alone MUST NOT classify a run as stalled or make any rung above report-only eligible;
+  what makes a rung eligible is *elapsed time during which nothing affirmative was emitted*.
 - **FR-002**: Every progress signal MUST be registered with: the event it directly observes, the
   component that is the source of truth for it, how often it can change, what its **absence**
   establishes, and — explicitly — **what its presence does not establish**. A signal MUST NOT be
   named for a condition it does not directly observe. "A model request is open" is not "the agent is
   thinking"; "the client process exists" is not "the game is responsive"; "the harness believes a
   prompt is blocking" is not "the game is blocking".
-- **FR-003**: The registered signal set MUST include, and MUST keep distinguishable: an in-flight
-  model call and its transport-level liveness; the recording of a completed decision step; a verified
-  change in game state; a bounded round trip that returns the game engine's own answer; the presence
-  of the client process; and the last time the harness recorded anything at all. A stall MUST NOT be
-  concluded from any single one of these.
-- **FR-004**: The harness MUST record the observed interval between occurrences of each signal, per
-  run, and MUST derive its stall threshold from that run's own measured behaviour rather than from a
-  constant fixed in advance. Model-call duration is approximately 85% of a turn's wall-clock on this
-  project, so a threshold applied to "time since the last decision step" is dominated by model
-  latency and measures nothing else.
-- **FR-005**: Time spent inside a model call MUST be attributed to that model call and MUST NOT count
-  toward any threshold applied to the game side. A long think MUST NOT be able to present as a game
-  stall.
-- **FR-006**: A signal whose source is unavailable MUST be reported as unavailable and MUST NOT be
-  reported as absence of progress. Absence of evidence is not evidence of a stall.
+- **FR-003**: **Every phase that can run longer than the FR-005 bound MUST emit an affirmative
+  liveness signal the watchdog can read, at an interval shorter than that bound.** This is a
+  requirement on the *phases*, not only on the watchdog. Acceptable signals are ones the phase
+  **publishes**: an output stream that is still being appended to, a log line, an explicit heartbeat,
+  a published poll iteration of a bounded wait loop, or provider bytes actually arriving on an
+  in-flight call. **A still-growing output stream is a first-class signal** and is often the cheapest
+  one obtainable from outside a process: a process whose output is still being written is
+  demonstrably working. An *open socket* on that same call is **not** a signal — it shows the phase
+  is active, not that it is emitting (FR-001).
+
+  Two clauses on *how* a phase emits, both of which a reviewer would otherwise pass and an
+  implementer would otherwise satisfy while shipping the original defect:
+
+  - **A single "started" line is not a heartbeat.** A phase that emits at entry and at exit and
+    nothing in between is indistinguishable from a wedged phase **for the entire interval that
+    matters**. Every phase that can outlast the ceiling MUST emit a **periodic tick while waiting**,
+    at an interval shorter than the bound — bracketing MUST NOT be accepted as satisfying FR-003.
+    Two log lines three minutes apart satisfy the letter of "the phase emits" and still produce a
+    watchdog that kills healthy runs.
+  - **The emission mechanism MUST be verified to stream.** A signal that exists in the code but only
+    materialises at completion — buffered, flushed at exit, written on teardown — is this same defect
+    again wearing a fix. Verification MUST be empirical: observe the stream growing monotonically
+    during the wait, not merely confirm that an emit call exists.
+
+  **The feature MUST enumerate every phase that can outlast the FR-005 ceiling and audit each one for
+  whether it actually emits.** That enumeration is an obligation this feature owns, not an assumption
+  it may make: both silent phases found so far were found only by searching their loops for a logging
+  call and finding none. A phase absent from the enumeration is a phase nobody checked.
+
+  **A phase that is silent by construction is a defect in that phase, not evidence about the run.**
+  Where a component cannot emit a liveness signal, the fix is to make it emit one — never to widen
+  the ceiling until the silence fits. Widening a bound to accommodate silence is how a threshold gets
+  chosen without measuring the thing it bounds, which is this project's third named defect pattern,
+  and it has been nearly committed twice in a single day.
+
+  The registered set MUST additionally include, and keep distinguishable: the recording of a
+  completed decision step; a verified change in game state; a bounded round trip returning the
+  engine's own answer; the presence of the client process; and the last time the harness recorded
+  anything at all. A stall MUST NOT be concluded from any single one of these.
+- **FR-004**: The watchdog MUST **interrogate** the run — read its log, query its state, observe its
+  in-flight work — rather than wait passively for it to finish. Passive waiting cannot distinguish
+  thinking from wedged, which is the entire problem; a watchdog that only watches a clock has not
+  satisfied this requirement. The harness MUST record the observed interval between occurrences of
+  each signal, per run, so that a run whose own history supports a **tighter** bound than FR-005's
+  ceiling is held to the tighter one.
+- **FR-005**: **A run that emits no affirmative liveness signal for three minutes MUST be treated as
+  stalled**, and that ceiling MUST be derived downward per run where that run's measured history
+  supports it. The bound is on **silence, not on duration**: an operation that legitimately runs
+  longer than three minutes MUST NOT be killed so long as it keeps signalling.
+
+  **The worked example is a phase that fails this today, and it is the most important fact in this
+  section.** The end-turn confirmation — whose bound is being raised to 200 seconds, beyond this
+  ceiling — polls the tuner roughly every two seconds, fourteen times across forty-seven seconds in
+  the measured case. A search for any logging or telemetry call inside that poll loop returns
+  **nothing**. It is continuously *active* and emits **nothing a watchdog can read**. So it is not an
+  illustration of the signal; it is an illustration of the defect, and the sharpest one available:
+  the single longest legitimate operation in the system, doing exactly the right thing, externally
+  indistinguishable from a wedged process. Under this ceiling it would be **the first healthy thing
+  killed** — during precisely the slow-regime turn the raised bound exists to accommodate.
+
+  The requirement that follows is therefore FR-003's, not an exemption: that loop MUST be made to
+  emit, and the ceiling MUST NOT be widened to fit its silence. A detector that measured "no
+  completion for three minutes" instead of "no signal for three minutes" would be wrong for a
+  different reason and MUST equally be proven against under FR-055.
+
+  **The worse case is settled, and it is a finding, not a risk.** The model-provider wait — ~146
+  seconds, roughly **85% of a turn's wall-clock**, the longest and by far the most frequent wait in
+  the system — **publishes nothing whatsoever.** The dispatch has no logging around it, and a search
+  for any logging import or call across *every module in the provider package* returns nothing at
+  all: not one of them logs anything. The end-turn confirmation loop is independently confirmed
+  silent on the same basis, its poll loop containing only docstring prose about waiting and no call
+  sites.
+
+  The consequence MUST be stated plainly, because it governs the order of work: **the criterion in
+  this requirement cannot be implemented against today's code.** In the single most common case in
+  the system, the watchdog has no way to distinguish thinking from stuck, because there is nothing to
+  read. Making the provider path emit is therefore a **precondition of this feature**, not a
+  companion task to it — and the same applies to the confirm loop. A watchdog shipped ahead of those
+  emissions would not be an incomplete watchdog; it would be a timer that kills the two healthiest
+  long operations in the system.
+
+  **Scope: this bound governs harness game runs** — the thing that plays Civilization VI and can
+  wedge a board. It is **not** a general rule for every command or process in the project, and MUST
+  NOT be applied as one. The worked counter-example is the project's own accepted test command, which
+  is quiet by construction: its output is piped such that a **correct** full suite produces nothing
+  readable for **225 to 270 seconds** — beyond this ceiling — and then completes normally. A watchdog
+  that reached that far would make its first act the killing of a healthy four-minute test run, and
+  the lane would record it as a flaky test rather than as a watchdog action: an artefact of our own
+  tooling attributed to the code under test, which is the exact class of error this project spent a
+  day retiring. A watchdog that reaches beyond its remit is a worse outcome than one that is slightly
+  narrow.
+- **FR-006**: The harness MUST distinguish **a signal that was not emitted** from **a signal the
+  watchdog could not read**, and MUST NOT collapse them. A run emitting nothing over a working
+  channel is evidence of a stall (FR-001). A signal source the watchdog cannot reach — the log is
+  unreadable, the state query fails — is *instrument failure*: it MUST be reported as unavailable,
+  MUST NOT be reported as absence of progress, and MUST push the classification toward *undetermined*
+  under FR-015 rather than toward a kill. Naming these the same thing is precisely the defect FR-002
+  exists to prevent.
 - **FR-007**: Liveness detection MUST NOT become a turn timer by another name. Spec 002 FR-008 and
   FR-014 forbid bounding a turn by wall-clock; detecting a stall MUST NOT end a turn that is making
-  progress, and MUST NOT truncate a turn for being long or expensive.
+  progress, and MUST NOT truncate a turn for being long or expensive. FR-005's bound is consistent
+  with this because it never measures how long a turn has taken — only how long the run has been
+  silent — and time spent inside a model call MUST be attributed to that call, with the call's own
+  in-flight observability serving as the affirmative signal for that period.
 - **FR-008**: The liveness monitor's own operation MUST be observable. A monitor that has stopped
   observing MUST be distinguishable, from the record alone, from a run that has nothing to report.
 
@@ -699,11 +857,25 @@ play was not interrupted, and that **no existing record was amended**.
 - **FR-046**: Every recovery action that touches the game MUST be one a human player could perform
   through the standard game UI, and MUST be registered in the action catalog with its parity basis
   (spec 002 FR-017). Pressing Escape qualifies. A debug call does not, however convenient.
-- **FR-047**: A recovery MUST NOT make a game decision on the agent's behalf. A blocking view that
-  carries no player choice MAY be dismissed by the harness; a view that carries a choice — including
-  one presented as a single acknowledging button — MUST be routed to the agent as a declared prompt
-  and answered as a recorded decision (spec 002 FR-010). The recovery layer MUST NOT become a second,
-  undeclared player.
+- **FR-047**: **Agent first, then watchdog.** A blocking view that carries no player choice MAY be
+  dismissed by the harness directly. A view that carries a choice — including one presented as a
+  single acknowledging button — MUST first be routed to the agent as a declared prompt and answered
+  as a recorded decision (spec 002 FR-010). If the agent does not act within a bounded window, **or
+  is unavailable**, the harness MUST then dismiss the view itself, and MUST record the dismissal as a
+  **labelled watchdog intervention that counts as nothing toward the agent's decision coverage** — it
+  is not an agent decision, is never presented as one, and never appears in any measure of what the
+  agent played.
+
+  The ordering is load-bearing in **both** directions, and a future contributor MUST NOT collapse it
+  to either extreme:
+  - **Why the agent goes first.** Letting the watchdog answer a choice makes it a second, undeclared
+    player, and Principle I does not permit that at any quality of intent. Giving the agent first
+    refusal is what preserves parity in the normal case.
+  - **Why the watchdog goes second rather than never.** A view that only the agent may answer, when
+    the agent is wedged or gone, is an indefinite freeze — the case that cost hours on the day this
+    was specified. Refusing to ever dismiss trades a bounded parity footnote for an unbounded outage.
+  - The intervention's separate labelling is what keeps both true at once: the board gets unstuck and
+    the play record stays honest about who did it.
 - **FR-048**: Reads performed for detection, classification, and reconciliation are harness
   diagnostics. They MUST NOT enter the playing agent's context, and a stall, its classification, and
   its recovery MUST NOT be presented to the agent as game information (spec 002 FR-019, FR-020).
@@ -810,13 +982,12 @@ play was not interrupted, and that **no existing record was amended**.
   this feature** — zero recovery actions fire against a run that was in fact making progress. The set
   MUST contain at least 20 model calls that individually exceed the run's stall threshold, so the
   criterion is exercised rather than vacuously satisfied. Any finding blocks release.
-- **SC-002**: No stall goes unclassified for more than 10 minutes after the last observable progress
-  signal, and no classification is produced before the run's own measured quiet-interval distribution
-  has been exceeded. Measured against the incidents this feature was written for, which ran for hours
-  with no record. This budget is **not** in tension with spec 002's SC-010, which gives crash
-  detection 60 seconds: a dead client is directly observable and must be caught fast, while a stall
-  is an *inference* over signals dominated by ~97-second turns and ~85%-model wall-clock, and must
-  not be rushed. Two different questions, two different budgets, and the record must say which one it
+- **SC-002**: No harness game run goes more than **three minutes without an affirmative liveness
+  signal** while still being treated as healthy, and the bound is derived tighter per run where that
+  run's history supports it. The criterion is measured on **silence, never on duration**: zero runs
+  are classified as stalled while still emitting, however long they have been running. This is not in
+  tension with spec 002's SC-010's 60-second crash budget — a dead client is directly observable and
+  must be caught fast, whereas a stall is an inference — and the record MUST say which question it
   answered.
 - **SC-003**: 100% of stalls receive a named disposition before any rung above report-only fires, and
   zero rungs above report-only fire under an *undetermined* disposition.
@@ -836,8 +1007,11 @@ play was not interrupted, and that **no existing record was amended**.
 - **SC-009**: On the reproduced stranded diplomacy view — the one that sat frozen for hours — the
   registered human dismissal returns the board to an interactive state, confirmed by an independent
   read, in 100% of reproductions, and the run resumes from a fresh observation.
-- **SC-010**: Zero blocking views carrying a player choice are dismissed by the recovery layer; 100%
-  are routed to the agent as declared prompts and answered as recorded decisions.
+- **SC-010**: 100% of blocking views carrying a player choice are offered to the agent as declared
+  prompts **before** any watchdog dismissal; zero are dismissed without that offer having been made
+  and its window having expired. Every watchdog dismissal is labelled as an intervention, and 100% of
+  them count as nothing toward the agent's decision coverage — zero appear in any measure of what the
+  agent played.
 - **SC-011**: 100% of *unreachable* classifications resolve to a specific cause before a rung fires,
   and both causes observed behind the single connection-refused symptom — a lock held by another run,
   and a connection inside a prior close's refusal tail — are distinguished on reproduction.
@@ -881,9 +1055,20 @@ play was not interrupted, and that **no existing record was amended**.
   release.
 - **SC-024**: 100% of recovered runs resume from an observation assembled after the recovery; zero
   resume on state read before the stall.
-- **SC-025**: Across at least 20 unattended runs, no run spends more than 30 minutes in a stalled
-  state without either recovering or stopping in a recorded terminal state. The incidents this
-  feature answers ran for hours.
+- **SC-025**: Across at least 20 unattended runs, no run spends more than 30 minutes between the
+  onset of a stall and either a recovery or a recorded terminal state — of which at most three
+  minutes is the detection itself (SC-002) and the remainder is the bounded ladder. The incidents
+  this feature answers ran for hours.
+- **SC-026**: Every phase that can outlast the three-minute ceiling is enumerated and audited for
+  whether it emits an affirmative liveness signal, with the audit re-run per release; zero such
+  phases are unenumerated, and zero silent ones are resolved by widening the ceiling rather than by
+  making the phase emit. The model-provider wait and the end-turn confirmation loop — both confirmed
+  silent today — are the first two entries, and both emit before the watchdog is enabled.
+- **SC-027**: 100% of liveness emissions are **periodic ticks during the wait**, not entry/exit
+  brackets, at an interval shorter than the bound; and 100% of emission mechanisms are verified
+  empirically to **stream** — the signal observed growing monotonically while the phase is still
+  running, never only at completion. A phase that emits twice, at its boundaries, counts as silent
+  for this criterion.
 
 ## Assumptions
 
@@ -915,10 +1100,15 @@ play was not interrupted, and that **no existing record was amended**.
 - Provider-side failures — a model call that hangs, rate-limits, or returns nothing usable — remain
   deliverable 2's concern under spec 002 FR-041 and FR-042. This feature must distinguish them from
   game-side stalls and must not duplicate their handling.
-- The detection ceiling of 10 minutes (SC-002) and the stalled-time bound of 30 minutes (SC-025) are
-  chosen against the observed cost — freezes measured in hours — and against the asymmetry in FR-016.
-  They are deliberately loose: a tighter ceiling buys little and moves the design toward the failure
-  the owner explicitly named.
+- The three-minute silence ceiling (SC-002) and the 30-minute stall-to-resolution bound (SC-025) are
+  short only because the bound measures silence rather than duration. A ceiling this tight would be
+  reckless against elapsed time — it is below the measured wall-clock of ordinary turns — and is safe
+  only in combination with FR-003's obligation that long phases emit. **If FR-003 is not
+  implemented, FR-005 must not be either**: the two ship together or the watchdog becomes the
+  timeout the owner rejected. This is the single most important sequencing constraint in the feature.
+- The agent-response window of FR-047 is assumed to be bounded by the same affirmative-liveness rule
+  rather than by a separate timer: an agent that is emitting is given its turn to answer, and one
+  that is silent or unavailable is what triggers the watchdog's dismissal.
 - Reproducing the observed incidents requires a live client, so the fixtures of FR-054 are expected to
   be a mix of live-marked reproductions and faithful injections at the seam the real failure crosses.
   An injection at a seam the real failure never crosses does not satisfy FR-054.
@@ -934,6 +1124,13 @@ play was not interrupted, and that **no existing record was amended**.
   success without acting. Classification of a stranded full-screen view therefore cannot be settled
   by asking the engine whether the session is open, and FR-053 requires the absence to be detected
   rather than read as "no".
+- **The provider path does not emit, and must before this feature can work.** No module in the
+  provider package logs anything, so the ~146-second model wait that is ~85% of a turn's wall-clock
+  publishes nothing a watchdog could read. The end-turn confirmation loop is silent on the same
+  basis. **Making both emit a periodic, streaming tick is a precondition of this feature**, not
+  parallel work: until they do, FR-005's criterion is unimplementable in the most common case in the
+  system, and a watchdog enabled ahead of them would kill the two healthiest long operations it has.
+  This is the feature's first implementation task and its hardest sequencing constraint.
 - **An existing detection and recovery layer is the substrate, not a competitor.** Process liveness,
   tuner heartbeat, per-operation bounds, screen identity, the single reload-the-start-quicksave
   recovery, and the no-progress turn backstop already exist and are wired. This feature's

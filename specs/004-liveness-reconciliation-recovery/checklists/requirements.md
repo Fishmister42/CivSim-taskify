@@ -35,14 +35,51 @@
 
 **Status: all items pass.** Spec is ready for `/speckit-plan`.
 
-Result: 59 functional requirements (FR-001–FR-059, contiguous), 25 success criteria
-(SC-001–SC-025, contiguous), zero `[NEEDS CLARIFICATION]` markers.
+Result: 59 functional requirements (FR-001–FR-059, contiguous), 27 success criteria
+(SC-001–SC-027, contiguous), zero `[NEEDS CLARIFICATION]` markers.
+
+### Amendment, 2026-09-22 — owner rulings on all three flagged decisions
+
+1. **Dismissal: "agent first, then watchdog."** FR-047 rewritten. A view carrying a choice goes to
+   the agent first; if the agent does not act within a bounded window or is unavailable, the watchdog
+   dismisses it and records a **labelled intervention that counts as nothing toward the agent's
+   decision coverage**. The rationale is written in both directions so it cannot later be collapsed
+   to "never dismiss" or to "just dismiss". US3 gained a scenario; SC-010 rewritten.
+2. **Stall budget: three minutes — and the mechanism changed with it.** The owner's reason ("if it
+   can't receive a proper response implying thinking vs being stuck in any way we kill it") is an
+   **affirmative-liveness** requirement, not a tighter timer. FR-001 now states the asymmetry
+   (absence of completion is not evidence; absence of a signal is) plus **active is not emitting**;
+   FR-003 obliges every long phase to emit; FR-004 obliges the watchdog to **interrogate** rather
+   than wait; FR-005 sets the three-minute bound **on silence, not duration**, with a scope clause
+   limiting it to harness game runs. SC-002 rewritten, SC-026 and SC-027 added.
+3. **Records: "leave it wrong, flag it."** Confirmed; FR-022 unchanged.
+
+### What the amendment found, which changed the sequencing
+
+- **The provider package emits nothing.** No module in it contains a logging call, so the ~146-second
+  model wait — ~85% of a turn's wall-clock, the most frequent wait in the system — publishes nothing
+  a watchdog can read. The end-turn confirmation loop is silent on the same basis (its poll loop
+  contains only docstring prose). **FR-005's criterion is therefore unimplementable against today's
+  code in the most common case**, and making those phases emit is recorded as a *precondition* of
+  the feature rather than work beside it.
+- **The first draft of the amendment had the worked example backwards.** The confirm loop was written
+  up as the example of a phase that *signals* because it polls every two seconds. It polls silently.
+  It is the example of the **defect** — and a far better one, since it is a phase doing exactly the
+  right thing while being externally indistinguishable from a wedged one.
+- **Two clauses were added that would otherwise pass review and still fail**: a single "started" line
+  is not a heartbeat (emission must be a periodic tick *while waiting*, not bracketing), and an
+  emission mechanism must be **verified empirically to stream** rather than assumed to — a tick that
+  buffers and flushes at completion is the same defect wearing a fix.
+- **A scope boundary was added** after another lane found the collision: the project's own test
+  command is silent by construction for 225–270 seconds, so a watchdog applied beyond harness game
+  runs would make its first act the killing of a healthy test run — and would have it filed as a
+  flaky test rather than as a watchdog action.
 
 ### Validation iteration 1 (2026-09-22)
 
-Six questions were resolved during specification rather than deferred, because each had a
-defensible answer grounded in an incident measured the same day. They are recorded in the spec's
-Clarifications section:
+Nine questions are recorded in the spec's Clarifications section. Six were resolved during
+specification, each grounded in an incident measured the same day; three more were settled by owner
+ruling and by code inspection during the amendment above:
 
 1. **Liveness or reconciliation?** → Reconciliation. Three divergences were measured on 2026-09-22
    and only one stopped play; a liveness-shaped detector catches one of three. This is the single
