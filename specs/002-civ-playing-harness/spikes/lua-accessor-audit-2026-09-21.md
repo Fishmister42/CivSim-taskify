@@ -239,3 +239,30 @@ reproducible from any machine with the game installed.
 - Neither map covers base-game gamecore; they are the XP1 and XP2 builds only. The `.so` binding
   table covers all three, so the two together span the API, but a name found only in one should be
   read as "registered in that build", not "registered everywhere".
+
+## 2026-09-22: `nm -DC` is sound as a POSITIVE discriminator and unsound as a negative
+
+The symbol table settled `research.set_civic` on 2026-09-22 (`0989e3b`) and deserves the credit: it
+was the only instrument that could separate two byte-for-byte parallel Lua bodies, by showing
+`GameCore::Cache::Lua::IPlayerCulture::lCanProgress` exported in all three libraries while
+`GameCore::Lua::IPlayerCulture::lCanProgress` is exported in none, and `lCanResearch` exported in
+both. **That is the positive direction: name present in one namespace and absent in the other, with
+a known-positive control confirming the pattern can match.**
+
+**Its silence is NOT evidence, and this was found the same day.** No `l*Favor*` symbol exists on any
+player interface in any of the three shipped libraries -- yet `strings -a` finds the registration
+names `GetFavor` (Base, XP1) and `GetDiplomaticFavor` (XP2), and Firaxis' own shipped XP2 UI calls
+`Players[id]:GetFavor()` (`worldcongresspopup.lua:181`, `toppanel_expansion2.lua:169`,
+`diplomacyribbon_expansion2.lua:77`). **Some Lua bindings exist only as name strings with no exported
+`l<Name>` trampoline**, so an absent symbol is consistent with both "not bound" and "bound by a
+mechanism this tool cannot see".
+
+**Rule, and it is the project's negative-search rule applied to a binary:** use `nm -DC` to answer
+*"is this bound HERE and not THERE"*, never *"does this exist at all"*. Before trusting any absence,
+corroborate with `strings -a` over the same libraries and with a grep for Firaxis' own callers in the
+shipped `.lua`. **Two negatives agreeing is not a measurement** -- they share the failure mode of
+looking for an exported symbol that need not exist.
+
+This sits alongside the standing caution on `ACCESSORS.txt`, which answers *"does this method exist"*
+and must never be read as *"is it callable from here"*. The two instruments fail in opposite
+directions and neither answers the other's question.
