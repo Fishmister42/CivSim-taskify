@@ -1,4 +1,4 @@
-"""Per-attempt liveness for the confirm-execution poll loop (T290).
+"""Per-attempt liveness for the confirm-execution poll loop (T302).
 
 **The defect this closes.** ``act/verify.py::confirm_execution`` re-reads the tuner every
 ``poll_s`` (2 s in production) for up to ``timeout_s`` -- 200 s at both production call

@@ -250,7 +250,7 @@ class ProviderChain:
                         step_index=request.step_index,
                         detail={**failure_detail, "delay_s": delay_s},
                     )
-                    # T290: `_record_event` reaches the *store*, which a watchdog polling the
+                    # T302: `_record_event` reaches the *store*, which a watchdog polling the
                     # driver log cannot see. This chain can legitimately spend several
                     # 120 s attempts in a row, so the log gets the same fact as well --
                     # harness telemetry only, no prompt or response content.

@@ -199,7 +199,7 @@ class OpenRouterProvider:
         headers = self._build_headers()
 
         start = time.monotonic()
-        # T290: this `post` is the longest silent window in the harness -- up to
+        # T302: this `post` is the longest silent window in the harness -- up to
         # `self._timeout_s` (120 s by default) with a blocking call and no progress callback,
         # and MEASURED at 146 s on the live driver logs of 2026-09-22 with not one line
         # published in between. The bound is unchanged; what changes is that the wait now

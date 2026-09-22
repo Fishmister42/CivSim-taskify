@@ -1,4 +1,4 @@
-"""The two long phases fixed in T290 actually emit, per attempt and mid-flight.
+"""The two long phases fixed in T302 actually emit, per attempt and mid-flight.
 
 ``tests/contract/test_long_phase_liveness.py`` asserts that an emission *call site exists*
 inside each rostered phase -- a structural check, so it can enumerate the whole set and

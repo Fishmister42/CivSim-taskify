@@ -1,4 +1,4 @@
-"""Long phases: anything that can outlast the watchdog's silence budget must emit (T290).
+"""Long phases: anything that can outlast the watchdog's silence budget must emit (T302).
 
 Third sibling to ``tests/contract/test_reachability.py`` and
 ``tests/contract/test_gate_inputs.py`` -- same idiom (AST scan, roster and allowlist as
@@ -251,7 +251,7 @@ LONG_PHASES: tuple[LongPhase, ...] = (
         "146 s on the live driver logs of 2026-09-22",
         why_long="A blocking HTTP POST to a reasoning model with no progress callback. "
         "This was the worst case in the system: the entire provider package contained no "
-        "logger, no logging import and no telemetry call of any kind (T290).",
+        "logger, no logging import and no telemetry call of any kind (T302).",
         emits_via=("provider_call_liveness",),
     ),
     LongPhase(
@@ -263,7 +263,7 @@ LONG_PHASES: tuple[LongPhase, ...] = (
         why_long="A composite: several in-flight calls back to back. Its leaf wait is "
         "provider.in_flight_call, which ticks; the chain's own backoff sleeps used to "
         "publish only RunEvents, which reach the store and not the driver log a watchdog "
-        "polls (T290).",
+        "polls (T302).",
         emits_via=("emit_provider_liveness",),
     ),
     LongPhase(
@@ -276,7 +276,7 @@ LONG_PHASES: tuple[LongPhase, ...] = (
         why_long="The single longest legitimate operation in the system: an end turn is "
         "confirmed only once every AI player has taken theirs. It polled the tuner every "
         "2 s and emitted nothing, so it was the first healthy thing the watchdog would "
-        "kill -- during exactly the slow turn its raised bound exists to accommodate (T290).",
+        "kill -- during exactly the slow turn its raised bound exists to accommodate (T302).",
         emits_via=("emit_confirm_liveness",),
     ),
     LongPhase(
@@ -286,7 +286,7 @@ LONG_PHASES: tuple[LongPhase, ...] = (
         bound="BACKSTOP_CONFIRM_TIMEOUT_S = 200 s, polled every BACKSTOP_CONFIRM_POLL_S = 2 s",
         why_long="A second, hand-rolled 200 s confirm loop that does not go through "
         "act/verify.py::confirm_execution, so the act/liveness.py fix does not reach it. "
-        "Same shape, same silence (T290).",
+        "Same shape, same silence (T302).",
         emits_via=("emit_confirm_liveness", "log_event"),
     ),
     LongPhase(
@@ -298,7 +298,7 @@ LONG_PHASES: tuple[LongPhase, ...] = (
         "state table to reappear on the far side of a load. 300 s is 1.67x the watchdog's "
         "whole budget, and the entire saves/ package contains no logging at all -- "
         "confirmed two ways, by grep for logger/logging across saves/*.py and by an import "
-        "scan of the same files (T290).",
+        "scan of the same files (T302).",
         emits_via=("log_event",),
     ),
     LongPhase(
@@ -309,7 +309,7 @@ LONG_PHASES: tuple[LongPhase, ...] = (
         "DEFAULT_LOAD_TIMEOUT_S = 300 s per attempt, up to recovery_attempt_limit attempts",
         why_long="A composite whose leaf wait is saves.load_await_phase. It records "
         "RunEvents to the store as it goes, which is durable evidence but not something a "
-        "watchdog polling the driver log can read (T290).",
+        "watchdog polling the driver log can read (T302).",
         emits_via=("log_event",),
     ),
 )
@@ -319,7 +319,7 @@ LONG_PHASES: tuple[LongPhase, ...] = (
 #: emitting, the entry fails and must be removed. The list can only tighten.
 LONG_PHASE_ALLOWLIST: dict[str, str] = {
     "run.backstop_end_turn_confirm": (
-        "T290: confirmed silent by reading run/turn_cycle.py:409-422 -- a hand-rolled "
+        "T302: confirmed silent by reading run/turn_cycle.py:409-422 -- a hand-rolled "
         "deadline/poll loop with no emission, not routed through confirm_execution, so the "
         "act/liveness.py fix does not reach it. owner: LIVE lane (run/** is theirs; this "
         "agent's grant covered provider/** and act/verify.py only). The fix is two lines: "
@@ -327,7 +327,7 @@ LONG_PHASE_ALLOWLIST: dict[str, str] = {
         "with the deadline and elapsed."
     ),
     "saves.load_await_phase": (
-        "T290: confirmed silent by reading saves/load_game.py:486-547 and by two "
+        "T302: confirmed silent by reading saves/load_game.py:486-547 and by two "
         "independent negative searches over saves/*.py (grep for logger|log_event|logging, "
         "and an import scan) -- the package has no logging at all. owner: UNRESOLVED - "
         "hypervisor review; saves/** was granted to no lane in this agent's brief. This is "
@@ -335,7 +335,7 @@ LONG_PHASE_ALLOWLIST: dict[str, str] = {
         "the watchdog budget on its own."
     ),
     "resilience.recover": (
-        "T290: confirmed by reading resilience/recovery.py:182-285 -- it emits RunEvents to "
+        "T302: confirmed by reading resilience/recovery.py:182-285 -- it emits RunEvents to "
         "the match store but nothing to the driver log, so a log-polling watchdog sees "
         "nothing for the duration of the load it drives. owner: UNRESOLVED - hypervisor "
         "review; resilience/** was granted to no lane in this agent's brief. Lower priority "
@@ -499,7 +499,7 @@ def test_negative_control_an_unrelated_call_does_not_count_as_emitting() -> None
 
 def test_negative_control_an_allowlisted_silent_phase_passes() -> None:
     assert (
-        _phase_problems((_PHASE,), {"slowpkg.wait": "T290 owner: LIVE lane"}, source_of=_SILENT)
+        _phase_problems((_PHASE,), {"slowpkg.wait": "T302 owner: LIVE lane"}, source_of=_SILENT)
         == []
     )
 
@@ -507,7 +507,7 @@ def test_negative_control_an_allowlisted_silent_phase_passes() -> None:
 def test_negative_control_a_stale_allowlist_entry_is_flagged() -> None:
     """The ratchet: once a phase starts emitting, its exemption must go."""
     problems = _phase_problems(
-        (_PHASE,), {"slowpkg.wait": "T290 owner: LIVE lane"}, source_of=_LOUD
+        (_PHASE,), {"slowpkg.wait": "T302 owner: LIVE lane"}, source_of=_LOUD
     )
     assert len(problems) == 1
     assert "stale exemption" in problems[0]
@@ -515,7 +515,7 @@ def test_negative_control_a_stale_allowlist_entry_is_flagged() -> None:
 
 def test_negative_control_an_allowlist_entry_naming_no_phase_is_flagged() -> None:
     problems = _phase_problems(
-        (_PHASE,), {"slowpkg.nonesuch": "T290 owner: LIVE lane"}, source_of=_LOUD
+        (_PHASE,), {"slowpkg.nonesuch": "T302 owner: LIVE lane"}, source_of=_LOUD
     )
     assert any("names no roster phase" in problem for problem in problems)
 
@@ -548,14 +548,14 @@ def test_negative_control_an_uncited_or_unowned_justification_is_rejected(
 
 
 def test_negative_control_a_cited_but_unowned_justification_is_rejected() -> None:
-    problems = _allowlist_problems({"slowpkg.wait": "T290: confirmed silent by reading."})
+    problems = _allowlist_problems({"slowpkg.wait": "T302: confirmed silent by reading."})
     assert len(problems) == 1
     assert "names no owning lane" in problems[0]
 
 
 def test_negative_control_a_properly_cited_and_owned_justification_is_accepted() -> None:
     assert (
-        _allowlist_problems({"slowpkg.wait": "T290: confirmed silent by reading. owner: LIVE lane"})
+        _allowlist_problems({"slowpkg.wait": "T302: confirmed silent by reading. owner: LIVE lane"})
         == []
     )
     assert _allowlist_problems({"slowpkg.wait": f"{_UNRESOLVED_MARKER}. owner: hypervisor"}) == []

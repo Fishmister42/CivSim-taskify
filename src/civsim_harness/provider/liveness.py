@@ -1,4 +1,22 @@
-"""Liveness ticks around an in-flight provider call (T290).
+"""Liveness ticks around an in-flight provider call (T302).
+
+**OBSERVER-DERIVED, NOT WORK-DERIVED. Read this before treating a tick as progress.**
+This emitter is a daemon thread ticking *beside* a blocking ``httpx`` POST. It reports that
+the call has not returned; it cannot report that the call is making progress. A ticker beside
+a hung socket ticks happily forever, so ``provider.call.waiting`` is emitted whether the call
+is waiting, hung, or dead -- the field's name asserts something the value does not establish,
+which is the exact defect family this module was written to fix, reproduced one layer inside
+the fix. That is registered here rather than discovered later.
+
+**Consequence, and it is normative:** a *work-derived* signal (bytes actually arriving) may
+clear a silence bound; an *observer-derived* one may not. Nothing downstream may treat these
+ticks as clearing a watchdog bound. They exist so a human or a log reader can see that the
+phase was entered and how long it has been in it -- strictly better than the silence they
+replace, and strictly weaker than evidence of progress.
+
+**The real fix, approved and not yet built: stream the provider completion so that a chunk
+arriving is the event.** That makes the signal work-derived and removes the tick interval
+entirely rather than tuning it. Until then this is the honest interim state.
 
 **The defect this closes.** ``run/decision_loop.py`` reaches the model with a single
 blocking line -- ``response = ctx.provider.complete(request)`` -- and until this module

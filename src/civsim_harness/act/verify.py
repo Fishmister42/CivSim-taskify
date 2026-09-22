@@ -301,7 +301,7 @@ async def confirm_execution[ReadT](
             attempts=attempts,
             elapsed_s=monotonic() - started,
         )
-        # T290: this is the single longest legitimate operation in the harness --
+        # T302: this is the single longest legitimate operation in the harness --
         # `run/decision_loop.py::END_TURN_CONFIRM_TIMEOUT_S` and
         # `run/turn_cycle.py::BACKSTOP_CONFIRM_TIMEOUT_S` are both 200 s, because an end turn
         # is confirmed only once every AI player has taken theirs. Until now it polled every
