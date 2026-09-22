@@ -59,6 +59,20 @@ open items below that block calling this deliverable fully compliant.
 - **Four screening gates** in `src/civsim_harness/parity/screening.py` — source, geometry,
   provenance, content (`_check_source`, `_check_geometry`, `_check_provenance`, `_check_content`) —
   gate every capture before it can reach an agent.
+  **Qualified 2026-09-22 (T299), and this qualification must travel with any citation of the
+  content gate.** The content gate's declared-text technique matches a reject category only when
+  **every** `_`-split token of the category id appears in the desktop evidence. Three shipped
+  categories contain a word no window title ever supplies — **`firetuner_window`** needs "window",
+  `harness_owned_ui` needs "owned"/"ui", `linux_panel` needs "linux" — so they are *addressable in
+  the coverage map and unmatchable in practice*. **`firetuner_window` MUST NOT be cited as screened
+  — not here, not in a scorecard, not in a release note.** The honest statement is: *the category is
+  undetectable by the current technique set; the protection on Linux is **structural**, not
+  gate-derived.* That structural protection is real and is why delivery stays open on Linux — the
+  X11 `XComposite`/`NameWindowPixmap` path reads the game window's **own off-screen pixmap** with no
+  screen-grab fallback, so another application's window cannot be in the frame, and the retro-audit
+  examined all 188 distinct delivered frames and found nothing. **It does not exist on Windows or
+  macOS**, whose capture is not window-scoped and whose coverage guard nevertheless passes — so
+  T299 is a **release blocker for both**.
 - **Camera validation**: `src/civsim_harness/act/camera.py`'s `validate_camera_action` validates
   the three declared `camera.*` actions specifically, refusing to act as a general-purpose
   replacement for the declared surface.
