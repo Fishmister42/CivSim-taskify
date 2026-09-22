@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 21:27 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 21:32 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -14,9 +14,9 @@ reads the constitution, this file, then issue #1's tail, and continues.
 - Autoplay the game's own AI to reach deep saves (~t100/t150/t200); run goal runs from them.
 - Spend: the OpenRouter cap is the agent's for the week; run rate is far below it — **increase it**.
   Never ask before spending; the provider's refusal is the only stop.
-- Steam/client: released 20:30, **re-taken 20:45 at the owner's word for a builder re-trial; the window is
-  open-ended — "you'll know when you have to stop, I'll ping you"**. Never wind down on the clock; release
-  with a `status: done` on #1 only when the owner pings. On later days, check before launching.
+- Steam/client: **the owner's own Steam session holds the account** (seen 21:27: "already playing Slay the
+  Spire 2 on another computer"; the live stage clicked Cancel). Released on #1 at 21:30. **Nothing on this
+  node launches the client until the owner pings.** Resume point: save `civsim-gameplay-2026-09-21-end2` (t56).
 - The T201 soak is parked ("I don't even care right now").
 
 ## Standing rules for every agent (learned the hard way today)
@@ -42,15 +42,18 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| Live S7 (Fable fork) | **client SEGFAULTED** (kernel: `Civ6 segfault at b0 in libGameCore_XP2.so`, 20:46:35, during Stage 6's first turn on worktree 454b2f8 — the first live sweep with tonight's repaired bodies; the harness saw only ConnectionResetError, stop_reason None). Steam would not respawn the client (2 tries); trying `-applaunch`, Steam dialog check, Steam restart (20-min cap). Then: load `…-end2`, one 1-turn coverage block at 454b2f8 under crash watch; if it crashes, same block at 14f7418 to confirm the bisect; then the guard patch | client | 21:08 |
-| crash diff (Fable fork, headless) | `git diff 14f7418..454b2f8 -- lua/`: every new engine call that runs at turn start / probe / sweep, ranked for null dereference on this board (no governors, no religion, no congress, no spies; city-state/barbarian player slots), with Firaxis' own guard for each; guard patch + lupa tests; `spikes/client-segfault-2026-09-21.md` | `lua/**`, tests | 21:25 |
-| orphan hygiene (Opus, retried ×2 after API 500s) | orphan detection on write-mode open + runner start; `civsim store repair [--dry-run]` | `run/lifecycle.py`, `run/runner.py`, `store/`, `operator/store_cli.py`, tests | 21:21 |
+| Live S7 (Fable fork) | standing down: ledger, entry 12 (the 20:46 segfault, the other-session explanation, the stand-down), log section; hands off with the client DOWN | `spikes/gameplay-2026-09-21/`, log | 21:08 |
+| crash diff (Fable fork, headless) | `git diff 14f7418..454b2f8 -- lua/`: new engine calls at turn start / probe / sweep ranked for null dereference, Firaxis-style guards + lupa tests, `spikes/client-segfault-2026-09-21.md` | `lua/**`, tests | 21:25 |
+| orphan hygiene (Opus) | orphan detection on write-mode open + runner start; `civsim store repair [--dry-run]` | `run/lifecycle.py`, `run/runner.py`, `store/`, `operator/store_cli.py`, tests | 21:21 |
 
-**Rule from the crash:** a method that exists is not a method that is safe to call on every object; every
-new engine call is guarded the way Firaxis guards it, and "unverified live" now means "may crash the
-client" until a one-turn crash-watched block has run it. **Do not play from 454b2f8 unguarded; the last
-hash known not to crash on this board is 14f7418.** Head `454b2f8`+ (main tree fine for headless work).
-Coverage at 20:29: actions applied live 11 of 41, images 287 of 619 steps, spend $13.40 cumulative.
+**Segfault reframed:** the kernel line is real (`Civ6 segfault at b0 in libGameCore_XP2.so`, 20:46:35, first
+turn on 454b2f8), but the owner's other-machine Steam session starting around then plausibly disconnected
+the game here first. The Lua bisect is a guard-patch exercise until the account is free. Harness findings
+either way: a client death during the probe/sweep surfaced as ConnectionResetError with `stop_reason: None`
+(must be named); a killed driver leaves a run `playing` (fix in flight).
+**When the owner pings:** load end2 → one 1-turn coverage block from head under crash watch → bisect to
+14f7418 if it crashes → guard patch → `--goal use_a_builder` → Settler → second city → every feasible goal.
+Coverage today: 3 → 11 of 41 applied live; images 0 → 287 of 619 steps; spend $13.40 cumulative.
 
 ## Queue, in order (2026-09-22)
 1. Owner's OK to launch. 2. From the worktree at head: verify live `cities.set_production` (once the
