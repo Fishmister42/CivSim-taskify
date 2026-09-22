@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from civsim_harness.errors import PreflightError
 from civsim_harness.host._shared import locate_process_by_names, read_disk_space
@@ -41,6 +42,7 @@ from civsim_harness.host.port import (
     InputResult,
     InputStatus,
     WindowRect,
+    WindowTitleListing,
 )
 
 # VERIFIED on a live Aspyr client (Steam app 289070, build 1.0.12.9): the
@@ -227,6 +229,46 @@ class CapturePreconditions:
         return tuple(issues)
 
 
+def _iter_client_list_windows(display: Any, root: Any) -> Iterator[tuple[int, Any, int | None]]:
+    """Walk `_NET_CLIENT_LIST`, yielding `(window_id, window_resource, pid_or_None)`.
+
+    Extracted verbatim from `LinuxHostPlatform.find_game_window` (T265) so the same
+    EWMH walk can also serve `list_window_titles`, which needs the *desktop* rather
+    than one process's window. VERIFIED on real hardware (X11/Cinnamon,
+    Mutter/Muffin) in its original inline form: reading `_NET_CLIENT_LIST` off the
+    root and matching `_NET_WM_PID` resolves the live client correctly.
+
+    **This is a generator, and that is load-bearing, not a style choice.**
+    `find_game_window` returns the instant a pid matches and must never touch a
+    window listed after it: a window that closes between the client-list read and a
+    property read raises `BadWindow`, so an eager enumeration would turn a
+    successful capture into an exception whenever the operator closes a window
+    during a run. Yielding lazily keeps that caller's reach exactly what it was --
+    one `_NET_WM_PID` read per preceding window, nothing at all after the match.
+    `tests/unit/test_linux_window_enumeration.py` pins both halves (it poisons a
+    later window and asserts the walk never reads it), and those tests were written
+    and run against the pre-extraction code first.
+
+    The pid is read here because both callers need it (the game-window lookup to
+    match on it, the desktop listing to recognise the harness's own windows if it
+    ever grows one); the title is NOT, because reading it eagerly would add a
+    property read per preceding window to `find_game_window`'s path -- each caller
+    reads what it needs off the yielded resource object.
+    """
+    from Xlib import X
+
+    net_client_list = display.intern_atom("_NET_CLIENT_LIST")
+    net_wm_pid = display.intern_atom("_NET_WM_PID")
+    client_list_prop = root.get_full_property(net_client_list, X.AnyPropertyType)
+    if client_list_prop is None:
+        return
+    for window_id in client_list_prop.value:
+        candidate = display.create_resource_object("window", window_id)
+        pid_prop = candidate.get_full_property(net_wm_pid, X.AnyPropertyType)
+        pid = int(pid_prop.value[0]) if pid_prop is not None and pid_prop.value else None
+        yield int(window_id), candidate, pid
+
+
 class LinuxHostPlatform:
     """`HostPlatform` adapter for native Linux, X11 or Wayland (research R19, R6, R5)."""
 
@@ -265,16 +307,9 @@ class LinuxHostPlatform:
         display = Display()
         try:
             root = display.screen().root
-            net_client_list = display.intern_atom("_NET_CLIENT_LIST")
-            net_wm_pid = display.intern_atom("_NET_WM_PID")
             net_wm_name = display.intern_atom("_NET_WM_NAME")
-            client_list_prop = root.get_full_property(net_client_list, X.AnyPropertyType)
-            if client_list_prop is None:
-                return None
-            for window_id in client_list_prop.value:
-                candidate = display.create_resource_object("window", window_id)
-                pid_prop = candidate.get_full_property(net_wm_pid, X.AnyPropertyType)
-                if pid_prop is None or not pid_prop.value or pid_prop.value[0] != process.pid:
+            for window_id, candidate, pid in _iter_client_list_windows(display, root):
+                if pid != process.pid:
                     continue
                 geometry = candidate.get_geometry()
                 name_prop = candidate.get_full_property(net_wm_name, X.AnyPropertyType)
@@ -305,6 +340,102 @@ class LinuxHostPlatform:
             return None
         finally:
             display.close()
+
+    def list_window_titles(self) -> WindowTitleListing:
+        """Desktop-wide window titles for the content gate's declared-text technique (T265).
+
+        The same `_NET_CLIENT_LIST` walk `find_game_window` uses
+        (`_iter_client_list_windows`), without the pid filter and reading
+        `_NET_WM_NAME` (falling back to the legacy `WM_NAME`) instead of geometry.
+
+        **Fails closed on every error, including a partial walk.** A listing that
+        silently skipped a window would tell the content gate "a text-evidence
+        source ran and the desktop is clean" while the one window that mattered was
+        the one that was missed -- the exact fail-open shape the gate was just
+        rebuilt to refuse. So anything unexpected during enumeration reports
+        `available=False` with the reason, and the capture path withholds that
+        frame and retries (T157's bounded retry absorbs the transient case: a
+        window closing mid-walk).
+
+        **PRINCIPLE I.** These titles are the operator's own desktop -- their
+        browser tabs, their mail. Nothing here logs them, and the returned
+        `reason` carries counts only, never a title. See
+        `host/port.py::WindowTitleListing`.
+        """
+        if self._session_type is LinuxSessionType.wayland:
+            return WindowTitleListing(
+                available=False,
+                reason=(
+                    "Wayland: there is no compositor-independent way to enumerate another "
+                    "application's top-level windows, and this repo declares none of the "
+                    "compositor-specific protocols that would provide one (pyproject.toml's "
+                    "'linux' extra has only python-xlib and dbus-python). The same documented "
+                    "gap that makes find_game_window report no window here. No text evidence "
+                    "means the content gate cannot certify a frame, so captures are withheld."
+                ),
+            )
+
+        try:
+            from Xlib import X
+            from Xlib.display import Display
+        except ImportError:
+            # Deliberately NOT the PreflightError find_game_window raises: this is a
+            # capture-screening input, and the port contract for it is a tagged
+            # outcome that never raises (like CaptureResult), so a missing optional
+            # dependency degrades image delivery instead of breaking the run.
+            return WindowTitleListing(
+                available=False,
+                reason=(
+                    "python-xlib is not installed; install the 'linux' extra "
+                    "(`uv sync --extra linux`) to enumerate desktop window titles on X11. "
+                    "Without them the content gate has no text evidence and withholds."
+                ),
+            )
+
+        try:
+            display = Display()
+        except Exception as exc:
+            return WindowTitleListing(
+                available=False,
+                reason=f"could not open the X display to enumerate window titles: {exc!r}",
+            )
+
+        try:
+            root = display.screen().root
+            net_wm_name = display.intern_atom("_NET_WM_NAME")
+            wm_name = display.intern_atom("WM_NAME")
+            titles: list[str] = []
+            walked = 0
+            for _window_id, candidate, _pid in _iter_client_list_windows(display, root):
+                walked += 1
+                name_prop = candidate.get_full_property(net_wm_name, X.AnyPropertyType)
+                if name_prop is None or not name_prop.value:
+                    name_prop = candidate.get_full_property(wm_name, X.AnyPropertyType)
+                if name_prop is None or not name_prop.value:
+                    continue
+                titles.append(bytes(name_prop.value).decode("utf-8", "replace"))
+        except Exception as exc:
+            # The exception, not the partial result: see the fail-closed note above.
+            return WindowTitleListing(
+                available=False,
+                reason=(
+                    "the _NET_CLIENT_LIST walk failed partway through, so this listing "
+                    f"would be incomplete rather than empty: {exc!r}"
+                ),
+            )
+        finally:
+            display.close()
+
+        return WindowTitleListing(
+            available=True,
+            # Counts only -- never a title (Principle I): this string is recorded on
+            # withheld captures and run events.
+            reason=(
+                f"enumerated {walked} top-level window(s) via _NET_CLIENT_LIST on X11; "
+                f"{len(titles)} carried a readable _NET_WM_NAME/WM_NAME"
+            ),
+            titles=tuple(titles),
+        )
 
     def check_capture_preconditions(self) -> CapturePreconditionResult:
         """The `HostPlatform` port preflight (T249): `capture_preconditions`' verdict, wired.
