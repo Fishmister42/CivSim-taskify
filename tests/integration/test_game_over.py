@@ -165,7 +165,7 @@ def _build_registry() -> CapabilityRegistry:
     capability = IntegrationCapability(
         capability_id=capability_id,
         path=CatalogCapabilityPath.FIRETUNER,
-        implementation_ref="test",
+        implementation_ref="test.lua",
         reads=["turn state"],
         writes=["turn state"],
     )

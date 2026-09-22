@@ -796,7 +796,7 @@ def test_audit_capabilities_flags_a_bespoke_capability_with_no_firetuner_gap(
     ungapped = IntegrationCapability.model_construct(
         capability_id=CapabilityId("cap.bespoke_no_gap"),
         path=CapabilityPath.BESPOKE,
-        implementation_ref="ref",
+        implementation_ref="ref.lua",
         reads=[],
         writes=[],
         firetuner_gap=None,
