@@ -560,6 +560,31 @@ def predicate_root_names(predicate: str) -> frozenset[str]:
     )
 
 
+def predicate_attribute_chains(predicate: str) -> frozenset[tuple[str, str]]:
+    """Every ``(namespace, attribute)`` pair *predicate* reads via one dot (``unit.is_selected`` ->
+    ``("unit", "is_selected")``), for namespaces whose root is a plain :class:`ast.Name` -- i.e.
+    every ``ast.Attribute`` node this restricted grammar can produce, since ``catalogs/README.md``
+    §4's grammar has no subscripts, calls, or nested attribute chains beyond one level deep in
+    practice for the root namespaces (``other_player.diplomatic_state``, not
+    ``other_player.a.b``). Used by :func:`known_predicate_fields`'s ratchet (T3xx) to check every
+    identifier an action predicate references against the field set an observation body actually
+    emits, the same defect class that let ``diplomacy.declare_war`` reference
+    ``other_player.diplomatic_state`` -- a name that parses, binds via ``bindings`` at runtime
+    (:func:`_resolve_attribute` never raises for an absent key), and is therefore never caught by
+    :func:`evaluate_predicate` itself. An unparseable predicate reads nothing, matching
+    :func:`predicate_root_names`.
+    """
+    try:
+        tree = _parse(predicate)
+    except PredicateEvaluationError:
+        return frozenset()
+    return frozenset(
+        (node.value.id, node.attr)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+    )
+
+
 def membership_collection(predicate: str) -> str | None:
     """For a predicate of the exact form ``target in <expr>``, ``<expr>``'s source; else ``None``.
 
@@ -682,3 +707,258 @@ def _bind_subject_namespace(
         ):
             return _bind(item)
     return namespace
+
+
+# --------------------------------------------------------------------------
+# The phantom-field ratchet (T306): the emitted-field set an action predicate may reference,
+# published as data.
+# --------------------------------------------------------------------------
+#
+# `diplomacy.declare_war`'s `availability_predicate`/`verification_predicate` both read
+# `other_player.diplomatic_state` -- a name `catalogs/observations/diplomacy.yaml`'s
+# `output_schema` DOES declare, but `lua/gamecore/diplomacy.lua` never actually puts in the
+# emitted JSON: `Player:GetDiplomaticAI()` is MEASURED absent in `GameCore_Tuner` (that file's own
+# header), the GameCore-side fallback (`player:GetDiplomacy():GetDiplomaticStateIndex`) is marked
+# UNVERIFIED, and a Lua table constructor silently drops a `key = nil` entry rather than emitting
+# `"key":null` -- so whenever that fallback fails or returns nothing, the key is not merely null,
+# it is ABSENT. CONFIRMED empirically (2026-09-22, read-only queries against
+# `civsim-match-store.db{,.v1.0.bak-20260921T152108Z}`'s `decision_steps.bundle_json`, 670 + 115
+# real captured bundles, including 670 `has_met: true` relations for a real met civilization
+# (`CIVILIZATION_AUSTRALIA`)): the key union of every `diplomacy.state.relations[]` entry ever
+# actually captured is exactly `{player_id, has_met, civilization, has_delegation}` --
+# `diplomatic_state` NEVER appears, met or not. Because `_resolve_attribute` (above) resolves an
+# absent key to `None` rather than raising, `other_player.diplomatic_state != "war"` reads `True`
+# forever (declare_war's availability -- so the sampler believes war is always declarable) and
+# `other_player.diplomatic_state == "war"` reads `False` forever (declare_war's verification -- so
+# a war that actually lands is recorded `rejected`). This section exists so that specific defect
+# shape -- a predicate identifier that resolves syntactically (no `PredicateEvaluationError`) but
+# can never bind to a real value -- cannot recur silently in any other declared action.
+#
+# `camera` is the second, independently-found instance of the same shape, one layer down: unlike
+# `diplomacy.state`, `catalogs/observations/camera.yaml`'s `camera.read_state` (added T221) DOES
+# reliably back `mode`/`zoom`/`target_plot`/`target_is_revealed` in `lua/ingame/camera.lua` -- but
+# `build_predicate_bindings` above hardcodes `"camera": {}` unconditionally and was never updated
+# to source it from `camera.read_state` once that declaration existed. So `camera.move`,
+# `camera.zoom`, and `camera.set_view_mode`'s own `verification_predicate`s (`camera.target_plot
+# == target and camera.target_is_revealed`, `camera.zoom == target`, `camera.mode == target`) can
+# never be true either, regardless of the real camera state -- a wiring gap, not a missing Lua
+# field, but the identical observable symptom. Reported as T307, not fixed here (out of this
+# task's narrow scope: only `declare_war`'s own fix was authorised).
+KNOWN_SCHEMA_BODY_DISAGREEMENTS: Mapping[DeclarationId, frozenset[str]] = {
+    DeclarationId("diplomacy.state"): frozenset({"diplomatic_state"}),
+}
+
+#: Fields present on a bound namespace that :func:`build_predicate_bindings` derives or overlays
+#: rather than copying straight off one observation body's own schema -- each cited to the exact
+#: code above that adds it, so this table can never silently drift from what binding actually does.
+_DERIVED_NAMESPACE_FIELDS: Mapping[str, frozenset[str]] = {
+    # `_resolve_attribute`: every subject namespace defaults to `{"exists": False}` and every
+    # `_bind` call sets `exists = True` -- present on `unit`/`city`/`other_player`/`congress`/
+    # `great_person`/`spy` regardless of what their backing observation's schema declares.
+    "unit": frozenset({"exists"}),
+    "city": frozenset({"exists", "is_selected"}),  # T255: `is_selected` overlaid from cities.selection
+    "other_player": frozenset({"exists"}),
+    "congress": frozenset({"exists"}),
+    "great_person": frozenset({"exists"}),
+    "spy": frozenset({"exists"}),
+    # `build_predicate_bindings`: `active_prompt_type` is computed from `game.current_screen`,
+    # not copied from any schema.
+    "game": frozenset({"active_prompt_type"}),
+    # `build_predicate_bindings`: `diplomatic_favor` is merged in from `congress.state`'s
+    # `local_player_favor`, a cross-namespace rename the schema tables below do not express.
+    "player": frozenset({"diplomatic_favor"}),
+    # `_bind_prompt_namespace`: built as a literal `{"type": ..., "is_active": ..., "options":
+    # ...}`, never sourced from an `output_schema` at all.
+    "prompt": frozenset({"type", "is_active", "options"}),
+}
+
+#: Root namespaces this ratchet does not check. `target` binds to whatever raw value the caller
+#: passed as the action's own parameter (a plot, a name, a number, ...) -- never to an observation
+#: body -- so its field vocabulary is the target_kind's shape, a contract this module has no way
+#: to check and no business checking. `camera` is deliberately NOT here: its known-good set is
+#: `frozenset()` (see `known_predicate_fields` below), so every `camera.*` reference is correctly
+#: reported as unresolved, which is the whole point of the finding above.
+UNCHECKED_PREDICATE_NAMESPACES: frozenset[str] = frozenset({"target"})
+
+
+def _schema_top_level_fields(output_schema: Mapping[str, Any] | None) -> frozenset[str]:
+    if not isinstance(output_schema, Mapping):
+        return frozenset()
+    properties = output_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return frozenset()
+    return frozenset(properties.keys())
+
+
+def _schema_list_item_fields(
+    output_schema: Mapping[str, Any] | None, list_field: str
+) -> frozenset[str]:
+    if not isinstance(output_schema, Mapping):
+        return frozenset()
+    properties = output_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return frozenset()
+    list_schema = properties.get(list_field)
+    if not isinstance(list_schema, Mapping):
+        return frozenset()
+    items_schema = list_schema.get("items")
+    if not isinstance(items_schema, Mapping):
+        return frozenset()
+    item_properties = items_schema.get("properties")
+    if not isinstance(item_properties, Mapping):
+        return frozenset()
+    return frozenset(item_properties.keys())
+
+
+def known_predicate_fields(
+    declarations: Mapping[DeclarationId, Any],
+) -> dict[str, frozenset[str]]:
+    """The field set each predicate namespace can actually bind to, derived mechanically from
+    *declarations*'s own declared ``output_schema``s -- never hand-typed -- through the exact same
+    namespace -> backing-declaration tables :func:`build_predicate_bindings` itself binds from
+    (``_GAME_SOURCES``/``_GAME_FIELD_RENAMES``, ``_PLAYER_SOURCES``/``_PLAYER_FIELD_RENAMES``,
+    ``_SUBJECT_SOURCES``), so this can never silently drift from what the evaluator actually does:
+    a rename applied there is applied here from the identical table, not a second, hand-copied one.
+
+    *declarations* is a ``declaration_id -> ParityDeclaration``-shaped mapping (a loaded
+    :class:`~civsim_harness.capability.loader.Catalog`'s own ``.declarations``, or any mapping
+    exposing the same ``.output_schema`` attribute) -- passed in rather than loaded here so this
+    stays a pure function of whatever catalog a caller already has open.
+
+    Two adjustments on top of the mechanical schema union, both cited to their own reason:
+    :data:`KNOWN_SCHEMA_BODY_DISAGREEMENTS` removes a field the schema declares but the Lua body
+    is confirmed never to actually emit (today: exactly ``diplomacy.state``'s
+    ``diplomatic_state``); :data:`_DERIVED_NAMESPACE_FIELDS` adds a field
+    :func:`build_predicate_bindings` derives or overlays rather than copying off a schema. ``camera``
+    is always ``frozenset()`` -- ``build_predicate_bindings`` never binds it to anything (see the
+    finding above this function), so nothing can resolve against it, honestly.
+    """
+
+    def schema_of(declaration_id: DeclarationId) -> Mapping[str, Any] | None:
+        declaration = declarations.get(declaration_id)
+        schema = getattr(declaration, "output_schema", None)
+        return schema if isinstance(schema, Mapping) else None
+
+    fields: dict[str, frozenset[str]] = {}
+
+    game_fields: set[str] = set()
+    for source_id in _GAME_SOURCES:
+        raw = _schema_top_level_fields(schema_of(source_id))
+        renamed = {_GAME_FIELD_RENAMES.get(name, name) for name in raw}
+        game_fields |= renamed
+    fields["game"] = frozenset(game_fields) | _DERIVED_NAMESPACE_FIELDS["game"]
+
+    player_fields: set[str] = set()
+    for source_id in _PLAYER_SOURCES:
+        raw = _schema_top_level_fields(schema_of(source_id))
+        renamed = {_PLAYER_FIELD_RENAMES.get(name, name) for name in raw}
+        player_fields |= renamed
+    fields["player"] = frozenset(player_fields) | _DERIVED_NAMESPACE_FIELDS["player"]
+
+    fields["prompt"] = _DERIVED_NAMESPACE_FIELDS["prompt"]
+    fields["camera"] = frozenset()  # never wired -- see this section's own header finding.
+
+    for namespace, (declaration_id, list_field, _id_field) in _SUBJECT_SOURCES.items():
+        item_fields = _schema_list_item_fields(schema_of(declaration_id), list_field)
+        if namespace == "congress":
+            item_fields |= _schema_top_level_fields(schema_of(declaration_id)) & frozenset(
+                _CONGRESS_TOP_LEVEL_FIELDS
+            )
+        disagreements = KNOWN_SCHEMA_BODY_DISAGREEMENTS.get(declaration_id, frozenset())
+        fields[namespace] = (
+            item_fields - disagreements
+        ) | _DERIVED_NAMESPACE_FIELDS.get(namespace, frozenset())
+
+    return fields
+
+
+#: Declared action predicates KNOWN, today, to reference a ``(namespace, attribute)`` pair that
+#: cannot resolve to anything :func:`known_predicate_fields` reports as bound -- the completed
+#: output of the T306 sweep, each entry reviewed and cited rather than silently excluded. Growing
+#: this table is a diff a reviewer sees; the ratchet (``tests/unit/test_predicate_field_ratchet.py``)
+#: fails the moment a listed declaration's predicate changes so that it no longer needs its entry,
+#: the same staleness discipline ``live.goal_run.KNOWN_AVAILABILITY_EXCEPTIONS`` already applies to
+#: goals.
+KNOWN_PHANTOM_PREDICATE_FIELDS: Mapping[DeclarationId, frozenset[tuple[str, str]]] = {
+    # PROVEN (2026-09-22, T306 sweep). See KNOWN_SCHEMA_BODY_DISAGREEMENTS's own comment above:
+    # `diplomacy.state` never actually emits `diplomatic_state` on this build (confirmed against
+    # 670 + 115 real captured bundles). A live `declare_war` that actually landed and ended a run
+    # today was recorded `rejected` for exactly this reason. NOT fixed in this pass: no honest,
+    # guardable accessor was confirmed in the time available without a live client to verify a new
+    # Lua call against (specs/002-civ-playing-harness/spikes/client-segfault-2026-09-21.md's own
+    # rule: a new engine call unverified live "may crash the client"). Reported as tasks T307/T308
+    # rather than patched blind. `diplomacy.make_peace` shares the identical identifier and
+    # therefore the identical defect -- not a second, separate finding.
+    DeclarationId("diplomacy.declare_war"): frozenset({("other_player", "diplomatic_state")}),
+    DeclarationId("diplomacy.make_peace"): frozenset({("other_player", "diplomatic_state")}),
+    # PROVEN (2026-09-22, T306 sweep). `build_predicate_bindings` hardcodes `"camera": {}` (above)
+    # and was never updated to source it from `camera.read_state` once that declaration existed
+    # (T221) -- a wiring gap, not a missing Lua field, with the identical observable symptom.
+    # Reported as task T309 rather than fixed here (out of this task's authorised scope).
+    DeclarationId("camera.move"): frozenset(
+        {("camera", "target_plot"), ("camera", "target_is_revealed")}
+    ),
+    DeclarationId("camera.zoom"): frozenset({("camera", "zoom")}),
+    DeclarationId("camera.set_view_mode"): frozenset({("camera", "mode")}),
+}
+
+
+def unresolved_predicate_fields(
+    *,
+    availability_predicate: str,
+    verification_predicate: str,
+    known_fields: Mapping[str, frozenset[str]],
+) -> frozenset[tuple[str, str]]:
+    """Every ``(namespace, attribute)`` pair either predicate references that cannot resolve
+    against *known_fields* -- ignoring :data:`UNCHECKED_PREDICATE_NAMESPACES` -- with no exception
+    table applied. Callers that want the reviewed, ``KNOWN_PHANTOM_PREDICATE_FIELDS``-aware check
+    should use :func:`assert_predicate_fields_resolve`; this is the raw computation it (and a
+    negative control) build on.
+    """
+    unresolved: set[tuple[str, str]] = set()
+    for predicate in (availability_predicate, verification_predicate):
+        for namespace, attr in predicate_attribute_chains(predicate):
+            if namespace in UNCHECKED_PREDICATE_NAMESPACES:
+                continue
+            if attr not in known_fields.get(namespace, frozenset()):
+                unresolved.add((namespace, attr))
+    return frozenset(unresolved)
+
+
+def assert_predicate_fields_resolve(
+    *,
+    declaration_id: DeclarationId,
+    availability_predicate: str,
+    verification_predicate: str,
+    known_fields: Mapping[str, frozenset[str]],
+    exceptions: Mapping[DeclarationId, frozenset[tuple[str, str]]] = KNOWN_PHANTOM_PREDICATE_FIELDS,
+) -> None:
+    """Raise :class:`AssertionError` unless every identifier *declaration_id*'s
+    ``availability_predicate``/``verification_predicate`` reference resolves to a field some
+    observation body actually emits (per *known_fields*, see :func:`known_predicate_fields`) --
+    except a pair *exceptions* names for this exact ``declaration_id``, each one a reviewed,
+    already-reported finding (:data:`KNOWN_PHANTOM_PREDICATE_FIELDS`) rather than a silent pass.
+
+    This is the ratchet ``diplomacy.declare_war`` should have tripped before today: a
+    ``PredicateEvaluationError`` is never raised for an unresolvable attribute
+    (:func:`_resolve_attribute` returns ``None``/``False`` for any name a bound namespace does not
+    carry, by design, so a human-readable "not available right now" can be reported instead of a
+    crash) -- which is exactly why an absent field is invisible at runtime and must be caught here,
+    statically, instead.
+    """
+    allowed = exceptions.get(declaration_id, frozenset())
+    unresolved = (
+        unresolved_predicate_fields(
+            availability_predicate=availability_predicate,
+            verification_predicate=verification_predicate,
+            known_fields=known_fields,
+        )
+        - allowed
+    )
+    if unresolved:
+        named = ", ".join(f"{namespace}.{attr}" for namespace, attr in sorted(unresolved))
+        raise AssertionError(
+            f"{declaration_id}: predicate references {named}, which no observation body emits. "
+            "A predicate that references a field no observation body emits can never be true, so "
+            "the action it guards will be recorded as refused even when it works."
+        )
