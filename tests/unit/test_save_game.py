@@ -238,12 +238,47 @@ def test_size_unstable_file_is_not_accepted_yet(tmp_path: Path) -> None:
         GameDirectories(saves_dir=saves_dir, app_options_path=tmp_path / "AppOptions.txt")
     )
 
-    def _grow_between_reads(_seconds: float) -> None:
-        # Simulate the game still writing the file between the two reads.
+    # A file that NEVER settles: it grows on every single read, so no two
+    # consecutive reads can ever agree and the budget must run out.
+    sizes = iter(range(200, 100_000, 100))
+
+    def _never_settles(_seconds: float) -> None:
+        save_path.write_bytes(b"x" * next(sizes))
+
+    with pytest.raises(SaveVerificationError, match="never stabilised"):
+        verify_save(host, _SAVE_NAME, sleep=_never_settles)
+
+
+def test_file_still_being_written_is_accepted_once_it_settles(tmp_path: Path) -> None:
+    """The positive control for the test above, and the case that stopped a
+    live run: a large .Civ6Save is routinely still growing when the first read
+    lands, then finishes. One pair of reads cannot tell that from a file that
+    will never settle -- resampling can, and must accept this one.
+    """
+    saves_dir = tmp_path / "Saves" / "Single"
+    saves_dir.mkdir(parents=True)
+    save_path = saves_dir / f"{_SAVE_NAME}{SAVE_FILE_SUFFIX}"
+    save_path.write_bytes(b"x" * 100)
+
+    host = FakeHostPlatform()
+    host.set_directories(
+        GameDirectories(saves_dir=saves_dir, app_options_path=tmp_path / "AppOptions.txt")
+    )
+
+    writes: list[int] = []
+
+    def _grow_once_then_settle(_seconds: float) -> None:
+        # Grows on the first read only; every later read sees the same size,
+        # which is what a finished write looks like.
+        writes.append(1)
         save_path.write_bytes(b"x" * 200)
 
-    with pytest.raises(SaveVerificationError, match="not yet stable"):
-        verify_save(host, _SAVE_NAME, sleep=_grow_between_reads)
+    verified = verify_save(host, _SAVE_NAME, sleep=_grow_once_then_settle)
+
+    assert verified.size_bytes == 200
+    # The simulation must actually have fired, or this passes vacuously against
+    # a file that was never unstable in the first place.
+    assert len(writes) >= 2
 
 
 def test_stable_file_is_accepted(tmp_path: Path) -> None:

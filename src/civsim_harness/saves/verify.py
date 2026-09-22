@@ -113,22 +113,44 @@ def verify_save(
             "expected .Civ6Save not found in the resolved save directory",
             detail={"path": str(path), "waited_s": appearance_timeout_s},
         )
-    first_size = path.stat().st_size
+    # A single pair of reads makes "the game is still writing" indistinguishable
+    # from "this save will never settle", and the first is the common case: a
+    # large .Civ6Save on a busy disk is routinely still growing 0.5 s after
+    # `Network.SaveGame` returns. Raising there paused a live run at game turn 3
+    # on 2026-09-22 -- play stopped for ten minutes because a file was mid-write.
+    #
+    # So resample until two CONSECUTIVE reads agree. The budget is derived from
+    # the two durations already reviewed above rather than from a new constant,
+    # and the loop is bounded by a COUNT rather than a clock, so an injected
+    # no-op `sleep` still terminates -- the same discipline as the appearance
+    # poll. Fail-closed is preserved exactly: a save that never settles inside
+    # the budget still raises, and the error now says how many times it looked.
+    stability_attempts = (
+        max(1, int(appearance_timeout_s / stability_wait_s)) if stability_wait_s > 0 else 1
+    )
 
-    sleep(stability_wait_s)
+    previous_size = path.stat().st_size
+    for _ in range(stability_attempts):
+        sleep(stability_wait_s)
 
-    if not path.is_file():
-        raise SaveVerificationError(
-            "expected .Civ6Save disappeared between the stability-check reads",
-            detail={"path": str(path)},
-        )
-    second_size = path.stat().st_size
+        if not path.is_file():
+            raise SaveVerificationError(
+                "expected .Civ6Save disappeared between the stability-check reads",
+                detail={"path": str(path)},
+            )
+        current_size = path.stat().st_size
 
-    if first_size != second_size:
-        raise SaveVerificationError(
-            "the .Civ6Save's size is not yet stable across two reads; the game "
-            "may still be writing it",
-            detail={"path": str(path), "first_size": first_size, "second_size": second_size},
-        )
+        if current_size == previous_size:
+            return VerifiedSave(path=path, size_bytes=current_size)
+        previous_size = current_size
 
-    return VerifiedSave(path=path, size_bytes=second_size)
+    raise SaveVerificationError(
+        "the .Civ6Save's size never stabilised across consecutive reads; the game "
+        "may still be writing it",
+        detail={
+            "path": str(path),
+            "last_size": previous_size,
+            "attempts": stability_attempts,
+            "waited_s": stability_attempts * stability_wait_s,
+        },
+    )
