@@ -63,7 +63,29 @@ end
 
 -- UNVERIFIED: `UI.LookAtPlot(x, y)` is recalled as the standard camera-pan call used by Civ VI's
 -- own UI Lua (e.g. jumping to a notification's location); exact signature not confirmed.
+--
+-- THIRD INSTANCE OF A KNOWN DEFECT (live, 2026-09-22): the dispatcher passes the decision's
+-- `target` as the LAST positional argument, and for a camera move the target is the destination
+-- plot `{x, y}` -- so a lone table argument is the plot, and the (x, y) two-scalar form is kept
+-- for a caller that already has two numbers. Without this guard the table itself lands in `x`
+-- with `y` nil (`UI.LookAtPlot(table, nil)`), which Firaxis' own accessor does not throw on, so
+-- `ok` came back true and `camera.target_plot == target` was unsatisfiable -- the recorded cause
+-- of `out_of_parity_camera`. Same normalisation as `lua/ingame/unit_orders.lua`'s
+-- `CivSim_UnitOrders_MoveTo` (unit_orders.lua:107-109), and before it `CivSim_UnitOrders_Promote`
+-- (unit_orders.lua:169-171): a lone table/string in the first parameter with the second nil is
+-- unpacked, never passed through as-is.
+--
+-- Guard like Firaxis does (specs/002-civ-playing-harness/spikes/client-segfault-2026-09-21.md):
+-- an engine call fed something it does not expect is the one failure `pcall` cannot always turn
+-- into a reason, so the type is checked BEFORE `UI.LookAtPlot` is ever called. Anything that is
+-- not, after normalisation, two numbers is a named refusal -- never a guess, and never a call.
 local function CivSim_Camera_Move(x, y)
+    if type(x) == "table" and y == nil then
+        x, y = x.x, x.y
+    end
+    if type(x) ~= "number" or type(y) ~= "number" then
+        return { ok = false, reason = "target_plot_invalid" }
+    end
     local ok, result = pcall(function() return UI.LookAtPlot(x, y) end) -- UNVERIFIED
     return { ok = (ok and result ~= false), target_plot = { x = x, y = y } }
 end
