@@ -16,6 +16,24 @@ them under the metric names the store and the web interface plot (``science``, `
 ``gold``, ``faith``, ``tourism``, plus the two balances). A metric the client did not answer is
 absent, never zero: the record then carries a gap for it, which is what Constitution III wants a
 gap to look like.
+
+**Why this list is seven and not 003 FR-018's eight** (T272, 2026-09-22). FR-018 named "science,
+culture, gold, faith, production and food per turn, plus city and unit counts". Of the four that
+this module does not emit:
+
+* ``city_count`` and ``unit_count`` were never this module's to emit and are **not missing**. The
+  store derives them per turn from the attempt's last observation (``store/trends.py``'s
+  ``turn_metrics_from`` -> ``city_count_from`` / ``unit_count_from``, off ``cities.state`` and
+  ``units.state``). MEASURED on the live store, 2026-09-22: all 93 recorded last-step observations
+  carry both lists, so both series are populated on real data today.
+* ``production`` and ``food`` have no producer **and no empire-level source to produce them from**.
+  Civilization VI shows food and production per city -- the city panel and the city banner -- and
+  displays no empire-wide figure for either anywhere in the standard UI, so there is nothing on the
+  top bar this module could read and no parity basis for claiming there is. FR-018 was amended for
+  exactly those two rather than satisfied with a harness-computed aggregate
+  (``specs/003-match-tracking-store/spec.md``, FR-018 + its Principle I note). The per-city figures
+  are a separate, legitimate future series, and reading them needs a Lua accessor that does not
+  exist yet -- see that note for the ask.
 """
 
 from __future__ import annotations
@@ -42,6 +60,12 @@ YIELD_METRIC_FIELDS: Final[Mapping[str, str]] = {
     "gold_balance": "gold_balance",
     "faith_balance": "faith_balance",
 }
+
+#: T272: the emitted key set, pinned as data so the produced list and the published list
+#: (``store/trends.py``'s ``FR018_METRIC_NAMES``, which is 003 FR-018's own named set) cannot drift
+#: apart again without a test saying so. Derived from :data:`YIELD_METRIC_FIELDS` rather than
+#: retyped beside it -- a second hand-maintained copy is the drift, not the guard against it.
+RECORDED_YIELD_METRICS: Final[tuple[str, ...]] = tuple(sorted(set(YIELD_METRIC_FIELDS.values())))
 
 
 def yields_from_observation(observation: Observation) -> dict[str, float]:

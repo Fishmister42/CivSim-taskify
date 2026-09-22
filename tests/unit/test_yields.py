@@ -21,11 +21,13 @@ from civsim_harness.models.common import (
 from civsim_harness.models.turn import Observation, ObservationEntry, TurnOutcome
 from civsim_harness.run.decision_loop import DecisionLoopResult
 from civsim_harness.run.yields import (
+    RECORDED_YIELD_METRICS,
     YIELD_METRIC_FIELDS,
     YIELDS_DECLARATION_ID,
     compute_yields_from_result,
     yields_from_observation,
 )
+from civsim_harness.store.trends import DERIVED_METRICS, FR018_METRIC_NAMES
 from store_support.builders import make_step_bundle
 
 _TOP_BAR: dict[str, Any] = {
@@ -76,6 +78,37 @@ def test_the_top_bar_becomes_the_recorded_yields_under_the_stores_metric_names()
     # `turn_number` is bookkeeping on the observation, not a yield: never a metric.
     assert "turn_number" not in recorded
     assert set(YIELD_METRIC_FIELDS.values()) == set(recorded)
+
+
+def test_the_emitted_key_set_is_pinned_and_matches_the_published_fr_018_set() -> None:
+    """T272: the produced list and the published list, pinned as data on both sides.
+
+    ``store/trends.py``'s ``turn_metrics_from`` is a generic pass-through -- it plots whatever
+    numbers a turn record happens to carry and holds no list of its own -- so nothing anywhere
+    compared what 003 FR-018 *names* against what this harness actually *emits*. They disagreed:
+    FR-018 named eight metrics and four of them had no entry in ``YIELD_METRIC_FIELDS``, which
+    means those series could never be non-empty no matter what the consumer did. Two of the four
+    (``city_count``, ``unit_count``) turned out to be produced elsewhere and fine; two
+    (``production``, ``food``) had no empire-level source at all and FR-018 was amended for them.
+
+    This is the guard that makes the next divergence a red test instead of an empty chart: one
+    literal list of the requirement's names, one list derived from the producer's own mapping, and
+    an equality between them. Adding a yield field without amending FR-018 fails here, and so does
+    amending FR-018 without a producer.
+    """
+    assert RECORDED_YIELD_METRICS == (
+        "culture",
+        "faith",
+        "faith_balance",
+        "gold",
+        "gold_balance",
+        "science",
+        "tourism",
+    )
+    assert set(FR018_METRIC_NAMES) == set(RECORDED_YIELD_METRICS) | set(DERIVED_METRICS)
+    # And the published set really is a set of distinct, sorted names -- not a list that grew a
+    # duplicate or an ordering nobody can diff.
+    assert FR018_METRIC_NAMES == tuple(sorted(set(FR018_METRIC_NAMES)))
 
 
 def test_a_value_the_client_did_not_answer_is_absent_never_zero() -> None:

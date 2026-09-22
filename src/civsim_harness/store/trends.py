@@ -38,6 +38,30 @@ CITY_COUNT = "city_count"
 UNIT_COUNT = "unit_count"
 DERIVED_METRICS: tuple[str, ...] = (CITY_COUNT, UNIT_COUNT)
 
+#: T272: 003 FR-018's named metric set, as data. ``turn_metrics_from`` is a deliberate generic
+#: pass-through -- it plots whatever numbers the record carries and has no list of its own -- which
+#: is why the requirement's list and the harness's producer (``run/yields.py``'s
+#: ``RECORDED_YIELD_METRICS``, plus the two derived below) were able to disagree for a year without
+#: anything going red. Pinning both sides as data and asserting they are equal
+#: (``tests/unit/test_yields.py``) is what makes a future divergence a test failure rather than an
+#: empty chart.
+#:
+#: ``production`` and ``food`` are deliberately absent, and their absence is the amendment, not an
+#: oversight: Civilization VI shows both per city and publishes no empire-wide figure for either,
+#: so there is no human-readable empire-level source to produce them from (Principle I; the reason
+#: is recorded against FR-018 itself in ``specs/003-match-tracking-store/spec.md``).
+FR018_METRIC_NAMES: tuple[str, ...] = (
+    "city_count",
+    "culture",
+    "faith",
+    "faith_balance",
+    "gold",
+    "gold_balance",
+    "science",
+    "tourism",
+    "unit_count",
+)
+
 _CITIES_DECLARATION = "cities.state"
 _UNITS_DECLARATION = "units.state"
 
@@ -244,6 +268,7 @@ def exclusion_for(
 __all__ = [
     "CITY_COUNT",
     "DERIVED_METRICS",
+    "FR018_METRIC_NAMES",
     "UNIT_COUNT",
     "canonical_parameters",
     "city_count",

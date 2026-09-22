@@ -28,13 +28,22 @@ def test_turn_metrics_are_numeric_yields_plus_derived_counts_and_nothing_else() 
     fabricated measurement) alongside ``cities``/``units``, so the requirement's full eight-name
     set is demonstrated here rather than only implied by the pass-through's genericity.
 
-    **Honest boundary**: this exercises FR-018's named set against a synthetic record only. It
-    does not show real data. 002's ``compute_yields`` is a no-op and no observation declares
-    per-turn yields, so the science/culture/gold/faith/production/food series are empty -- with a
-    stated reason -- on every run this project has actually recorded (research R4;
-    `specs/003-match-tracking-store/plan.md`'s "Cross-spec follow-ups"; `validation-results.md`'s
-    "Not verified here" section). That is a 002 follow-up, not something fixed by this test, and
+    **Honest boundary**: this exercises FR-018's named set against a synthetic record only, and
     this test fabricates no yield anywhere outside this fixture.
+
+    **Corrected 2026-09-22 (T272).** This docstring used to add "002's ``compute_yields`` is a
+    no-op and no observation declares per-turn yields, so the science/culture/gold/faith/
+    production/food series are empty ... on every run this project has actually recorded". That
+    stopped being true on 2026-09-21, when ``catalogs/observations/yields.yaml``,
+    ``lua/ingame/yields.lua`` and ``src/civsim_harness/run/yields.py`` landed (T258) and the
+    production composition stopped using the ``_no_yields`` placeholder. MEASURED on the live
+    store, 2026-09-22: **77 of 93 recorded turn cycles carry real yields**, every one of them all
+    seven of ``science``, ``culture``, ``gold``, ``faith``, ``tourism``, ``gold_balance`` and
+    ``faith_balance``; ``city_count`` and ``unit_count`` derive cleanly from all 93. The sentence
+    was left here after the fact it described was fixed, and it was then read back out of this
+    file into two separate audit reports on 2026-09-22 as though it were current -- which is what
+    a stale claim in a test file costs. What is genuinely absent is ``production`` and ``food``,
+    for the reason FR-018 now records (no empire-level source in the standard UI; Principle I).
     """
     record = make_turn_cycle_record(
         "r",

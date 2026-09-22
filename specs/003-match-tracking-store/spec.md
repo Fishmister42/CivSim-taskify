@@ -297,8 +297,47 @@ run the reaper's listing and confirm no preset and no non-archived run's save ap
 **Cross-run reads for trending**
 
 - **FR-018**: The store MUST provide per-turn metric series (at minimum science, culture, gold,
-  faith, production and food per turn, plus city and unit counts) for one run or for all runs of a
-  seed set.
+  faith and tourism per turn, the gold and faith balances, plus city and unit counts) for one run
+  or for all runs of a seed set.
+
+  > **Amended 2026-09-22 (T272), for `production` and `food` only.** This requirement originally
+  > named "science, culture, gold, faith, production and food per turn, plus city and unit
+  > counts". Six of those eight are produced and populated; `production` and `food` never were,
+  > and the reason they were not is not an implementation gap.
+  >
+  > **Why `production` and `food` were removed.** Civilization VI shows food and production **per
+  > city** — on the city banner and in the city panel — and displays **no empire-wide figure for
+  > either anywhere in the standard game UI**. The top bar, which is where the other six yields
+  > are read from (`catalogs/observations/yields.yaml`, `lua/ingame/yields.lua`), carries science,
+  > culture, faith, gold, their balances and tourism, and nothing else. So an empire-level
+  > `production` or `food` per turn is a number no human player can read. Emitting one through
+  > `player.yields` — the observation the agent itself sees — would put a harness-computed
+  > aggregate in the agent's context under a `parity_basis` claiming a top-bar reading that does
+  > not exist, which **Principle I (NON-NEGOTIABLE)** forbids. Principle III wants the record
+  > complete, but "complete" cannot mean inventing a measurement to satisfy a list: a fabricated
+  > number in the trend series would invalidate exactly the cross-run comparisons the series
+  > exists for.
+  >
+  > **What was NOT removed, and was never missing.** `city_count` and `unit_count` are produced —
+  > derived per turn by `store/trends.py::turn_metrics_from` from the attempt's last observation
+  > (`cities.state`, `units.state`), not from `TurnCycle.yields`. MEASURED on the live store,
+  > 2026-09-22: all 93 recorded last-step observations carry both lists, and 77 of 93 turn cycles
+  > carry all six remaining yields. The two balances and `tourism` are added to the named set
+  > here because the harness has produced them since 2026-09-21 and the requirement did not say
+  > so.
+  >
+  > **The open ask, so this is not read later as the door being closed.** A *per-city* food and
+  > production series would be fully Principle-I-clean — both figures are on a panel a human
+  > opens — and is a legitimate future requirement. It cannot be built today: `cities.state`
+  > carries no per-city yields, and no file under `lua/` reads any yield other than the top bar's.
+  > It needs a new Lua accessor (the city panel's own `GetYield`-family reads, with a
+  > `parity_basis` naming the city panel), which is the live lane's to write. That is an addition
+  > to this spec when it exists, not a silent reinstatement of an empire-level series.
+  >
+  > The named set is pinned as data on both sides so this cannot drift again unnoticed:
+  > `store/trends.py::FR018_METRIC_NAMES` (published) against
+  > `run/yields.py::RECORDED_YIELD_METRICS` + `DERIVED_METRICS` (produced), asserted equal in
+  > `tests/unit/test_yields.py`.
 - **FR-019**: Trend and comparison reads MUST exclude runs with record gaps or degraded
   comparability by the store's own rule, and MUST name each excluded run with its reason.
 - **FR-020**: The store MUST report divergence points between two runs of the same seed set: the
