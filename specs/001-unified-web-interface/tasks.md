@@ -1460,3 +1460,109 @@ behind it. Writing the test found `/runs` five times over budget. **The lesson i
 the phase's own, one layer up**: the nine findings were checks narrower than the
 sentences describing them, and this note was a *note* narrower than the sentence
 describing it. See T075.
+
+---
+
+## Phase 10: Convergence re-check (2026-09-22)
+
+`/speckit-converge`, attempt 2, against the shipped code after Phase 9 closed and all 75 prior
+tasks were `[X]`. Suite at head `c7b5654`: **2138 passed / 19 skipped / 0 failed** in 203.89 s
+— green, including the `/compare` render-budget case that is load-sensitive on this box.
+Report: [analyze-2026-09-22.md](./analyze-2026-09-22.md).
+
+**Phase 9's ten fixes were re-verified against the code, not against this file's claims.**
+All ten landed with real code and real tests behind them: `viewmodels/service_health.py` +
+`redact.py` + `test_the_secret_scan_covers_every_registered_route` (T066); `select_step_window`
+public and called from both the route and `build_turn_cycle_view`, with
+`test_a_turn_reads_only_the_captures_of_the_steps_it_returns` counting the reads (T067); four
+source-level `poll.js` guards plus a rendered-markup assertion (T068); the widened
+`_NUMBERED_ENTITY` pattern with `ParityDeclaration` asserted into the scanned set (T069); the
+`GET /` amendment in **both** artifacts (T070); `FR-037` cited in `viewmodels/comparison.py` and
+its pinning tests (T071); `detect_private_addresses` stubbed with a public and a link-local
+address (T072); all three unasserted clauses pinned (T073); both stale in-code claims corrected
+(T074); `MetricsScope` and the 55 × 320 fixture with `test_the_catalog_row_reads_only_the_turns_it_shows`
+(T075). Nothing was found to be a claim without a code path behind it.
+
+**So the findings below are not Phase 9's work undone.** They are where that phase's own shape —
+*a check narrower than the sentence describing it* — migrated to once the checks were widened:
+**a number an artifact asserts that nothing recomputes**, and **in-code prose that instructs a
+future contributor and that nothing can make wrong.** Both are load-bearing in the way a test is,
+and neither fails when it stops being true.
+
+- [ ] T076 **MEDIUM** Correct `quickstart.md`'s `civsim-web doctor` sample and guard it at the
+  level it can actually hold, per T062 and `quickstart.md` (contradicts). **The finding**:
+  `quickstart.md:32` documents `registry coverage : ok (167 fields scanned, 91 marked
+  out-of-game, 27 registered, 49 unregistered and unrendered, 0 unregistered fields reachable
+  from a view model)`. Running `uv run civsim-web doctor` at this head prints **`180 … 103 … 27
+  … 50 …`** — four of the five numbers are wrong. T069 widened the scan (167 → 179) and did not
+  update the document; 002's `data-model.md` has since grown it again to 180, so **the figure
+  moves whenever another lane adds a field to a deliverable this feature does not own**. T062's
+  own text promised output "matching quickstart.md's expected output shape *verbatim*", and the
+  test that discharges it —
+  `tests/integration/test_quickstart_scenarios.py::test_setup_doctor_reports_all_green_in_the_documented_shape`
+  — asserts the five **labels** and nothing else, so the drift was invisible: the audit is
+  narrower than the sentence describing it, one layer up from where Phase 9 found it.
+  **The fix is not to pin the number.** Tightening the test to compare the whole line would put a
+  cross-deliverable count in this feature's CI and break it on every 002 field addition — that is
+  how a guard becomes something contributors edit to make green. Correct the documented line to
+  what `doctor` prints, say in the document that the field counts track 002's `data-model.md` and
+  will move, and tighten the test to assert the part that is this feature's own invariant: five
+  labelled lines, each `ok`, and **the coverage line's last number is `0`** — which is the claim
+  `doctor` exits non-zero on and the only one of the five that means anything about parity.
+- [ ] T077 **MEDIUM** Replace the three probe docstrings' now-false instruction with the decision
+  that was actually taken, per Phase 9's "The three probed capabilities stay, now that 003 has
+  landed" (contradicts). **The finding**: `src/civsim_web/store_client/port.py` declares
+  `RunCatalogReader` (line 295), `CaptureBlobReader` (322) and `TurnAttemptReader` (353), and each
+  closes with **"This is a dependency to raise with deliverable 3, not a decision taken here. …
+  delete this Protocol and widen `MatchStore` to match."** Deliverable 3 landed on 2026-09-21 and
+  publishes all three reads (`specs/003-match-tracking-store/contracts/match-tracking-store.md`
+  Operations: `list_runs`, `get_capture_blob`, `get_turn_cycle_attempt`). The condition each
+  docstring names has been met, so each is now an instruction to do the thing **this feature
+  deliberately decided not to do** — and the two reasons for that decision (retiring them deletes
+  the graceful-degradation paths and the tests that hold them, `published_port_only` and
+  `make_store(attempt_reader=False)`; and the amended port's E2 keeps structural probing as the
+  discovery mechanism) live only in the Phase 9 notes of this file. A contributor reading
+  `port.py` alone is told to delete three Protocols and would take three tests with them.
+  **The template for the fix is eight lines above the first one**: the retired
+  `RunConfigurationReader` comment records what happened and why. Write the same for the three
+  that stayed — the decision, its two reasons, and what would have to change to re-open it.
+  Same task, two smaller instances of the same class: `src/civsim_web/routes/__init__.py:22` says
+  "twenty shipped panels are `scope: step`" where the shipped registry has **22** of 37
+  (`grep -c 'scope: step' panels/*.yaml`), which is what `contracts/web-read-api.md`'s own
+  amendment says; the number was right when US2 wrote it and went stale when US3 added
+  `history.yaml`.
+
+### Recorded, not tasked
+
+Each was checked this pass and each is a deliberate non-finding. Written down so the next reader
+spends the pass on something else.
+
+- **The SC-004 parity matrix still has no coverage guard of its own.** T066's
+  `test_the_secret_scan_covers_every_registered_route` resolves every registered route against
+  `ROUTES + SECRET_SCAN_EXTRA`, which guards FR-030. A future HTML-rendering route could satisfy
+  it by being appended to `SECRET_SCAN_EXTRA` and would then be audited for secrets but never for
+  JSON/HTML parity. **Not a present defect** — all 13 registered routes are correctly placed, and
+  `/healthz` and `/captures/{id}/image` genuinely cannot sit in a parity matrix. Enforcing
+  "renders HTML ⇒ must be in `ROUTES`" needs the test to know which routes negotiate, which is a
+  second model of the application and the exact thing this project keeps finding wrong.
+- **T071 says "three pinning tests" and two test functions cite `FR-037`.** Both statements are
+  true: the divergent and uniform cases share one function
+  (`test_a_comparison_of_runs_with_different_starting_conditions_says_so`) and the unverifiable
+  case is its own. Three cases, two functions. Amendment B's wording is loose, the coverage is
+  not. Recorded rather than rewritten, per Phase 7's standing rule — editing a closed task's text
+  after the fact erases the record of what the contributor actually hit.
+- **T066's text says "/healthz to `ROUTES`" and the code put it in `SECRET_SCAN_EXTRA`.** The code
+  is right and says why in its own docstring: `ROUTES` is the HTML-**and**-JSON matrix, and the
+  parity test would parse a JSON-only body as markup. Same standing rule, same treatment.
+- **T069's field count is not pinned by a number**, only by `ParityDeclaration`'s presence in the
+  scanned set. That is the correct choice for the same reason T076 gives, and the live count (180)
+  confirms the widening holds.
+- **UP-007 ("Comparison is first-class") is the only UI Principle with no citation** in
+  `src/civsim_web/**` or `tests/`. The behaviour exists and is well tested; only the thread is
+  missing, and T071 established that the fix is a comment plus test docstrings. One citation is
+  not a task.
+- **SC-006 and SC-013 each have a mechanically checkable half that no test states.** Both hold in
+  fact — the landing → run → turn path is two hops, and no route in the tree reads a credential, a
+  cookie or a session. Asserting "no route requires authentication" over a codebase containing no
+  authentication code is a check that compares the absence of a thing to itself, which is the
+  anti-pattern the Phase 9 notes name three times. Deliberately not written.
