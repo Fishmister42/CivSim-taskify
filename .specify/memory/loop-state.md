@@ -595,6 +595,32 @@ there was one partial lookup between them.
   **Observation is only ~34%** (~6,777 tok, of which `map.state` alone is 56%); **~66% is
   non-observation scaffolding** — system prompt, action catalog, objective — with the **catalog
   listing alone roughly 2× the entire board state.** Reported, not optimised.
+- **🛑 WE RUN GATHERING STORM, AND XP2 REPLACES BASE UI FILES. A citation into `base/assets/ui/` is
+  UNVERIFIED for our game until you check `dlc/expansion2/ui/replacements/` for the same file.**
+  Our seed set is `RULESET_EXPANSION_2`. `dlc/expansion2/ui/replacements/ingame.lua` (395 lines)
+  replaces `base/assets/ui/ingame.lua` (386 lines), registered in `expansion2.modinfo` — so every
+  top-level base citation shifted by 1–6 lines and the base file is **dead code** for us. **XP1 has
+  no `ingame.lua` replacement, so base IS live for a Rise & Fall game** — it is specifically XP2 that
+  diverges. **The harness reasons from Firaxis source constantly, so this affects all of it.**
+  **The two accessors that matter, verified in the shipped files:**
+  `dlc/expansion2/ui/replacements/ingame.lua:23` declares **`g_uiAddins`**, and `:348-353` fills it
+  from `Modding.GetUserInterfaces("InGame")` via `LoadNewContext(..., Controls.AdditionalUserInterfaces,
+  id, isHidden)`. **That is a live enumeration of every add-in context, walkable instead of an
+  allowlist** — it is how `HistoricMoments` arrives, at `/InGame/AdditionalUserInterfaces/
+  HistoricMoments`, id = filename stem, created hidden.
+  `base/assets/ui/utilities/tunerutilities.lua:187` has **`UIManager:GetPopupStack()`**, which answers
+  **globally**.
+  **Dropped as candidates because their arity was verified: `UIManager:IsModal()` takes a CONTEXT
+  argument** (`frontend/statetransition.lua:26,:46`) and so does `UIManager:IsInPopupQueue`
+  (`religionscreen.lua:1437`) — **per-context, not "is anything modal".** And `UI.CanShowPopup` is not
+  sufficient alone: Firaxis pairs it (`boostunlockedpopup.lua:257`).
+  **XP2 has 10 BulkHide reasons where base has 8** — the XP2-only ones are **`NaturalDisaster` and
+  `RockBand`**, both Gathering-Storm-frequent popups that bulk-hide the HUD, so both are live hazards
+  for any "is the world interactable" check.
+  **Cause of the original miswrite, worth copying: a researcher ran a faster replacement grep, handed
+  back before the original finished, and the faster one was scoped so it never surfaced the XP2 file.
+  It self-corrected when the slow grep completed after handback.** An abandoned search that finishes
+  later is still evidence — do not discard it because the task is closed.
 - **A query that returns the same empty answer for your control as for your subject is broken, not
   conclusive.** A sweep read `outcome: None` for everything including the control, because the
   execution record nests under `decision` rather than beside it. **The control caught a broken query
