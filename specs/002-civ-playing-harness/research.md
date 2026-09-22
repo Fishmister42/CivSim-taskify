@@ -833,6 +833,93 @@ seed-set apparatus exists to remove.
 
 ---
 
+## R21 — "Correct, tested, and not wired to production": the defect family, and what actually detects it
+
+**Decision**: two **narrow, semantic** structural checks, rostered as data in
+`tests/contract/test_gate_inputs.py` (T285/T286), sibling to `test_reachability.py`. A broad
+syntactic scan for the same family was built, measured, and **rejected on evidence** — that negative
+result is recorded here deliberately, because the recommendation alone would invite someone to
+rebuild the thing that does not work.
+
+**The family.** Every serious finding of 2026-09-21/22 is one sentence: *a correct thing that is not
+wired to production, with nothing red to show for it.* The suite is green, the good code exists and
+is tested, and production runs something worse — or nothing. `test_reachability.py` (T235) already
+catches the variant where the symbol has **no caller at all**. Two variants slip past it:
+
+1. **A safety gate whose evidence is never gathered** — an optional parameter whose empty default
+   makes a withhold/reject decision vacuous. Worked examples:
+   - **C0**: `detected_text_tokens` is empty at the one production call site of `capture_for_step`
+     (`run/decision_loop.py:488`), so every screening technique depending on text tokens is dead in
+     production while unit tests supply tokens and pass.
+   - **C0b**: the source gate's process-identity check never runs in production because the located
+     `GameProcess` is not threaded in — and a test named
+     `test_source_gate_skips_process_check_when_none_supplied` asserts the *clean* result for
+     exactly the production shape, encoding the defect as intended behaviour.
+   - **`ActionExecution.verification`** is `Field(default_factory=dict)`
+     (`src/civsim_harness/models/decision.py`), which is what lets an `APPLIED` outcome carry no
+     verification at all.
+2. **A public helper with no production caller while a naive reimplementation sits in the call
+   path.** `act/prompts.py::prompt_screen_for_declaration_id` honours a documented exception —
+   `prompts.ai_diplomatic_approach` answers the screen `prompt.diplomatic_approach`, because the
+   catalog names the action for what the human does and the screen for what is on screen. It existed,
+   was tested, and had **zero callers in `src/`**, while `act/executor.py` derived the key inline with
+   a prefix swap that is right for twelve of thirteen prompt declarations. The thirteenth cost a whole
+   board: the wrong key was rejected by the Lua guard, the prompt stayed unanswerable,
+   `game.has_blocking_prompt` stayed true, `turn.end_turn` was refused, and **no run on that board
+   could advance a turn at all.** Proven live, 2026-09-22.
+
+**The rejected approach, with its measurement.** The obvious generalisation — "flag every parameter
+with an empty default that every unit test supplies and no production caller does" — was built and
+run read-only over `src/civsim_harness` + `tests` in three formulations. **None of them caught C0 or
+C0b, the two findings that motivated it:**
+
+| Formulation | Hits | C0 / C0b found? | What dominated the hits |
+|---|---|---|---|
+| Naive signature rule | 24 | no | 9 × `build_runner_dependencies(provider=None, save_loader=None, run_lock=None, …)`, 6 × `run_doctor(env=None, host_info=None, …)` — correct DI |
+| …plus `test_reachability.py`'s defining-module exclusion | 32 | no | same, plus more seams |
+| …chain-aware, collapsing same-name forwarding chains | 43 (20 multi-hop) | no | legitimate telemetry threading: `turn_number=None` / `step_index=None` through `check_now` / `check_heartbeat` / `check_operation_bound` / `check_screen_identity` / `transition` |
+
+**Why it misses is structural, not a tuning problem.** The shape is **not** "a parameter nobody
+passes" — that describes good dependency injection as often as it describes a defect. It is **"a
+parameter whose empty default makes a safety gate vacuous"**, and the signal lives in **what the
+value feeds**, not in the signature. C0 compounds this by spanning three hops, with tests entering
+at hop 3 (`CaptureAttempt`) while production enters at hop 1 (`capture_for_step`): at hop 1 the
+"tests supply it" clause is false, and at hop 3 the "production supplies it" clause is satisfied by
+`capture.py`'s own internal forwarding. A signature-keyed check cannot see it from either end.
+
+**Why shipping it anyway would have been worse than nothing.** ~40 findings of which ~35 are
+legitimate seams gets allowlisted down to nothing, becomes a check nobody reads, and still does not
+catch the shape — a check that cannot fail *in the way that matters*. That is this project's
+defining defect wearing the costume of the fix for it, which is precisely what
+`test_reachability.py`'s own docstring was written against.
+
+**The countermeasure, as landed.** Two rosters, both data, both with per-entry prose, both with
+mandatory negative controls:
+
+- **Gate inputs (T285)**: `(entry_point, parameter)` pairs where a vacuous value is a silent pass
+  through a Principle I gate. Each entry records *what it decides* and *what vacuous means*. Every
+  production call site outside the defining module must supply the parameter explicitly, and a
+  literal empty (`None`, `()`, `[]`, `{}`, `frozenset()`) counts as **not supplied** — otherwise the
+  fix for a finding would be to type `detected_text_tokens=frozenset()` and move on. `**kwargs` is
+  reported as *unprovable*, never as a pass. The **outermost** production entry point is what is
+  rostered, because the defect hides in the gap between where production enters the chain and where
+  tests do.
+- **Derivation helpers (T286)**: public helpers whose entire value is a documented exception to a
+  rule simple enough that a caller will cheerfully reimplement it inline and be right almost every
+  time. Each must have a production caller outside its own module, or declare the one module-level
+  entry point it is legitimately reached through — and *both* halves of that indirection are then
+  checked, so a same-module reference cannot vouch for itself.
+
+**The rule this leaves for the next author**: a check aimed at this family must key on **meaning**
+(what does this value decide?) and on the **`src/` vs `tests/` partition** (who actually runs it?),
+never on the signature alone. Both rosters are hand-curated by design: the judgement that a given
+optional parameter guards a withhold decision is the part no syntax scan supplies, and making it a
+visible, reasoned entry is the point rather than a shortcoming. Adding an allowlist entry requires a
+task or finding citation, and an entry goes **stale and fails** the moment the wiring lands, so the
+exemption list can only ratchet down.
+
+---
+
 ## Resolved unknowns summary
 
 | Technical Context field | Resolution | Ref |
