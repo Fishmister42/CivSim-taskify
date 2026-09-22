@@ -1809,3 +1809,45 @@ A message that forbids, reorders or re-prioritises **permits nothing new, so it 
 risk by construction**. The worst a hostile narrowing achieves is making the agent do less — denial of
 service, not privilege escalation. The test keeps the property that made the original refusal correct:
 **it is mechanical and does not require judging the sender.**
+
+### Another check that worked: the availability layer's 58 honest refusals (2026-09-22)
+
+`units.found_city` stands at **1 applied / 58 refused**, and **all 58 refusals are
+`unavailable_to_human_now`** — the **pre-dispatch** kind. Not one is a `verification_failed`. So across
+58 draws the availability layer **correctly declined to offer an action the game was not offering**,
+every time, with no false positive and no fabricated success.
+
+That deserves recording precisely because the rest of today's ledger is failures: a screening gate
+blind to the one contaminant guaranteed present, a refused column mis-scored by two independent
+mechanisms, a verification that could not fail sitting in the day's headline claim, an orphan sweep
+that could not see the case it existed for. **Against all of that, this column is clean** — and under
+the rule adopted this morning (*name what held, not only what broke*), a ledger that recorded only the
+failures would never have mentioned it.
+
+**Its remaining risk, stated beside it, because praise without the caveat is how a working check gets
+broken:** those 58 establish that the layer **refuses correctly when the game says no**. They say
+**nothing** about whether it **offers correctly when the game says yes**. **A gate that always refused
+would produce an identical column.** The positive half is unevidenced here and needs a board where the
+action genuinely is available — which is exactly what the live lane is attempting now. Founding a city
+by the harness's own action has happened **once, ever** (2026-09-20). If a city appears from the
+current run, that is the second time in the project's history; if it does not, these 58 stand as
+evidence the action was simply never offered on those boards, which is a different and still useful
+fact.
+
+### T310/T311: the same six declarations are vulnerable on BOTH operands
+
+Worth stating explicitly, because the obvious reading is wrong. It is **not** six declarations exposed
+on the observation side and a different set exposed on the target side. It is the **same six**,
+independently, on **both**:
+
+- **right operand** (T310): an absent observation field makes the predicate resolve **True**, so a
+  no-op records as `applied`;
+- **left operand** (T311): a **null `target`** does the same through `x not in y` / `not (x in y)`,
+  **regardless of whether the observation field is present.** Confirmed live: today's headline
+  `prompts.ai_diplomatic_approach` `applied` had `prompt.options == ["Goodbye"]` — **present** — and
+  `target: null`, and passed at `confirm_attempts: 1, confirm_elapsed_s: 0.0`.
+
+**Consequence: a fix addressing only the observation side would leave every one of the six still able
+to fabricate.** Any repair must check **both sides of the comparison** for absent-or-null and pin the
+resolved polarity in a test, or it closes the visible half of the defect and leaves the invisible half
+in place — which is worse than not fixing it, because the task would be marked done.
