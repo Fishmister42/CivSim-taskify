@@ -114,7 +114,7 @@ the same sum over the step bundles is equal by I-B (spec US2 scenario 3).
 |---|---|
 | `MetricPoint` | `turn: int`, `value: float` |
 | `MetricSeries` | `run_id`, `metric`, `points: tuple[MetricPoint, ...]` (ascending turns, gapped turns absent), `in_progress: bool` (FR-021), `comparability_status`, `unavailable_reason: str \| None` (set, with empty points, when the record carries no such metric — R4) |
-| `ExclusionReason` (enum) | `has_gaps`, `game_turn_did_not_advance`, `completeness_unknown`, `not_comparable`, `visually_degraded`, `no_such_run`, `not_in_seed_set` |
+| `ExclusionReason` (enum) | `has_gaps`, `game_turn_did_not_advance`, `completeness_unknown`, `record_in_flight` (T298), `not_comparable`, `visually_degraded`, `no_such_run`, `not_in_seed_set` |
 | `ExcludedRun` | `run_id`, `reason`, `detail: str`, `gaps: tuple[int, ...]` |
 | `TrendQuery` | exactly one of `run_ids: Sequence[RunId]` / `seed_set_id`; `metrics: Sequence[str] \| None` (None = every metric the records carry); `include_visually_degraded: bool = False` |
 | `TrendResponse` | `series: tuple[MetricSeries, ...]`, `excluded: tuple[ExcludedRun, ...]`, `metric_names: tuple[str, ...]`, `included_visually_degraded: bool` |
@@ -124,10 +124,21 @@ the same sum over the step bundles is equal by I-B (spec US2 scenario 3).
 `units.state.units`). Nothing else is ever synthesised (R4).
 
 **Exclusion rule (store-owned, FR-019)**: a run is excluded when its record carries game turns
-that did not advance (below), or its store-derived completeness is `has_gaps` or `unknown`, or its
-`comparability_status` is `not_comparable`, or it is `visually_degraded` and the query did not opt
-in. Excluded runs never contribute a point. `MatchTrackingStore.trend_exclusion(run_id)` publishes
-the same verdict as its own read, so a listing can show eligibility without requesting a series.
+that did not advance (below), or its store-derived completeness is **anything other than
+`complete`**, or its `comparability_status` is `not_comparable`, or it is `visually_degraded` and
+the query did not opt in. Excluded runs never contribute a point.
+`MatchTrackingStore.trend_exclusion(run_id)` publishes the same verdict as its own read, so a
+listing can show eligibility without requesting a series.
+
+**The completeness half of that rule is stated as an allowlist on purpose (amended 2026-09-22,
+T298).** It used to read "`has_gaps` or `unknown`" — an enumeration of the bad values, with
+everything else admitted. That makes the gate fail *open* on a completeness state it has not been
+taught, and the states nobody has taught it about are exactly the ones a defect has just invented:
+T298 added `in_flight` (`RecordCompletenessStatus`, 002 data-model.md §4) for a run whose
+in-flight turn is unrecorded, which under the old enumeration would have passed this gate clean
+while describing a run that may well have lost a turn. `in_flight` is excluded under its own
+reason, `record_in_flight`, rather than folded into `completeness_unknown`: `unknown` means no turn
+has been attempted, which is a different fact and a different operator response.
 
 **Game turns that did not advance (added 2026-09-21, research R6; Constitution Principle III)**: a
 gap-free record is not automatically a trendable one. Gameplay block 7 (`run-480aa573`) recorded

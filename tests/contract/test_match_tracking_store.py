@@ -139,7 +139,11 @@ def test_us1_ac5_a_quicksave_with_no_turn_becomes_a_gap_once_the_run_stops(
     store.write_save_point(make_save_point("r-sp3-0", "r", 3))  # the in-flight turn
 
     assert store.turn_gaps("r") == []  # still playing: normal shape (FR-007)
-    assert store.record_completeness("r") is RecordCompletenessStatus.COMPLETE
+    # Not a gap -- and not `complete` either (T298). The carve-out above holds only while the
+    # run really is cycling, and a run that halted on a failed write keeps the `playing` it last
+    # wrote, so these two shapes are indistinguishable from the record. `in_flight` says that
+    # rather than calling a possibly-lost turn a whole record.
+    assert store.record_completeness("r") is RecordCompletenessStatus.IN_FLIGHT
     assert store.highest_recorded_turn("r") == 3  # R7 counts the trailing save point
 
     store.update_run("r", lifecycle_state="paused")  # the writer stopped
@@ -493,13 +497,45 @@ def test_us3_ac2_divergence_is_the_first_turn_the_runs_did_something_different(
 def test_us3_ac3_a_run_still_playing_is_in_progress_with_its_turns_so_far(
     store: SqliteMatchStore,
 ) -> None:
+    """US3/AC3, narrowed by T298: a live run is trended *while its record is whole*.
+
+    Turns 1-3 recorded, save points 1-3, nothing in flight: the record is currently complete,
+    the run is non-terminal, so the series carries `in_progress=True` (FR-021, T3) and nothing
+    is excluded. That is the window this criterion lives in, and it is a real one -- it is every
+    moment between a turn's `TurnCycle` landing and the next turn's quicksave.
+    """
     record_run(store, "live", turns=3, yields_for=_science)
-    store.write_save_point(make_save_point("live-sp4-0", "live", 4))  # mid-turn 4
     response = store.metric_series(TrendQuery(run_ids=("live",), metrics=("science",)))
     (series,) = response.series
     assert series.in_progress is True
     assert [p.turn for p in series.points] == [1, 2, 3]
     assert response.excluded == ()
+
+
+def test_us3_ac3_a_run_mid_turn_is_excluded_until_that_turn_lands(
+    store: SqliteMatchStore,
+) -> None:
+    """The other half of the same criterion, changed by T298 (contract amended, see
+    contracts/match-tracking-store.md T1/T3).
+
+    Add turn 4's quicksave and the run is mid-turn. Before T298 it derived `complete` and fed
+    trending; now it derives `in_flight` and is refused under `record_in_flight`. The reason is
+    not that turns 1-3 are wrong -- they are fine -- but that this shape is exactly the shape a
+    run that *died* on turn 4's write leaves behind, and the record cannot tell the two apart.
+    Principle III does not let the gate guess, so it refuses both and the run returns to the
+    series the moment turn 4 lands (or reports `has_gaps` the moment it stops advancing).
+    """
+    record_run(store, "live", turns=3, yields_for=_science)
+    store.write_save_point(make_save_point("live-sp4-0", "live", 4))  # mid-turn 4
+
+    assert store.record_completeness("live") is RecordCompletenessStatus.IN_FLIGHT
+    response = store.metric_series(TrendQuery(run_ids=("live",), metrics=("science",)))
+    assert response.series == ()
+    assert [e.reason for e in response.excluded] == [ExclusionReason.RECORD_IN_FLIGHT]
+
+    # It is not disqualified for having gaps: it has none. The reason names the real fact.
+    assert store.turn_gaps("live") == []
+    assert response.excluded[0].gaps == ()
 
 
 def test_t1_the_exclusion_rule_is_the_stores_and_the_override_is_recorded(

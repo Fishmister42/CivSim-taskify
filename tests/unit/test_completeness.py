@@ -376,10 +376,16 @@ def test_trailing_unrecorded_turn_on_a_still_playing_run_is_not_a_spurious_gap(
     store: SqliteMatchStore,
 ) -> None:
     """The exact same shape as the terminal case above -- a quicksave for the highest attempted
-    turn and no TurnCycle for it -- must NOT be reported while the run is still playing: that
-    turn is simply the one currently in progress, whose quicksave legitimately precedes its
-    TurnCycle (FR-007). Getting this backwards would make every healthy running run report
-    has_gaps."""
+    turn and no TurnCycle for it -- must NOT be reported as a *gap* while the run is still
+    playing: that turn is simply the one currently in progress, whose quicksave legitimately
+    precedes its TurnCycle (FR-007). Getting this backwards would make every healthy running run
+    report has_gaps.
+
+    It must not be reported `complete` either (T298). The carve-out is right, but it holds only
+    while the run really is still cycling, and no halt path is obliged to say so -- a run that
+    died on a write failure keeps the `playing` it last wrote, so `complete` here would be the
+    record of a lost turn describing itself as whole. `in_flight` is the honest third answer:
+    not a gap, not whole, and not judgeable until this run stops advancing."""
     store.create_run(
         _make_run("run-trailing-playing", lifecycle_state="playing"),
         _make_config("cfg-trailing-playing"),
@@ -390,8 +396,9 @@ def test_trailing_unrecorded_turn_on_a_still_playing_run_is_not_a_spurious_gap(
 
     assert (
         record_completeness_status(store, "run-trailing-playing")  # type: ignore[arg-type]
-        is RecordCompletenessStatus.COMPLETE
+        is RecordCompletenessStatus.IN_FLIGHT
     )
+    assert store.turn_gaps("run-trailing-playing") == []  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------

@@ -29,6 +29,20 @@ anything, so the trailing case surfaces here for free, with no separate check ag
 actively playing the highest attempted turn is deliberately left alone by that same check -- its
 quicksave legitimately precedes its ``TurnCycle`` (FR-007), and that is not a gap.
 
+**The carve-out above is right; what it used to return was not (T298).** The exemption holds only
+while the run really is still cycling, and no halt path is obliged to say so: a run that dies on a
+write failure (FR-013's "halt rather than advance") keeps whatever ``lifecycle_state`` it last
+wrote, so the exemption follows it into the grave and the derivation fell through to ``complete``
+-- reporting a whole record for exactly the run that had just lost a turn. The halt is what makes
+the gap visible, which means anything that halts without transitioning lifecycle state was hiding
+its own data loss, and spec 003's trend gate consumes this field precisely to stop that data being
+used. The fix is not "every halt path must transition first" -- that is the assumption that
+produced the defect, and it would leave the next halt path free to forget. It is
+:func:`in_flight_turn_is_unpersisted`: one predicate, asked by both derivations, that reports the
+exempted shape as :attr:`~civsim_harness.models.run.RecordCompletenessStatus.IN_FLIGHT` instead of
+``complete``. ``store/trends.py``'s ``exclusion_for`` admits **only** ``complete`` as a result, so
+the new state -- and any future one -- is refused by construction rather than by being remembered.
+
 **A branch owes its record from its branch point, not from turn 1 (T239).** A branch replays its
 ``parent_turn`` from the parent's turn-start save (``run/runner.py``'s ``_begin``); every turn
 before that lives in the *parent's* record, reachable through the lineage Principle IV requires
@@ -68,9 +82,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from civsim_harness.models.common import DeclarationId, RunId
-from civsim_harness.models.run import RecordCompletenessStatus, Run
+from civsim_harness.models.run import LifecycleState, RecordCompletenessStatus, Run
 from civsim_harness.models.turn import Observation
 from civsim_harness.store.port import MatchStore
+
+#: The lifecycle states in which a run is still cycling through its own turn loop, so a trailing
+#: attempted-but-unrecorded turn is a turn in progress rather than a gap (FR-007: the quicksave
+#: lands before the ``TurnCycle``). The one definition: ``store/sqlite_reads.py``'s
+#: ``_turn_gaps_body`` -- the carve-out itself -- and :func:`in_flight_turn_is_unpersisted` --
+#: the price of the carve-out -- both read it, so the exemption and the state that discloses it
+#: can never come to disagree about which runs are exempt (T298).
+ACTIVELY_PLAYING_LIFECYCLE_STATES = frozenset(
+    {LifecycleState.PLAYING, LifecycleState.WAITING_ON_MODEL, LifecycleState.WAITING_ON_GAME}
+)
 
 #: The catalog declaration that carries the *game's* own turn counter
 #: (``catalogs/observations/game.yaml``: ``turn_number`` is ``Game.GetCurrentGameTurn()``). It is
@@ -91,6 +115,46 @@ def first_owed_turn(run: Run | None) -> int:
     if run is not None and run.parent_run_id is not None and run.parent_turn is not None:
         return run.parent_turn
     return 1
+
+
+def in_flight_turn_is_unpersisted(
+    lifecycle_state: LifecycleState | str | None,
+    *,
+    highest_attempted_turn: int,
+    highest_recorded_turn: int,
+) -> bool:
+    """Whether the in-flight carve-out is currently hiding an unrecorded turn (T298).
+
+    ``True`` when this run's lifecycle state says it is still cycling **and** it has attempted a
+    turn (an FR-007 quicksave) that has no authoritative ``TurnCycle`` behind it. That is exactly
+    the set of runs ``sqlite_reads._turn_gaps_body`` exempts from the gap check, stated as a
+    question the derivation can ask rather than a silence the derivation inherits.
+
+    **Why this exists rather than a rule that every halt path must transition first.** The
+    carve-out is correct: a turn in progress is not a gap, and removing it would stamp every live
+    run ``has_gaps``. But it is only correct while the run really is still cycling, and nothing
+    guarantees that -- a run that dies on a write failure (FR-013's halt) or is killed outright
+    keeps whatever lifecycle state it last wrote. Requiring every present and future halt path to
+    remember to move the run first is the assumption that produced the defect; re-adopting it as
+    the cure would leave the next halt path free to forget in the same way. The burden lives here
+    instead, in the one derivation both call sites already go through, where forgetting it is not
+    an option a halt path has.
+
+    *lifecycle_state* accepts the enum or its stored string, because the store asks this question
+    against a raw ``lifecycle_state`` column and the harness asks it against a loaded ``Run``.
+    """
+    if lifecycle_state is None:
+        return False
+    try:
+        state = LifecycleState(lifecycle_state)
+    except ValueError:
+        # A state this code does not recognise is not assumed to be actively playing: the
+        # carve-out does not apply to it either (`_turn_gaps_body` extends its range for exactly
+        # the same set), so there is no hidden gap for this function to disclose.
+        return False
+    return state in ACTIVELY_PLAYING_LIFECYCLE_STATES and highest_attempted_turn > (
+        highest_recorded_turn
+    )
 
 
 def game_turn_of(observation: Observation | None) -> int | None:
@@ -179,6 +243,15 @@ def record_completeness_status(store: MatchStore, run_id: RunId) -> RecordComple
       turn number with no authoritative attempt, **or** ``step_gaps`` names a missing
       ``step_index`` within some attempted turn's authoritative attempt (T145: either alone is
       sufficient, checked independently).
+    - :attr:`~civsim_harness.models.run.RecordCompletenessStatus.IN_FLIGHT` -- the run's lifecycle
+      state still says it is cycling, and it has attempted a turn (FR-007 quicksave) that has no
+      authoritative attempt behind it yet. ``turn_gaps`` deliberately exempts that turn -- it is
+      not a gap while the turn really is in progress -- and this is the price of that exemption
+      said out loud rather than swallowed: a run that halted without anything moving it out of an
+      actively-playing state is indistinguishable from one still playing, so neither may be called
+      ``complete`` (T298). Checked **last**, after the two gap checks, so a run that has a genuine
+      gap *and* an in-flight turn still reports ``has_gaps`` -- the stronger, already-actionable
+      fact.
     - :attr:`~civsim_harness.models.run.RecordCompletenessStatus.COMPLETE` -- every turn from 1 to
       the highest attempted turn has an authoritative attempt, and every one of those attempts has
       a contiguous step sequence -- the only case data-model.md's own definition of ``complete``
@@ -194,7 +267,8 @@ def record_completeness_status(store: MatchStore, run_id: RunId) -> RecordComple
 
     # A branch owes its record only from its branch point onward -- see the module docstring
     # (T239). Gaps below that floor are the parent's record, not this run's.
-    floor = first_owed_turn(store.get_run(run_id))
+    run = store.get_run(run_id)
+    floor = first_owed_turn(run)
     if any(gap >= floor for gap in store.turn_gaps(run_id)):
         return RecordCompletenessStatus.HAS_GAPS
 
@@ -202,6 +276,21 @@ def record_completeness_status(store: MatchStore, run_id: RunId) -> RecordComple
     for turn in range(floor, highest_turn + 1):
         if store.step_gaps(run_id, turn):
             return RecordCompletenessStatus.HAS_GAPS
+
+    # The carve-out's price (T298). `turn_gaps` above reported nothing, so the authoritative
+    # attempts from `floor` up are contiguous -- which makes the highest *attempted* turn that
+    # carries a record the highest recorded one, found by walking down until one does.
+    highest_recorded = 0
+    for turn in sorted(attempted_turns, reverse=True):
+        if store.get_turn_cycle(run_id, turn) is not None:
+            highest_recorded = turn
+            break
+    if in_flight_turn_is_unpersisted(
+        run.lifecycle_state if run is not None else None,
+        highest_attempted_turn=highest_turn,
+        highest_recorded_turn=highest_recorded,
+    ):
+        return RecordCompletenessStatus.IN_FLIGHT
 
     return RecordCompletenessStatus.COMPLETE
 

@@ -66,10 +66,17 @@ class StopResolution(StrEnum):
 
 
 class RecordCompletenessStatus(StrEnum):
-    """Derived, never asserted (FR-052, SC-003, SC-011)."""
+    """Derived, never asserted (FR-052, SC-003, SC-011). `in_flight` (T298) narrows `complete`:
+    a turn is attempted (FR-007 quicksave) with no authoritative `TurnCycle` behind it while the
+    run's lifecycle state still says it is cycling, so a turn in progress cannot be told from a
+    turn that was lost. Distinct from `unknown`, which means no turn has been attempted at all.
+    Consumers must test for `complete` and refuse everything else, never enumerate the
+    non-complete values and admit the rest -- see `store/completeness.py`.
+    """
 
     COMPLETE = "complete"
     HAS_GAPS = "has_gaps"
+    IN_FLIGHT = "in_flight"
     UNKNOWN = "unknown"
 
 

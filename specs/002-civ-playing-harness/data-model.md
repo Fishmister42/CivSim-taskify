@@ -169,7 +169,7 @@ same hash — guidance that varies per run is a contract violation, not a featur
 | `lifecycle_state` | enum | See state machine |
 | `started_at` / `ended_at` | timestamp? | |
 | `stop_resolution` | enum? | Exactly one on termination — `turn_reached` \| `victory` \| `defeat` \| `operator_stop` \| `unrecoverable_failure` (FR-005) |
-| `record_completeness_status` | enum | `complete` \| `has_gaps` \| `unknown` (FR-052) |
+| `record_completeness_status` | enum | `complete` \| `has_gaps` \| `in_flight` \| `unknown` (FR-052). `in_flight` (T298) narrows `complete`: an attempted turn (FR-007 quicksave) has no authoritative attempt behind it while the run's lifecycle state still says it is cycling — `turn_gaps` exempts that turn, correctly, so the derivation may not call the record whole either. Distinct from `unknown` (no turn attempted at all). Never trend-eligible |
 | `comparability_status` | enum | `comparable` \| `visually_degraded` \| `not_comparable` (FR-050) |
 | `observation_catalog_version` | CatalogVersionRef | In force while it played (FR-022) |
 | `action_catalog_version` | CatalogVersionRef | In force while it played (FR-022) |
@@ -295,7 +295,11 @@ The turn no longer carries an `observation_id`: observations are per decision st
    correct turn, not a degenerate one (FR-008).
 7. **Gaps are explicit, at both grains.** A turn number with no authoritative attempt carries a gap
    marker; so does a missing `step_index` within a turn. Either forces
-   `record_completeness_status = has_gaps` (SC-003, SC-011).
+   `record_completeness_status = has_gaps` (SC-003, SC-011). The one exemption — the turn a run is
+   actively playing, whose FR-007 quicksave legitimately precedes its `TurnCycle` — does not buy
+   `complete`: it forces `in_flight` instead (T298), because a run that halted without anything
+   moving it out of an actively-playing lifecycle state looks exactly like one still playing, and
+   calling that record whole would hide the loss from the gate that exists to catch it.
 
 ### Turn attempt state machine
 

@@ -30,6 +30,7 @@ from civsim_harness.models.records import ModelCall, RunEvent, RunEventType, Sav
 from civsim_harness.models.run import DebugMenuState, RecordCompletenessStatus, Run
 from civsim_harness.models.turn import DecisionStep, Observation, ScreenCapture, TurnCycle
 from civsim_harness.store.completeness import record_completeness_status
+from civsim_harness.store.contract import ExclusionReason
 from civsim_harness.store.guard import (
     TurnPersistedToken,
     advance_turn,
@@ -1199,6 +1200,66 @@ def test_a_failed_write_leaves_the_runs_own_bookkeeping_un_advanced(
     # FR-013's second clause: the run halts rather than advancing. Only then is the trailing
     # attempted-but-unrecorded turn a gap rather than a turn legitimately still in flight
     # (`sqlite_reads._turn_gaps_body`'s own actively-playing carve-out).
+    store.update_run(run_id, lifecycle_state="failed")
+    assert record_completeness_status(store, run_id) is RecordCompletenessStatus.HAS_GAPS
+
+
+def test_a_run_still_playing_an_unpersisted_turn_is_never_reported_complete(
+    store: SqliteMatchStore,
+) -> None:
+    """T298: the in-flight carve-out must answer `in_flight`, never `complete`.
+
+    `_turn_gaps_body` exempts the in-flight turn of an actively-playing run from the gap
+    check, and that exemption is right on its face -- a turn in progress is not yet a gap
+    (FR-007 puts the quicksave before the `TurnCycle`). The consequence was not: a run that
+    *halted* without its lifecycle state being moved out of an actively-playing one kept the
+    exemption, so the derivation fell through to `complete` and reported a whole record for
+    precisely the run that had just lost a turn.
+
+    That defeats a guard rather than merely mis-stating a field. Principle III's rule is that
+    a run with gaps must not feed trending, and `store/trends.py`'s `exclusion_for` admits on
+    completeness -- so an invisible gap walked through the gate clean. The burden may not sit
+    on every future halt path remembering to transition first; it sits here, in the one
+    derivation, which now distinguishes "whole" from "still in flight, cannot say yet".
+
+    Two shapes, one rule. The bare discovery: a `playing` run with a turn-1 quicksave and no
+    turn record. And the write-failure shape it was found in: the same state reached by a
+    `write_turn_cycle` that raised, with nothing having moved the run out of `playing`.
+    """
+    run_id = RunId("run-in-flight-not-complete")
+    store.create_run(_make_run(run_id, "cfg-in-flight"), _make_config("cfg-in-flight"))
+    store.write_save_point(_make_save_point(f"{run_id}-sp1-0", run_id, 1))
+
+    # The discovery, exactly: playing, one quicksave, no turn record.
+    status = record_completeness_status(store, run_id)
+    assert status is not RecordCompletenessStatus.COMPLETE
+    assert status is RecordCompletenessStatus.IN_FLIGHT
+    # The store's own in-transaction derivation must agree -- one definition, two call sites.
+    assert store.record_completeness(run_id) is RecordCompletenessStatus.IN_FLIGHT
+
+    # And the gate this field exists to feed must refuse it, rather than admitting a state it
+    # was never taught (FR-019, Principle III).
+    exclusion = store.trend_exclusion(run_id)
+    assert exclusion is not None
+    assert exclusion.reason is ExclusionReason.RECORD_IN_FLIGHT
+
+    # The write-failure shape: the write raises, nothing transitions lifecycle state, and the
+    # run is left exactly as the discovery found it. Still not `complete`.
+    def failing_write(record: TurnCycleRecord) -> str:
+        raise StoreWriteError("store unreachable", detail={"run_id": run_id})
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(store, "write_turn_cycle", failing_write)
+        with pytest.raises(StoreWriteError):
+            write_then_advance(store, _make_turn_cycle_record(run_id, 1, 0), lambda token: None)
+
+    assert store.get_turn_cycle(run_id, 1) is None
+    assert store.get_run(run_id) is not None
+    assert record_completeness_status(store, run_id) is RecordCompletenessStatus.IN_FLIGHT
+
+    # Unchanged on either side of the carve-out: an empty record is still `unknown`, and the
+    # same run once it stops advancing is still `has_gaps` -- `in_flight` narrows `complete`,
+    # it does not swallow the states that already told the truth.
     store.update_run(run_id, lifecycle_state="failed")
     assert record_completeness_status(store, run_id) is RecordCompletenessStatus.HAS_GAPS
 

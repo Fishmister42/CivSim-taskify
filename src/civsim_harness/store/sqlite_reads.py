@@ -41,9 +41,11 @@ from civsim_harness.models.run import LifecycleState, RecordCompletenessStatus, 
 from civsim_harness.models.turn import Observation, ScreenCapture, ScreeningStatus, TurnCycle
 from civsim_harness.store import schema as store_schema
 from civsim_harness.store.completeness import (
+    ACTIVELY_PLAYING_LIFECYCLE_STATES,
     CycleGameTurn,
     first_owed_turn,
     game_turn_of,
+    in_flight_turn_is_unpersisted,
     turns_whose_game_turn_did_not_advance,
 )
 from civsim_harness.store.contract import (
@@ -81,12 +83,11 @@ _TERMINAL_LIFECYCLE_STATES = frozenset({LifecycleState.FINISHED, LifecycleState.
 #: The lifecycle states in which a run is actively cycling through its own turn loop -- see
 #: ``turn_gaps`` below and contracts/match-store-port.md's ``turn_gaps`` row: a trailing
 #: quicksave with no ``TurnCycle`` behind it is the normal in-flight shape here and a gap
-#: everywhere else.
-_ACTIVELY_PLAYING_LIFECYCLE_STATES = frozenset(
-    {LifecycleState.PLAYING, LifecycleState.WAITING_ON_MODEL, LifecycleState.WAITING_ON_GAME}
-)
+#: everywhere else. Re-exported from ``store/completeness.py`` rather than restated, so the
+#: carve-out and the ``in_flight`` state that discloses it cannot disagree about which runs are
+#: exempt (T298).
 _ACTIVELY_PLAYING_LIFECYCLE_STATE_VALUES = frozenset(
-    state.value for state in _ACTIVELY_PLAYING_LIFECYCLE_STATES
+    state.value for state in ACTIVELY_PLAYING_LIFECYCLE_STATES
 )
 
 _ORDER_BY: dict[RunSort, str] = {
@@ -299,14 +300,16 @@ class SqliteReadBase:
         One definition, two call sites (plan Complexity Tracking C2): the harness's
         ``refresh_run_completeness`` derives through the port's public reads; the store derives
         here inside its own write transactions. Same save-point floor, same branch floor, same
-        turn-then-step order.
+        turn-then-step order -- and, since T298, the same in-flight disclosure at the end.
         """
         attempted_row = conn.execute(
             "SELECT COUNT(*), MAX(turn_number) FROM save_points WHERE run_id = ?", (run_id,)
         ).fetchone()
         if attempted_row is None or not attempted_row[0]:
             return RecordCompletenessStatus.UNKNOWN
-        floor = first_owed_turn(self._get_run_body(conn, run_id))
+        highest_attempted = int(attempted_row[1])
+        run = self._get_run_body(conn, run_id)
+        floor = first_owed_turn(run)
         if any(gap >= floor for gap in self._turn_gaps_body(conn, run_id)):
             return RecordCompletenessStatus.HAS_GAPS
         # Step gaps, in one query rather than one `step_gaps` per turn: an authoritative
@@ -323,6 +326,23 @@ class SqliteReadBase:
         ).fetchone()
         if holed is not None:
             return RecordCompletenessStatus.HAS_GAPS
+        # The price of `_turn_gaps_body`'s actively-playing carve-out, disclosed rather than
+        # swallowed (T298). `_turn_gaps_body` said nothing above, but on an actively-playing run
+        # it was *not asked* about a trailing attempted turn with no record -- so "no gaps" there
+        # does not license `complete` here.
+        recorded_row = conn.execute(
+            "SELECT MAX(turn_number) FROM turn_cycles WHERE run_id = ? AND is_authoritative = 1",
+            (run_id,),
+        ).fetchone()
+        highest_recorded = (
+            int(recorded_row[0]) if recorded_row is not None and recorded_row[0] is not None else 0
+        )
+        if in_flight_turn_is_unpersisted(
+            run.lifecycle_state if run is not None else None,
+            highest_attempted_turn=highest_attempted,
+            highest_recorded_turn=highest_recorded,
+        ):
+            return RecordCompletenessStatus.IN_FLIGHT
         return RecordCompletenessStatus.COMPLETE
 
     def _capture_image_body(self, conn: sqlite3.Connection, capture_id: str) -> CaptureImage:

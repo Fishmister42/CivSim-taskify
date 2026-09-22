@@ -202,6 +202,33 @@ def first_divergence(
     return None, ()
 
 
+#: Why each non-``complete`` completeness state disqualifies a run, in the words the report shows
+#: (T298). A mapping rather than a chain of ``if``s so that adding a state to
+#: ``RecordCompletenessStatus`` cannot accidentally add an *eligible* one: the gate admits only
+#: ``complete``, and this table merely names the refusal.
+_REASON_FOR_STATUS: dict[RecordCompletenessStatus, tuple[ExclusionReason, str]] = {
+    RecordCompletenessStatus.HAS_GAPS: (ExclusionReason.HAS_GAPS, "record has gaps"),
+    RecordCompletenessStatus.UNKNOWN: (
+        ExclusionReason.COMPLETENESS_UNKNOWN,
+        "no turn has been attempted, so completeness cannot be judged",
+    ),
+    RecordCompletenessStatus.IN_FLIGHT: (
+        ExclusionReason.RECORD_IN_FLIGHT,
+        "a turn is attempted with no authoritative record and the run's lifecycle state still "
+        "says it is cycling; until it stops advancing, a turn in progress cannot be told from a "
+        "turn that was lost",
+    ),
+}
+
+#: The fallback for a completeness value this code has never seen. Refused, not admitted -- an
+#: unrecognised status is a disqualification rather than a pass, the same discipline
+#: ``civsim_web``'s ``derive_trend_eligibility`` applies on the other side of the port.
+_UNRECOGNISED_COMPLETENESS: tuple[ExclusionReason, str] = (
+    ExclusionReason.COMPLETENESS_UNKNOWN,
+    "completeness is {status}, which this gate does not recognise as complete",
+)
+
+
 def exclusion_for(
     run: Run,
     completeness: RecordCompletenessStatus,
@@ -219,6 +246,15 @@ def exclusion_for(
     turn-by-turn record does not describe turns the game actually played, so trending it would
     average a stall in with real play. Checked first and separately from ``has_gaps``, because
     the two say different things and the report must name which one happened.
+
+    **Completeness is checked as "is it ``complete``?", never as "is it one of the bad ones?"**
+    (T298). This function used to enumerate ``has_gaps`` and ``unknown`` and let everything else
+    fall through to eligible, which made the gate fail *open* on any completeness state it had
+    not been taught -- the exact failure mode Principle III's gate exists to prevent, since the
+    states nobody has taught it about are the ones a defect has just invented. A new value
+    (``in_flight``, added by T298) is therefore refused by construction; ``_REASON_FOR_STATUS``
+    below only decides *what to call* the refusal, and an unmapped status is still refused, under
+    the closest reason available.
     """
     if stalled_turns:
         return ExcludedRun(
@@ -231,18 +267,17 @@ def exclusion_for(
             ),
             gaps=tuple(stalled_turns),
         )
-    if completeness is RecordCompletenessStatus.HAS_GAPS:
+    if completeness is not RecordCompletenessStatus.COMPLETE:
+        reason, detail = _REASON_FOR_STATUS.get(completeness, _UNRECOGNISED_COMPLETENESS)
         return ExcludedRun(
             run_id=run.run_id,
-            reason=ExclusionReason.HAS_GAPS,
-            detail=f"record has gaps at turns {list(gaps)}" if gaps else "record has step gaps",
-            gaps=tuple(gaps),
-        )
-    if completeness is RecordCompletenessStatus.UNKNOWN:
-        return ExcludedRun(
-            run_id=run.run_id,
-            reason=ExclusionReason.COMPLETENESS_UNKNOWN,
-            detail="no turn has been attempted, so completeness cannot be judged",
+            reason=reason,
+            detail=(
+                (f"record has gaps at turns {list(gaps)}" if gaps else "record has step gaps")
+                if completeness is RecordCompletenessStatus.HAS_GAPS
+                else detail.format(status=completeness.value)
+            ),
+            gaps=tuple(gaps) if completeness is RecordCompletenessStatus.HAS_GAPS else (),
         )
     if run.comparability_status is ComparabilityStatus.NOT_COMPARABLE:
         return ExcludedRun(

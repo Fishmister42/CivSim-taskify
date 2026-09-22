@@ -281,6 +281,13 @@ class ExclusionReason(StrEnum):
     #: recorded at the same game turn (research R6, revised 2026-09-21; gameplay block 7).
     GAME_TURN_DID_NOT_ADVANCE = "game_turn_did_not_advance"
     COMPLETENESS_UNKNOWN = "completeness_unknown"
+    #: The run's lifecycle state still says it is cycling and it has an attempted turn with no
+    #: authoritative record -- ``RecordCompletenessStatus.IN_FLIGHT``. Its own reason rather than
+    #: folded into ``completeness_unknown``, because the two say different things: ``unknown`` is
+    #: "no turn has been attempted", this is "a turn is attempted and not yet recorded, and until
+    #: this run stops advancing there is no way to tell a turn in progress from one that was
+    #: lost" (T298).
+    RECORD_IN_FLIGHT = "record_in_flight"
     NOT_COMPARABLE = "not_comparable"
     VISUALLY_DEGRADED = "visually_degraded"
     NO_SUCH_RUN = "no_such_run"

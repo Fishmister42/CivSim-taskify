@@ -155,8 +155,16 @@ divergence points match the first turn at which the clean runs' fingerprints dif
 2. **Given** two complete runs of the same seed that took the same actions until turn 12,
    **When** divergence is requested, **Then** turn 12 is reported as the first divergence with what
    differed.
-3. **Given** a run that is still playing, **When** a series is requested, **Then** its turns so far
-   are included and it is marked as in progress, not as complete.
+3. **Given** a run that is still playing **and whose record is currently whole** (its last turn's
+   `TurnCycle` has landed and no further quicksave is outstanding), **When** a series is requested,
+   **Then** its turns so far are included and it is marked as in progress, not as complete.
+   **Amended 2026-09-22 (T298).** A run *mid-turn* — an FR-007 quicksave with no `TurnCycle`
+   behind it — is excluded instead, under `record_in_flight`. Not because its recorded turns are
+   wrong (they are not) but because that shape is indistinguishable from the shape a run that
+   *died* on that turn's write leaves behind: nothing obliges a halt path to move the run out of
+   an actively-playing lifecycle state, so the record cannot tell "playing turn 4" from "lost
+   turn 4". Principle III does not let the gate guess, so it refuses both; the run re-enters the
+   series the moment that turn lands, or reports `has_gaps` the moment it stops advancing.
 
 ---
 
