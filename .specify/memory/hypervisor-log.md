@@ -1106,3 +1106,70 @@ run and recorded.
 **One ask, outside this lane's paths.** `src/civsim_harness/operator/store_cli.py`'s module
 docstring says "Seven commands, all over the published contract" above a list of eight. Not edited
 here; reported rather than taken unilaterally.
+
+### Live S1 — 2026-09-22 (08:31–08:52 EDT) — the guard patch survives the board that killed the client
+
+**Verified live: `882758e` does not crash.** Cold launch through Steam (no "logged in on another
+computer" dialog — the account was free), tuner bound in 8 s, and the production `LuaSaveLoader`
+loaded `civsim-gameplay-2026-09-21-end2` **from a fresh main menu in 40.9 s**. That last fact
+corrects a standing belief: "only the UI path works" is too strong — `Network.LoadGame` works from a
+*fresh* `MainMenu`; yesterday's three `returned false` results were all on a **reused** menu (post
+exit-to-menu, post-defeat). Board read back at game turn 56, 1 city, 1 unit, Cyrus/Persia.
+
+One crash-watched stochastic turn (`run-55e5bfeab48b41deb3329d6946f56ed8`, seed 22, policy coverage,
+63.1 s) then ran the full 16-step observation sweep — the same sweep that segfaulted the client at
+20:46:35 yesterday on the repaired `government.state` body. **No segfault.** The evidence is
+positive, not merely absent: the kernel ring's last `Civ6 … segfault at b0 … libGameCore_XP2.so` is
+still yesterday's, pid 1915400, with nothing after it and no entry for today's pid; `coredumpctl`
+since 08:00 is empty; and the client **process never died** — the launch pid ran continuously
+through the block and was still InGame at turn 56 afterwards. (`dmesg -T`'s date labels are
+clock-skewed on this box and read "Sep 24"; the monotonic ring is the load-bearing anchor.)
+
+**`dispatch_result` is live, and it earned its keep on the first block.** Every one of the 16 steps
+carries the Lua's own answer, and it immediately separated three failures that all used to surface
+as one `verification_failed`:
+
+| action | `dispatch_result` | outcome | what it actually means |
+|---|---|---|---|
+| `camera.zoom` | `{"ok":true,"zoom":0.05,"mechanism":"UI.SetMapZoom"}` | rejected | the order landed; the **verifier** disagrees |
+| `diplomacy.send_delegation` | `{"ok":true,"mechanism":"DiplomacyManager.RequestSession(…,\"DIPLOMATIC_DELEGATION\")","target_player_id":1}` | rejected | landed; `other_player.has_delegation` read false |
+| `prompts.ai_diplomatic_approach` | `{"reason":"unknown_prompt","ok":false}` | rejected | **never dispatched — the mapping misses the prompt** |
+| `turn.end_turn` ×8 | `null` | `unavailable_to_human_now` | honestly refused, never issued |
+
+3 of 16 applied: `saves.save_game`, `research.set_tech` TECH_SHIPBUILDING (via
+`PlayerOperations.RESEARCH`), `units.move_to` {46,37}.
+
+**Two findings, both new.**
+
+1. **The board is wedged on an unmapped prompt.** An AI leader's diplomatic-approach greeting came
+   up at step 4 and stayed (screens: `world` ×3, then `prompt.diplomatic_approach` ×13). The only
+   action that can clear it answers `unknown_prompt`, so `has_blocking_prompt` stays true, so all
+   eight end-turn attempts were correctly refused and the backstop paused the run
+   (`BackstopEndTurnNotConfirmed`). **No run on this board can advance a turn until the mapping is
+   fixed** — which also means the guard patch is verified for exactly one turn's sweep, not for a
+   game. Same blocker class as yesterday's block 07 and the 48/48 first-meeting failures, but this
+   time `dispatch_result` *names* it instead of leaving it inferred.
+
+2. **One out-of-range camera draw poisoned image delivery for the whole block.** The sampler drew
+   `camera.zoom {"target": 0.05}`; the view's declared `zoom_range` is (0.2, 1.0); the engine
+   **accepted** it and nothing clamped or refused it. The provenance gate then withheld **16 of 17**
+   subsequent frames with `camera zoom 0.049999713897705 is outside the view's declared zoom_range`.
+   1 image delivered where 17 were possible. The recorder itself was healthy (61 frames, 0 capture
+   failures, 3.8 MB GIF). **An action argument the catalog declares out of range must be refused at
+   availability time, not accepted by the engine and paid for by the capture path.**
+
+**Coordination incident (recorded, not counted).** A headless lane's live-test self-check started a
+real run against this lane's client mid-stage (`run-09110770797041989212fe6559f57900`, lock at
+12:45:58 UTC holding this client's pid, a `t0001` quicksave at 12:46:15, in no store). It cost this
+stage one refused tuner probe — the tuner takes one connection — and left a lock that would have
+blocked the next run. The lane confirmed and removed it, and is adding skip-guards that run *before*
+any lock or tuner connection plus `try/finally` lock release. Incident on issue #1. The rule this
+earns: **a `live`-marked test must prove the client is free before it touches it, and must not be
+able to leave a lock behind.** Worth noting honestly: that collision's positive control *did* start
+and finish a real charter-matched run, which is the substance of T191 — but it was not run as T191
+and the box stays unchecked until it is.
+
+Cost $0.00 (stochastic provider, 16 calls, no OpenRouter spend). Artifacts:
+`specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/block-01/`. Client left alive, InGame,
+turn 56, tuner free — but with the greeting still up and the camera still at 0.05, so Stage 2 starts
+by reseting the camera and reading the prompt's real identity back from `InGame`.
