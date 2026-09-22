@@ -1,0 +1,8 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal answer_first_meeting: objective written to goal-answer_first_meeting.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=answer_first_meeting provider=openrouter provider_policy=uniform provider_script=None turn_cap=5]
+t+001s  goal answer_first_meeting: run run-3edb5591c556422b89e48a19b3f6f886
+t+001s  goal answer_first_meeting: playing turn=1 step=None
+t+343s  goal answer_first_meeting: playing turn=2 step=None
+t+343s  goal answer_first_meeting: REACHED at recorded turn 1 -- stopping the run
+t+677s  goal answer_first_meeting: finished turn=2 step=None

@@ -1,0 +1,131 @@
+{
+  "goal": "answer_first_meeting",
+  "chain": [
+    "answer_first_meeting"
+  ],
+  "provider": "openrouter",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "provider_script": null,
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T21:20:47.611494+00:00",
+  "parts": [
+    {
+      "goal": "answer_first_meeting",
+      "title": "Answer another leader's first approach",
+      "run_id": "run-3edb5591c556422b89e48a19b3f6f886",
+      "turn_cap": 5,
+      "reached_at_turn": 1,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": "success",
+      "reached": true,
+      "evaluated": true,
+      "reached_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "game.has_blocking_prompt",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "game.current_screen == \"prompt.diplomatic_approach\"",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "game.prompt_options != []",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "finished",
+      "elapsed_s": 676.7,
+      "success_predicate": "observed_applied_prompts_ai_diplomatic_approach >= 1",
+      "success_check": {
+        "predicate": "observed_applied_prompts_ai_diplomatic_approach >= 1",
+        "met": true,
+        "reason": null
+      },
+      "steps": 11,
+      "turns_recorded": [
+        1,
+        2
+      ],
+      "actions": {
+        "prompts.ai_diplomatic_approach": {
+          "applied": 2
+        },
+        "units.select": {
+          "applied": 1
+        },
+        "units.move_to": {
+          "verification_failed": 5
+        },
+        "turn.end_turn": {
+          "applied": 1,
+          "verification_failed": 1
+        },
+        "units.build_improvement": {
+          "verification_failed": 1
+        }
+      },
+      "actions_applied": {
+        "prompts.ai_diplomatic_approach": 2,
+        "units.select": 1,
+        "turn.end_turn": 1
+      },
+      "provider": "openrouter",
+      "provider_policy": "uniform",
+      "game_start_turn": 86,
+      "store": {
+        "run": {
+          "lifecycle_state": "finished",
+          "stop_resolution": "operator_stop",
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 2,
+        "decision_steps": 11,
+        "save_points": 2,
+        "captures": 15,
+        "run_events": 21,
+        "model_calls": 11,
+        "turns_recorded": [
+          1,
+          2
+        ],
+        "captures_shown_to_agent": 9,
+        "capture_screening": [
+          "screened_clean",
+          "withheld"
+        ],
+        "model_calls_served": [
+          "openrouter/anthropic/claude-sonnet-5"
+        ],
+        "model_cost_usd": 0.7978,
+        "model_input_tokens": 243414,
+        "model_output_tokens": 31098
+      }
+    }
+  ],
+  "finished_at": "2026-09-22T21:32:54.366715+00:00",
+  "reached": true,
+  "evaluated": true,
+  "reached_reason": null,
+  "recording": {
+    "frames": 619,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 4419,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t225s.png",
+      "keyframe_2_t451s.png",
+      "keyframe_3_t677s.png"
+    ],
+    "capture_failures": 0
+  }
+}
