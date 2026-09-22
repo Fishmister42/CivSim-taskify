@@ -207,10 +207,13 @@ def test_overlapping_locks_only_the_outermost_release_restores_the_original_hand
         outer = RunIdentityLock(lock_dir=lock_dir)
         inner = RunIdentityLock(lock_dir=lock_dir)
 
+        # `acquire` refuses two run identities on the *same* client PID (V8, research R4),
+        # so this simulates two genuinely distinct clients with two different -- but real,
+        # live -- PIDs, the same trick `test_stray_lock_repair.py` uses.
         outer.acquire(run_id=outer_id, client_pid=os.getpid(), now=datetime.now(UTC))
         assert signal.getsignal(signal.SIGTERM) is identity_lock_module._sigterm_handler
 
-        inner.acquire(run_id=inner_id, client_pid=os.getpid(), now=datetime.now(UTC))
+        inner.acquire(run_id=inner_id, client_pid=os.getppid(), now=datetime.now(UTC))
         assert signal.getsignal(signal.SIGTERM) is identity_lock_module._sigterm_handler
 
         inner.release(inner_id)
