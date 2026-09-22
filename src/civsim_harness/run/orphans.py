@@ -54,6 +54,33 @@ write-mode store open (`store/sqlite_adapter.py`) and in the runner's start path
 otherwise build on a lie. `civsim store repair [--dry-run]`
 (`operator/store_cli.py`) is the operator's hand on the same function: `--dry-run`
 calls :func:`scan_orphans` and prints the evidence without writing a byte.
+
+----
+
+**The other direction (2026-09-22).** Everything above starts from a run *row* and asks
+about its lock. A lock whose run has no row is therefore outside all of it, and that is
+not a hypothetical: `run-09110770797041989212fe6559f57900` (client pid 2459457, acquired
+12:45:58Z) reached `finished`, its driver exited, its lock file stayed -- and the run was
+never written to any store, so there was no row to pause. The next run could not start.
+`RunIdentityLock.acquire` refuses a second run identity on a client PID an existing lock
+already names, and the Civ VI client is long-lived, so the dead run's lock went on naming
+a *live* PID. Nothing in the harness could say why, because nothing was looking at the
+lock directory at all.
+
+:func:`scan_stray_locks` closes that asymmetry: it enumerates the lock directory and asks
+of each file whether it still stands for anything. :func:`clean_stray_locks` removes the
+ones that provably do not, and `civsim store repair` is the same operator surface as
+above. What "provably" means is :class:`StrayLockDisposition`, and it is deliberately
+narrow -- see that class; a lock this module cannot settle is *reported loudly and left
+alone*, because deleting a live run's lock is a far worse failure than naming a dead
+one.
+
+One asymmetry survives on purpose. The run-side sweep repairs automatically on a store
+open; the lock side only ever *reports* there (:func:`sweep_stray_locks`) and deletes
+nothing unless an operator asks. A store open is one process's intention to use one
+store; the lock directory is shared by every store on the host, and a lock with no row
+*here* may be a live run recorded *there*. That is the same reasoning the grace window
+already encodes, applied to a file rather than a row.
 """
 
 from __future__ import annotations
@@ -61,7 +88,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from pathlib import Path
 from typing import Any, Protocol
 
 from civsim_harness.models.common import EventId, RunId, Timestamp
@@ -69,7 +98,7 @@ from civsim_harness.models.config import RunConfiguration
 from civsim_harness.models.records import RunEvent
 from civsim_harness.models.run import LifecycleState, Run
 from civsim_harness.run.identity_lock import LockInspection, RunIdentityLock
-from civsim_harness.run.lifecycle import transition
+from civsim_harness.run.lifecycle import TERMINAL_STATES, transition
 from civsim_harness.telemetry.logging import get_harness_logger, log_event
 
 #: The `detail["reason"]` every transition this module records carries. One spelling,
@@ -411,16 +440,385 @@ def sweep_orphans(
         return []
 
 
+# --------------------------------------------------------------------------
+# The lock side: a lock whose run never reached a store (2026-09-22)
+# --------------------------------------------------------------------------
+
+#: The lock directory's file-name convention, mirrored from
+#: :meth:`~civsim_harness.run.identity_lock.RunIdentityLock._path_for`. Mirrored rather
+#: than imported because it is private there and this module must not reach into it --
+#: so `test_the_lock_file_naming_this_module_mirrors_is_the_one_the_lock_writes` pins the
+#: two together and fails if either moves. A drift here would not raise: it would make
+#: the scan silently see nothing, which is the failure mode this whole section exists to
+#: end.
+LOCK_FILE_SUFFIX = ".lock.json"
+
+
+class StrayLockDisposition(StrEnum):
+    """What a lock with no live run behind it is, and therefore what may be done to it.
+
+    The three are ordered by how much they prove, and only the first two are enough to
+    delete a file on:
+
+    ``TERMINAL_RUN``
+        The store has this run's row and it is `finished` or `failed`. Decisive whatever
+        the PID says: a terminal run is over, nothing will drive it again, and its lock
+        can only block the next run on that client.
+
+    ``DEAD_HOLDER``
+        The lock names a process that no longer exists (or is malformed and names none).
+        Also decisive: a run cannot be in flight against a client process that is gone.
+        PID reuse cannot turn this into a false positive -- a recycled PID reads as
+        *alive*, which lands in the third case, not this one.
+
+    ``UNRECORDED``
+        The store has no row for this run id, and the lock names a live PID. This is
+        today's wreck -- and it is **not** decisive, which is why it is reported and not
+        deleted by default. The live PID is the *game client*, which outlives any number
+        of drivers, so it says nothing about whether a driver is running. And `create_run`
+        writes the run row before `acquire` takes the lock, so "no row" means the row went
+        to a *different store* or was never written at all -- and this module cannot see
+        the difference from here. `civsim store repair --clean-unrecorded-locks` is the
+        operator saying they can.
+    """
+
+    TERMINAL_RUN = "run_already_terminal"
+    DEAD_HOLDER = "lock_holder_dead"
+    UNRECORDED = "run_not_in_store"
+
+
+#: The dispositions :func:`clean_stray_locks` will act on without being asked twice.
+CLEANABLE_DISPOSITIONS: frozenset[StrayLockDisposition] = frozenset(
+    {StrayLockDisposition.TERMINAL_RUN, StrayLockDisposition.DEAD_HOLDER}
+)
+
+#: The `reason` every stray-lock log line carries, matching :data:`ORPHAN_REASON`'s role.
+STRAY_LOCK_REASON = "stray_lock"
+
+
+class LockDirectoryProbe(LockProbe, Protocol):
+    """:class:`LockProbe` plus the directory those locks live in.
+
+    Both members are already public on
+    :class:`~civsim_harness.run.identity_lock.RunIdentityLock`. A probe that cannot name
+    its directory (a two-line test fake) simply is not scannable from this side, and
+    :func:`sweep_stray_locks` treats that as "nothing to report" rather than an error.
+    """
+
+    @property
+    def lock_dir(self) -> Path: ...
+
+
+class LockCleanupProbe(LockDirectoryProbe, Protocol):
+    """:class:`LockDirectoryProbe` plus the one write :func:`clean_stray_locks` performs."""
+
+    def release(self, run_id: RunId) -> None: ...
+
+
+class StrayLockStore(Protocol):
+    """The single read the lock-side scan needs, on the published `MatchStore` port.
+
+    A read-only store satisfies it, which is what lets `--dry-run` and the web interface
+    ask the question without a write-mode open.
+    """
+
+    def get_run(self, run_id: RunId) -> Run | None: ...
+
+
+@dataclass(frozen=True)
+class StrayLockFinding:
+    """One lock file with no live run behind it, and everything checked to say so.
+
+    Evidence, not an act -- the same contract as :class:`OrphanFinding`. The difference
+    is where the evidence can be *recorded*: an orphaned run has a row to hang a
+    `lifecycle_transition` event on, and a stray lock, by definition, does not. So this
+    finding's record is :meth:`as_detail` on a `WARNING` through the harness log plus the
+    `civsim store repair` listing. That is not a shortcut; it is the defect's own shape.
+    Inventing a run row to explain the lock would assert a run this harness never saw.
+    """
+
+    run_id: RunId
+    lock: LockInspection
+    disposition: StrayLockDisposition
+    run_state: LifecycleState | None
+    age_seconds: float | None
+    age_source: str
+    checked_at: Timestamp
+
+    @property
+    def cleanable(self) -> bool:
+        """Whether this lock may be removed without an operator saying so explicitly."""
+        return self.disposition in CLEANABLE_DISPOSITIONS
+
+    @property
+    def why(self) -> str:
+        """The one-phrase cause, for a listing line and for the log detail."""
+        if self.disposition is StrayLockDisposition.TERMINAL_RUN:
+            state = self.run_state.value if self.run_state else "terminal"
+            return f"the run it names is recorded as {state}"
+        if self.disposition is StrayLockDisposition.DEAD_HOLDER:
+            if not self.lock.readable:
+                return "the lock file is malformed and names no holder"
+            return f"lock holder pid {self.lock.client_pid} is not alive"
+        return "no run with this id is recorded in this store"
+
+    def as_detail(self) -> dict[str, Any]:
+        """The finding as a flat JSON payload for the log line that records it."""
+        detail: dict[str, Any] = {
+            "reason": STRAY_LOCK_REASON,
+            "run_id": str(self.run_id),
+            "stray_lock_disposition": self.disposition.value,
+            "stray_lock_cause": self.why,
+            "stray_lock_cleanable": self.cleanable,
+            "run_state": self.run_state.value if self.run_state else None,
+            "checked_at": self.checked_at.isoformat(),
+            "lock_age_seconds": (
+                round(self.age_seconds, 3) if self.age_seconds is not None else None
+            ),
+            "lock_age_source": self.age_source,
+        }
+        detail.update(self.lock.as_detail())
+        return detail
+
+    def render(self) -> str:
+        """One operator-facing line: the lock, what it stands for, and what will happen."""
+        age = "unknown" if self.age_seconds is None else f"{self.age_seconds:.0f}s"
+        act = "remove" if self.cleanable else "report"
+        return (
+            f"{self.run_id:<38} {self.disposition.value:<22} -> {act}  "
+            f"{self.why}; lock={self.lock.lock_path} "
+            f"pid={self.lock.client_pid if self.lock.client_pid is not None else '-'} "
+            f"alive={str(self.lock.pid_alive).lower()} age={age} ({self.age_source})"
+        )
+
+
+def _lock_age(inspection: LockInspection, *, now: Timestamp) -> tuple[float | None, str]:
+    """How long this lock has existed, and on whose word.
+
+    The lock's own `acquired_at` first; the file's mtime when the lock is malformed or its
+    timestamp will not parse, so that a half-written file is still *dated* and the grace
+    window still covers it. `None` when neither can be had -- and an undated lock is never
+    cleanable, because the grace window is the only thing standing between this scan and a
+    run that started half a second ago.
+    """
+    if inspection.acquired_at is not None:
+        try:
+            acquired = datetime.fromisoformat(inspection.acquired_at)
+        except ValueError:
+            acquired = None
+        if acquired is not None:
+            if acquired.tzinfo is None:
+                acquired = acquired.replace(tzinfo=UTC)
+            return (now - acquired).total_seconds(), "lock.acquired_at"
+    try:
+        mtime = inspection.lock_path.stat().st_mtime
+    except OSError:
+        return None, "none"
+    return now.timestamp() - mtime, "lock_file.mtime"
+
+
+def _recorded_run(store: StrayLockStore, run_id: RunId) -> tuple[Run | None, bool]:
+    """This run's row and whether the store could be asked at all.
+
+    The second value matters: a read that *failed* must never be read as "no such run",
+    which is the one inference that would let this module delete a live run's lock.
+    """
+    try:
+        return store.get_run(run_id), True
+    except Exception as exc:  # noqa: BLE001 - a failed read weakens the finding, never widens it
+        log_event(
+            get_harness_logger(),
+            logging.WARNING,
+            "run/orphans: a stray lock's run could not be looked up; the lock is left alone",
+            extra={"run_id": str(run_id), "error_type": type(exc).__name__},
+        )
+        return None, False
+
+
+def _classify(
+    inspection: LockInspection, run: Run | None, store_readable: bool
+) -> StrayLockDisposition | None:
+    """Which :class:`StrayLockDisposition` this lock is, or `None` for a healthy one.
+
+    `None` covers the two cases that are not strays at all: a live claim on a run this
+    store has in flight, and any lock at all when the store could not be read.
+    """
+    if run is not None and run.lifecycle_state in TERMINAL_STATES:
+        return StrayLockDisposition.TERMINAL_RUN
+    if not inspection.held_by_live_process:
+        return StrayLockDisposition.DEAD_HOLDER
+    if not store_readable:
+        return None  # cannot distinguish "no row" from "could not look"; leave it be
+    if run is None:
+        return StrayLockDisposition.UNRECORDED
+    return None  # a live process holding a run this store has in flight: healthy
+
+
+def scan_stray_locks(
+    store: StrayLockStore,
+    *,
+    lock: LockDirectoryProbe,
+    now: Timestamp,
+    grace_seconds: float = DEFAULT_ORPHAN_GRACE_SECONDS,
+) -> list[StrayLockFinding]:
+    """Every lock file in *lock*'s directory that no live run stands behind. Writes nothing.
+
+    The mirror of :func:`scan_orphans`: that one walks run rows and asks about their locks,
+    this one walks lock files and asks about their runs. A lock younger than
+    *grace_seconds* is never returned on any evidence -- the window that covers a run
+    between `create_run` and `acquire` covers a lock between `acquire` and its first
+    recorded step just as well.
+    """
+    grace = max(0.0, grace_seconds)
+    directory = lock.lock_dir
+    try:
+        paths = sorted(directory.glob(f"*{LOCK_FILE_SUFFIX}"))
+    except OSError:
+        return []
+    findings: list[StrayLockFinding] = []
+    for path in paths:
+        run_id = RunId(path.name[: -len(LOCK_FILE_SUFFIX)])
+        inspection = lock.inspect(run_id)
+        if not inspection.present:
+            continue  # released between the listing and the read; nothing to report
+        age_seconds, age_source = _lock_age(inspection, now=now)
+        if age_seconds is None or age_seconds < grace:
+            continue
+        run, store_readable = _recorded_run(store, run_id)
+        disposition = _classify(inspection, run, store_readable)
+        if disposition is None:
+            continue
+        findings.append(
+            StrayLockFinding(
+                run_id=run_id,
+                lock=inspection,
+                disposition=disposition,
+                run_state=run.lifecycle_state if run is not None else None,
+                age_seconds=age_seconds,
+                age_source=age_source,
+                checked_at=now,
+            )
+        )
+    return findings
+
+
+def clean_stray_locks(
+    findings: Sequence[StrayLockFinding],
+    *,
+    lock: LockCleanupProbe,
+    include_unrecorded: bool = False,
+) -> list[StrayLockFinding]:
+    """Remove the lock files in *findings* that may be removed; return those removed.
+
+    `cleanable` findings always; `UNRECORDED` ones only when *include_unrecorded* -- see
+    :class:`StrayLockDisposition` for why that one needs an operator behind it.
+
+    Each file is re-inspected here, inside the removal, and skipped if it has changed
+    since the scan: a lock released and re-acquired in between is a *new* claim, and the
+    scan's verdict was about the old one. Same rule as :func:`pause_orphan`'s re-read --
+    the scan produces candidates, the act re-establishes the facts.
+    """
+    removed: list[StrayLockFinding] = []
+    for finding in findings:
+        if not (finding.cleanable or include_unrecorded):
+            continue
+        current = lock.inspect(finding.run_id)
+        if (
+            not current.present
+            or current.client_pid != finding.lock.client_pid
+            or current.acquired_at != finding.lock.acquired_at
+        ):
+            log_event(
+                get_harness_logger(),
+                logging.INFO,
+                "run/orphans: a stray lock changed between the scan and the removal and was "
+                "left alone",
+                extra={"run_id": str(finding.run_id), **finding.as_detail()},
+            )
+            continue
+        lock.release(finding.run_id)
+        log_event(
+            get_harness_logger(),
+            logging.WARNING,
+            "run/orphans: a run-identity lock with no live run behind it was removed",
+            extra=finding.as_detail(),
+        )
+        removed.append(finding)
+    return removed
+
+
+def sweep_stray_locks(
+    store: StrayLockStore,
+    *,
+    lock: LockProbe | None = None,
+    now: Timestamp,
+    grace_seconds: float = DEFAULT_ORPHAN_GRACE_SECONDS,
+) -> list[StrayLockFinding]:
+    """Scan for stray locks and *record* them. Removes nothing, and never raises.
+
+    The automatic counterpart to :func:`sweep_orphans`, and deliberately not its equal:
+    this one reports and stops. A store open is one process's intention to use one store,
+    while the lock directory is shared by every store on the host -- so an open is
+    entitled to say "a lock here stands for no run I can see" and is not entitled to act
+    on it. `civsim store repair` is where acting happens, with an operator behind it.
+
+    What it buys is the thing that was missing on 2026-09-21/22: the next run's driver log
+    names the lock that is about to refuse it, by path and PID, instead of the run simply
+    failing to start with no diagnosis.
+
+    *lock* defaults to a :class:`~civsim_harness.run.identity_lock.RunIdentityLock` over
+    the harness's own directory. A probe that cannot name its directory (a test fake) is
+    not scannable and yields an empty list.
+    """
+    probe: LockProbe = lock if lock is not None else RunIdentityLock()
+    if not hasattr(probe, "lock_dir"):
+        return []
+    try:
+        findings = scan_stray_locks(
+            store, lock=probe, now=now, grace_seconds=grace_seconds  # type: ignore[arg-type]
+        )
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        log_event(
+            get_harness_logger(),
+            logging.ERROR,
+            "run/orphans: the stray run-identity lock scan failed; `civsim store repair "
+            "--dry-run` will still list them",
+            extra={"error_type": type(exc).__name__},
+            exc_info=True,
+        )
+        return []
+    for finding in findings:
+        log_event(
+            get_harness_logger(),
+            logging.WARNING,
+            "run/orphans: a run-identity lock stands for no run this store can see -- it will "
+            "refuse the next run on that client pid; `civsim store repair --dry-run`",
+            extra=finding.as_detail(),
+        )
+    return findings
+
+
 __all__ = [
+    "CLEANABLE_DISPOSITIONS",
     "DEFAULT_ORPHAN_GRACE_SECONDS",
+    "LOCK_FILE_SUFFIX",
     "ORPHAN_CANDIDATE_STATES",
     "ORPHAN_REASON",
+    "STRAY_LOCK_REASON",
+    "LockCleanupProbe",
+    "LockDirectoryProbe",
     "LockProbe",
     "OrphanFinding",
     "OrphanRepairStore",
     "OrphanScanStore",
+    "StrayLockDisposition",
+    "StrayLockFinding",
+    "StrayLockStore",
+    "clean_stray_locks",
     "pause_orphan",
     "repair_orphans",
     "scan_orphans",
+    "scan_stray_locks",
     "sweep_orphans",
+    "sweep_stray_locks",
 ]

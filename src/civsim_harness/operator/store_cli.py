@@ -12,7 +12,8 @@ is added, removed or renamed without this list moving with it:
 - ``export``    a run as a bundle directory, ``--archive`` for the ``.tar.gz`` (FR-027)
 - ``import``    a bundle directory or archive into this store (FR-027)
 - ``repair``    pause runs whose driver is gone -- ``playing``/``preparing`` with no live lock
-                holder -- with the evidence on the event; ``--dry-run`` lists and changes nothing
+                holder -- with the evidence on the event, and remove run-identity locks that
+                stand for no live run; ``--dry-run`` lists and changes nothing
 
 ``info``, ``runs``, ``model-calls``, ``coverage`` and ``export`` open the store **read-only** --
 an operator inspecting a store never migrates it by accident. ``migrate``, ``import`` and
@@ -47,8 +48,12 @@ from civsim_harness.run.identity_lock import RunIdentityLock
 from civsim_harness.run.orphans import (
     DEFAULT_ORPHAN_GRACE_SECONDS,
     OrphanFinding,
+    StrayLockDisposition,
+    StrayLockFinding,
+    clean_stray_locks,
     repair_orphans,
     scan_orphans,
+    scan_stray_locks,
 )
 from civsim_harness.store import schema as store_schema
 from civsim_harness.store.bundle import read_bundle, write_bundle
@@ -471,11 +476,47 @@ _GraceOption = typer.Option(
 )
 
 
+_CleanUnrecordedOption = typer.Option(
+    False,
+    "--clean-unrecorded-locks",
+    help=(
+        "Also remove locks for run ids this store has no row for. Reported without this; "
+        "see `run/orphans.py`'s StrayLockDisposition on why that one needs you."
+    ),
+)
+
+
 def _echo_findings(findings: list[OrphanFinding]) -> None:
     if not findings:
         typer.echo("orphaned runs: none")
         return
     typer.echo(f"orphaned runs: {len(findings)}")
+    for finding in findings:
+        typer.echo("  " + finding.render())
+
+
+def _echo_unrecorded_hint(findings: list[StrayLockFinding], cleaning: bool) -> None:
+    """Name the way out, on the one class this command will not decide by itself.
+
+    An operator who has just been refused a run needs the next command, not a category.
+    """
+    if cleaning:
+        return
+    kept = [f for f in findings if f.disposition is StrayLockDisposition.UNRECORDED]
+    if not kept:
+        return
+    typer.echo(
+        f"{len(kept)} lock(s) name a run this store has no row for and were kept: a run "
+        "recorded in another store looks the same from here. If this is the only store, "
+        "`--clean-unrecorded-locks` removes them."
+    )
+
+
+def _echo_stray_locks(findings: list[StrayLockFinding]) -> None:
+    if not findings:
+        typer.echo("stray run-identity locks: none")
+        return
+    typer.echo(f"stray run-identity locks: {len(findings)}")
     for finding in findings:
         typer.echo("  " + finding.render())
 
@@ -486,6 +527,7 @@ def store_repair(
     dry_run: bool = _DryRunOption,
     lock_dir: Path | None = _LockDirOption,
     grace_seconds: float = _GraceOption,
+    clean_unrecorded_locks: bool = _CleanUnrecordedOption,
 ) -> None:
     """Pause runs whose driver is gone (`run/orphans.py`, 2026-09-21).
 
@@ -498,6 +540,16 @@ def store_repair(
     checked (lock path, PID and liveness, last activity and how stale it was). A run whose
     lock holder is alive is never touched. ``--dry-run`` opens the store read-only and lists
     the same evidence without writing a byte.
+
+    It also repairs the other direction (2026-09-22): a **lock** standing for no live run.
+    A run that finishes without ever being written to a store leaves a lock file behind,
+    and because the Civ VI client outlives its driver that lock goes on naming a live PID
+    -- so ``acquire`` refuses the next run on that client and nothing anywhere says why.
+    Every lock file older than the grace window is listed with its evidence. Two kinds are
+    removed: one whose run this store records as ``finished``/``failed``, and one whose
+    holder process is gone. A lock for a run id this store has **no row for** is reported
+    and kept, because a run recorded in a *different* store looks identical from here --
+    ``--clean-unrecorded-locks`` is the operator saying it does not.
     """
     path = _resolve(store_path)
     if not path.exists():
@@ -514,10 +566,17 @@ def store_repair(
         store = _open(path, read_only=True)
         try:
             findings = scan_orphans(store, lock=lock, now=now, grace_seconds=grace_seconds)
+            strays = scan_stray_locks(store, lock=lock, now=now, grace_seconds=grace_seconds)
         finally:
             store.close()
         _echo_findings(findings)
-        typer.echo(f"dry run: {len(findings)} run(s) would be paused; nothing changed")
+        _echo_stray_locks(strays)
+        would_remove = [s for s in strays if s.cleanable or clean_unrecorded_locks]
+        typer.echo(
+            f"dry run: {len(findings)} run(s) would be paused, "
+            f"{len(would_remove)} lock(s) removed; nothing changed"
+        )
+        _echo_unrecorded_hint(strays, clean_unrecorded_locks)
         return
     try:
         # orphan_sweep=False: the open must not pre-empt the command, or this listing
@@ -529,6 +588,13 @@ def store_repair(
         findings = scan_orphans(store, lock=lock, now=now, grace_seconds=grace_seconds)
         _echo_findings(findings)
         applied = repair_orphans(store, findings, now=now)
+        # After the pauses: a run just moved to `paused` is no longer in flight, and its
+        # lock -- if its holder is dead -- is now removable on the same evidence.
+        strays = scan_stray_locks(store, lock=lock, now=now, grace_seconds=grace_seconds)
     finally:
         store.close()
+    _echo_stray_locks(strays)
+    removed = clean_stray_locks(strays, lock=lock, include_unrecorded=clean_unrecorded_locks)
     typer.echo(f"paused {len(applied)} orphaned run(s)")
+    typer.echo(f"removed {len(removed)} stray run-identity lock(s)")
+    _echo_unrecorded_hint(strays, clean_unrecorded_locks)

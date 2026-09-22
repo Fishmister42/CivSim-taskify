@@ -171,7 +171,10 @@ def test_repair_dry_run_lists_the_orphan_and_changes_nothing(
     assert "orphaned runs: 1" in out
     assert ORPHAN in out and "identity lock absent" in out and "-> paused" in out
     assert LIVE not in out.split("orphaned runs")[1]
-    assert "dry run: 1 run(s) would be paused; nothing changed" in out
+    # The lock side is scanned in the same pass (2026-09-22): here there is nothing to
+    # report, LIVE's lock being a live claim on a run this store has in flight.
+    assert "stray run-identity locks: none" in out
+    assert "dry run: 1 run(s) would be paused, 0 lock(s) removed; nothing changed" in out
     assert _states(store_path) == {ORPHAN: LifecycleState.PLAYING, LIVE: LifecycleState.PLAYING}
     assert _orphan_events(store_path) == []
 
