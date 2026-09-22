@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 21:58 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 22:15 EDT — FINAL for the day)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -40,23 +40,16 @@ reads the constitution, this file, then issue #1's tail, and continues.
   not persisted in saves; the UI lays out at 1024×768 (scale 1.875 × 1.5625 on 1920×1200).
 
 ## Agents running now
-| lane | scope | files | started |
-|---|---|---|---|
-| Live S7 (Fable fork) | standing down: ledger, entry 12 (the 20:46 segfault, the other-session explanation, the stand-down), log section; hands off with the client DOWN | `spikes/gameplay-2026-09-21/`, log | 21:08 |
-| orphan hygiene (Fable fork; the Opus agent was killed 3× by API 500s) | orphan detection on write-mode open + runner start; `civsim store repair [--dry-run]` | `run/lifecycle.py`, `run/runner.py`, `store/`, `operator/store_cli.py`, tests | 21:21 |
+None. The hypervisor's self-check cron is deleted. **Nothing launches the client until the owner pings.**
 
-**Segfault NAMED (not the owner's session):** `nm -DC libGameCore_XP2.so` resolves the crash ip to
-`GameCore::Definition::Government::GetPrereqCivicReference()` reading `this+0xb0` — a NULL government
-definition — reached from `e076f83`'s `government.state` per-row `IsGovernmentUnlocked(row.Hash)` loop run
-from `GameCore_Tuner` (Firaxis calls it only InGame). **Guard patch `882758e`**: government/great_people/
-religion bodies → InGame; per-row calls only with numeric Hash/Index; `no_local_player` guard; six lupa
-tests; `spikes/client-segfault-2026-09-21.md`. **Live worktree at `882758e`.** Harness findings: a client
-death during the probe/sweep surfaced as ConnectionResetError with `stop_reason: None` (must be named);
-a killed driver leaves a run `playing` (fix in flight).
-**When the owner pings:** load end2 → one 1-turn coverage block from the worktree at `882758e` under crash
-watch (tail `dmesg` for `Civ6.*segfault` after the turn) → if it survives, `--goal use_a_builder` → Settler →
-second city → every feasible goal; if it segfaults, `nm -DC` on the new ip names the next call.
-Coverage today: 3 → 11 of 41 applied live; images 0 → 287 of 619 steps; spend $13.40 cumulative.
+**Final landings (21:53–22:12):** guard patch `882758e` (the segfault was ours: NULL government definition
+from a per-row engine call in the gamecore context; three bodies → InGame; per-row calls guarded);
+orphan hygiene `9f200d5` (a run whose lock is absent or whose holder pid is dead is paused with an
+`orphaned` event on write-mode open and runner start; `civsim store repair [--dry-run]`; applied once
+at 22:12: four stale runs paused). **Live worktree at head (`9f200d5`).** Suite green at head.
+Coverage today: actions applied live 3 → 11 of 41; images to the model 0 → 287 of 619 steps; store
+spend $13.40 cumulative. Issue #3: entries 1–12, two scorecards, the audit finding, the day tally, the
+segfault correction. Issue #1: release + correction.
 
 ## Queue, in order (2026-09-22)
 1. Owner's OK to launch. 2. From the worktree at head: verify live `cities.set_production` (once the
