@@ -302,18 +302,28 @@ GATE_INPUTS: list[GateInput] = [
 #: justifications fail on their own (see ``_allowlist_problems``).
 GATE_INPUT_ALLOWLIST: dict[str, str] = {
     "capture_for_step.detected_text_tokens": (
-        "UNRESOLVED - hypervisor review: C0, found 2026-09-22. The fix (fail-closed "
-        "first, then window-title enumeration to produce the tokens) is in flight in the "
-        "screening lane this same day; this entry exists so the gap is RECORDED rather "
-        "than discovered again, and is expected to go STALE -- delete it -- the moment "
-        "run/decision_loop.py passes the tokens."
+        "UNRESOLVED - hypervisor review: C0, found 2026-09-22. HALF DONE as of a395325: "
+        "the gate now fails CLOSED on this gap -- an absent value (None, and None is the "
+        "default) means the declared-text technique did not run, so every category it is "
+        "the only technique for is withheld rather than passed. Nothing escapes any more, "
+        "but nothing is delivered either: image delivery is closed on all platforms until "
+        "the tokens exist. Producing them needs desktop-wide window-title enumeration, "
+        "which no HostPlatform port method exposes -- adding it means editing host/port.py "
+        "and host/<platform>/adapter.py, another lane's files. STALE -- delete it -- the "
+        "moment run/decision_loop.py passes the tokens."
     ),
     "capture_for_step.expected_process": (
-        "UNRESOLVED - hypervisor review: C0b, found 2026-09-22. Threading the located "
-        "GameProcess through to the source gate is in flight in the same lane. Note that "
-        "tests/unit/test_image_screening.py currently *asserts* the clean result for the "
-        "unsupplied shape, which is the defect encoded as intended behaviour -- that "
-        "assertion is the screening lane's to revisit, not this file's."
+        "UNRESOLVED - hypervisor review: C0b, found 2026-09-22. RESOLVED IN SUBSTANCE as "
+        "of a395325, but kept because this check reads the CALL SITE and the call site has "
+        "not changed. The source gate now withholds when no process is supplied (it was "
+        "skipping the check), and observe/capture.py resolves one itself via "
+        "host.locate_game_process() rather than omitting it, so the identity check does "
+        "run in production. What remains is that run/decision_loop.py -- which already "
+        "holds the run's process -- still passes nothing, leaving a /proc scan per capture "
+        "where a hand-off would do. Superseded note: the assertion this entry cited in "
+        "tests/unit/test_image_screening.py is gone (test_source_gate_skips_process_check_"
+        "when_none_supplied is rewritten as ..._withholds_when_no_located_process_is_"
+        "supplied). STALE -- delete it -- the moment the loop passes the process."
     ),
 }
 
