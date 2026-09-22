@@ -326,22 +326,13 @@ LONG_PHASE_ALLOWLIST: dict[str, str] = {
         "import emit_harness_liveness from act/liveness.py and call it once per iteration "
         "with the deadline and elapsed."
     ),
-    "saves.load_await_phase": (
-        "T302: confirmed silent by reading saves/load_game.py:486-547 and by two "
-        "independent negative searches over saves/*.py (grep for logger|log_event|logging, "
-        "and an import scan) -- the package has no logging at all. owner: UNRESOLVED - "
-        "hypervisor review; saves/** was granted to no lane in this agent's brief. This is "
-        "the highest-value remaining entry: 300 s is the longest bound in src/ and is 1.67x "
-        "the watchdog budget on its own."
-    ),
-    "resilience.recover": (
-        "T302: confirmed by reading resilience/recovery.py:182-285 -- it emits RunEvents to "
-        "the match store but nothing to the driver log, so a log-polling watchdog sees "
-        "nothing for the duration of the load it drives. owner: UNRESOLVED - hypervisor "
-        "review; resilience/** was granted to no lane in this agent's brief. Lower priority "
-        "than saves.load_await_phase because fixing that one makes this composite readable "
-        "for its longest leg."
-    ),
+    # T301 removed 'saves.load_await_phase' and 'resilience.recover' together. Both were
+    # `owner: UNRESOLVED`, and both now emit via `saves/liveness.py` -- so this checker's
+    # stale-exemption arm failed them, which is the ratchet working rather than a regression.
+    # They came out in one commit because they were one defect: `recover` is spec 004's rung 4,
+    # `_await_phase` is the wait that rung is built on, and the enumeration they now share
+    # (`saves/liveness.py`'s RELOAD_PATH) is what states the number neither entry could on its
+    # own -- the reload path's 510 s worst case, 2.8x this file's own WATCHDOG_SILENCE_BUDGET_S.
 }
 
 

@@ -66,6 +66,19 @@ from civsim_harness.host.port import (
 from civsim_harness.models.records import SavePoint
 from civsim_harness.nexus.client import NexusClient, StateIndices
 from civsim_harness.nexus.sentinels import LUA_JSON_PRELUDE, lua_print_json
+from civsim_harness.saves import liveness as reload_liveness
+from civsim_harness.saves.liveness import (
+    OUTCOME_PENDING,
+    OUTCOME_SATISFIED,
+    OUTCOME_UNREACHABLE,
+    RELOAD_PHASE_ENTERED,
+    RELOAD_PHASE_POLLED,
+    STEP_EXIT_TO_MENU,
+    STEP_LOAD_GAME,
+    STEP_LOCATE_PHASE,
+    phase_entered_record,
+    phase_poll_record,
+)
 from civsim_harness.saves.verify import SAVE_FILE_SUFFIX, resolve_saves_dir
 
 #: The two Lua state names this loader steers between. ``InGame`` exists only while a game is
@@ -285,6 +298,7 @@ class LuaSaveLoader:
 
         # -- 2. where is the client right now? Resolved fresh, at this known phase boundary. ----
         indices = await self._await_phase(
+            step=STEP_LOCATE_PHASE,
             predicate=lambda st: IN_GAME_STATE_NAME in st.by_name or _is_front_end(st),
             timeout_s=self._exit_to_menu_timeout_s,
             waiting_for=(
@@ -297,6 +311,7 @@ class LuaSaveLoader:
         if IN_GAME_STATE_NAME in indices.by_name:
             await self._exit_to_main_menu(indices.by_name[IN_GAME_STATE_NAME], save)
             indices = await self._await_phase(
+                step=STEP_EXIT_TO_MENU,
                 predicate=_is_front_end,
                 timeout_s=self._exit_to_menu_timeout_s,
                 waiting_for=(
@@ -325,6 +340,7 @@ class LuaSaveLoader:
                 f"({lost_response}), so whether the client accepted the load was never reported"
             )
         await self._await_phase(
+            step=STEP_LOAD_GAME,
             predicate=lambda st: st.has_game_states,
             timeout_s=self._load_timeout_s,
             waiting_for=(
@@ -486,6 +502,7 @@ class LuaSaveLoader:
     async def _await_phase(
         self,
         *,
+        step: str,
         predicate: Any,
         timeout_s: float,
         waiting_for: str,
@@ -497,14 +514,43 @@ class LuaSaveLoader:
         needed. A refused connection or dropped socket is an *expected* observation mid-load
         (the spike measured the tuner port closed for the whole load), so both are recorded and
         retried rather than raised; what is never silent is the deadline, whose error names what
-        was awaited, for how long, the last state table seen, and the last transport failure."""
+        was awaited, for how long, the last state table seen, and the last transport failure.
+
+        **T301: and now the wait itself is never silent either.** This is the longest bound in
+        ``src/`` -- ``DEFAULT_LOAD_TIMEOUT_S`` is 300 s, 1.67x the watchdog's whole silence
+        budget -- and it published nothing for the duration, so the healthiest possible reload
+        was indistinguishable from a wedged process to a watchdog polling the driver log. Every
+        completed poll now publishes a :data:`~civsim_harness.saves.liveness.RELOAD_PHASE_POLLED`
+        record naming *step*, the poll number, the elapsed time and the bound.
+
+        That emission is **work-derived** (``saves/liveness.py``'s table): it is published by
+        this loop after a round trip returned, so it cannot be produced unless the poll actually
+        ran -- unlike a ticker thread beside a blocking call, which ticks just as happily when
+        the call is dead. Nothing here changes the bound, the poll interval, the reconnect
+        behaviour or the deadline: the wait is exactly as long as it was, and is now readable
+        while it happens. *step* is required and must be a member of ``RELOAD_PATH`` -- an
+        unnamed wait is one a reader cannot attribute, which is most of what made the silence
+        expensive.
+        """
         client = self._client
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout_s
+        started = loop.time()
+        deadline = started + timeout_s
         needs_reconnect = not client.is_connected
         last_error: str | None = None
         last_states: list[str] | None = None
+        polls = 0
+        reload_liveness.log_event(
+            RELOAD_PHASE_ENTERED,
+            phase_entered_record(
+                step=step, timeout_s=timeout_s, poll_interval_s=self._poll_interval_s
+            ),
+        )
         while True:
+            polls += 1
+            resolved: StateIndices | None = None
+            state_count: int | None = None
+            satisfied = False
             try:
                 if needs_reconnect:
                     indices = await client.reconnect()
@@ -525,9 +571,33 @@ class LuaSaveLoader:
                 if on_unreachable is not None:
                     on_unreachable()
             else:
+                resolved = indices
                 last_states = sorted(indices.by_name)
-                if predicate(indices):
-                    return indices
+                state_count = len(indices.by_name)
+                satisfied = bool(predicate(indices))
+            # Published after the round trip, never beside it: the record is the poll's own
+            # byproduct. The satisfied record also *closes* the wait, so there is no exit line
+            # that is not backed by a unit of work.
+            reload_liveness.log_event(
+                RELOAD_PHASE_POLLED,
+                phase_poll_record(
+                    step=step,
+                    poll=polls,
+                    elapsed_s=loop.time() - started,
+                    timeout_s=timeout_s,
+                    poll_interval_s=self._poll_interval_s,
+                    outcome=(
+                        OUTCOME_SATISFIED
+                        if satisfied
+                        else OUTCOME_PENDING
+                        if state_count is not None
+                        else OUTCOME_UNREACHABLE
+                    ),
+                    state_count=state_count,
+                ),
+            )
+            if satisfied and resolved is not None:
+                return resolved
             if loop.time() >= deadline:
                 raise HarnessError(
                     f"timed out after {timeout_s:g}s waiting for {waiting_for} while loading "

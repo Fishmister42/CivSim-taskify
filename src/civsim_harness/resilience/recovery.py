@@ -60,6 +60,7 @@ concurrent wave) wires a concrete loader in once one exists.
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -72,7 +73,24 @@ from civsim_harness.models.records import RetentionStatus, RunEvent, RunEventTyp
 from civsim_harness.models.run import LifecycleState, Run, StopResolution
 from civsim_harness.observe.assemble import handle_assembly_failure
 from civsim_harness.run.lifecycle import transition
+from civsim_harness.saves import liveness as reload_liveness
 from civsim_harness.saves.addressing import SaveAddressingError, report_save_missing
+from civsim_harness.saves.liveness import (
+    OUTCOME_FAILED,
+    OUTCOME_LOADED,
+    OUTCOME_RECORDED,
+    OUTCOME_RESUMED,
+    OUTCOME_SAVE_ABSENT,
+    OUTCOME_SAVE_MISSING,
+    RECOVERY_RUNG,
+    RELOAD_RUNG_ENTERED,
+    RELOAD_RUNG_STEP,
+    STEP_ABANDON_ATTEMPT,
+    STEP_LOAD_SAVE,
+    STEP_RESUME,
+    rung_entered_record,
+    rung_step_record,
+)
 from civsim_harness.store.port import MatchStore
 
 
@@ -160,7 +178,12 @@ class RecoveryEngine:
         loader: SaveLoader,
         recovery_attempt_limit: int,
         clock: Callable[[], Timestamp] = _utcnow,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
+        """*monotonic* backs the ``elapsed_s`` on this rung's liveness records only -- never
+        any durable record, which continues to carry *clock*'s single ``occurred_at``. It is
+        separate from *clock* because a wall clock can step and a test may pin one, and a
+        heartbeat measured against a clock that can go backwards is not a heartbeat."""
         if recovery_attempt_limit < 1:
             raise ValueError("recovery_attempt_limit must be >= 1")
         self._run_id = run_id
@@ -168,6 +191,7 @@ class RecoveryEngine:
         self._loader = loader
         self._recovery_attempt_limit = recovery_attempt_limit
         self._clock = clock
+        self._monotonic = monotonic
         self._consecutive_failures = 0
 
     @property
@@ -212,6 +236,27 @@ class RecoveryEngine:
         to be) absent: see the module docstring's T172 paragraph. This is
         the one failure this method never retries, since a missing file
         cannot become present by trying the same load again.
+
+        **T301 -- this rung is itself a long phase, and it used to be silent
+        to everyone outside the process.** It is spec 004's rung 4, it is
+        dominated by a save load bounded at 300 s per attempt (and 510 s in
+        the loader's own worst case), and the `RunEvent`s it writes reach the
+        **match store**, which a watchdog polling the driver log cannot see.
+        A rung that does not emit is detected as a stall *while it is
+        recovering from one* -- the ladder then escalates against its own
+        action and burns the attempt limit on a recovery that was working,
+        and a watchdog that killed the harness mid-load would leave wreckage
+        indistinguishable from the crash the load was repairing. So the rung
+        now publishes one `reload.rung.entered` line (observer-derived: it
+        says the rung was entered, nothing more) and one
+        `reload.rung.step` line per *completed* step (work-derived: the
+        step's durable writes landed, or the loader returned). The long
+        step's interior is filled by `saves/load_game.py::_await_phase`'s own
+        per-poll records, so "rung 4 is loading a save, 141 s into a 300 s
+        bound" is readable from outside as a recorded state rather than as
+        silence. None of it is returned to the caller or added to
+        `RecoveryResult`; see `saves/liveness.py` for the Principle I
+        boundary and the work/observer registration.
         """
         occurred_at = self._clock()
         if turn_start_save.turn_number != turn_number:
@@ -220,6 +265,33 @@ class RecoveryEngine:
                 f"save is for turn {turn_start_save.turn_number}, recovering turn {turn_number}"
             )
 
+        started = self._monotonic()
+        attempt = self._consecutive_failures + 1
+
+        def _emit_step(step: str, outcome: str) -> None:
+            reload_liveness.log_event(
+                RELOAD_RUNG_STEP,
+                rung_step_record(
+                    run_id=self._run_id,
+                    rung=RECOVERY_RUNG,
+                    step=step,
+                    attempt=attempt,
+                    elapsed_s=self._monotonic() - started,
+                    outcome=outcome,
+                ),
+            )
+
+        reload_liveness.log_event(
+            RELOAD_RUNG_ENTERED,
+            rung_entered_record(
+                run_id=self._run_id,
+                rung=RECOVERY_RUNG,
+                attempt=attempt,
+                attempt_limit=self._recovery_attempt_limit,
+                trigger=trigger_event_type.value,
+            ),
+        )
+
         resuming, phase_a_events = self._ensure_interrupted_and_resuming(
             run,
             turn_number=turn_number,
@@ -227,6 +299,7 @@ class RecoveryEngine:
             trigger_event_type=trigger_event_type,
             trigger_detail=trigger_detail,
         )
+        _emit_step(STEP_ABANDON_ATTEMPT, OUTCOME_RECORDED)
 
         # T172 / FR-036: a save already recorded absent (by an earlier
         # recovery attempt's own discovery below, or by the reaper marking
@@ -245,10 +318,17 @@ class RecoveryEngine:
                     "retention_status": turn_start_save.retention_status.value,
                 },
             )
+            _emit_step(STEP_LOAD_SAVE, OUTCOME_SAVE_ABSENT)
             await self._fail_on_missing_save(resuming, occurred_at=occurred_at, cause=already_known)
 
+        # Which step a failure below belongs to. The `except Exception` arm covers the resume
+        # writes as well as the load, and attributing a store failure to the loader would be a
+        # record that names the wrong thing -- the defect this whole task exists to stop.
+        stage = STEP_LOAD_SAVE
         try:
             await self._loader.load(turn_start_save)
+            _emit_step(STEP_LOAD_SAVE, OUTCOME_LOADED)
+            stage = STEP_RESUME
 
             playing, playing_event = transition(
                 resuming,
@@ -268,6 +348,7 @@ class RecoveryEngine:
             self._store.update_run(run.run_id, lifecycle_state=playing.lifecycle_state)
 
             self._consecutive_failures = 0
+            _emit_step(STEP_RESUME, OUTCOME_RESUMED)
             return RecoveryResult(
                 run=playing,
                 resumed_from=turn_start_save,
@@ -278,9 +359,11 @@ class RecoveryEngine:
             # see report_save_missing's own docstring for why this module,
             # not saves/addressing.py, is the one that calls it here (this is
             # the code that actually attempted to load the file).
+            _emit_step(STEP_LOAD_SAVE, OUTCOME_SAVE_MISSING)
             report_save_missing(self._store, turn_start_save, occurred_at=occurred_at)
             await self._fail_on_missing_save(resuming, occurred_at=occurred_at, cause=exc)
         except Exception as exc:
+            _emit_step(stage, OUTCOME_FAILED)
             await self._on_recovery_attempt_failed(resuming, occurred_at=occurred_at, cause=exc)
             raise
 
