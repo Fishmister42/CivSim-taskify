@@ -1,19 +1,28 @@
-"""Unit tests for camera validation (T125; FR-026, research R8).
+"""Unit tests for camera validation (T125, T276; FR-026, research R8).
 
 Each of the three declared camera actions (``catalogs/actions/camera.yaml``) is exercised once
 rejected and once authorized: an unrevealed target plot, an out-of-range zoom, and a non-human
 view mode are each rejected with ``out_of_parity_camera`` and recorded (never
 ``unavailable_to_human_now``, the generic reason ``act.dispatch.dispatch_action`` would produce for
 the same predicate failure) -- the whole point of ``act.camera`` existing as a separate module.
+
+T276 adds the check the predicate alone could not make. ``camera.zoom``'s declared predicate is
+the *union* of two views' ranges, so a strategic-view zoom asked for in world mode satisfies it
+while naming a camera state no view in the catalog declares. **Every bound in these tests is read
+out of the loaded catalog, never written down here**: the point is that the check and the
+declaration cannot drift apart, which a hard-coded ``(0.2, 1.0)`` would quietly allow.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from civsim_harness.act.availability import CROSS_VIEW_ZOOM, CrossViewZoom
 from civsim_harness.act.camera import (
     CAMERA_ACTION_DECLARATION_IDS,
     CAMERA_MOVE,
@@ -24,23 +33,105 @@ from civsim_harness.act.camera import (
 from civsim_harness.act.dispatch import DispatchOutcome, DispatchStatus, rejection_to_execution
 from civsim_harness.capability.loader import Catalog, load_catalog
 from civsim_harness.capability.registry import CapabilityRegistry
-from civsim_harness.models.common import DeclarationId
+from civsim_harness.models.common import (
+    CatalogVersionRef,
+    DecisionStepId,
+    DeclarationId,
+    LuaContext,
+    ObservationId,
+)
 from civsim_harness.models.decision import ExecutionOutcome, RejectionReason
+from civsim_harness.models.turn import Observation, ObservationEntry
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOGS_ROOT = _REPO_ROOT / "catalogs"
 
+WORLD_VIEW = DeclarationId("views.world")
+STRATEGIC_VIEW = DeclarationId("views.strategic")
+CAMERA_STATE = DeclarationId("camera.read_state")
+
+
+def _board(camera_state: Mapping[str, Any] | None) -> Observation:
+    """A board reporting *camera_state* as its ``camera.read_state`` entry, or reporting none."""
+    entries = (
+        []
+        if camera_state is None
+        else [
+            ObservationEntry(
+                declaration_id=CAMERA_STATE,
+                key=str(CAMERA_STATE),
+                value=dict(camera_state),
+                context=LuaContext.IN_GAME,
+            )
+        ]
+    )
+    return Observation(
+        observation_id=ObservationId("obs-camera"),
+        decision_step_id=DecisionStepId("step-camera"),
+        assembled_at=datetime(2026, 9, 22, tzinfo=UTC),
+        catalog_version=CatalogVersionRef(version="2026.09.3", content_hash="deadbeef"),
+        entries=entries,
+        screen_identity="world",
+    )
+
+
+def _in_view(catalog: Catalog, view: DeclarationId) -> Observation:
+    """A board whose camera sits in *view*'s declared mode, at the midpoint of its declared range.
+
+    Both the mode and the zoom are read from the view's own ``camera_requirements`` -- this helper
+    never states a number of its own.
+    """
+    requirements = catalog.declarations[view].camera_requirements
+    assert requirements is not None
+    low, high = requirements.zoom_range
+    return _board(
+        {"mode": requirements.mode.value, "zoom": (low + high) / 2, "target_is_revealed": True}
+    )
+
+
+def _zoom_range(catalog: Catalog, view: DeclarationId) -> tuple[float, float]:
+    requirements = catalog.declarations[view].camera_requirements
+    assert requirements is not None
+    return requirements.zoom_range
+
+
+#: The real, checked-in ``catalogs/`` tree -- camera.py binds to the authored
+#: ``catalogs/actions/camera.yaml``, not a fixture stand-in (task instructions).
+_CATALOG = load_catalog(CATALOGS_ROOT)
+
+#: The board the pre-T276 tests below run against: the camera sitting in the world view, which is
+#: where a run starts (``run/composition.py``'s own ``DEFAULT_VIEW_DECLARATION_ID``). Built from
+#: the view's own declaration, so it is the world view by the catalog's definition of one.
+WORLD_BOARD = _in_view(_CATALOG, WORLD_VIEW)
+
 
 @pytest.fixture(scope="module")
 def real_catalog() -> Catalog:
-    """The real, checked-in ``catalogs/`` tree -- camera.py binds to the authored
-    ``catalogs/actions/camera.yaml``, not a fixture stand-in (task instructions)."""
-    return load_catalog(CATALOGS_ROOT)
+    return _CATALOG
 
 
 @pytest.fixture
 def registry(real_catalog: Catalog) -> CapabilityRegistry:
     return CapabilityRegistry(catalog=real_catalog)
+
+
+def _validated(
+    *,
+    registry: CapabilityRegistry,
+    action_declaration_id: DeclarationId,
+    target: Any,
+    observation: Observation = WORLD_BOARD,
+    cross_view: CrossViewZoom = CROSS_VIEW_ZOOM,
+) -> DispatchOutcome:
+    """:func:`validate_camera_action` with the camera in the world view unless a test says
+    otherwise -- the context the checks below were always implicitly written against."""
+    return validate_camera_action(
+        registry=registry,
+        action_declaration_id=action_declaration_id,
+        target=target,
+        observation=observation,
+        cross_view=cross_view,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -49,7 +140,7 @@ def registry(real_catalog: Catalog) -> CapabilityRegistry:
 
 
 def test_unrevealed_target_plot_is_rejected_out_of_parity(registry: CapabilityRegistry) -> None:
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry,
         action_declaration_id=CAMERA_MOVE,
         target={"x": 4, "y": 7, "is_revealed": False},
@@ -60,7 +151,7 @@ def test_unrevealed_target_plot_is_rejected_out_of_parity(registry: CapabilityRe
 
 
 def test_revealed_target_plot_is_authorized(registry: CapabilityRegistry) -> None:
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry,
         action_declaration_id=CAMERA_MOVE,
         target={"x": 4, "y": 7, "is_revealed": True},
@@ -77,7 +168,7 @@ def test_revealed_target_plot_is_authorized(registry: CapabilityRegistry) -> Non
 
 
 def test_out_of_range_zoom_is_rejected_out_of_parity(registry: CapabilityRegistry) -> None:
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry, action_declaration_id=CAMERA_ZOOM, target=5.0
     )
 
@@ -86,7 +177,7 @@ def test_out_of_range_zoom_is_rejected_out_of_parity(registry: CapabilityRegistr
 
 
 def test_negative_zoom_is_rejected_out_of_parity(registry: CapabilityRegistry) -> None:
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry, action_declaration_id=CAMERA_ZOOM, target=-0.1
     )
 
@@ -95,11 +186,118 @@ def test_negative_zoom_is_rejected_out_of_parity(registry: CapabilityRegistry) -
 
 
 def test_in_range_zoom_is_authorized(registry: CapabilityRegistry) -> None:
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry, action_declaration_id=CAMERA_ZOOM, target=0.5
     )
 
     assert outcome.status is DispatchStatus.authorized
+
+
+# --------------------------------------------------------------------------
+# camera.zoom -- and within the range the view the camera is IN declares (T276)
+# --------------------------------------------------------------------------
+
+
+def _strategic_only_zoom(catalog: Catalog) -> float:
+    """A zoom the strategic view declares and the world view does not.
+
+    Read from the two declarations, never written down: the premise of the whole check is that
+    ``camera.zoom``'s predicate is the union of these two ranges, so if the catalog is ever
+    authored such that no such zoom exists, this asserts rather than passing vacuously.
+    """
+    world_low, world_high = _zoom_range(catalog, WORLD_VIEW)
+    strategic_low, strategic_high = _zoom_range(catalog, STRATEGIC_VIEW)
+    assert strategic_low < world_low or strategic_high > world_high, (
+        "the strategic view no longer declares a zoom the world view does not; "
+        "re-derive this scenario from the catalog rather than deleting the check"
+    )
+    return strategic_low if strategic_low < world_low else strategic_high
+
+
+def test_a_strategic_zoom_asked_for_in_world_mode_is_refused_naming_the_view_and_range(
+    registry: CapabilityRegistry, real_catalog: Catalog
+) -> None:
+    """The live failure of 2026-09-21: `camera.zoom` was issued with 0.05 while the camera was in
+    world mode. It satisfies the declared predicate -- which is the union of both views' ranges --
+    and names a camera state no view declares and no human occupies. Refused here, before
+    dispatch, rather than discovered afterwards when the captures fail the provenance gate."""
+    zoom = _strategic_only_zoom(real_catalog)
+    world_low, world_high = _zoom_range(real_catalog, WORLD_VIEW)
+
+    outcome = _validated(registry=registry, action_declaration_id=CAMERA_ZOOM, target=zoom)
+
+    assert outcome.status is DispatchStatus.rejected
+    assert outcome.rejection_reason is RejectionReason.OUT_OF_PARITY_CAMERA
+    reason = outcome.detail["reason"]
+    # The refusal names the view it violated and that view's own declared range, both read back
+    # out of the catalog here -- a refusal that says only "out of parity" is not actionable.
+    assert str(WORLD_VIEW) in reason
+    assert f"{world_low:g}" in reason and f"{world_high:g}" in reason
+    assert str(STRATEGIC_VIEW) in reason
+
+
+def test_the_same_zoom_is_authorized_in_the_view_that_declares_it(
+    registry: CapabilityRegistry, real_catalog: Catalog
+) -> None:
+    """The other half of Principle I: the strategic view's own declared range must stay reachable.
+    Clamping `camera.zoom` to the world range would have fixed the first failure by breaking this
+    one."""
+    zoom = _strategic_only_zoom(real_catalog)
+
+    outcome = _validated(
+        registry=registry,
+        action_declaration_id=CAMERA_ZOOM,
+        target=zoom,
+        observation=_in_view(real_catalog, STRATEGIC_VIEW),
+    )
+
+    assert outcome.status is DispatchStatus.authorized
+
+
+def test_a_zoom_the_current_view_declares_is_authorized(
+    registry: CapabilityRegistry, real_catalog: Catalog
+) -> None:
+    low, high = _zoom_range(real_catalog, WORLD_VIEW)
+
+    for zoom in (low, (low + high) / 2, high):
+        outcome = _validated(registry=registry, action_declaration_id=CAMERA_ZOOM, target=zoom)
+        assert outcome.status is DispatchStatus.authorized, zoom
+
+
+def test_a_board_reporting_no_camera_mode_is_not_refused_on_an_invented_range(
+    registry: CapabilityRegistry, real_catalog: Catalog
+) -> None:
+    """With no camera mode reported there is no current view to measure against, and this module
+    never invents a restriction. The capture side still fails closed on an unreadable camera state
+    (`parity/screening.py`'s provenance gate), which is where that belongs."""
+    zoom = _strategic_only_zoom(real_catalog)
+
+    for board in (_board(None), _board({"zoom": zoom, "target_is_revealed": True})):
+        outcome = _validated(
+            registry=registry,
+            action_declaration_id=CAMERA_ZOOM,
+            target=zoom,
+            observation=board,
+        )
+        assert outcome.status is DispatchStatus.authorized
+
+
+def test_the_cross_view_answer_is_held_rather_than_guessed(
+    registry: CapabilityRegistry, real_catalog: Catalog
+) -> None:
+    """Whether a target legal for a *different* view should be refused or should perform the view
+    change first depends on what a real scroll-wheel zoom does to mode and zoom together on this
+    build -- a client-gated measurement (tasks.md T277). The seam is a parameter, and the
+    unmeasured branch fails loudly instead of quietly re-admitting the argument."""
+    zoom = _strategic_only_zoom(real_catalog)
+
+    with pytest.raises(NotImplementedError, match="T277"):
+        _validated(
+            registry=registry,
+            action_declaration_id=CAMERA_ZOOM,
+            target=zoom,
+            cross_view=CrossViewZoom.SWITCH_VIEW_FIRST,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -110,7 +308,7 @@ def test_in_range_zoom_is_authorized(registry: CapabilityRegistry) -> None:
 def test_non_human_view_mode_is_rejected_out_of_parity(registry: CapabilityRegistry) -> None:
     """``city_screen`` exists as a declared view (catalogs/observations/views.yaml) but is reached
     by its own screen-opening action, never this generic toggle."""
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry, action_declaration_id=CAMERA_SET_VIEW_MODE, target="city_screen"
     )
 
@@ -119,7 +317,7 @@ def test_non_human_view_mode_is_rejected_out_of_parity(registry: CapabilityRegis
 
 
 def test_nonexistent_view_mode_is_rejected_out_of_parity(registry: CapabilityRegistry) -> None:
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry, action_declaration_id=CAMERA_SET_VIEW_MODE, target="orbital"
     )
 
@@ -131,7 +329,7 @@ def test_nonexistent_view_mode_is_rejected_out_of_parity(registry: CapabilityReg
 def test_human_togglable_view_mode_is_authorized(
     registry: CapabilityRegistry, mode: str
 ) -> None:
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry, action_declaration_id=CAMERA_SET_VIEW_MODE, target=mode
     )
 
@@ -157,7 +355,7 @@ def test_rejection_is_recorded_as_an_action_execution(
     """A camera rejection feeds straight into ``act.dispatch.rejection_to_execution`` unmodified
     -- proving the two modules' DispatchOutcome shapes are genuinely interchangeable -- and the
     action is never performed (FR-026)."""
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry, action_declaration_id=declaration_id, target=target
     )
     assert outcome.status is DispatchStatus.rejected
@@ -181,7 +379,7 @@ def test_camera_action_declaration_ids_cover_exactly_the_declared_three() -> Non
 
 
 def test_a_non_camera_action_is_rejected_as_not_in_catalog(registry: CapabilityRegistry) -> None:
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry,
         action_declaration_id=DeclarationId("turn.end_turn"),
         target=None,
@@ -196,7 +394,7 @@ def test_unresolvable_declaration_id_is_rejected_as_not_in_catalog(
 ) -> None:
     """camera.py never routes an unknown id through the availability predicate path -- membership
     in CAMERA_ACTION_DECLARATION_IDS is checked first, so this can never reach registry.resolve."""
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry,
         action_declaration_id=DeclarationId("camera.nonexistent"),
         target=None,
@@ -210,7 +408,7 @@ def test_authorized_outcome_matches_dispatch_outcome_shape(
     registry: CapabilityRegistry,
 ) -> None:
     """The return type is genuinely act.dispatch.DispatchOutcome, not a lookalike."""
-    outcome = validate_camera_action(
+    outcome = _validated(
         registry=registry, action_declaration_id=CAMERA_ZOOM, target=0.5
     )
 

@@ -47,6 +47,32 @@ not chosen yet, and claiming otherwise would grey out a button the game does not
 A predicate that cannot be evaluated at all is reported **unavailable**, matching
 ``dispatch_action``'s own fail-closed rule (a predicate that will not evaluate is never read as
 available).
+
+**Once the agent HAS named an argument** (:func:`evaluate_argument_availability`, T276). The
+undecided-until-a-target-is-named half above is only half the question, and the other half is not
+"is this number in range" -- it is *which* range. Observed live on 2026-09-21: ``camera.zoom`` was
+issued with ``{"target": 0.05}`` while the camera was in **world** mode, the captures that
+followed failed the provenance gate on zoom, and 16 of 17 were withheld. ``camera.zoom``'s own
+``availability_predicate`` is ``target >= 0.05 and target <= 1.0`` -- the *union* of two views'
+declared ranges (``views.world`` [0.2, 1.0], ``views.strategic`` [0.05, 0.3]) -- so 0.05 is a
+perfectly legal **strategic** zoom that the harness asked for while still in **world** mode. On
+the standard interface, scrolling past the threshold switches views: mode and zoom move together,
+and there is no seat a human can take in world mode at 0.05. What the engine then did with the
+request is a separate question and not this module's: the harness had already *asked* for a camera
+state no view in the catalog declares, which is a parity violation on the declarations alone.
+
+The defect is the union itself, and it was structural. ``act/camera.py``'s
+``validate_camera_action`` bound ``{"target": target}`` and nothing else -- no ``Observation``, so
+no way to know which view the camera was in -- and could therefore only ever check the union. Any
+target legal in *either* view was accepted in *both*.
+
+So an argument is checked against the range the view the board *is currently in* declares, not
+against the union of every view's. The check is derived entirely from the catalog: which action
+this is comes from its own verification predicate (``camera.zoom == target`` -- the declaration's
+own statement that it puts the camera at ``target``), the current view comes from the observation's
+``camera.read_state`` mode, and the range comes from that view's ``camera_requirements.zoom_range``.
+Nothing about ``(0.2, 1.0)`` is written down here; changing ``catalogs/observations/views.yaml``
+changes what this refuses, which is the only way the check and the declaration cannot drift apart.
 """
 
 from __future__ import annotations
@@ -55,6 +81,7 @@ import ast
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Final
 
 from civsim_harness.act.predicates import (
@@ -73,9 +100,13 @@ from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration
 from civsim_harness.models.turn import Observation
 
 __all__ = [
+    "CAMERA_STATE_DECLARATION_ID",
+    "CROSS_VIEW_ZOOM",
     "ActionAvailability",
+    "CrossViewZoom",
     "availability_by_action",
     "evaluate_action_availability",
+    "evaluate_argument_availability",
 ]
 
 
@@ -155,6 +186,216 @@ def availability_by_action(
         for declaration in declarations
         if declaration.kind is DeclarationKind.ACTION
     }
+
+
+# --------------------------------------------------------------------------
+# The argument, once the agent has named one (T276)
+# --------------------------------------------------------------------------
+
+#: ``catalogs/observations/camera.yaml``'s own declaration_id -- where the camera actually is, read
+#: fresh every decision step (T221). Restated here rather than imported from ``run/composition.py``,
+#: exactly as ``observe/reader.py`` restates ``game.screen_state`` for the same reason: this module
+#: has no business depending on the run loop for a single literal, and the literal is catalog data.
+CAMERA_STATE_DECLARATION_ID: Final = "camera.read_state"
+
+#: The symbol a declaration uses to say "the camera's zoom". A camera action that declares
+#: ``camera.zoom == target`` as its verification predicate is, by its own declaration, the action
+#: that puts the camera at ``target`` -- which is how :func:`_sets_camera_zoom` finds it without
+#: this module hard-coding the id ``camera.zoom``.
+_CAMERA_ZOOM_SYMBOL: Final = "camera.zoom"
+
+
+class CrossViewZoom(StrEnum):
+    """What to do with an argument the **current** view forbids but another declared view allows.
+
+    **This is the undecided half, and it is deliberately not decided here.** 0.05 is outside
+    ``views.world``'s declared [0.2, 1.0] and inside ``views.strategic``'s declared [0.05, 0.3].
+    Two readings are open, and which is right is a fact about this build's interface, not about
+    this module:
+
+    - the scroll wheel, pushed past the threshold, changes the mode *and* the zoom together -- in
+      which case a human reaches 0.05 by scrolling, and the harness's equivalent is a view change
+      followed by the zoom, so the argument should be honoured after that view change rather than
+      refused; or
+    - the mode only ever changes by its own toggle (``camera.set_view_mode``) -- in which case
+      asking for 0.05 while in world mode is asking for a seat no human has, and refusing it is
+      right permanently.
+
+    Settling it means watching what a real scroll-wheel zoom does to ``camera.read_state``'s
+    ``mode`` and ``zoom`` together on a live client. That is client-gated and belongs to the live
+    lane (tasks.md **T277**); nothing here guesses it.
+
+    :attr:`REFUSE` is what ships, because it is the answer under *both* readings for an argument
+    outside every declared range, and under the second for this one -- and because a refusal is
+    recoverable by the agent in one step (issue ``camera.set_view_mode``, then the zoom) while a
+    camera parked in a state no view declares is not. :attr:`SWITCH_VIEW_FIRST` is named so the
+    seam is a value and not a rewrite, and raises rather than silently re-admitting the argument:
+    honouring it needs the measurement above *and* an executor step that performs the view change,
+    and neither exists yet.
+    """
+
+    REFUSE = "refuse"
+    SWITCH_VIEW_FIRST = "switch_view_first"
+
+
+#: The policy in force until T277 lands the measurement. Callers may pass their own.
+CROSS_VIEW_ZOOM: Final = CrossViewZoom.REFUSE
+
+
+def evaluate_argument_availability(
+    declaration: ParityDeclaration,
+    observation: Observation,
+    *,
+    target: Any,
+    declarations: Iterable[ParityDeclaration],
+    cross_view: CrossViewZoom = CROSS_VIEW_ZOOM,
+) -> ActionAvailability:
+    """Whether *target* is an argument a human could give *declaration* **on this board**.
+
+    The companion to :func:`evaluate_action_availability`, which runs before a target is named and
+    therefore leaves every ``target`` conjunct undecided. This one runs after, and answers the one
+    question the union-shaped predicate in the catalog cannot: not "is this number in the range
+    some view allows" but "is it in the range the view we are *in* allows" (see the module
+    docstring). Every parameter is required for that reason -- an argument check with an optional
+    observation, or an optional catalog, is a check that silently does nothing wherever the caller
+    forgets it.
+
+    *declarations* is the catalog (or any slice of it containing the ``kind: view`` declarations);
+    non-views are ignored. Refuses with a reason naming the view and the range it violated, so the
+    refusal is actionable rather than a bare "out of parity".
+
+    **Abstains, rather than refusing, when the board reports no camera mode** -- there is then no
+    current view to measure against, and inventing a restriction is this module's one standing
+    prohibition. That is not a hole in the guarantee: an unreadable camera state already fails the
+    *capture* side closed (``parity/screening.py``'s provenance gate withholds the image), which is
+    where a camera that cannot be confirmed belongs.
+    """
+    declaration_id = str(declaration.declaration_id)
+    refusal = _out_of_current_view_range(
+        declaration,
+        observation,
+        target=target,
+        declarations=declarations,
+        cross_view=cross_view,
+    )
+    if refusal is not None:
+        return ActionAvailability(declaration_id, False, refusal)
+    return ActionAvailability(declaration_id, True)
+
+
+def _out_of_current_view_range(
+    declaration: ParityDeclaration,
+    observation: Observation,
+    *,
+    target: Any,
+    declarations: Iterable[ParityDeclaration],
+    cross_view: CrossViewZoom,
+) -> str | None:
+    """The reason *target* is outside the current view's declared zoom range, or ``None``."""
+    if declaration.kind is not DeclarationKind.ACTION or not _sets_camera_zoom(declaration):
+        return None
+    if isinstance(target, bool) or not isinstance(target, (int, float)):
+        # Not a zoom level at all. The action's own availability predicate is the authority on a
+        # malformed argument, and it already fails closed on one.
+        return None
+
+    mode = _current_camera_mode(observation)
+    if mode is None:
+        return None
+    views = [view for view in declarations if _declares_mode(view, mode)]
+    if not views:
+        # The board reports a mode no view declares. That is a catalog gap, and refusing the
+        # agent's argument is not how a catalog gap gets reported.
+        return None
+    if any(_accepts_zoom(view, target) for view in views):
+        return None
+
+    elsewhere = sorted(
+        str(view.declaration_id)
+        for view in declarations
+        if _accepts_zoom(view, target) and not _declares_mode(view, mode)
+    )
+    if elsewhere and cross_view is CrossViewZoom.SWITCH_VIEW_FIRST:
+        raise NotImplementedError(
+            "CrossViewZoom.SWITCH_VIEW_FIRST is named, not implemented: honouring an argument "
+            "legal in another view needs the live measurement of what a scroll-wheel zoom does to "
+            "mode and zoom together, and an executor step that performs the view change first "
+            f"(tasks.md T277). The argument {target!r} is legal in {', '.join(elsewhere)}."
+        )
+
+    declared = "; ".join(
+        f"{view.declaration_id} declares {_zoom_range_words(view)}" for view in views
+    )
+    reason = (
+        f"the camera is in the {mode} view, where a zoom of {_number(target)} is not a seat a "
+        f"human can take: {declared}"
+    )
+    if elsewhere:
+        reason += f" ({_number(target)} is inside {', '.join(elsewhere)}, which is another view)"
+    return reason
+
+
+def _sets_camera_zoom(declaration: ParityDeclaration) -> bool:
+    """Whether *declaration* says, in its own verification predicate, that it puts the camera's
+    zoom at ``target`` (``camera.zoom == target``, either way round)."""
+    predicate = declaration.verification_predicate
+    if not predicate:
+        return False
+    for conjunct in split_conjuncts(predicate):
+        try:
+            node = ast.parse(conjunct, mode="eval").body
+        except SyntaxError:  # pragma: no cover - split_conjuncts only emits parseable operands
+            continue
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            continue
+        if not isinstance(node.ops[0], ast.Eq):
+            continue
+        if {ast.unparse(node.left), ast.unparse(node.comparators[0])} == {
+            _CAMERA_ZOOM_SYMBOL,
+            "target",
+        }:
+            return True
+    return False
+
+
+def _declares_mode(declaration: ParityDeclaration, mode: str) -> bool:
+    """Whether *declaration* is a view declared for camera *mode*."""
+    requirements = declaration.camera_requirements
+    return (
+        declaration.kind is DeclarationKind.VIEW
+        and requirements is not None
+        and requirements.mode.value == mode
+    )
+
+
+def _accepts_zoom(declaration: ParityDeclaration, zoom: float) -> bool:
+    """Whether *declaration* is a view whose own declared ``zoom_range`` contains *zoom*."""
+    requirements = declaration.camera_requirements
+    if declaration.kind is not DeclarationKind.VIEW or requirements is None:
+        return False
+    low, high = requirements.zoom_range
+    return low <= zoom <= high
+
+
+def _current_camera_mode(observation: Observation) -> str | None:
+    """The camera mode the board is reporting, or ``None`` when it reports none."""
+    for entry in observation.entries:
+        if str(entry.declaration_id) != CAMERA_STATE_DECLARATION_ID:
+            continue
+        value = entry.value
+        mode = value.get("mode") if isinstance(value, Mapping) else None
+        return mode if isinstance(mode, str) and mode else None
+    return None
+
+
+def _number(value: float) -> str:
+    return f"{value:g}"
+
+
+def _zoom_range_words(view: ParityDeclaration) -> str:
+    assert view.camera_requirements is not None  # _declares_mode already established this
+    low, high = view.camera_requirements.zoom_range
+    return f"a zoom range of {_number(low)} to {_number(high)}"
 
 
 # --------------------------------------------------------------------------
