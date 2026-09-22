@@ -61,6 +61,35 @@
       prompt_selected_options:
         type: array
         items: { type: string }
+      # 2026.09.20. THE FALL-THROUGH'S EVIDENCE. `recognized: true` used to mean two different
+      # things: "I identified what is on screen" and "nothing on my hand-maintained watchlist is
+      # open". Three production instances took the second meaning and reported the first --
+      # `WorldCongressIntro` (turn 57), `EndGameMenu` (a full-screen DEFEAT modal, turn 67) and
+      # `HistoricMoments` (the "Era Makes History" card) -- so the probe answered `screen: world`,
+      # `recognized: true`, `has_blocking_prompt: false` with a modal demonstrably up, and actions
+      # were dispatched into it. The probe now reads the engine's own popup stack
+      # (`UIManager:GetPopupStack`, base/assets/ui/utilities/tunerutilities.lua:187) before
+      # consulting any list of ours, and these two fields are the evidence the `world` answer
+      # rests on. `popup_stack_depth` is absent exactly when the stack could not be read at all --
+      # in which case `recognized` is false and `screen_probe_reason` says why, because absence
+      # and unobservability must not share a representation.
+      #
+      # `screen_probe_reason` is present only when the probe could NOT identify the board, and it
+      # names which of the branches fired: `popup_stack_unreadable` (the accessor is not
+      # available), `popup_stack_entry_unnamed` (a popup is up carrying no id at all),
+      # `popup_stack_id_unresolvable` / `popup_stack_id_unreadable` (an id the probe cannot look
+      # up or whose visibility it cannot read), `unnamed_popup_showing` (a popup demonstrably on
+      # screen that no catalog id names) or `watched_state_has_no_catalog_id`.
+      #
+      # Parity: `popup_stack_ids` names the screens currently stacked on the local player's own
+      # display -- what a human sees by looking at their screen. Nothing here reads a popup's
+      # private state.
+      screen_probe_reason: { type: string }
+      screen_probe_error: { type: string }
+      popup_stack_depth: { type: integer, minimum: 0 }
+      popup_stack_ids:
+        type: array
+        items: { type: string }
   introduced_in_version: "2026.09.1"
 
 - declaration_id: game.turn_state

@@ -176,6 +176,18 @@ def route_prompt(
     folded into :attr:`PromptRouteStatus.unknown_screen`.
     """
     if not screen.recognized:
+        # `reason` is the difference between "a modal I cannot name is up" and "I could not read
+        # the popup stack at all" -- two conditions that both stall the run and need completely
+        # different fixes. It is written as a STATED GAP when the client did not say
+        # (``unrecognized_reason is None``), never defaulted to a plausible string: a default
+        # would make an unexplained stall look explained, which is the shape this whole change
+        # exists to remove.
+        detail: dict[str, object] = {"raw_screen_id": screen.raw_screen_id}
+        detail["reason"] = (
+            screen.unrecognized_reason
+            if screen.unrecognized_reason is not None
+            else "no_reason_reported_by_client"
+        )
         event = RunEvent(
             event_id=event_id if event_id is not None else EventId(uuid.uuid4().hex),
             run_id=run_id,
@@ -183,7 +195,7 @@ def route_prompt(
             step_index=step_index,
             event_type=RunEventType.UNKNOWN_SCREEN,
             occurred_at=occurred_at,
-            detail={"raw_screen_id": screen.raw_screen_id},
+            detail=detail,
         )
         return PromptRoute(status=PromptRouteStatus.unknown_screen, event=event)
 

@@ -402,3 +402,133 @@ def test_the_dispatched_screen_id_round_trips_back_to_the_same_action(
             continue
         screen = _dispatched_prompt_type(registry, declaration_id)
         assert str(prompt_declaration_id_for_screen(screen)) == declaration_id
+
+
+# ---------------------------------------------------------------------------
+# Absence vs unobservability, carried from the client's value to the stall record
+# ---------------------------------------------------------------------------
+#
+# The Lua half of this is in `tests/unit/test_screens_lua.py`; these are the Python half. What
+# they pin is that the REASON survives the whole way: the probe's `screen_probe_reason` reaches
+# `ScreenIdentityResult.unrecognized_reason` and then the `unknown_screen` event's detail, so an
+# operator reading a stalled run can tell "a modal I cannot name is up" from "I could not read
+# the popup stack at all". Those stall identically and need completely different fixes.
+
+
+def test_an_unrecognised_screen_carries_the_clients_own_reason() -> None:
+    """MEASURED 2026-09-22 ~17:15: the `HistoricMoments` card was showing and the probe answered
+    `world` / `recognized: true`. It now answers unknown, and says which branch fired."""
+    result = interpret_screen_state(
+        {
+            "screen": "unknown",
+            "raw_screen_id": "HistoricMoments",
+            "recognized": False,
+            "has_blocking_prompt": False,
+            "prompt_options": [],
+            "screen_probe_reason": "unnamed_popup_showing",
+            "popup_stack_depth": 1,
+            "popup_stack_ids": ["HistoricMoments"],
+        }
+    )
+    assert result.recognized is False
+    assert result.unrecognized_reason == "unnamed_popup_showing"
+
+    route = route_prompt(
+        screen=result,
+        run_id=RunId("run-1"),
+        turn_number=70,
+        step_index=3,
+        occurred_at=datetime(2026, 9, 22, tzinfo=UTC),
+    )
+    assert route.status is PromptRouteStatus.unknown_screen
+    assert route.event is not None
+    assert route.event.detail["raw_screen_id"] == "HistoricMoments"
+    assert route.event.detail["reason"] == "unnamed_popup_showing"
+
+
+def test_a_recognised_screen_carries_no_reason() -> None:
+    """The positive control, varying the dimension the rule constrains -- whether the probe could
+    identify the board -- and nothing else. Same call, same shape, recognised board: no reason,
+    no stall."""
+    result = interpret_screen_state(
+        {
+            "screen": "world",
+            "raw_screen_id": "InGame",
+            "recognized": True,
+            "has_blocking_prompt": False,
+            "prompt_options": [],
+            "popup_stack_depth": 0,
+            "popup_stack_ids": [],
+        }
+    )
+    assert result.recognized is True
+    assert result.unrecognized_reason is None
+    route = route_prompt(
+        screen=result,
+        run_id=RunId("run-1"),
+        turn_number=70,
+        step_index=3,
+        occurred_at=datetime(2026, 9, 22, tzinfo=UTC),
+    )
+    assert route.status is PromptRouteStatus.no_prompt
+
+
+def test_an_unreadable_popup_stack_is_not_recorded_as_an_empty_board() -> None:
+    """The spine rule at the Python boundary. `popup_stack_unreadable` and a quiet world both
+    produce "no blocking prompt"; only one of them may authorise actions, and the record has to
+    keep them apart."""
+    result = interpret_screen_state(
+        {
+            "screen": "unknown",
+            "raw_screen_id": "InGame",
+            "recognized": False,
+            "has_blocking_prompt": False,
+            "prompt_options": [],
+            "screen_probe_reason": "popup_stack_unreadable",
+            "screen_probe_error": "attempt to call a nil value",
+        }
+    )
+    assert result.recognized is False
+    assert result.unrecognized_reason == "popup_stack_unreadable"
+
+
+def test_an_unrecognised_screen_with_no_stated_reason_says_so_rather_than_inventing_one() -> None:
+    """A stall the client did not explain must read as unexplained. Defaulting the field to a
+    plausible string is how 131 withheld captures came to look accounted for -- the same shape,
+    in the capture writer, found the same day."""
+    result = interpret_screen_state(
+        {
+            "screen": "unknown",
+            "raw_screen_id": "SomeScreen",
+            "recognized": False,
+            "has_blocking_prompt": False,
+        }
+    )
+    assert result.unrecognized_reason is None
+    route = route_prompt(
+        screen=result,
+        run_id=RunId("run-1"),
+        turn_number=1,
+        step_index=0,
+        occurred_at=datetime(2026, 9, 22, tzinfo=UTC),
+    )
+    assert route.event is not None
+    assert route.event.detail["reason"] == "no_reason_reported_by_client"
+
+
+def test_recognised_true_alongside_a_probe_reason_resolves_toward_the_stall() -> None:
+    """The two readings of that pair are not equally safe: one authorises actions against a board
+    and the other stalls it. A producer that emits both is believed in the safe direction, and
+    both strings are kept so the drift is visible rather than silently corrected."""
+    result = interpret_screen_state(
+        {
+            "screen": "world",
+            "raw_screen_id": "InGame",
+            "recognized": True,
+            "has_blocking_prompt": False,
+            "prompt_options": [],
+            "screen_probe_reason": "popup_stack_unreadable",
+        }
+    )
+    assert result.recognized is False
+    assert result.unrecognized_reason == "recognized_with_probe_reason:popup_stack_unreadable"

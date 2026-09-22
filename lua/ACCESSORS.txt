@@ -100,6 +100,7 @@
 :GetPointsPerTurn                                    base/assets/ui/popups/greatpeoplepopup.lua:801
 :GetPointsTotal                                      base/assets/ui/popups/greatpeoplepopup.lua:800
 :GetPopulation                                       base/assets/ui/panels/productionpanel.lua:1877
+:GetPopupStack                                       base/assets/ui/utilities/tunerutilities.lua:187
 :GetProgressingCivic                                 base/assets/ui/screens/civicstree.lua:1251
 :GetReligion                                         base/assets/ui/panels/productionpanel.lua:1286
 :GetReligionTypeCreated                              base/assets/ui/partialscreens/worldrankings.lua:2030

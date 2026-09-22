@@ -38,6 +38,13 @@
 -- per-screen `hidden` results into game.screen_state's aggregate shape — rather than assuming one
 -- call into "InGame" is enough, which was this file's previous (wrong) assumption.
 --
+-- CORRECTED 2026-09-22: the watchlist is no longer the probe's only evidence, and the three
+-- limits below are scoped to the `IsHidden()` sweep, not to the probe as a whole. The probe now
+-- reads `UIManager:GetPopupStack()` -- the engine's own list of what is showing -- BEFORE it
+-- consults any list of ours, because using the watchlist as a detector produced three confident
+-- false all-clears in two days. See the "What is ACTUALLY showing" section below for the defect,
+-- the mechanism, the shipped citations, and what is still unverified live.
+--
 -- Three honest limits on what this answers even once the dispatcher does that (see spike P2):
 -- 1. It answers "is screen X open", not "what is topmost" — Z-order is not exposed. Sufficient
 --    for FR-049 (the unknown case is "the game is blocked and nothing known is open"), not for
@@ -398,6 +405,15 @@ local CIVSIM_SCREEN_ID_BY_STATE = {
     -- "something is up that I cannot name" signal, and cross-check
     -- `game.outcome_state.is_game_over` against `game.screen_state.screen` at assembly time (both
     -- were in the same sweep, contradicting each other, and nothing compared them).
+    --
+    -- ✅ FIXED 2026-09-22, after `HistoricMoments` made it three. The first follow-up above is
+    -- done: `CivSim_Screens_State` now reads the ENGINE's own popup stack before it consults this
+    -- list at all, and answers `unknown` for anything showing there that it cannot name -- see the
+    -- popup-stack section further down for the mechanism and the citations. The text above stands
+    -- as the record of what was true of this entry when it was written; what is withdrawn is only
+    -- "NOT FIXED HERE". The SECOND follow-up (cross-checking `game.outcome_state.is_game_over`
+    -- against `game.screen_state.screen` at assembly time) is still OPEN and is not this file's to
+    -- close -- it lives in observation assembly, not in the probe.
     game_over = "EndGameMenu",
     city_screen = "CityPanel",
     congress = "WorldCongressPopup",
@@ -823,6 +839,154 @@ local function CivSim_CongressPhaseChoices()
     return choices
 end
 
+-- ---------------------------------------------------------------------------
+-- What is ACTUALLY showing: the engine's own popup stack
+-- ---------------------------------------------------------------------------
+--
+-- THE DEFECT THIS EXISTS TO REMOVE (three confirmed instances, all in the dangerous direction).
+-- `CIVSIM_SCREEN_WATCHLIST` below is an ALLOWLIST, and `CivSim_Screens_State` used it as a
+-- DETECTOR: when nothing on it reported open it took its `#open == 0` branch and answered
+--     screen = "world", raw_screen_id = "InGame", recognized = TRUE,
+--     has_blocking_prompt = false, prompt_options = {}
+-- So a screen absent from the list read as NO SCREEN. The probe could not tell "nothing is
+-- blocking" from "nothing I know about is blocking", and it reported the confident version --
+-- which every downstream consumer treats as settled, so the harness dispatched actions into a
+-- full-screen modal and recorded them as action failures rather than as a blocked board.
+--   * `WorldCongressIntro`  (2026-09-21, game turn 57)  -- stalled `UnknownScreenEncountered`.
+--   * `EndGameMenu`         (2026-09-22 14:53Z, turn 67) -- a full-screen DEFEAT modal answered
+--                                                          `world` / `recognized = true`.
+--   * `HistoricMoments`     (2026-09-22 ~17:15)         -- the "Era Makes History" card, same
+--                                                          signature; `turn.end_turn` would have
+--                                                          been authorised against it.
+-- Each was patched by APPENDING ONE NAME to the list. The game exposes ~140 Lua contexts (the
+-- `LSQ:` enumeration the nexus handshake already reads; `HistoricMoments` is index 124 in
+-- specs/002-civ-playing-harness/spikes/r5-raw/00_states.txt) and the watchlist names 33, so that
+-- move leaves ~107 further chances to reproduce the identical false all-clear.
+--
+-- THE REPLACEMENT: ask the engine which contexts are showing instead of asking our own list.
+-- `UIManager:GetPopupStack()` is shipped Firaxis API -- `base/assets/ui/utilities/
+-- tunerutilities.lua:187-192` reads it and formats each entry as `ID;Priority;Flags`, so the
+-- entries carry an `.ID` and the array is ordered. That single call covers every
+-- `UIManager:QueuePopup` screen in the game with no list of ours in the loop at all, and ALL
+-- THREE confirmed instances are QueuePopup popups:
+--   * `dlc/expansion2/ui/additions/worldcongressintro.lua:43`
+--   * `base/assets/ui/endgame/endgamemenu.lua:755`
+--   * `dlc/expansion2/ui/additions/historicmoments.lua:430`
+--
+-- The watchlist sweep is KEPT, unchanged, for the screens we do know and for the full-screen
+-- views that are NOT UIManager popups (`GreatWorkShowcase` and `NaturalDisasterPopup` close
+-- through `ContextPtr:SetHide`, see CIVSIM_ACKNOWLEDGE_ONLY_PROMPTS). This is about the
+-- fall-through, not about discarding the vocabulary.
+--
+-- WHY THIS IS NOT JUST A BIGGER ALLOWLIST. The stack is produced by the engine, so a screen
+-- nobody has heard of appears on it the first time it is raised. What the probe then does with an
+-- id it cannot name is the whole point: it answers `unknown` and the run stalls (FR-049), rather
+-- than answering `world`. The maintenance burden moves to the SAFE side of the allowlist -- an
+-- unrecognised card costs a visible stall naming the exact context id, never a silent all-clear.
+--
+-- UNVERIFIED LIVE: that `UIManager:GetPopupStack` is bound in the InGame context (the shipped
+-- call site is the tuner's own utility state). It is pcall'd, and a build that cannot answer it
+-- is reported as `screen_probe_reason = "popup_stack_unreadable"` -- NOT as `world`. That is
+-- deliberate and it is the spine rule: absence and unobservability must not share a
+-- representation. It is also the one way this change can fail loudly, so it is named here: on a
+-- build without the accessor every probe stalls with that exact reason, which is visible and
+-- annoying rather than invisible and confident.
+
+-- Three-way, because two-way is the bug: true (hidden), false (showing), nil (could not read).
+-- `CivSim_IsVisible` above collapses "errored" into "not visible", which is safe where it is used
+-- (it guards an extra read) and would be exactly the original defect here.
+local function CivSim_ContextIsHidden(control)
+    local ok, hidden = pcall(function() return control:IsHidden() end)
+    if not ok then return nil end
+    if hidden == true then return true end
+    if hidden == false then return false end
+    return nil
+end
+
+-- Is this context id one the probe already accounts for? A watchlisted name that maps to no
+-- catalog id still counts as accounted for: the sweep below sees it open and answers `unknown`
+-- through the existing path, so treating it as unknown here too would only change which branch
+-- reported the same stall.
+local function CivSim_ContextIsAccountedFor(contextId)
+    for _, name in ipairs(CIVSIM_SCREEN_WATCHLIST) do
+        if name == contextId then return true end
+    end
+    for _, state in pairs(CIVSIM_SCREEN_ID_BY_STATE) do
+        if state == contextId then return true end
+    end
+    if contextId == CIVSIM_DIPLOMACY_STATE then return true end
+    if contextId == CIVSIM_CONGRESS_STATE then return true end
+    if contextId == CIVSIM_DEDICATION_STATE then return true end
+    return false
+end
+
+-- The engine's popup stack as {readable, ids, unnamed} -- or {readable = false, reason} when the
+-- call is not available. `unnamed` counts entries that exist but carry no id: a popup that is up
+-- and cannot be named at all, which must be reported rather than skipped.
+local function CivSim_Screens_PopupStack()
+    local okCall, stack = pcall(function() return UIManager:GetPopupStack() end)
+    if not okCall then
+        return { readable = false, reason = "popup_stack_unreadable", error = tostring(stack) }
+    end
+    if stack == nil then
+        return {
+            readable = false, reason = "popup_stack_unreadable",
+            error = "UIManager:GetPopupStack returned nil",
+        }
+    end
+    local ids = {}
+    local unnamed = 0
+    local okWalk, err = pcall(function()
+        for _, entry in ipairs(stack) do
+            local id = nil
+            local okId, value = pcall(function() return entry.ID end)
+            if okId and value ~= nil then
+                id = tostring(value)
+            elseif type(entry) == "string" then
+                id = entry
+            end
+            if id ~= nil and id ~= "" then
+                ids[#ids + 1] = id
+            else
+                unnamed = unnamed + 1
+            end
+        end
+    end)
+    if not okWalk then
+        return { readable = false, reason = "popup_stack_unreadable", error = tostring(err) }
+    end
+    return { readable = true, ids = ids, unnamed = unnamed }
+end
+
+-- The first stack entry the probe cannot account for, as {id, reason}, or nil when every entry is
+-- either accounted for or demonstrably not on screen.
+--
+-- An entry is only a stall when there is positive evidence it is up, or when the probe cannot
+-- tell. `GetPopupStack` reports what is QUEUED, and a queued entry whose own context reports
+-- `IsHidden() == true` is demonstrably not displayed (something above it is, and that something
+-- is on the stack too) -- stalling on those would stall a healthy board on background queue
+-- entries. The other two outcomes are not reassurance: a context that resolves and is SHOWING is
+-- the `HistoricMoments` case, and a context that cannot be resolved or whose hidden flag cannot
+-- be read is unobservable, which is not the same as absent.
+local function CivSim_Screens_UnaccountedPopup(ids)
+    for _, id in ipairs(ids) do
+        if not CivSim_ContextIsAccountedFor(id) then
+            local ctx = CivSim_LookUp(id, nil)
+            if ctx == nil then
+                return { id = id, reason = "popup_stack_id_unresolvable" }
+            end
+            local hidden = CivSim_ContextIsHidden(ctx)
+            if hidden == nil then
+                return { id = id, reason = "popup_stack_id_unreadable" }
+            end
+            if hidden == false then
+                return { id = id, reason = "unnamed_popup_showing" }
+            end
+        end
+    end
+    return nil
+end
+
 -- VERIFIED (P2): the confirmed screen-identity mechanism. This is written to be dispatched once
 -- *per candidate screen state* (see header) — when the dispatcher targets a given screen's own
 -- Lua state and calls this, it reports that screen's own hidden flag. The caller already knows
@@ -848,6 +1012,40 @@ end
 -- returns nil) and `:IsHidden()` is its open flag; at the plain world view every watchlist screen
 -- answered hidden=true. That is the aggregate, built from `InGame` in one dispatch.
 local function CivSim_Screens_State()
+    -- Ask the ENGINE what is showing before consulting any list of ours (see the popup-stack
+    -- section above for why, and for the three production instances that made it necessary).
+    local popups = CivSim_Screens_PopupStack()
+    if not popups.readable then
+        -- Unobservable, not empty. The `world` answer below is a POSITIVE claim and it is not
+        -- available from here: the probe could not establish what is on the stack, so it says so.
+        return {
+            screen = "unknown", raw_screen_id = "InGame", recognized = false,
+            has_blocking_prompt = false, prompt_options = {},
+            screen_probe_reason = popups.reason, screen_probe_error = popups.error,
+        }
+    end
+    local popupDepth = #popups.ids + popups.unnamed
+    if popups.unnamed > 0 then
+        return {
+            screen = "unknown", raw_screen_id = "InGame", recognized = false,
+            has_blocking_prompt = false, prompt_options = {},
+            screen_probe_reason = "popup_stack_entry_unnamed",
+            popup_stack_depth = popupDepth, popup_stack_ids = popups.ids,
+        }
+    end
+    -- A card the probe cannot name outranks anything it can, in both directions: it does not know
+    -- which is on top (Z-order is not exposed, header limitation 1), so naming the one it happens
+    -- to understand would be a guess in the dangerous direction.
+    local unaccounted = CivSim_Screens_UnaccountedPopup(popups.ids)
+    if unaccounted ~= nil then
+        return {
+            screen = "unknown", raw_screen_id = unaccounted.id, recognized = false,
+            has_blocking_prompt = false, prompt_options = {},
+            screen_probe_reason = unaccounted.reason,
+            popup_stack_depth = popupDepth, popup_stack_ids = popups.ids,
+        }
+    end
+
     local open = {}
     for _, name in ipairs(CIVSIM_SCREEN_WATCHLIST) do
         local okC, ctx = pcall(function() return ContextPtr:LookUpControl("/InGame/" .. name) end)
@@ -862,9 +1060,17 @@ local function CivSim_Screens_State()
         -- vocabulary") and CIVSIM_KNOWN_SCREENS above both say `world`, so the catalog contract
         -- wins and the probe now answers `world`. Nothing else in the catalog ever named
         -- `world_view`; it existed only here and in the Python fakes that mirrored it.
+        --
+        -- CORRECTED 2026-09-22: this is now a POSITIVE claim, and `popup_stack_depth` is the
+        -- evidence it rests on -- the engine's own popup stack was read, and every entry on it
+        -- was either accounted for or demonstrably not displayed. It used to be returned on the
+        -- strength of an allowlist MISS, which is how a full-screen DEFEAT modal read as `world`
+        -- with `recognized = true`. Every route to this branch now passes the popup-stack read
+        -- above, and an unreadable stack leaves by a different door.
         return {
             screen = "world", raw_screen_id = "InGame", recognized = true,
             has_blocking_prompt = false, prompt_options = {},
+            popup_stack_depth = popupDepth, popup_stack_ids = popups.ids,
         }
     end
     -- Three prompts are MODES of a context that is also an ordinary screen, so they are read from
@@ -928,6 +1134,8 @@ local function CivSim_Screens_State()
         return {
             screen = "unknown", raw_screen_id = raw, recognized = false,
             has_blocking_prompt = false, prompt_options = {},
+            screen_probe_reason = "watched_state_has_no_catalog_id",
+            popup_stack_depth = popupDepth, popup_stack_ids = popups.ids,
         }
     end
     -- T253: an acknowledge-only popup offers exactly one option. Every other prompt family still
@@ -961,6 +1169,7 @@ local function CivSim_Screens_State()
     local result = {
         screen = screen, raw_screen_id = raw, recognized = true,
         has_blocking_prompt = (string.sub(screen, 1, 7) == "prompt."), prompt_options = options,
+        popup_stack_depth = popupDepth, popup_stack_ids = popups.ids,
     }
     if extra ~= nil then
         for k, v in pairs(extra) do result[k] = v end

@@ -104,6 +104,7 @@ function M.reset(open_states, hidden_states)
     M.selection_rows = {}
     M.drop_selection_table = false
     M.reply_choices = nil
+    M.popup_stack = {}
     M.controls = {}
     for _, s in ipairs(open_states) do M.controls["/InGame/" .. s] = make_control(s, false) end
     for _, s in ipairs(hidden_states) do M.controls["/InGame/" .. s] = make_control(s, true) end
@@ -340,6 +341,51 @@ function UIManager:DequeuePopup(ctx)
     ctx.hidden = true
 end
 
+-- Forge's own popup stack, in the shape Firaxis's shipped tuner utility reads it:
+-- `UIManager:GetPopupStack()` answers an array whose entries carry `.ID`, `.Priority` and
+-- `.Flags` (base/assets/ui/utilities/tunerutilities.lua:187-192). `M.popup_stack` is the list of
+-- ids currently queued/shown; `M.drop_popup_stack()` scripts a build on which the accessor is not
+-- reachable from InGame at all, which is the condition this box cannot otherwise reproduce.
+M.popup_stack = {}
+function UIManager:GetPopupStack()
+    local entries = {}
+    for i, id in ipairs(M.popup_stack) do
+        if id == M.unnamed_popup_marker then
+            entries[i] = { Priority = 0, Flags = 0 }
+        else
+            entries[i] = { ID = id, Priority = 0, Flags = 0 }
+        end
+    end
+    return entries
+end
+
+M.unnamed_popup_marker = "<<unnamed>>"
+
+function M.set_popup_stack(ids)
+    M.popup_stack = {}
+    for _, id in ipairs(ids) do M.popup_stack[#M.popup_stack + 1] = id end
+end
+
+-- Remove the accessor entirely -- a client build on which `GetPopupStack` is not bound in the
+-- InGame context. Returns true so the caller can assert the simulation actually fired rather
+-- than passing vacuously against a stub that still answers.
+function M.drop_popup_stack()
+    UIManager.GetPopupStack = nil
+    return UIManager.GetPopupStack == nil
+end
+
+function M.popup_stack_is_reachable()
+    return UIManager.GetPopupStack ~= nil
+end
+
+-- A context that resolves but whose hidden flag cannot be read -- the third fail-closed branch,
+-- and the one a two-valued `IsHidden()` reader would silently fold into "not showing".
+function M.set_unreadable_context(name)
+    local c = { name = name }
+    function c:IsHidden() error("stubbed IsHidden failure") end
+    M.controls["/InGame/" .. name] = c
+end
+
 return M
 """
 
@@ -352,10 +398,22 @@ def lua() -> tuple[Any, Any]:
     return runtime, stubs
 
 
-def _state(runtime: Any, stubs: Any, *, open: list[str], hidden: list[str] = ()) -> dict[str, Any]:
+_LIST_FIELDS = ("prompt_options", "prompt_selected_options", "popup_stack_ids")
+
+
+def _state(
+    runtime: Any,
+    stubs: Any,
+    *,
+    open: list[str],
+    hidden: list[str] = (),
+    popup_stack: list[str] | None = None,
+) -> dict[str, Any]:
     stubs.reset(runtime.table(*open), runtime.table(*hidden))
+    if popup_stack is not None:
+        stubs.set_popup_stack(runtime.table(*popup_stack))
     result = runtime.globals()["CivSim_Screens"]["probe"]()
-    return {k: (list(v.values()) if k == "prompt_options" else v) for k, v in result.items()}
+    return {k: (list(v.values()) if k in _LIST_FIELDS else v) for k, v in result.items()}
 
 
 def test_the_plain_world_view_is_recognised_with_no_prompt(lua: tuple[Any, Any]) -> None:
@@ -365,6 +423,195 @@ def test_the_plain_world_view_is_recognised_with_no_prompt(lua: tuple[Any, Any])
     assert state["recognized"] is True
     assert state["has_blocking_prompt"] is False
     assert state["prompt_options"] == []
+    # The `world` answer is now a POSITIVE claim, and this is the evidence it rests on: the
+    # engine's own popup stack was read and was empty. Before this field existed, `world` was
+    # returned on the strength of an allowlist miss (see the three tests below).
+    assert state["popup_stack_depth"] == 0
+    # Absent, not null: a reason exists only when there is one to give.
+    assert "screen_probe_reason" not in state
+
+
+# ---------------------------------------------------------------------------
+# The fall-through: "nothing I know about is open" is NOT "nothing is open"
+# ---------------------------------------------------------------------------
+#
+# MEASURED three times in production, each on a different screen, each costing a run:
+#   * `WorldCongressIntro` (2026-09-21, game turn 57) -- stalled `UnknownScreenEncountered`.
+#   * `EndGameMenu` (2026-09-22 14:53Z, game turn 67) -- a full-screen DEFEAT modal while the
+#     probe answered `world` / `recognized = true` / `has_blocking_prompt = false`.
+#   * `HistoricMoments` (2026-09-22 ~17:15) -- the "Era Makes History" card, same signature;
+#     `turn.end_turn` would have been authorised against it.
+# All three are `UIManager:QueuePopup` popups -- `worldcongressintro.lua:43`,
+# `endgame/endgamemenu.lua:755`, `historicmoments.lua:430` -- so all three are on the stack the
+# engine itself keeps, and none of them needed to be on a list of ours to be seen there.
+#
+# The dimension the rule constrains is NAMEABILITY, not which screen it is, so the positive twin
+# below varies exactly that: the same mechanism, the same stack, a popup the probe CAN name.
+
+
+def test_a_popup_the_probe_cannot_name_is_not_the_world_view(lua: tuple[Any, Any]) -> None:
+    """The defect, in its third and most dangerous instance. `HistoricMoments` is showing and is
+    on the engine's popup stack; nothing the probe watches is open. The old fall-through answered
+    `world`/`recognized = true` and authorised actions into it."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=["HistoricMoments"],
+        hidden=["CityPanel", "TechCivicCompletedPopup"],
+        popup_stack=["HistoricMoments"],
+    )
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["has_blocking_prompt"] is False
+    assert state["prompt_options"] == []
+    # The stall must SAY what it saw, or the operator is back to guessing.
+    assert state["raw_screen_id"] == "HistoricMoments"
+    assert state["screen_probe_reason"] == "unnamed_popup_showing"
+
+
+def test_a_popup_the_probe_can_name_is_still_named_from_the_same_stack(
+    lua: tuple[Any, Any],
+) -> None:
+    """The positive control, varying NAMEABILITY and nothing else: identical mechanism, identical
+    stack shape, a popup that IS in the catalog vocabulary. The real one this is modelled on is
+    the same probe naming `TechCivicCompletedPopup` correctly on the same board minutes after it
+    had answered `world` over `HistoricMoments` -- the machinery was never the gap."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=["TechCivicCompletedPopup"],
+        hidden=["CityPanel"],
+        popup_stack=["TechCivicCompletedPopup"],
+    )
+    assert state["screen"] == "prompt.tech_civic_completed"
+    assert state["recognized"] is True
+    assert state["has_blocking_prompt"] is True
+    assert state["prompt_options"] == ["continue"]
+    assert "screen_probe_reason" not in state
+
+
+def test_an_unnamed_popup_outranks_a_named_screen_that_is_also_open(
+    lua: tuple[Any, Any],
+) -> None:
+    """Z-order is not exposed, so a card the probe cannot name, showing at the same time as one it
+    can, must not be resolved in favour of the one it happens to understand -- it does not know
+    which is on top. Fail closed on the one it cannot name."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=["TechCivicCompletedPopup", "HistoricMoments"],
+        hidden=["CityPanel"],
+        popup_stack=["TechCivicCompletedPopup", "HistoricMoments"],
+    )
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["raw_screen_id"] == "HistoricMoments"
+
+
+def test_a_queued_popup_that_is_not_displayed_does_not_stall_the_board(
+    lua: tuple[Any, Any],
+) -> None:
+    """The negative control for the rule above, and the reason it is keyed on the CONTEXT's own
+    visibility rather than on stack membership alone: `GetPopupStack` reports what is queued, and
+    a queued entry whose own context reports `IsHidden() == true` is demonstrably not on screen.
+    Without this branch every background queue entry would stall a healthy board."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=[],
+        hidden=["HistoricMoments", "CityPanel"],
+        popup_stack=["HistoricMoments"],
+    )
+    assert state["screen"] == "world"
+    assert state["recognized"] is True
+    # The evidence is still carried, so an auditor can see the entry was considered and why it
+    # did not count -- absence of a stall is not absence of the entry.
+    assert state["popup_stack_ids"] == ["HistoricMoments"]
+    assert state["popup_stack_depth"] == 1
+
+
+def test_a_popup_stack_entry_whose_context_cannot_be_resolved_fails_closed(
+    lua: tuple[Any, Any],
+) -> None:
+    """A stack entry naming a context that `/InGame/<id>` does not resolve is UNOBSERVABLE, not
+    absent: the probe cannot read whether it is displayed. That must not resolve to `world`."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=[],
+        hidden=["CityPanel"],
+        popup_stack=["SomePopupThisBuildAddedLater"],
+    )
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["raw_screen_id"] == "SomePopupThisBuildAddedLater"
+    assert state["screen_probe_reason"] == "popup_stack_id_unresolvable"
+
+
+def test_a_popup_stack_entry_with_no_id_fails_closed(lua: tuple[Any, Any]) -> None:
+    """An entry the engine reports without an `ID` is a popup that is up and cannot be named at
+    all -- the purest form of "something is there and I cannot say what"."""
+    runtime, stubs = lua
+    state = _state(
+        runtime,
+        stubs,
+        open=[],
+        hidden=["CityPanel"],
+        popup_stack=[stubs.unnamed_popup_marker],
+    )
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["screen_probe_reason"] == "popup_stack_entry_unnamed"
+
+
+def test_a_popup_stack_entry_whose_visibility_cannot_be_read_fails_closed(
+    lua: tuple[Any, Any],
+) -> None:
+    """The third fail-closed branch, and the one a two-valued reader loses. `CivSim_IsVisible`
+    collapses "the call errored" into "not visible", which is safe where it guards an extra read
+    and would be the original defect here -- a context whose hidden flag cannot be read is
+    unobservable, and unobservable is not absent."""
+    runtime, stubs = lua
+    stubs.reset(runtime.table(), runtime.table("CityPanel"))
+    stubs.set_unreadable_context("HistoricMoments")
+    stubs.set_popup_stack(runtime.table("HistoricMoments"))
+    result = runtime.globals()["CivSim_Screens"]["probe"]()
+    state = {k: (list(v.values()) if k in _LIST_FIELDS else v) for k, v in result.items()}
+
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["raw_screen_id"] == "HistoricMoments"
+    assert state["screen_probe_reason"] == "popup_stack_id_unreadable"
+
+
+def test_an_unreadable_popup_stack_is_unobservable_not_an_empty_board(
+    lua: tuple[Any, Any],
+) -> None:
+    """THE SPINE RULE, on this file's own value: absence and unobservability must not share a
+    representation. A build where `UIManager:GetPopupStack` is not reachable from InGame cannot
+    be reproduced on this box at all, so the condition is simulated explicitly -- and the
+    simulation is ASSERTED to have fired, or this test would pass vacuously against a stub that
+    still answers (the same trap the UTF-8 encoder fix hit at `34b029a`)."""
+    runtime, stubs = lua
+    assert stubs.popup_stack_is_reachable() is True, "the control itself must start reachable"
+    assert stubs.drop_popup_stack() is True, "the simulation did not fire"
+    assert stubs.popup_stack_is_reachable() is False
+
+    stubs.reset(runtime.table(), runtime.table("CityPanel", "TechCivicCompletedPopup"))
+    result = runtime.globals()["CivSim_Screens"]["probe"]()
+    state = {k: (list(v.values()) if k in _LIST_FIELDS else v) for k, v in result.items()}
+
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["has_blocking_prompt"] is False
+    assert state["screen_probe_reason"] == "popup_stack_unreadable"
+    # And it must not silently claim a depth it never read.
+    assert "popup_stack_depth" not in state
 
 
 @pytest.mark.parametrize(

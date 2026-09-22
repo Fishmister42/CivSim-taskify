@@ -12,6 +12,17 @@ exactly this case (see its
 ``CivSim_ScreenIsKnown`` gate) -- this module does not re-derive that judgement, it only gives the
 rest of ``observe``/``act`` a stable type to consume instead of a bare ``dict``.
 
+**What ``recognized`` means, and what it used to mean (corrected 2026-09-22).** It means "I
+identified what is on screen". It did NOT: until 2026-09-22 the Lua probe answered
+``screen = "world", recognized = true`` whenever nothing on its hand-maintained watchlist was
+open, so "nothing I know about is blocking" was reported as "nothing is blocking" -- three times
+in production, most recently over a full-screen ``EndGameMenu`` DEFEAT modal and the
+``HistoricMoments`` era card. The probe now reads the engine's own popup stack first and reports
+``recognized = false`` plus a :data:`SCREEN_PROBE_REASON_FIELD` for anything it cannot name or
+could not read, which this module carries through as
+:attr:`ScreenIdentityResult.unrecognized_reason`. **Absence and unobservability do not share a
+representation here**, and that is the property to preserve in any future change to this file.
+
 Probed between decision steps and after every interruption (research R13) -- this module does not
 decide *when* to probe; that is the run loop's job (T110, a later wave). It only interprets one
 probe result at a time, which is what keeps it callable identically from ordinary step-boundary
@@ -34,6 +45,16 @@ UNKNOWN_SCREEN = "unknown"
 #: ``catalogs/actions/prompts.yaml`` and ``lua/ingame/screens.lua``.
 PROMPT_SCREEN_PREFIX = "prompt."
 
+#: The field ``lua/ingame/screens.lua`` sets when the probe could not identify the board, naming
+#: which branch fired (``popup_stack_unreadable``, ``unnamed_popup_showing``, ...). Its presence
+#: is what distinguishes "I looked and nothing is blocking" from "I could not look" -- the two
+#: states that shared a representation until 2026-09-22 and produced three false all-clears.
+SCREEN_PROBE_REASON_FIELD = "screen_probe_reason"
+
+#: Set when a value claims ``recognized: true`` while also carrying a reason it could not identify
+#: the board. The Lua never emits that pair; a value that does is trusted in the safe direction.
+INCONSISTENT_RECOGNITION_REASON = "recognized_with_probe_reason"
+
 
 @dataclass(frozen=True)
 class ScreenIdentityResult:
@@ -50,6 +71,12 @@ class ScreenIdentityResult:
     recognized: bool
     has_blocking_prompt: bool
     prompt_options: tuple[str, ...] = ()
+    #: Why the probe could not identify the board, when it could not. ``None`` on a recognised
+    #: screen, and ``None`` on an unrecognised one only when the client did not say -- which is
+    #: itself worth seeing, so it is never defaulted to a plausible string. The whole point of
+    #: this field is that "I looked and nothing is blocking" and "I could not look" stop sharing
+    #: a representation; filling it in with a guess would undo that.
+    unrecognized_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not self.recognized and (self.has_blocking_prompt or self.prompt_options):
@@ -101,6 +128,17 @@ def interpret_screen_state(value: Any) -> ScreenIdentityResult:
     recognized = bool(value["recognized"])
     raw_screen_id = str(value.get("raw_screen_id", screen))
 
+    reason_value = value.get(SCREEN_PROBE_REASON_FIELD)
+    probe_reason = str(reason_value) if reason_value is not None else None
+
+    if recognized and probe_reason is not None:
+        # A value that says both "I identified this" and "here is why I could not" is internally
+        # inconsistent, and the two readings are not equally safe: one authorises actions against
+        # the board and the other stalls it. Resolve toward the stall and record both strings, so
+        # a producer drifting into this shape is visible rather than silently believed.
+        recognized = False
+        probe_reason = f"{INCONSISTENT_RECOGNITION_REASON}:{probe_reason}"
+
     if not recognized:
         # Never trust a prompt/options claim riding along with an unrecognised screen -- treat the
         # whole probe result as "unknown" rather than a partially-known one (R13: no guessing).
@@ -110,6 +148,7 @@ def interpret_screen_state(value: Any) -> ScreenIdentityResult:
             recognized=False,
             has_blocking_prompt=False,
             prompt_options=(),
+            unrecognized_reason=probe_reason,
         )
 
     has_blocking_prompt = bool(value["has_blocking_prompt"])
