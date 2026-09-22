@@ -1497,3 +1497,46 @@ The requirement that follows: **the liveness signal must be emitted by the waiti
 never inferred from the process still existing**, or the criterion collapses back into the timer it
 was written to replace. Routed to the lane owning `act/verify.py`, together with the open question —
 not yet a finding — of whether the in-flight provider call emits anything, which would matter more.
+
+### Two more named patterns, and the rule-writing principle that came out of applying them (2026-09-22)
+
+**Pattern: "a docstring standing in for a mechanism."** `RunLockHandle.commit()` promised the lock was
+*"registered somewhere a later, real release will find it."* It was not: the "later, real release"
+(`_release_terminal_run_clients`) runs only when a **subsequent** run prepares, in the same process,
+against an in-memory `run_contexts` dict a fresh process does not have. **This is a sibling of the
+zero-caller helper and the discarded return value, and it is the worst of the three** — those are
+passive, and nobody looked; this one *made looking feel unnecessary*. It reads as a guarantee to
+anyone auditing the lock's lifetime, which is the likeliest reason the gap survived the commit that
+was written to close it.
+
+**Pattern: "the engine answers and we discard the answer."** Three instances now, all live-measured:
+1. `cities.set_production`'s Lua answered `city_not_found` and the executor dropped the dispatch
+   answer, surfacing it as `verification_failed` — the defect that hid the lone-argument bug.
+2. `run/composition.py:746` calls the debug-menu reader and **discards the return**, so
+   `Run.debug_menu_state` has been empty on every run ever made (T280).
+3. The build-options read: the engine returns a **per-row failure reason** for each disabled build
+   and our Lua **discards it**, so `available_builds_reason` came back `null` where it should have
+   said "cannot build on a city centre". The field exists precisely to carry that explanation.
+
+Distinct from "a mechanism that exists but is never reached": here the mechanism runs, the engine
+replies, and the reply is thrown away — so the system is *less* informed than the game was willing
+to make it, and the silence reads as absence of information rather than loss of it.
+
+### The principle for writing the next rule
+
+Today's rules divide cleanly by one property, and it predicts which held:
+
+> **A rule that asks for an assessment returns the assessor's priors. A rule that asks for a lookup
+> returns the fact.**
+
+- The verification rule failed **three times** while it asked "is this isolated?" — an assessment.
+  It started working when it asked "which path does the import resolve to?" — a lookup.
+- "What measurement is this number from?" works because it is answerable without judgement.
+- Reconciliation works because "which line, which commit" is a lookup.
+- The case that proves it: asked *"is the lock fix good?"* the honest answer was **yes** — the guard
+  really is correct. The question that found the gap was narrower and duller: **"which line releases
+  it on each exit path?"** Same code, same reviewer, same day; only the second question found that
+  the guard's protection ends at `commit()` and nothing spans the drive phase.
+
+A rule phrased as an assessment feels like it is working right up until the moment it matters, because
+it agrees with whoever is applying it. Prefer the dull question.
