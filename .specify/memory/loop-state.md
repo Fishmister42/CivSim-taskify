@@ -44,6 +44,15 @@ assessment is a rule that returns the assessor's priors.
   `PYTHONPATH=/home/matt/CivSolver-live/src UV_PROJECT_ENVIRONMENT=/home/matt/CivSolver/.venv uv run
   --no-sync python -m tests.live.<driver> … --store /home/matt/CivSolver/civsim-match-store.db` and an
   absolute output dir under the main tree's `spikes/gameplay-<date>/`. Nobody edits the worktree.
+  **ALWAYS pass `--store /home/matt/CivSolver/civsim-match-store.db` explicitly.** `goal_run`'s
+  `DEFAULT_STORE` is `REPO / "civsim-match-store.db"` where `REPO` resolves to **the worktree the module
+  runs from** — so a run driven from `CivSolver-live` silently creates and writes a *separate* store
+  there. Found 2026-09-22: block-07 landed in the live worktree's own store while every coverage number
+  we quote comes from the main one. **A live lane writing to a store nobody audits is a silent
+  measurement hole**, and cross-block comparisons are meaningless unless you know which store each
+  landed in. Also `uv sync --all-groups --all-extras` the live worktree: a bare venv there lacks the
+  `linux` extra, and the GIF recording thread dies on `No module named 'Xlib'` (recording only — the run
+  and its observations are unaffected; this is environment hygiene, **not** a withheld-frame finding).
 - **Test command** (the only accepted form): `timeout 900 uv run pytest -q -p no:cacheprovider
   -o faulthandler_timeout=120` (Lua-executing tests: prefix `uv run --with lupa`). **Redirect it to a
   log and poll that log in a bounded loop** rather than piping to `tail` — `-q` plus `| tail -N` makes
