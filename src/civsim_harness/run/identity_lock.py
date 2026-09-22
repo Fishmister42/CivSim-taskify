@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
+import signal
 import tempfile
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -33,6 +36,107 @@ from civsim_harness.errors import PreflightError
 from civsim_harness.models.common import RunId, Timestamp
 
 DEFAULT_LOCK_DIR = Path(tempfile.gettempdir()) / "civsim_harness" / "run_locks"
+
+
+# ---------------------------------------------------------------------------------------
+# SIGTERM backstop (T227/T289 follow-on, 2026-09-22)
+# ---------------------------------------------------------------------------------------
+# `RunLockHandle.commit`'s `atexit` backstop (below) does not fire for `SIGTERM`: Python's
+# default `SIGTERM` disposition terminates the process WITHOUT running `atexit` handlers,
+# and `timeout` -- this project's own standing rule for bounding every long-running command
+# -- sends `SIGTERM` by default. Left alone, that made every `timeout`-bounded command an
+# uncaught leak of exactly the lock the `atexit` backstop exists to close.
+#
+# This bookkeeping is deliberately module-level, not per-`RunIdentityLock`-instance: a
+# process has exactly one `SIGTERM` disposition no matter how many `RunIdentityLock` objects
+# exist in it, so whatever decides when to install/restore that disposition has to be shared
+# the same way, or two instances could each think they own it. It is a plain reference count
+# (`_sigterm_install_depth`) plus the one previous handler captured the moment the count first
+# left zero (`_sigterm_previous_handler`) -- installed only while at least one lock anywhere
+# in this process is held, restored the instant the last one is released, and never touched
+# at import time (nothing above this comment calls `signal.signal`).
+_SIG_NOT_CAPTURED = object()
+_sigterm_previous_handler: object = _SIG_NOT_CAPTURED
+_sigterm_install_depth = 0
+#: Every lock this process currently holds, so `_sigterm_handler` knows what to release.
+#: `installed` records whether *that particular* `acquire()` call contributed to
+#: `_sigterm_install_depth` (see `_sigterm_arm`) -- `_disarm_sigterm` must consult it, not
+#: assume it, before deciding whether to decrement.
+_sigterm_held_locks: list[tuple["RunIdentityLock", RunId, bool]] = []
+
+
+def _sigterm_arm() -> bool:
+    """Install this module's shared `SIGTERM` handler for one more held lock.
+
+    Returns whether this call actually contributed to the shared installation.
+    `False` covers two cases, both handled identically by the matching
+    `_sigterm_disarm(installed=False)`: not on the main thread (`signal.signal` only
+    works there -- CPython raises `ValueError` off it; the file lock itself is
+    unaffected, only this particular acquisition's `SIGTERM` catch is unavailable, and
+    the `atexit` backstop still covers every other exit path for it), or the shared
+    handler was already installed by an outer, still-held lock. Either way the caller
+    must remember what this call returned and pass it back to `_sigterm_disarm`, so an
+    acquisition that installed nothing can never be mistaken for one that did and
+    over-decrement a depth it never incremented.
+    """
+    global _sigterm_previous_handler, _sigterm_install_depth
+    if threading.current_thread() is not threading.main_thread():
+        return False
+    if _sigterm_install_depth == 0:
+        _sigterm_previous_handler = signal.signal(signal.SIGTERM, _sigterm_handler)
+    _sigterm_install_depth += 1
+    return True
+
+
+def _sigterm_disarm(*, installed: bool) -> None:
+    """Undo one `_sigterm_arm` contribution. A no-op unless *installed* is `True` -- see
+    `_sigterm_arm` for why an acquisition that never installed must never decrement a
+    depth it never incremented.
+
+    Only the innermost `_sigterm_arm` call (the one that took the depth 0 -> 1) captured
+    `_sigterm_previous_handler`; only the matching outermost `_sigterm_disarm` call (the
+    one that takes it 1 -> 0) restores it. Everything in between is silent bookkeeping,
+    on purpose -- that is what stops two overlapping held locks from each restoring a
+    stale handler: an inner lock's release must never touch the process's `SIGTERM`
+    disposition while an outer lock still holds it.
+    """
+    global _sigterm_previous_handler, _sigterm_install_depth
+    if not installed:
+        return
+    _sigterm_install_depth -= 1
+    if _sigterm_install_depth == 0 and _sigterm_previous_handler is not _SIG_NOT_CAPTURED:
+        signal.signal(signal.SIGTERM, _sigterm_previous_handler)
+        _sigterm_previous_handler = _SIG_NOT_CAPTURED
+
+
+def _sigterm_handler(signum: int, frame: object) -> None:
+    """Fires on `SIGTERM` while at least one run-identity lock is held in this process.
+
+    Releases every lock this process currently holds -- each release unlinks that lock's
+    file, disarms that lock's own `atexit` exit backstop (`_arm_exit_backstop`), and
+    unwinds one layer of this handler's own installation via `_sigterm_disarm`. By the
+    time the loop below finishes, the last `_sigterm_disarm` call has already restored
+    whatever `SIGTERM` disposition preceded this module's -- default, ignored, or some
+    other library's handler.
+
+    What happens next makes that restored disposition actually take effect -- a handler
+    that swallows `SIGTERM` is worse than none. A real chained handler is called
+    directly (so it runs exactly once, now, rather than racing a redelivered signal);
+    anything else (default or ignore) is put back with `signal.signal` and then
+    re-delivered to this same process with `os.kill`, so the process dies -- or is
+    ignored -- precisely as it would have if this module had never installed anything.
+    """
+    for lock, run_id, _installed in list(_sigterm_held_locks):
+        lock.release(run_id)
+
+    previous = signal.getsignal(signal.SIGTERM)
+    if callable(previous):
+        # `signal.SIG_DFL`/`signal.SIG_IGN` are `signal.Handlers` enum members, not
+        # callables, so this only matches a real chained handler function.
+        previous(signum, frame)
+        return
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
 class RunIdentityLockError(PreflightError):
@@ -135,13 +239,26 @@ class RunLockHandle:
     enumerating them, but by not needing to know which one ran. It is disarmed the moment any
     real release happens first, so it never fires a second time over a live re-acquisition.
 
-    **What this still does not cover, on purpose.** A hard kill (`SIGKILL`, or any signal Python
-    cannot handle) stops this process before even the exit backstop can run -- nothing inside this
-    process can catch that. That is a *different* mechanism's job (the orphan sweep,
-    `run/orphans.py`: it detects a lock whose recorded holder is gone and clears it from
-    whichever *later* process next looks), not a duplicate of this one. This closes the
-    in-process leak (exception/abort/stop while the process stays alive); that closes the case
-    where the process itself never got the chance to run any cleanup at all.
+    **What this covers, precisely, and what still isn't its job.** The `atexit` backstop above
+    is paired with a module-level `SIGTERM` handler (`_sigterm_handler`, armed by
+    `RunIdentityLock.acquire` and disarmed by `RunIdentityLock.release` -- the same
+    release-convergence point this whole class exists to feed, not a second one) because
+    Python's default `SIGTERM` disposition terminates the process WITHOUT running `atexit`
+    handlers, and `timeout` -- this project's own standing rule for bounding every
+    long-running command -- sends `SIGTERM` by default. Without that handler, every
+    `timeout`-bounded command would have leaked past this exact backstop, uncaught, which is
+    why it exists. Between the two, every exit this process can still run code for -- a normal
+    return, an unhandled exception, `sys.exit`, or `SIGTERM` -- releases the lock.
+
+    `SIGKILL` is the one signal genuinely outside that reach: no process, in any language, can
+    install a handler for it at all -- the interpreter is stopped before a single further
+    instruction, including this module's own cleanup, ever runs. That is not a smaller version
+    of what this class already does and must not be read as one: it is a *different*,
+    separately-owned mechanism's job -- the orphan sweep (`run/orphans.py`), which does not try
+    to run code in the dying process at all. It instead detects, from a *later* process, that a
+    lock's recorded holder PID is no longer alive, and clears it then. This class prevents the
+    leak from happening; the orphan sweep repairs it after the fact, for the one case this
+    class can never reach.
 
     **Double release is safe, by construction.** `release()` here is idempotent (tracked by
     `_released`, on top of `RunIdentityLock.release` itself already unlinking with
@@ -240,6 +357,11 @@ class RunIdentityLock:
             lock_path=self._path_for(run_id),
         )
         self._write(lock)
+        # Arm the SIGTERM catch for as long as this lock is held (module docstring above
+        # has the full reasoning) -- symmetric with `release`'s own disarm below, so this
+        # is a second trigger for the same release-convergence point, not a parallel one.
+        installed = _sigterm_arm()
+        _sigterm_held_locks.append((self, run_id, installed))
         return lock
 
     def release(self, run_id: RunId) -> None:
@@ -247,16 +369,31 @@ class RunIdentityLock:
 
         Also disarms *run_id*'s process-exit backstop, if `_arm_exit_backstop` ever armed one --
         this is the one place every release path (the handle's own `release`, `composition.py`'s
-        `evaluate_stop_facts`, `_release_terminal_run_clients`, and the backstop calling this very
-        method on itself at process exit) converges, so whichever gets here first both drops the
-        lock file and disarms the others. A lock that was never committed, or never had a
-        backstop armed for some other reason, disarms nothing here -- `pop(..., None)` is the
-        no-op for that.
+        `evaluate_stop_facts`, `_release_terminal_run_clients`, the backstop calling this very
+        method on itself at process exit, and now the `SIGTERM` handler doing the same)
+        converges, so whichever gets here first both drops the lock file and disarms the others.
+        A lock that was never committed, or never had a backstop armed for some other reason,
+        disarms nothing here -- `pop(..., None)` is the no-op for that.
         """
         backstop = self._exit_backstops.pop(run_id, None)
         if backstop is not None:
             atexit.unregister(backstop)
         self._path_for(run_id).unlink(missing_ok=True)
+        self._disarm_sigterm(run_id)
+
+    def _disarm_sigterm(self, run_id: RunId) -> None:
+        """Undo this instance's own `_sigterm_arm` contribution for *run_id*, if it made one.
+
+        Finds and removes *this run id's* entry from the shared `_sigterm_held_locks`
+        registry -- a lock this instance never itself acquired (e.g. the orphan sweep
+        clearing a stale lock some other, dead process left behind) has no entry here and
+        this is a harmless no-op for it, same as the rest of `release`.
+        """
+        for index, (lock, held_run_id, installed) in enumerate(_sigterm_held_locks):
+            if lock is self and held_run_id == run_id:
+                _sigterm_held_locks.pop(index)
+                _sigterm_disarm(installed=installed)
+                return
 
     def _arm_exit_backstop(self, run_id: RunId) -> None:
         """Guarantee *run_id*'s lock is released by the time this process exits, even if nothing
