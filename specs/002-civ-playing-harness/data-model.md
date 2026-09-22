@@ -503,10 +503,12 @@ at one decision step (FR-012).
   city-id parameter through 24 Lua refusals in `run-ba3ad80d`, each reaching the ledger as a bare
   `verification_failed`. *(Added 2026-09-22: the field has been on `models/decision.py`'s
   `ActionExecution` and in the generated `ActionExecution.schema.json` since `454b2f8` — this table
-  documented four of its five fields. A live measurement the same morning is why the wording above
-  is careful: `UI.SetMapZoom(0.5, 0.0, 0.0)` returned cleanly while `UI.GetMapZoom()` still read
-  0.0499997 afterwards in the same tuner session. Produces a value is not produces the right
-  value — and that now applies to this field itself.)*
+  documented four of its five fields, so the machine-checked artifact was right and nothing was
+  red while the human-read one omitted a field present on every step in the store. The wording
+  above is careful for a structural reason, not an incidental one: a dispatch answer and a
+  verification result are claims about different things, so no value of the first can stand in for
+  the second. Produces a value is not produces the right value — and that applies to this field
+  itself.)*
 - A requested action absent from the catalog, or unavailable to a human in the current context, is
   rejected and recorded with its reason — and not performed (FR-017).
 - Contradictory or self-cancelling decisions execute in step order; the resulting state is what is
