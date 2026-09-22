@@ -170,6 +170,10 @@ there was one partial lookup between them.
   2026-09-22 two of three were *measurement errors that looked like product defects*, and that rate is
   itself a finding: it is the strongest argument for the readback sweep, and a summary of only the
   survivors would present the lane as more reliable than its own evidence supports.
+  **Put a correction WHERE THE CLAIM IS READ, not where corrections go.** An appended retraction at the
+  bottom of a 1700-line ledger never reaches someone reading the entry it corrects. Correct in place,
+  keep what was actually observed, and mark only the withdrawn consequence — for a published entry,
+  prepend a marked block so the original text and its date still stand beneath it.
   **And name what HELD, not only what broke.** A finding feels like it needs recording and a success
   feels like the baseline, so a ledger drifts to defects-only — the same sampling bias as the refused
   column, applied to our own record. On 2026-09-22 a lane wrote up ten defects and zero successes
