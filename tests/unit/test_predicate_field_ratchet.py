@@ -107,13 +107,16 @@ def test_the_known_phantom_predicate_fields_are_exactly_these_and_no_others(cata
     """Pins `KNOWN_PHANTOM_PREDICATE_FIELDS`'s keys so a new exception cannot be added silently --
     the same staleness discipline `live.goal_run`'s
     `test_the_known_availability_exceptions_are_exactly_these_and_no_others` already applies to
-    goals. Growing this set is a diff a reviewer sees, in this file, not an accident."""
+    goals. Growing this set is a diff a reviewer sees, in this file, not an accident.
+
+    T308: `camera.move`/`camera.zoom`/`camera.set_view_mode` were here (T306 sweep) because
+    `build_predicate_bindings` hardcoded `"camera": {}`. That wiring gap is fixed -- `camera` is
+    now sourced from `camera.read_state` the same way `game`/`player` are sourced from their own
+    declarations -- so all three entries are gone. Leaving them allowlisted after fixing them is
+    exactly the rot this ratchet exists to prevent."""
     assert set(KNOWN_PHANTOM_PREDICATE_FIELDS) == {
         DeclarationId("diplomacy.declare_war"),
         DeclarationId("diplomacy.make_peace"),
-        DeclarationId("camera.move"),
-        DeclarationId("camera.zoom"),
-        DeclarationId("camera.set_view_mode"),
     }
     # And every key must still actually be a declared action -- an exception for a declaration
     # that was renamed or removed is a stale exception, silently excusing nothing real.
@@ -133,10 +136,13 @@ def test_declare_war_and_make_peace_are_exactly_the_diplomatic_state_phantom(fie
     )
 
 
-def test_camera_namespace_is_never_wired_so_nothing_resolves_against_it(fields) -> None:
-    """`build_predicate_bindings` hardcodes `camera: {}` -- confirms the ratchet's own account of
-    why the three camera actions are in the exception table, from the published data itself."""
-    assert fields["camera"] == frozenset()
+def test_camera_namespace_now_resolves_the_fields_its_actions_reference(fields) -> None:
+    """T308: `camera` is wired to `camera.read_state`'s own `output_schema`, so the exact fields
+    `camera.move`/`camera.zoom`/`camera.set_view_mode`'s predicates reference now resolve -- the
+    positive twin of the `camera: {}` finding this ratchet used to pin here."""
+    assert fields["camera"] == frozenset(
+        {"mode", "zoom", "target_plot", "target_is_revealed", "target_unavailable_reason"}
+    )
 
 
 def test_a_synthetic_declaration_referencing_a_field_nobody_emits_fails_the_ratchet(fields) -> None:
@@ -186,7 +192,8 @@ def test_every_shipped_goal_predicate_field_resolves() -> None:
     `live.goal_run.known_fact_names` (itself derived from `derive_facts`, which is built only from
     fields `catalogs/observations/*.yaml` declarations actually carry -- see that function's own
     docstring). This is the goal-side half of the T306 sweep: it found zero phantom identifiers,
-    unlike the action-catalog side, which found five (see `KNOWN_PHANTOM_PREDICATE_FIELDS`)."""
+    unlike the action-catalog side, which found five at the time (three of them -- the camera
+    actions -- since fixed by T308; see `KNOWN_PHANTOM_PREDICATE_FIELDS`)."""
     from live.goal_run import load_goals
 
     goals = load_goals()

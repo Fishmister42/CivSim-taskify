@@ -41,11 +41,11 @@ namespace-name -> value mapping the caller supplies and does not know where that
 (T108) both use to turn a live :class:`~civsim_harness.models.turn.Observation` into that mapping,
 following ``catalogs/README.md`` §4's namespace/field vocabulary and its "binding subject namespaces
 to target" rule. It is necessarily best-effort against the catalog data that exists today -- see its
-own docstring for the specific, honestly-stated gaps (``camera.*`` has no backing observation
-declaration at all yet; a few scalar fields such as ``player.gold``/``player.faith`` and
-``unit.is_selected`` are named in the README's vocabulary but not yet produced by any authored
-``output_schema``). Those are catalog-authoring gaps outside this wave's file ownership
-(``catalogs/**``), not evaluator bugs, and are called out in this wave's report.
+own docstring for the specific, honestly-stated gaps (as of T308, ``camera.*`` IS wired to
+``camera.read_state``, added T221; a few scalar fields such as ``unit.is_selected`` are named in the
+README's vocabulary but not yet produced by any authored ``output_schema``). Those are
+catalog-authoring gaps outside this wave's file ownership (``catalogs/**``), not evaluator bugs, and
+are called out in this wave's report.
 """
 
 from __future__ import annotations
@@ -336,6 +336,11 @@ _PLAYER_SOURCES: tuple[DeclarationId, ...] = (
 _PLAYER_FIELD_RENAMES: Mapping[str, str] = {"gold_balance": "gold", "faith_balance": "faith"}
 _CONGRESS_DECLARATION_ID = DeclarationId("congress.state")
 
+# T221/T308: `camera.read_state`'s own `output_schema` (catalogs/observations/camera.yaml) already
+# names its fields exactly as the three camera actions' predicates reference them (`mode`, `zoom`,
+# `target_plot`, `target_is_revealed`) -- no rename table needed, unlike `game`/`player` above.
+_CAMERA_SOURCES: tuple[DeclarationId, ...] = (DeclarationId("camera.read_state"),)
+
 # namespace -> (backing declaration_id, list field, id field matched against `target`)
 # (catalogs/README.md §4 "Binding subject namespaces to target").
 #
@@ -411,17 +416,18 @@ def build_predicate_bindings(
     """Build the ``evaluate_predicate`` bindings environment from a live ``Observation``.
 
     Realises ``catalogs/README.md`` §4's namespace table from the entries actually present in
-    *observation*: ``game``/``player`` are merges of the (few) declarations that back them;
+    *observation*: ``game``/``player``/``camera`` are merges of the (few) declarations that back
+    them (T308: ``camera`` from ``camera.read_state``, added T221, the same merge shape as
+    ``game``/``player`` -- when the observation carries no ``camera.read_state`` entry, the merge
+    naturally produces ``{}``, exactly as it always has, rather than special-casing absence);
     ``prompt`` is derived from ``game.screen_state``; the subject namespaces (``unit``, ``city``,
     ``other_player``, ``congress``, ``great_person``, ``spy``) are resolved by matching *target*
     against the matching observation's own list, per the README's "binding subject namespaces to
     target" rule, defaulting to ``{"exists": False}`` (every other attribute read then resolves to
     ``None`` via :func:`_resolve_attribute`, which is falsy in every predicate this catalog
-    declares). ``camera`` has no backing observation declaration in this catalog today and is
-    always ``{}`` -- a catalog-authoring gap, not something this function can source data for.
-    ``target`` itself is bound to the raw value passed in, so ``target == ...`` / ``target in ...``
-    compare against it directly and ``target.<field>`` falls back to ``None`` for any field a plain
-    value does not carry.
+    declares). ``target`` itself is bound to the raw value passed in, so ``target == ...`` /
+    ``target in ...`` compare against it directly and ``target.<field>`` falls back to ``None`` for
+    any field a plain value does not carry.
 
     *observed_snapshot*, when given, is merged in verbatim (already-prefixed ``observed_*`` keys) --
     see ``act.verify`` for how a pre-execution snapshot is built and threaded through here.
@@ -442,12 +448,13 @@ def build_predicate_bindings(
         player["diplomatic_favor"] = congress_source["local_player_favor"]
 
     prompt = _bind_prompt_namespace(index)
+    camera = _merge_fields(index, _CAMERA_SOURCES)
 
     bindings: dict[str, Any] = {
         "game": game,
         "player": player,
         "prompt": prompt,
-        "camera": {},  # no backing observation declaration exists yet (catalog gap, out of scope)
+        "camera": camera,  # T308: wired to camera.read_state, same merge shape as game/player.
         "target": target,
     }
     for namespace, (declaration_id, list_field, id_field) in _SUBJECT_SOURCES.items():
@@ -734,16 +741,25 @@ def _bind_subject_namespace(
 # shape -- a predicate identifier that resolves syntactically (no `PredicateEvaluationError`) but
 # can never bind to a real value -- cannot recur silently in any other declared action.
 #
-# `camera` is the second, independently-found instance of the same shape, one layer down: unlike
+# `camera` was the second, independently-found instance of the same shape, one layer down: unlike
 # `diplomacy.state`, `catalogs/observations/camera.yaml`'s `camera.read_state` (added T221) DOES
 # reliably back `mode`/`zoom`/`target_plot`/`target_is_revealed` in `lua/ingame/camera.lua` -- but
-# `build_predicate_bindings` above hardcodes `"camera": {}` unconditionally and was never updated
-# to source it from `camera.read_state` once that declaration existed. So `camera.move`,
-# `camera.zoom`, and `camera.set_view_mode`'s own `verification_predicate`s (`camera.target_plot
-# == target and camera.target_is_revealed`, `camera.zoom == target`, `camera.mode == target`) can
-# never be true either, regardless of the real camera state -- a wiring gap, not a missing Lua
-# field, but the identical observable symptom. Reported as T307, not fixed here (out of this
-# task's narrow scope: only `declare_war`'s own fix was authorised).
+# `build_predicate_bindings` hardcoded `"camera": {}` unconditionally and was never updated to
+# source it from `camera.read_state` once that declaration existed, so `camera.move`, `camera.zoom`,
+# and `camera.set_view_mode`'s own `verification_predicate`s (`camera.target_plot == target and
+# camera.target_is_revealed`, `camera.zoom == target`, `camera.mode == target`) could never be true
+# either, regardless of the real camera state -- a wiring gap, not a missing Lua field, but the
+# identical observable symptom. FIXED (T308): `build_predicate_bindings` now merges `camera` from
+# `camera.read_state` the same way `game`/`player` are merged from their own sources (see
+# `_CAMERA_SOURCES` above); `known_predicate_fields` below derives `camera`'s known-good field set
+# from that same declaration's schema instead of hardcoding `frozenset()`, and the three camera
+# actions' entries are removed from `KNOWN_PHANTOM_PREDICATE_FIELDS` below accordingly. All three
+# camera verification predicates compare with `==` (or read a boolean field for truthiness) against
+# `camera.*`, never `!=`/`not in` -- so an absent/null field (no `camera.read_state` entry, or a
+# `pcall`-guarded read that came back empty) resolves the comparison to `False`, never fabricating a
+# `True`: this wiring can only ever make a previously-unresolvable predicate correctly resolve to
+# `False` more often, never turn an absent field into an `applied` verification. See
+# `tests/unit/test_predicates.py`'s camera tests for the polarity proof, per predicate.
 KNOWN_SCHEMA_BODY_DISAGREEMENTS: Mapping[DeclarationId, frozenset[str]] = {
     DeclarationId("diplomacy.state"): frozenset({"diplomatic_state"}),
 }
@@ -775,9 +791,9 @@ _DERIVED_NAMESPACE_FIELDS: Mapping[str, frozenset[str]] = {
 #: Root namespaces this ratchet does not check. `target` binds to whatever raw value the caller
 #: passed as the action's own parameter (a plot, a name, a number, ...) -- never to an observation
 #: body -- so its field vocabulary is the target_kind's shape, a contract this module has no way
-#: to check and no business checking. `camera` is deliberately NOT here: its known-good set is
-#: `frozenset()` (see `known_predicate_fields` below), so every `camera.*` reference is correctly
-#: reported as unresolved, which is the whole point of the finding above.
+#: to check and no business checking. `camera` (T308) IS checked like every other namespace now
+#: that it is wired: its known-good set comes from `camera.read_state`'s own schema (see
+#: `known_predicate_fields` below), not a hardcoded `frozenset()`.
 UNCHECKED_PREDICATE_NAMESPACES: frozenset[str] = frozenset({"target"})
 
 
@@ -830,8 +846,9 @@ def known_predicate_fields(
     is confirmed never to actually emit (today: exactly ``diplomacy.state``'s
     ``diplomatic_state``); :data:`_DERIVED_NAMESPACE_FIELDS` adds a field
     :func:`build_predicate_bindings` derives or overlays rather than copying off a schema. ``camera``
-    is always ``frozenset()`` -- ``build_predicate_bindings`` never binds it to anything (see the
-    finding above this function), so nothing can resolve against it, honestly.
+    (T308) is derived the same mechanical way as ``game``/``player``, from ``_CAMERA_SOURCES`` --
+    i.e. ``camera.read_state``'s own ``output_schema`` -- since :func:`build_predicate_bindings` now
+    actually binds it there.
     """
 
     def schema_of(declaration_id: DeclarationId) -> Mapping[str, Any] | None:
@@ -856,7 +873,13 @@ def known_predicate_fields(
     fields["player"] = frozenset(player_fields) | _DERIVED_NAMESPACE_FIELDS["player"]
 
     fields["prompt"] = _DERIVED_NAMESPACE_FIELDS["prompt"]
-    fields["camera"] = frozenset()  # never wired -- see this section's own header finding.
+
+    camera_fields: set[str] = set()
+    for source_id in _CAMERA_SOURCES:
+        camera_fields |= _schema_top_level_fields(schema_of(source_id))
+    fields["camera"] = frozenset(camera_fields) | _DERIVED_NAMESPACE_FIELDS.get(
+        "camera", frozenset()
+    )
 
     for namespace, (declaration_id, list_field, _id_field) in _SUBJECT_SOURCES.items():
         item_fields = _schema_list_item_fields(schema_of(declaration_id), list_field)
@@ -891,15 +914,13 @@ KNOWN_PHANTOM_PREDICATE_FIELDS: Mapping[DeclarationId, frozenset[tuple[str, str]
     # therefore the identical defect -- not a second, separate finding.
     DeclarationId("diplomacy.declare_war"): frozenset({("other_player", "diplomatic_state")}),
     DeclarationId("diplomacy.make_peace"): frozenset({("other_player", "diplomatic_state")}),
-    # PROVEN (2026-09-22, T306 sweep). `build_predicate_bindings` hardcodes `"camera": {}` (above)
-    # and was never updated to source it from `camera.read_state` once that declaration existed
-    # (T221) -- a wiring gap, not a missing Lua field, with the identical observable symptom.
-    # Reported as task T309 rather than fixed here (out of this task's authorised scope).
-    DeclarationId("camera.move"): frozenset(
-        {("camera", "target_plot"), ("camera", "target_is_revealed")}
-    ),
-    DeclarationId("camera.zoom"): frozenset({("camera", "zoom")}),
-    DeclarationId("camera.set_view_mode"): frozenset({("camera", "mode")}),
+    # `camera.move`/`camera.zoom`/`camera.set_view_mode` WERE listed here (T306 sweep): they were
+    # a second, independently-found instance of the same defect shape, at `build_predicate_bindings`
+    # hardcoding `"camera": {}` instead of sourcing it from `camera.read_state` (added T221). FIXED
+    # (T308): `camera` is now wired the same way `game`/`player` are (see `_CAMERA_SOURCES` and this
+    # module's binding-header comment above), so all three now resolve against a real observation
+    # and the exception entries are removed -- an unresolvable exception the fix already closed is
+    # exactly the kind of rot this table's own docstring warns against leaving in place.
 }
 
 

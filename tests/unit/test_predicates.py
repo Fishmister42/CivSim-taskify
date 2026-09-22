@@ -742,3 +742,225 @@ def test_the_verification_predicate_reads_the_queue_the_order_replaced() -> None
         )
         is True
     )
+
+
+# --------------------------------------------------------------------------
+# T308 -- `camera` namespace wiring. Before this fix, `build_predicate_bindings` hardcoded
+# `"camera": {}` unconditionally and was never updated to source it from `camera.read_state`
+# (added T221), even though that declaration reliably backs `mode`/`zoom`/`target_plot`/
+# `target_is_revealed`. Consequence: `camera.move`/`camera.zoom`/`camera.set_view_mode`'s own
+# `verification_predicate`s could never be True regardless of the real camera state -- 17+
+# recorded refusals that were never evidence about the camera at all.
+#
+# `camera` is merged from `camera.read_state` the same way `game`/`player` are merged from their
+# own sources (see `_CAMERA_SOURCES`, `predicates.py`) -- no rename table, since the schema's own
+# field names (`mode`, `zoom`, `target_plot`, `target_is_revealed`) already match what the
+# predicates reference.
+# --------------------------------------------------------------------------
+
+
+def _camera_observation(camera_state: dict[str, Any] | None) -> Observation:
+    """An observation carrying a single `camera.read_state` entry, or none at all (`None`) --
+    the shape a real capture takes when the Lua read failed entirely (T221's own header: every
+    field read is independently pcall-guarded; an unreadable field comes back absent)."""
+    entries = []
+    if camera_state is not None:
+        entries.append(_entry("camera.read_state", camera_state, context=LuaContext.IN_GAME))
+    return _observation(entries)
+
+
+def test_build_bindings_wires_camera_namespace_from_camera_read_state() -> None:
+    """THE LOAD-BEARING FIX. Confirmed failing against the unfixed binder (pre-fix,
+    `build_predicate_bindings` hardcoded `"camera": {}`, so every assertion below read `None`
+    instead of the value actually captured, e.g. `bindings["camera"]["mode"]` was `None`, not
+    `"world"`). `camera` must now be a real merge of `camera.read_state`'s own body, exactly like
+    `game`/`player` are merges of their own backing declarations."""
+    observation = _camera_observation(
+        {
+            "mode": "world",
+            "zoom": 0.4,
+            "target_is_revealed": True,
+            "target_plot": {"x": 5, "y": 9},
+        }
+    )
+    bindings = build_predicate_bindings(observation=observation)
+
+    assert bindings["camera"]["mode"] == "world"
+    assert bindings["camera"]["zoom"] == 0.4
+    assert bindings["camera"]["target_is_revealed"] is True
+    assert bindings["camera"]["target_plot"] == {"x": 5, "y": 9}
+    # An observation with no camera.read_state entry at all still merges to `{}` -- the same
+    # value the old hardcoded binding always produced, so the fix cannot regress the "no capture
+    # yet" case, only add the "capture exists" one.
+    assert build_predicate_bindings(observation=_camera_observation(None))["camera"] == {}
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+@pytest.mark.parametrize(
+    ("declaration_id", "camera_state", "target", "expected"),
+    [
+        (
+            "camera.zoom",
+            {"mode": "world", "zoom": 0.5, "target_is_revealed": True},
+            0.5,
+            True,
+        ),
+        (
+            "camera.zoom",
+            {"mode": "world", "zoom": 0.5, "target_is_revealed": True},
+            0.6,
+            False,
+        ),
+        (
+            "camera.set_view_mode",
+            {"mode": "strategic", "zoom": 0.5, "target_is_revealed": True},
+            "strategic",
+            True,
+        ),
+        (
+            "camera.set_view_mode",
+            {"mode": "world", "zoom": 0.5, "target_is_revealed": True},
+            "strategic",
+            False,
+        ),
+        (
+            "camera.move",
+            {
+                "mode": "world",
+                "zoom": 0.5,
+                "target_is_revealed": True,
+                "target_plot": {"x": 3, "y": 4},
+            },
+            {"x": 3, "y": 4},
+            True,
+        ),
+        (
+            "camera.move",
+            {
+                "mode": "world",
+                "zoom": 0.5,
+                "target_is_revealed": False,
+                "target_plot": {"x": 3, "y": 4},
+            },
+            {"x": 3, "y": 4},
+            False,
+        ),
+    ],
+)
+def test_real_camera_verification_predicates_evaluate_correctly(
+    declaration_id: str, camera_state: dict[str, Any], target: Any, expected: bool
+) -> None:
+    """The three camera actions' own `verification_predicate`, loaded from the real shipped
+    catalog (not a hand-written stand-in), resolves and evaluates correctly against a real
+    `camera.read_state` observation -- both when the camera genuinely matches the requested
+    target and when it does not. This is exactly what T308 proved broken: before the fix, every
+    one of these read `None` for every `camera.*` field and could never be `True`, so a camera
+    action that actually worked was always recorded `rejected`."""
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve(declaration_id)
+    assert declaration.verification_predicate is not None
+
+    observation = _camera_observation(camera_state)
+    bindings = build_predicate_bindings(observation=observation, target=target)
+
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is expected
+
+
+# --------------------------------------------------------------------------
+# Polarity (mandatory per T308's brief): all three camera verification predicates compare with
+# `==` or read a boolean field for truthiness -- never `!=`/`not in`. An absent or explicitly
+# `null` field must resolve the predicate `False` (an under-report the harness can live with),
+# never `True` (a fabricated `applied` that "nothing in the data would ever reveal", per T310/
+# T311). Each test checks the real catalog predicate against a plausible, in-range `target` (the
+# only kind that reaches `verify_execution` in practice, since `act.dispatch` already rejects any
+# decision whose `availability_predicate` fails -- e.g. `camera.zoom`'s own
+# `target >= 0.05 and target <= 1.0` cannot pass with `target=None`), so this is the realistic
+# "camera state missing, decision otherwise normal" shape, not a contrived double-absence.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+@pytest.mark.parametrize(
+    ("declaration_id", "target"),
+    [
+        ("camera.zoom", 0.5),
+        ("camera.set_view_mode", "world"),
+        ("camera.move", {"x": 3, "y": 4}),
+    ],
+)
+def test_camera_verification_predicate_polarity_no_capture_is_false_not_true(
+    declaration_id: str, target: Any
+) -> None:
+    """No `camera.read_state` entry at all (the Lua read failed, or none was ever captured) must
+    resolve every camera verification predicate `False`, never `True`."""
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve(declaration_id)
+    assert declaration.verification_predicate is not None
+
+    observation = _camera_observation(None)
+    bindings = build_predicate_bindings(observation=observation, target=target)
+    assert bindings["camera"] == {}
+
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_camera_zoom_polarity_explicit_null_zoom_is_false_not_true() -> None:
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("camera.zoom")
+    assert declaration.verification_predicate is not None
+
+    observation = _camera_observation({"mode": "world", "zoom": None, "target_is_revealed": True})
+    bindings = build_predicate_bindings(observation=observation, target=0.5)
+    assert bindings["camera"]["zoom"] is None
+
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_camera_set_view_mode_polarity_explicit_null_mode_is_false_not_true() -> None:
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("camera.set_view_mode")
+    assert declaration.verification_predicate is not None
+
+    observation = _camera_observation({"mode": None, "zoom": 0.5, "target_is_revealed": True})
+    bindings = build_predicate_bindings(observation=observation, target="world")
+    assert bindings["camera"]["mode"] is None
+
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_camera_move_polarity_explicit_null_target_plot_is_false_not_true() -> None:
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("camera.move")
+    assert declaration.verification_predicate is not None
+
+    observation = _camera_observation(
+        {"mode": "world", "zoom": 0.5, "target_is_revealed": True, "target_plot": None}
+    )
+    bindings = build_predicate_bindings(observation=observation, target={"x": 1, "y": 2})
+    assert bindings["camera"]["target_plot"] is None
+
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_camera_move_polarity_absent_target_is_revealed_is_false_not_true() -> None:
+    """`target_is_revealed` absent from the captured body entirely (not merely `null`) -- the
+    boolean-truthiness half of `camera.move`'s predicate, distinct from its `==` half above."""
+    catalog = load_catalog(CATALOG_ROOT)
+    registry = CapabilityRegistry(catalog=catalog)
+    declaration = registry.resolve("camera.move")
+    assert declaration.verification_predicate is not None
+
+    observation = _camera_observation({"mode": "world", "zoom": 0.5, "target_plot": {"x": 1, "y": 2}})
+    bindings = build_predicate_bindings(observation=observation, target={"x": 1, "y": 2})
+    assert bindings["camera"].get("target_is_revealed") is None
+
+    assert evaluate_predicate(declaration.verification_predicate, bindings) is False
