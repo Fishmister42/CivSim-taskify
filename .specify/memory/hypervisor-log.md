@@ -991,3 +991,25 @@ as the promote bug (6606d4b). Fix for tomorrow: normalise the lone argument (sel
 and record the Lua's answer on the step. The harness has still never built anything by its own
 action. End save `civsim-gameplay-2026-09-21-end2` (t56, Persia alive); client InGame, no prompt,
 no lock. Spend $0.82. Entry 11 on #3.
+
+### Executive close-out, evening — 2026-09-21 20:35 EDT (Steam released 20:30)
+
+Owner directives 17:45–18:30: reachable-state sampling only; directed goal runs ("build a builder
+→ use a builder"); increase the run rate; compact the loop state in the repo; Steam back by 21:00;
+monitor rigorously. Result on issue #3: entries 8–11 plus the audit finding. Game turn 54 → 59
+(Persia defeated at t59 — the first observed game over) → labelled reload to 42 → 56. Coverage
+3 → **11 of 41** actions applied live for the day, 18 attempted while available, images delivered
+287 of 619 steps, 43 runs, store spend $13.40 cumulative (≈ $12 today).
+Landed headless from live findings: availability rendering + `--provider-policy coverage`; goal driver
++ 13 goals; scorecard honesty; suite hang (unbounded replay loop) + pytest timeouts; production
+list (verified live); `units.build_improvement`; `units.promote` (never could fire); game-over
+detection; dedication/congress/first-meeting mappings (era card, dedication, eruption verified
+live); bounded verification re-read with `last_read`; **accessor audit — 28 phantom methods, 10
+permanently-empty fields, 14 of 38 actions structurally impossible** (`a606729`), bodies repaired
+(`e076f83`, `03efcac`), allowlist + CI test landing. Root cause of `cities.set_production` pinned
+live by Stage 5: the executor passes only the target and the city-orders Lua takes it as the city
+id; the dispatch answer was discarded → fix + dispatch-answer recording in flight.
+Process: live runs now execute from a detached worktree; a 15-min cron self-check; every agent
+forbidden to wait on background notifications (one more fork stall caught within 10 min). Loader
+follow-ups: post-defeat menu refuses Lua loads; exit modal ignores synthetic input (17-min recovery).
+Autoplay still blocked on the owner's permission. Loop state: `.specify/memory/loop-state.md`.
