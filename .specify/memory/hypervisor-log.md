@@ -1540,3 +1540,37 @@ Today's rules divide cleanly by one property, and it predicts which held:
 
 A rule phrased as an assessment feels like it is working right up until the moment it matters, because
 it agrees with whoever is applying it. Prefer the dull question.
+
+### Closing note, 2026-09-22 — the safeguard that worked was the verification step, not anyone's scepticism
+
+The day's last correction is a correction about the day itself. The hypervisor credited this lane with
+**refusing a ruling**: it had ruled for a `finally` spanning the drive phase, and the lane reported
+that back as unimplementable. But the lane did **not** spot the flaw when the ruling was issued. The
+agent that wrote `0187345` traced `runner.py:911-913`'s operator-stop bypass independently, and only
+then did it become visible that `composition.py` has no scope to wrap at all — `_prepare_connected_run`
+**returns**, and the run is driven by `Runner` afterwards. A `finally` placed in composition would have
+looked like compliance, passed review, and covered nothing.
+
+So the refusal came from a **measurement**, not from anyone's judgement of the ruling.
+
+**That distinction matters more than the fix.** A safeguard that depends on someone happening to be
+sceptical is precisely the class this whole day has been naming: a mechanism that exists, reads as
+protection, and fires only when the person applying it was already suspicious. Scepticism is not a
+control. It is a mood, unevenly distributed, and absent exactly when deference or time pressure is
+highest.
+
+**It also closes the loop on the morning's rule about how to write rules.** *A rule that asks for an
+assessment returns the assessor's priors; a rule that asks for a lookup returns the fact.* The
+verification step **is** the lookup. It replaced "do you think the ruling is sound?" — which returns
+the answerer's deference — with "which line releases the lock on each exit path?", which returns a
+fact and does not care who is asking or who they are answering to.
+
+**Every catch today has that shape, including the three where the hypervisor was the one corrected**
+(the camera clamp that would have made a declared range unreachable, the non-isolated verify
+invocation, the `finally` with no scope to live in). None of them required anyone to be clever. All
+of them required someone to be **made to look** — and the making was done by a rule, a gate, or a
+store query, never by an instinct.
+
+The practical form, for whoever runs the next lane: **when a ruling is handed down, the next action is
+not to evaluate it — it is to run the lookup it implies.** If the lookup cannot be run, that is itself
+the finding.
