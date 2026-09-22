@@ -1913,3 +1913,74 @@ dispatcher's last-positional `target` lands in `x` with `y` nil; `UI.LookAtPlot(
 throw, so `ok` is true and `camera.target_plot == target` is unsatisfiable. **`units.move_to` received
 exactly this guard on 2026-09-21 and `camera.move` never did** — the fix pattern was already in the
 tree, for the third time.
+
+### Headless 002 — 2026-09-22, attempt 4 close (NOT CONVERGED; the day's green is `96dabb6`)
+
+**Suite: `2311 passed / 19 skipped / 41 deselected / 0 failed`, 248.84 s, at `96dabb6`** — dedicated
+worktree, pinned head, `uv sync --all-groups --all-extras`, bare `uv run`, **ungated**, isolation
+proven *before* the run. Every provisional count quoted earlier in the day is discharged against it.
+Board at close: **274 closed / 37 open** (the open count rose because lanes appended faster than
+anyone closed, not because anything regressed).
+
+**The three ruled priorities all landed.**
+
+**T301 — the reload path was silent for a worst case of 510 s, and only the enumeration could say
+so.** `RELOAD_PATH_WORST_CASE_S = 510` is **summed from the table, not asserted** — 2.8× the 180 s
+budget. Neither roster row could state it alone, because *the 300 s in both rows is the same 300 s*:
+`recover` is rung 4 and `_await_phase` is the wait rung 4 is built on. Patched apart, each looks
+like a 300 s problem. **That is the argument for enumeration, made by the enumeration.** No thread,
+no timer, no clock-driven emission — the record rate *is* the work rate, asserted by a test driving
+a round trip that never returns and requiring silence. **No bound, poll interval or deadline was
+changed: make it legible, do not make it shorter to fit a threshold.**
+
+**T298 — the task was completeness lying; the finding was the guard failing open.**
+`store/trends.py::exclusion_for` enumerated `has_gaps` and `unknown` and let **everything else fall
+through to eligible** — so the one gate enforcing Principle III admitted any status it did not
+recognise. Now an allowlist admitting only `COMPLETE`. 003's US3/AC3 was deliberately **narrowed**:
+a mid-turn run is excluded because its shape is *indistinguishable from a run that died on turn N's
+write*, and Principle III does not let the gate guess.
+
+**T299 — the fix was not to make the guard pass, it was to make the guard able to fail.**
+`firetuner_window` is **still not matchable and now says so**. The loader refuses a keyword group no
+declared witness produces, checked against **the evidence source's own tokeniser**; today's shipped
+state does not load under that rule. **Exactly one of ten categories has a usable vocabulary, pinned
+by a test so it cannot grow by invention.** The blocker is **executable** — Windows and macOS under
+`xfail(strict=True)` — so closing it takes a deliberate deletion, not a quiet green. Declaring
+`firetuner_window: [[firetuner]]` was declined: mechanically different from the rejected host-side
+`window` token, **identical in effect**, and it would have turned a red guard green without changing
+what the gate can see.
+
+**Two rules this pass earned, both from our own failures.**
+
+**The fail-safe corollary.** *A fail-safe defect survives longest in exactly the mechanisms we trust
+most, because a guard erring toward "not ready" or "withhold" never produces a visible incident — so
+audit the fail-safe direction deliberately, because nothing else will make you.* Three findings
+share it (`firetuner_window` withholding nothing while the map says covered; the suite gate
+reporting busy on a clear box; completeness reporting `complete` for a run that lost data) and
+**every one sat all day while the dangerous defects were found in minutes.** Its counterpart landed
+the same day: T298's trending gate failed **open**. **The fail-safe direction hides a defect; the
+fail-open direction is one** — and one rule catches both: a default's direction must be a decision,
+never whatever the enumeration happened to omit.
+
+**Gate on what the measurement is for.** A functional result is not load-sensitive; a timing result
+is, and cannot be rescued by waiting. 248 s loaded against ~225 s quiet is ~10% — noise for pass/fail,
+meaningless against the 3.4× spread measured on `/compare`. The "wait for quiet" gate was chasing a
+state this machine never reaches. **This retires the last defence of the render budget as a
+wall-clock assertion.**
+
+**And a category: a heartbeat is not a progress signal.** During a save load the tuner port is closed
+*by design*, so polls answer `unreachable` — work-derived **about the poll loop**, and not evidence
+the load is advancing. Hence `reload.phase.polled`, never `loading`. Measure elapsed against **the
+phase's own declared bound**, not the watchdog's ceiling; that is what makes a 510 s reload survivable
+under a 180 s rule without bending it, and without it the ceiling kills every legitimate reload and
+**the killed recovery looks exactly like the crash it was recovering from.**
+
+**Two failures at two altitudes, both cheap:** *a claim nobody re-checks* (three relayed subagent
+claims passed on as established, two false) and *an answer nobody looks up* (the correct
+`grep -c "[b]in/pytest"` matcher **already existed in the tree** while two lanes used a form that
+matched monitoring scripts and their own command lines). Neither is fixed by being more careful.
+
+**Still open and highest-value:** T269 (Principle VII's resilience half is *unimplementable* — no
+client-lifecycle method on any platform), T297 (we stored 421 withheld captures with null blobs and
+destroyed the evidence needed to evaluate our own detectors — fix with derived statistics, never
+pixels), T300, T313, and T299's executable Windows/macOS blocker.
