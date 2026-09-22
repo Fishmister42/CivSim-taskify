@@ -239,12 +239,38 @@ excellent input and a useless output, because all three of the observed classes 
 | *(new)* harness belief vs engine answer disagree | *blocked by the harness* | *blocked by the game* |
 | *(new)* silence on the liveness stream past the derived bound | makes a candidate; contributes to none of the five by itself | every disposition — silence triggers classification, it does not conclude it |
 
-**The load-bearing addition is the last-but-one row**, and it is the one no existing signal supplies:
-FR-010 requires at least one observation obtained **independently of the component under suspicion**,
-and a liveness check that consults only harness state structurally cannot see the case where the
-harness is the problem. Concretely, for the class-2 fixture: the harness's `has_blocking_prompt`
-belief is compared against the engine's own end-turn availability answer, read in a separate tuner
-command (R6).
+**The load-bearing addition is the belief-versus-engine row**, and it is the one no existing signal
+supplies: FR-010 requires at least one observation obtained **independently of the component under
+suspicion**, and a liveness check that consults only harness state structurally cannot see the case
+where the harness is the problem. Concretely, for the class-2 fixture: the harness's
+`has_blocking_prompt` belief is compared against the engine's own end-turn availability answer, read
+in a separate tuner command (R6).
+
+### Class 4, and why it promotes FR-010 from a refinement to the feature's foundation
+
+*(Added by amendment, 2026-09-22, from the live lane.)*
+
+The screen-identity probe reports `recognized=true, has_blocking_prompt=false` **while a full-screen
+modal is up** — observed against `EndGameMenu`. Class 2 is *"I blocked myself."* **Class 4 is "I am
+certain nothing is blocking me, and I am wrong."**
+
+The two are inverse directions of one disagreement and they fail differently:
+
+| | Harness believes | Engine says | External symptom | What a harness-state detector does |
+|---|---|---|---|---|
+| **Class 2** | blocked | permitted | the run visibly stops | fails to explain it — but *something* looks wrong |
+| **Class 4** | free | holding a modal | **nothing looks wrong at all** | **agrees, and certifies a dead board as healthy, repeatedly** |
+
+Class 4 adds **no sixth disposition** — a board held by a modal is still *blocked by the game*. What
+it adds is the case where **no candidate opens at all**, because the harness is not silent; it is
+confidently reporting health. There is no elapsed-silence fallback that rescues this, which is
+exactly why it lands on FR-010 and FR-060 rather than on FR-009.
+
+**Design consequence, and it is a hard one**: every `live` disposition must rest on a signal that
+did **not** come from the component whose health is being asserted, and a `live` supported only by
+harness state is recorded **undetermined** (SC-028). That is more expensive than it sounds — it
+means "the run looks fine" is not, on its own, a conclusion the classifier may reach from harness
+telemetry, however much of it there is.
 
 **`Stall Candidate` and `Stall Classification` are separate entities on purpose** (spec Key
 Entities). The thing that *triggers* classification (silence past the bound) must not be the thing
@@ -494,6 +520,49 @@ for which `tests/fakes/aborting_tuner.py` already exists and was built for exact
 harness-belief-vs-engine seam, the lock directory, and the confirm loop. The two that genuinely need
 a client — a stranded diplomacy view and a real client segfault — are `tests/live/`, marked, and
 owned by the live lane.
+
+---
+
+### The mechanical test that replaces the judgement (FR-060, SC-028)
+
+*(Added by amendment, 2026-09-22, from the live lane.)*
+
+Everything above is a check on *mechanisms*. FR-060 adds a check on *checks*, and it is one dull
+question asked of every detector, probe and comparison in the feature:
+
+> **Could this check ever return "I do not know"?**
+
+If it structurally cannot, it is **an allowlist being read as a detector**, and it will produce
+confident false all-clears rather than misses.
+
+**Why the question beats a prose requirement.** It is the same shape as *"which line releases the
+lock on each exit path"*: it replaces a judgement with a lookup. A reviewer asked *"is this detector
+sound?"* supplies their own meaning; a reviewer asked *"show me an input on which it returns
+unknown"* either can or cannot.
+
+**The defect underneath it**: *an allowlist inverts its safety property depending on which way it is
+read.*
+
+| Read as | "unknown" means | Failure mode | Visibility |
+|---|---|---|---|
+| **permit** | deny | false refusal | visible, annoying, self-correcting |
+| **detect** | "nothing there" | **false all-clear** | invisible, confident, compounding |
+
+**Same data structure, opposite failure mode, and nothing in the code distinguishes the two uses.**
+Three instances on 2026-09-22 alone: the **screen watchlist** (an unlisted screen reads as no
+screen — which is class 4's mechanism); the **Lua accessor allowlist** (answers *"does this exist"*,
+read as *"is this safe to call"*); and the **content screening gate**.
+
+**The third settles this rather than arguing it.** The gate's remedy was already exactly this fix —
+a contaminant category that no technique addressed used to read as *clean* and now **withholds**. So
+applying it to this feature's probes is a **consistency requirement**: the same fix, one subsystem
+over, on the same class of defect, by the owner's own criterion. Not a design position that needs
+winning.
+
+**It is one rule at three grains, and the feature already had the other two.** FR-006 separates *a
+signal that was not emitted* from *a signal the watchdog could not read*. FR-025 and R6 separate
+*diverged* from *unverified*. FR-060 separates *nothing is wrong* from *I cannot tell*. Stated once:
+**absence and unobservability MUST NOT share a representation, anywhere in this feature.**
 
 ---
 

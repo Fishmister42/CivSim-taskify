@@ -4,7 +4,18 @@
 **Spec**: [spec.md](./spec.md)
 
 **Input**: Feature specification from `/specs/004-liveness-reconciliation-recovery/spec.md`
-(59 functional requirements, 27 success criteria, 6 user stories, 9 clarifications, no open markers)
+(60 functional requirements, 28 success criteria, 6 user stories, 9 clarifications + a post-plan
+amendment of three rulings, no open markers)
+
+**Revision 1 — 2026-09-22, post-plan amendment.** The planning pass found a gap in FR-003 and the
+live lane found two more things while this plan was being written. All three were ruled on and
+amended into `spec.md`, and this plan was updated with them rather than left describing the earlier
+spec — the failure spec 002's plan spent months in. The three: FR-003 now makes the
+**work-derived / observer-derived** split normative with FR-001 named as governing; a **fourth stall
+class** was added — *"I am certain nothing is blocking me, and I am wrong"* — which raises FR-010 to
+a load-bearing requirement of the whole feature; and **FR-060/SC-028** add the mechanical audit
+*could this check ever return "I do not know"?*, whose failure mode is an allowlist being read as a
+detector. The phase breakdown is unchanged; what changed is what phases 2 and 4 must contain.
 
 **Note on the helper script**: `pwsh` is absent on this host, so `setup-plan.ps1 -Json` was
 hand-derived. `FEATURE_DIR` = `specs/004-liveness-reconciliation-recovery`, `FEATURE_SPEC` =
@@ -57,6 +68,16 @@ Five load-bearing structures:
    existing detector already produces plus one read taken **independently of the component under
    suspicion**. *Undetermined* is a first-class recorded outcome and only report-only is eligible
    under it (FR-009 – FR-015).
+
+   **The independent read is load-bearing for the whole feature, and class 4 is why.** The screen
+   probe answers `recognized=true, has_blocking_prompt=false` **with a full-screen modal up** —
+   observed live against `EndGameMenu`. The harness is not merely wrong, it is *confidently* wrong,
+   and confidently wrong about the one proposition that makes a watchdog stand down. A detector
+   consulting harness state does not merely fail to notice this: **it agrees, and certifies a dead
+   board as healthy, repeatedly.** There is no elapsed-silence fallback that rescues it, because the
+   harness is not silent. So *every* `live` disposition must rest on a signal that did not come from
+   the component whose health is being asserted, and one that does not is recorded *undetermined*
+   (FR-010, SC-028).
 4. **An escalating ladder ordered by destructiveness**, rungs 0–4, each declaring the disposition it
    answers, the precondition it must *observe*, what it destroys, and the independent read that
    verifies it. **Rung 5 (restart the client) is declared unavailable on every host**, because no
@@ -158,23 +179,26 @@ input), and **rung 5 is unavailable everywhere**.
   of the day's adopted root cause, an optional parameter with a safe-looking empty default that
   every unit test supplies and the single production call site does not.
 
-**Scale/Scope**: **59 functional requirements (FR-001 – FR-059), in the eight groups `spec.md`
+**Scale/Scope**: **60 functional requirements (FR-001 – FR-060), in the eight groups `spec.md`
 itself heads them under**: Progress signals and what each one measures; Detection and classification;
 Reconciliation against the engine; The recovery ladder; Recording; Human parity and the boundary;
 Probes, bounds and the capability surface; Proving the feature. *(The counting rule is stated so the
 number can be re-derived: the bold headings in the spec's Functional Requirements section, counted.
 Spec 002's plan carried three unreproducible figures for months, and the correction to it is the
-reason this sentence exists.)* **27 success criteria (SC-001 – SC-027), of which exactly six carry
-an explicit release-blocking clause**: SC-001, SC-004, SC-007, SC-015, SC-018, SC-020. SC-023 and
-SC-026 are *audited per release* without one, and are listed separately here rather than rounded up
-into the blocking set.
+reason this sentence exists.)* **28 success criteria (SC-001 – SC-028), of which exactly seven carry
+an explicit release-blocking clause**: SC-001, SC-004, SC-007, SC-015, SC-018, SC-020, SC-028.
+SC-023 and SC-026 are *audited per release* without one, and are listed separately here rather than
+rounded up into the blocking set.
 
-*(The counting rule for that six, because it nearly went wrong: a `grep` for "blocks release" over
-`spec.md` returns **five**, because SC-015's clause wraps across two lines. The set was re-derived
-by splitting the Measurable Outcomes section on criterion ids and flattening each body first. **A
-negative search result is evidence only if the search could have matched** — this project adopted
-that rule after a `grep` for a prose sentence returned zero against a passage that was still there
-verbatim, and it fired again here, in this plan, while checking this plan's own number.)*
+*(**The counting rule, because it went wrong the first time and is the best argument for the rule
+it broke.** A `grep` for "blocks release" over `spec.md` returned **five**, not six — because
+SC-015's clause wraps across two lines. Every count in this plan is therefore re-derived by
+splitting the Measurable Outcomes section on criterion ids and flattening each body before matching,
+and the same script re-derives the FR total and the group count. **A negative search result is
+evidence only if the search could have matched.** This project adopted that rule after a `grep` for
+a prose sentence returned zero against a passage that was still there verbatim; it then fired again
+inside the artifact that quotes it, while that artifact was checking its own number. Re-derived
+after the amendment: 60 / 28 / 7 / eight groups.)*
 
 ---
 
@@ -425,7 +449,7 @@ both docstrings name does not exist yet.
 
 ### Phase 2 — The proving apparatus
 
-**Delivers**: FR-054 – FR-059, SC-004, SC-017, SC-018, SC-019.
+**Delivers**: FR-054 – FR-060, SC-004, SC-017, SC-018, SC-019, SC-028.
 **Gate**: every acceptance check from here on passes through it.
 
 Built second, before the first detector, because FR-057 applies to *every* acceptance check in the
@@ -446,6 +470,20 @@ apparatus is exercised against phase 1's work and then retro-applied to it.
    inputs that make it *capable of firing*.
 4. **No inert construction** (FR-059). Detector and rung inputs are required with no defaults; a
    missing input is a startup failure, never a silent no-op.
+5. **The "I do not know" audit** (FR-060, SC-028). For every detector, probe and check, enumerate it
+   and demonstrate an input on which it returns **unknown**. One that structurally cannot is an
+   **allowlist being read as a detector** and is not accepted.
+
+   This is deliberately dull and mechanical — the same shape as *"which line releases the lock on
+   each exit path"* — because it replaces a judgement with a lookup, which is this project's own
+   rule for how to write a rule. The defect it catches: *an allowlist inverts its safety property
+   depending on which way it is read.* Used to **permit**, unknown means deny and the failure is a
+   visible false refusal. Used to **detect**, unknown means "nothing there" and the failure is an
+   invisible, confident false all-clear. Same data structure, opposite failure mode, nothing in the
+   code distinguishing the two uses — three instances on 2026-09-22 alone (the screen watchlist, the
+   Lua accessor allowlist, the content screening gate). **The gate's remedy was already exactly
+   this**: a contaminant category no technique addressed moved from reading as *clean* to
+   **withholding**. So this is a consistency requirement, not a design argument.
 
 Spec 002 research R21 records, with its measurements, that a broad syntactic scan for this family
 was built and **rejected on evidence** — three formulations, 24/32/43 hits, none catching either
@@ -493,8 +531,12 @@ half), SC-011 (classification half), SC-020.
 1. The five dispositions, produced **before** anything acts, exactly one per candidate.
 2. **At least one observation independent of the component under suspicion** (FR-010) — the
    harness's belief checked against the engine's own answer. A liveness check that consults only
-   harness state structurally cannot see the case where the harness is the problem, which is the
-   most dangerous of the three classes.
+   harness state structurally cannot see the case where the harness is the problem. **This is the
+   requirement the whole feature rests on, not a refinement of one class**, because of class 4: when
+   the harness is *confidently* wrong that anything is blocking it, a harness-state detector agrees
+   with it and certifies a dead board as healthy. Every `live` disposition must therefore rest on a
+   signal that did not come from the component whose health is being asserted; one that does not is
+   recorded `undetermined` (SC-028).
 3. **Sub-classification of *unreachable*** before any rung is eligible (FR-012): lock held by
    another party; connection refused inside a prior close's ~2 s refusal tail; client process
    absent; client present but not answering. One symptom has had several causes on one day.
@@ -657,12 +699,26 @@ is: an auditor satisfying SC-007 and SC-023 should read declarations, not trace 
 |-----------|------------|-------------------------------------|
 | **C1** — A bespoke synthetic-input path used by a recovery rung, alongside Principle II's Firetuner-first rule. *(Inherited, not newly created: this is spec 002's live C1, extended to a new caller.)* | Rung 1 is the cheapest and least destructive recovery and answers the class that cost the most wall-clock on the day of specification. Its action — press Escape, click the one button the view is already offering — has a measured Firetuner gap: no Lua API reachable from `InGame` fires a control's registered callback, and `UI.RespondToPrompt` exists in none of Firaxis' 645 shipped Lua files. | **Pure Firetuner** rejected because the capability is measured absent, not awkward. **No rung 1 at all** rejected because the alternative recovery for a held board is rung 4 — reload and replay — which destroys the in-progress turn to clear a view that one keypress clears; ordering the ladder by destructiveness is the whole safety argument and skipping the cheap rung inverts it. Mitigation is inherited rather than invented: the path must be declared `path: bespoke` with its gap recorded, and `test_synthetic_input_declaration.py` `ast`-derives every call site so an undeclared one cannot ship. |
 | **C2** — **Principle VII's "restart the run" clause cannot be satisfied on any host, and this plan ships a ladder that stops one rung short of it.** | No method anywhere in `src/civsim_harness/` launches, restarts, or terminates the Civilization VI client or the tuner; `HostPlatform` declares nine methods and none is a lifecycle method. Verified for this plan by a search that could have matched. Rung 5 depends on that capability. | **Building the capability inside this feature** rejected because it is a host-layer capability needing three platform implementations and a separate safety argument about when ending a live client is data-safe — a second deliverable's worth of work, gated on measurements nobody has taken. **Assuming it and escalating toward it** rejected outright: FR-039 and SC-022 exist because a run that escalates toward a rung its host cannot perform converts a recoverable stall into a failed one while reporting that it tried everything. **Declaring the ladder complete at rung 4** rejected as dishonest — the gap is recorded as a dependency and reported at preparation, so the record says the ladder is four rungs tall on this host and why. |
-| **C3** — Liveness ticks are written to a telemetry log and a per-run NDJSON stream rather than to the match store, which Principle III makes the home of everything else this feature records. | A tick every few seconds for the length of a run is write amplification against a store with a no-delete/no-edit floor, and — decisively — the store's own write path is one of the things that can wedge. A signal that requires the suspect component to be healthy cannot testify about it. | **Ticks as store rows** rejected on both counts above. **Ticks in memory only** rejected because FR-008's dead-monitor case and SC-027's "observed growing while the phase runs" both need an out-of-process reader. **A mutable last-heartbeat file** rejected because it is not a stream: `st_mtime` cannot distinguish "still ticking" from "one tick and a clock that moved", whereas an append-only stream's monotonic byte growth is directly observable and is exactly what SC-027 asks for. The boundary is drawn at *conclusions*: a stall candidate, a classification, a rung attempt and a divergence incident are all store writes (FR-040), and nothing downstream ever reconstructs a fact about the match from a tick. |
+| **C3** — Liveness ticks are written to a telemetry log and a per-run NDJSON stream rather than to the match store. **This is not a Principle III exception, and it must not be read as one.** Principle III governs **turn-by-turn match telemetry** — what happened in the game. A watchdog heartbeat is not that: it asserts nothing about the match, nothing downstream reconstructs a fact about play from one, and no assertion about a turn rests on one. **Every *conclusion* is a store write** — stall candidates, classifications, rung attempts, rung skips, divergence incidents, and the wall-clock and model spend a stall consumed (FR-040). Nothing that says what happened in the game leaves the store; only the raw "this phase is still speaking" ticks do, and they are diagnostics about the harness. | A tick every few seconds for the length of a run is write amplification against a store with a no-delete/no-edit floor, and — decisively — the store's own write path is one of the things that can wedge. **A signal that requires the suspect component to be healthy cannot testify about it.** | **Ticks as store rows** rejected on both counts above. **Ticks in memory only** rejected because FR-008's dead-monitor case and SC-027's "observed growing while the phase runs" both need an out-of-process reader. **A mutable last-heartbeat file** rejected because it is not a stream: `st_mtime` cannot distinguish "still ticking" from "one tick and a clock that moved", whereas an append-only stream's monotonic byte growth is directly observable and is exactly what SC-027 asks for. The boundary is drawn at *conclusions*: a stall candidate, a classification, a rung attempt and a divergence incident are all store writes (FR-040), and nothing downstream ever reconstructs a fact about the match from a tick. |
 
-**One judgement recorded because it looks like a deviation and is not.** This plan proposes changing
-the decision-path provider call to **streaming** (research R2) in order to obtain a work-derived
-liveness signal. That touches the most parity-sensitive path in the harness, so it reads like a
-complexity item. It is not a deviation from any principle: the provider port's contract is unchanged
-(exactly one decision per call), no vendor SDK enters the path, and nothing about what reaches the
-agent changes. It is listed here only so that nobody discovers it in a diff. It *is* flagged for the
-owner, because a change to the decision path deserves a decision rather than an implementation note.
+**One judgement recorded because it looks like a deviation and is not — approved 2026-09-22.** This
+plan changes the decision-path provider call to **streaming** (research R2) in order to obtain a
+work-derived liveness signal. That touches the most parity-sensitive path in the harness, so it
+reads like a complexity item.
+
+**The parity risk is low, and the reason is worth stating rather than asserting: Principle I governs
+what reaches the agent, not how bytes arrive.** The provider port's contract is unchanged — exactly
+one decision per call — no vendor SDK enters the path, the response is accumulated and parsed
+exactly as today, and not one byte of what the agent sees or says is altered by the transport mode.
+Streaming changes the *arrival shape* of a payload whose *content* the parity boundary already
+governs, and the parity boundary sits in the catalog and the filter, neither of which has any
+concept of a transport.
+
+**It is also the "remove the number" fix**, which is the shape this project has preferred all day: a
+chunk arriving **is** the event, so there is no tick interval to tune and nothing that can rot when
+a figure drifts. A measurement only constrains fixes of the form "wait long enough" or "retry enough
+times"; this one is neither.
+
+**Until it lands, provider silence yields `undetermined` rather than `stalled`.** That is correct
+under FR-015 and it means the 85% case is *reported* rather than *acted on* — the honest interim
+state, and not the feature working.

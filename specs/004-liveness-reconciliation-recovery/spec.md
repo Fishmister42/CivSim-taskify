@@ -4,7 +4,9 @@
 
 **Created**: 2026-09-22
 
-**Status**: Draft
+**Status**: Planned (2026-09-22) — owner-reviewed, amended post-plan; `plan.md` and its design
+artifacts landed at `ab1b694`. Not `Implemented`: this project's convention reserves that for a
+feature whose tasks are all closed, and `tasks.md` has not been generated yet.
 
 **Input**: User description: "You got war declared on you. I think we need to /speckit-specify closing the
 loop on detecting these freezes. We need to let it plan without killing it but we need to detect and
@@ -53,6 +55,10 @@ And the second half, which is what makes a timeout not merely blunt but wrong:
 
 > The harness could not tell **"the game is blocked"** from **"I blocked myself"** from **"I cannot
 > reach a healthy game"** — and all three presented identically as a stalled run.
+
+*(Amended 2026-09-22: there is a **fourth**, and it is worse because it does not present as a
+stalled run at all — the harness reporting, confidently, that nothing is blocking it. See Class 4
+in the evidence base.)*
 
 A watchdog that only asks *"has progress stopped?"* cannot choose a recovery, because the correct
 response to each of the three is different and applying the wrong one is destructive. So detection
@@ -107,6 +113,23 @@ These are not hypotheticals. Each is a reproduced incident and each is a require
 - After a defeat, the main menu refuses a save load and its exit-confirm modal ignores synthetic
   input; ending the process at the empty menu is data-safe, and a fresh menu comes back in ~38 s.
 
+**Class 4 — the harness is *confidently* wrong that nothing is blocking it.** *(Added by amendment,
+2026-09-22, from the live lane. This is the worst of the four.)*
+
+- The screen-identity probe reported `recognized=true, has_blocking_prompt=false` **while a
+  full-screen modal was up** — observed live against `EndGameMenu`. The harness's belief was not
+  merely wrong; it was **certain**, and it was certain of the one proposition that makes a watchdog
+  stand down.
+- Class 2 is *"I blocked myself."* Class 4 is *"I am certain nothing is blocking me, and I am
+  wrong."* They are inverse directions of the same disagreement and they are not
+  interchangeable: in class 2 the harness refuses to act and the run visibly stops, so something
+  eventually looks wrong. In class 4 **nothing looks wrong at all.**
+- **This is why FR-010's independent-read requirement is load-bearing for the entire feature rather
+  than a refinement of one class.** Against class 4 a watchdog that consults harness state does not
+  merely fail to notice: **it agrees, and certifies the board as healthy, repeatedly, while the run
+  is dead.** Every signal it has says fine. A detector built on harness belief is, in this class,
+  not a weak detector — it is an accomplice.
+
 ### What already exists, so this is not built twice
 
 This feature is **not greenfield**, and the spec is written against what is already wired:
@@ -127,7 +150,7 @@ This feature is **not greenfield**, and the spec is written against what is alre
 
 **The gap is therefore not "detect a crash".** It is (a) that the existing classification sorts
 faults by *which probe noticed*, not by *what is actually wrong*, so it cannot choose between the
-three classes below; (b) that there is exactly one recovery move, with nothing cheaper beneath it
+classes below; (b) that there is exactly one recovery move, with nothing cheaper beneath it
 and nothing above it; and (c) that a divergence which does not stop play is not looked for at all.
 
 ### The reframing: this is reconciliation, not just liveness
@@ -188,7 +211,8 @@ on an unclassified stall picks its rung by guessing.
 
 **Independent Test**: Run three reproductions back to back — the stranded diplomacy view, the
 `has_blocking_prompt` refusal, and a tuner made unreachable — with recovery disabled entirely.
-Verify each is classified into the correct one of the three classes, with its basis recorded. Then
+Verify each is classified into the correct class, with its basis recorded — and add the class-4
+reproduction, on which a `live` verdict is the failure this test exists to catch. Then
 run a healthy turn containing a model call longer than the stall threshold and verify the
 classification is "live" and that nothing fired.
 
@@ -551,6 +575,46 @@ play was not interrupted, and that **no existing record was amended**.
   feature is a watchdog that reports healthy runs as broken — the exact outcome the owner said must
   not happen, arriving through the detector rather than through a timeout.
 
+### Amendment, 2026-09-22 (post-plan) — three rulings, one from planning and two from the live lane
+
+Recorded here in the same shape as the session's own rulings. Each names what it supersedes, because
+a superseded reading that is simply deleted is a reading somebody re-derives.
+
+- Q: Does FR-003's list of acceptable signals actually satisfy FR-001? → A: **No, and the gap is a
+  missing distinction rather than a contradiction** (owner ruling, 2026-09-22). *"An explicit
+  heartbeat"* is satisfiable by a daemon thread ticking beside a blocking call — which is *a thread
+  being alive*, which FR-001's third clause excludes outright. The emitter that landed for provider
+  silence on the day of this amendment is exactly that shape: it passes FR-003's letter and fails
+  FR-001's intent. Against this spec's own edge case — *a model call that hangs with the socket open
+  and no bytes arriving* — it ticks happily forever while the watchdog reads a healthy run, which is
+  **worse than silence**, because now there is a signal and it looks affirmative. FR-003 therefore
+  gains a **third clause** making the *work-derived* / *observer-derived* split normative, with only
+  work-derived signals permitted to clear FR-005's bound and **FR-001 named as governing**. This
+  supersedes the reading in which the candidate list was a list of sufficient signals; it is now a
+  list of candidates, each of which must survive classification.
+- Q: Are the three observed classes exhaustive? → A: **No — there is a fourth, and it is the worst**
+  (live lane, 2026-09-22). The screen-identity probe reports `recognized=true,
+  has_blocking_prompt=false` **while a full-screen modal is up**, observed against `EndGameMenu`.
+  Class 2 is *"I blocked myself"*; **class 4 is "I am certain nothing is blocking me, and I am
+  wrong."** It adds no disposition — a board held by a modal is still *blocked by the game* — but it
+  is the case where **no candidate opens at all**, because the harness is not silent, it is
+  confidently reporting health. This **raises FR-010 from a refinement of one class to a
+  load-bearing requirement of the whole feature**: against class 4 a watchdog consulting harness
+  state does not merely fail to notice, it *agrees* and certifies a dead board as healthy,
+  repeatedly. This supersedes the Assumptions clause that treated three classes as exhaustive.
+- Q: Is there a mechanical test for whether a detector is really a detector? → A: **Yes, and it is
+  better than any prose requirement: *could this check ever return "I do not know"?*** (live lane,
+  2026-09-22; now FR-060 and SC-028). If it cannot, it is an **allowlist being read as a detector**,
+  and it will produce confident false all-clears. The general defect: *an allowlist inverts its
+  safety property depending on which way it is read* — used to **permit**, unknown means deny and
+  the failure is a visible false refusal; used to **detect**, unknown means "nothing there" and the
+  failure is an invisible false all-clear. Same data structure, opposite failure mode, and nothing
+  in the code distinguishes the two uses. Three instances on one day: the screen watchlist, the Lua
+  accessor allowlist, and the content screening gate — **where the remedy was already exactly this**,
+  a contaminant category no technique addressed moving from reading as *clean* to **withholding**.
+  That makes this a **consistency requirement** rather than a design argument: the probe's fix is
+  the gate's fix one subsystem over, on the same class of defect, by the owner's own criterion.
+
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
@@ -582,15 +646,17 @@ play was not interrupted, and that **no existing record was amended**.
   prompt is blocking" is not "the game is blocking".
 - **FR-003**: **Every phase that can run longer than the FR-005 bound MUST emit an affirmative
   liveness signal the watchdog can read, at an interval shorter than that bound.** This is a
-  requirement on the *phases*, not only on the watchdog. Acceptable signals are ones the phase
+  requirement on the *phases*, not only on the watchdog. Candidate signals are ones the phase
   **publishes**: an output stream that is still being appended to, a log line, an explicit heartbeat,
   a published poll iteration of a bounded wait loop, or provider bytes actually arriving on an
-  in-flight call. **A still-growing output stream is a first-class signal** and is often the cheapest
+  in-flight call. **That list is a list of candidates, not of sufficient signals** — each entry MUST
+  additionally be classified under the third clause below, and not every entry survives it.
+  **A still-growing output stream is a first-class signal** and is often the cheapest
   one obtainable from outside a process: a process whose output is still being written is
   demonstrably working. An *open socket* on that same call is **not** a signal — it shows the phase
   is active, not that it is emitting (FR-001).
 
-  Two clauses on *how* a phase emits, both of which a reviewer would otherwise pass and an
+  Three clauses on *how* a phase emits, each of which a reviewer would otherwise pass and an
   implementer would otherwise satisfy while shipping the original defect:
 
   - **A single "started" line is not a heartbeat.** A phase that emits at entry and at exit and
@@ -603,6 +669,35 @@ play was not interrupted, and that **no existing record was amended**.
     materialises at completion — buffered, flushed at exit, written on teardown — is this same defect
     again wearing a fix. Verification MUST be empirical: observe the stream growing monotonically
     during the wait, not merely confirm that an emit call exists.
+  - **A signal MUST be derived from the work, or it MUST NOT clear the bound.** *(Amendment,
+    2026-09-22 — owner ruling. See the final clarification below for why this was added after the
+    other two.)* Every registered signal MUST be classified as one of:
+    - **work-derived** — the emission is a **byproduct of the work itself** and cannot be produced
+      unless the work made progress. Its presence establishes that the work is progressing. **Only a
+      work-derived signal may satisfy this requirement for its phase and clear FR-005's bound.**
+    - **observer-derived** — the emission comes from something *beside* the work: a timer, a ticker
+      thread, a supervisor clock. Its presence establishes only that the harness process and its
+      emitter are alive. It MAY be published, and it usefully bounds the interval between records
+      where no work-derived signal can be had — the connect, TLS and pre-first-byte window of a
+      provider call is the worked case. It MUST NOT be read as evidence that the phase is
+      progressing, and a phase whose only signal is observer-derived MUST yield *undetermined* under
+      FR-015 on silence, never *stalled*.
+
+    **FR-001 governs this clause**, and the classification exists because the clause above it can
+    otherwise be satisfied by the exact mechanism FR-001 forbids. "An explicit heartbeat" in the
+    candidate list is satisfiable by a daemon thread ticking beside a blocking call — which is *a
+    thread being alive*, which FR-001's third clause excludes outright. **The worked example is this
+    spec's own edge case**: *a model call that hangs with the socket open and no bytes arriving.*
+    Against it, a ticker thread ticks happily forever while the watchdog reads a healthy run. That
+    is this feature's own indistinguishability moved up one level and made **harder** to see, not
+    easier, because now there is a signal and it looks affirmative — and it is simultaneously a value
+    whose name asserts something it does not mean, since such a record asserts the call is waiting
+    and is emitted whether the call is waiting, hung, or dead.
+
+    The remedy is to source the signal from the work rather than to tune the emitter: **provider
+    bytes actually arriving on an in-flight call** is work-derived and is already in the candidate
+    list; **a published poll iteration that completed a real round trip** is work-derived, because an
+    iteration that publishes proves the far side answered. A single "still waiting" tick is not.
 
   **The feature MUST enumerate every phase that can outlast the FR-005 ceiling and audit each one for
   whether it actually emits.** That enumeration is an obligation this feature owns, not an assumption
@@ -698,6 +793,16 @@ play was not interrupted, and that **no existing record was amended**.
   NOT be derivable from harness state alone: the harness's belief MUST be checked against the game
   engine's own answer to the equivalent question. A liveness check that consults only harness state
   cannot see the case where the harness is the problem.
+
+  **This requirement is load-bearing for the whole feature, not a refinement of one class**
+  *(amendment, 2026-09-22)*. Class 4 is the reason. Where the harness is *confidently* wrong — the
+  screen probe answering `recognized=true, has_blocking_prompt=false` with a full-screen modal up —
+  a watchdog consulting harness state does not merely fail to notice the stall: **it agrees with the
+  harness and certifies the board as healthy, repeatedly, while the run is dead.** There is no
+  elapsed-silence fallback that rescues this, because the harness is not silent; it is confidently
+  reporting health. **Every disposition of *live* MUST therefore rest on a signal that did not come
+  from the component whose health is being asserted**, and a *live* disposition supported only by
+  harness state MUST be recorded as *undetermined* under FR-015.
 - **FR-011**: *Blocked by the game* MUST mean an independent read confirms the game is holding a view
   or state the board cannot leave. *Blocked by the harness* MUST mean the harness's belief and the
   engine's answer disagree, with the engine permitting what the harness refuses. *The game is
@@ -934,6 +1039,39 @@ play was not interrupted, and that **no existing record was amended**.
 - **FR-059**: A detector or rung MUST NOT be constructible into a state where it runs and never
   fires. Inputs a detector requires MUST have no defaults that render it inert, and a missing input
   MUST be a startup failure rather than a silent no-op.
+- **FR-060**: **Every detector, probe and check in this feature MUST be able to return "I do not
+  know", and MUST be audited per release against the question: *could this check ever return "I do
+  not know"?*** A check that structurally cannot MUST be treated as an **allowlist being read as a
+  detector**, and MUST NOT be accepted. *(Added by amendment, 2026-09-22, from the live lane.)*
+
+  **The general defect, and it is why a prose requirement was not enough.** *An allowlist inverts
+  its safety property depending on which way it is read.* Used to **permit**, "unknown" means deny:
+  the failure is a **false refusal** — visible, annoying, self-correcting. Used to **detect**,
+  "unknown" means "nothing there": the failure is a **false all-clear** — invisible, confident, and
+  it compounds. **It is the same data structure with the opposite failure mode, and nothing in the
+  code distinguishes the two uses.** The audit question is deliberately dull and mechanical, the
+  same shape as *"which line releases the lock on each exit path"*: it replaces a judgement with a
+  lookup, which is this project's own rule for how to write a rule.
+
+  **Three instances on 2026-09-22 alone**, all of them an allowlist read as a detector:
+
+  - The **screen watchlist** — an unlisted screen reads as *no screen*, which is precisely the
+    class-4 false all-clear above.
+  - The **Lua accessor allowlist** — it answers *"does this exist"* and was read as *"is this safe
+    to call"*.
+  - The **content screening gate** — where **the remedy was exactly this**: a contaminant category
+    that no technique addressed used to read as *clean*, and now **withholds**.
+
+  **That third one settles this requirement rather than arguing for it.** The screening gate's fix
+  is this fix, one subsystem over, on the same class of defect, by the owner's own criterion — so
+  applying it here is a **consistency requirement**, not a design proposal. A detector in this
+  feature that cannot say "I do not know" is the screening gate before its fix.
+
+  This generalises FR-015 from the classifier to every check beneath it, and it is the same
+  distinction FR-006 draws between *a signal that was not emitted* and *a signal the watchdog could
+  not read*, and that FR-025 draws between *diverged* and *unverified*. Those three are one rule
+  applied at three grains: **absence and unobservability MUST NOT share a representation, anywhere
+  in this feature.**
 
 ### Key Entities *(include if feature involves data)*
 
@@ -991,7 +1129,9 @@ play was not interrupted, and that **no existing record was amended**.
   answered.
 - **SC-003**: 100% of stalls receive a named disposition before any rung above report-only fires, and
   zero rungs above report-only fire under an *undetermined* disposition.
-- **SC-004**: Each of the three blocked classes has both an injected-real-failure fixture that its
+- **SC-004**: Each blocked class — **four since the 2026-09-22 amendment**, the fourth being the
+  harness confidently reporting that nothing is blocking it — has both an injected-real-failure
+  fixture that its
   detector fires on and a negative control that it does not fire on; 100% coverage. A class missing
   either half blocks release.
 - **SC-005**: On the reproduced `has_blocking_prompt` incident, the divergence between the harness's
@@ -1069,13 +1209,26 @@ play was not interrupted, and that **no existing record was amended**.
   empirically to **stream** — the signal observed growing monotonically while the phase is still
   running, never only at completion. A phase that emits twice, at its boundaries, counts as silent
   for this criterion.
+- **SC-028**: **Zero detectors, probes or checks in this feature are incapable of returning "I do not
+  know"** — audited per release by enumerating every one and demonstrating, for each, an input on
+  which it returns unknown. Any finding blocks release, and a check that cannot return unknown is
+  recorded as an allowlist read as a detector rather than as a detector needing work. Additionally,
+  **zero *live* dispositions rest only on state produced by the component whose health is being
+  asserted** (FR-010): proven against the class-4 reproduction, where the screen probe answers
+  `recognized=true, has_blocking_prompt=false` with a full-screen modal up. *(Added by amendment,
+  2026-09-22.)*
 
 ## Assumptions
 
-- The three classes — the game is blocking, the harness blocked itself, a healthy game is unreachable
-  — are treated as exhaustive for the failures observed to date, plus *live* and *undetermined* as
+- The **four** classes — the game is blocking, the harness blocked itself, a healthy game is
+  unreachable, and the harness is confidently wrong that anything is blocking it — are treated as
+  exhaustive for the failures observed to date, plus *live* and *undetermined* as
   dispositions. A stall that fits none of them resolves to *undetermined*, which is a recorded
   outcome rather than a gap, and new classes are added by observation rather than by anticipation.
+  *(Class 4 is the worked proof of that last clause: it was added by amendment on 2026-09-22 because
+  the live lane observed it, not because anyone anticipated it. It does not add a sixth disposition —
+  a board held by a modal is still *blocked by the game* — it adds the case where nothing **opens a
+  candidate at all**, which is why it lands on FR-010 and FR-060 rather than on FR-009.)*
 - Model-call duration being roughly 85% of a turn's wall-clock is taken from the project's own
   measurements and is treated as a property of this workload, not a constant. The requirement that
   thresholds be derived per run (FR-004) is what keeps the design correct if that share changes.

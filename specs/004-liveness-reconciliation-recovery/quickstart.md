@@ -108,9 +108,9 @@ a different reason and must be proven against explicitly.
 
 ---
 
-## Scenario 2 — Three reproductions, three classes, recovery disabled
+## Scenario 2 — Four reproductions, four classes, recovery disabled
 
-**Proves**: US1 — FR-009 – FR-015, SC-003, SC-004, SC-011.
+**Proves**: US1 — FR-009 – FR-015, FR-060, SC-003, SC-004, SC-011, SC-028.
 
 Run with **recovery disabled entirely**, so the classification is judged on its own:
 
@@ -119,7 +119,8 @@ Run with **recovery disabled entirely**, so the classification is judged on its 
 | Stranded full-screen diplomacy view *(live lane)* | `blocked_by_game` | an independent read confirming the view is held — **not** the screen probe alone |
 | `has_blocking_prompt` permanently true while the engine permits end turn | `blocked_by_harness` | both sides captured verbatim; the engine's answer read **in a separate command** |
 | Tuner made unreachable | `unreachable` **+ a resolved cause** | which of the four causes, and what established it |
-| A healthy turn with a model call past the threshold | `live` | nothing fired |
+| **Class 4** — the screen probe answering `recognized=true, has_blocking_prompt=false` **with a full-screen modal up** (`EndGameMenu`) | `blocked_by_game`, **or at minimum `undetermined`** | an independent read that did **not** come from the screen probe. **A `live` verdict here is the failure the whole scenario exists to catch** |
+| A healthy turn with a model call past the threshold | `live` | nothing fired, **and the `live` rests on a signal from outside the component whose health it asserts** |
 
 Expect also:
 
@@ -131,14 +132,27 @@ Expect also:
   rung above report-only eligible**.
 - A **dead monitor** is distinguishable from a run with nothing to report.
 
-**The break that must go red**: make the classifier decide `blocked_by_game` from harness state
-alone. The class-2 reproduction must then misclassify and the check must fail.
+And the rule class 4 forces on every other scenario:
+
+- **No `live` disposition rests only on state produced by the component whose health it asserts**
+  (FR-010, SC-028). Against class 4 a harness-state detector does not merely fail to notice — **it
+  agrees, and certifies a dead board as healthy, repeatedly.** "The run looks fine" is not a
+  conclusion the classifier may reach from harness telemetry, however much of it there is.
+- **Every detector, probe and check in this run can return "I do not know"** (FR-060). Ask it of
+  each, mechanically: *show me an input on which this returns unknown.* One that cannot is an
+  **allowlist being read as a detector** — the screen watchlist, where an unlisted screen reads as
+  *no screen*, is the instance that produced class 4.
+
+**The two breaks that must go red**: (a) make the classifier decide `blocked_by_game` from harness
+state alone — the class-2 reproduction must then misclassify and the check must fail; (b) let the
+screen probe's negative answer count toward `live` — the class-4 reproduction must then return
+`live` and the check must fail. A build that passes (b) is the build that certifies dead boards.
 
 ---
 
 ## Scenario 3 — Every detector fires on the real failure and sits still on the control
 
-**Proves**: US2 — FR-054 – FR-059, SC-004, SC-017, SC-018, SC-019.
+**Proves**: US2 — FR-054 – FR-060, SC-004, SC-017, SC-018, SC-019, SC-028.
 
 ```bash
 uv run pytest -q tests/contract/test_watchdog_reachability.py
@@ -162,6 +176,13 @@ Expect, for **each** detector and **each** rung:
    never fires. No default renders a detector inert.
 6. A rung is shown **not to fire on the classes it does not answer**, as well as working on the one
    it does.
+7. **It can return "I do not know", demonstrated on an input where it does** (FR-060, SC-028). One
+   that structurally cannot is recorded as **an allowlist being read as a detector** — not as a
+   detector needing work — and is not accepted. *Used to permit, unknown means deny and the failure
+   is a visible false refusal; used to detect, unknown means "nothing there" and the failure is an
+   invisible, confident false all-clear. Same data structure, opposite failure mode.* The precedent
+   is the content screening gate, where an unaddressed contaminant category moved from reading as
+   *clean* to **withholding**.
 
 **Any mechanism exercised only by tests is a release-blocking finding.**
 
@@ -295,15 +316,16 @@ detector's own latency is never measured against a human-rescued run.
 
 ## Scenario 9 — The audits that block release
 
-Run per release. **Six carry an explicit release-blocking clause** — any finding in those blocks the
-release. SC-023 and SC-026 are audited per release without one; they are listed here because they
-are audits, and separated because rounding them up into the blocking set would be a claim the spec
-does not make.
+Run per release. **Seven carry an explicit release-blocking clause** — any finding in those blocks
+the release. SC-023 and SC-026 are audited per release without one; they are listed here because
+they are audits, and separated because rounding them up into the blocking set would be a claim the
+spec does not make.
 
 | Audit | Blocking? | Asserts |
 |---|---|---|
 | SC-001 | **yes** | Zero healthy runs interrupted, across ≥20 unattended runs containing ≥20 over-threshold model calls |
-| SC-004 | **yes** | Each of the three blocked classes has both an injected-real-failure fixture and a negative control |
+| SC-028 | **yes** | Zero detectors, probes or checks incapable of returning "I do not know" — each demonstrated on an input where it does; and zero `live` dispositions resting only on the suspect component's own state |
+| SC-004 | **yes** | Each of the **four** blocked classes has both an injected-real-failure fixture and a negative control |
 | SC-007 | **yes** | Zero recovery actions a human could not perform through the standard game UI |
 | SC-015 | **yes** | Zero existing turn records amended, rewritten or deleted |
 | SC-018 | **yes** | Every detector and rung reachable from a production path **and able to fire there** |
@@ -329,7 +351,8 @@ costs another lane its stage.
 
 ## Reference
 
-- Requirements: [spec.md](./spec.md) — FR-001 – FR-059, SC-001 – SC-027
+- Requirements: [spec.md](./spec.md) — FR-001 – FR-060, SC-001 – SC-028, plus the post-plan
+  amendment of 2026-09-22 (the work-derived split, class 4, and the "I do not know" audit)
 - Design decisions: [research.md](./research.md) — R2 (work-derived vs observer-derived) and R12
   (every number and its provenance) are the two to read first
 - Entities and invariants: [data-model.md](./data-model.md)

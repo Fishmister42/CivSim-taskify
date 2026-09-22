@@ -221,7 +221,7 @@ it, and elapsed silence cannot leak into the verdict.
 
 | Disposition | MUST mean | MUST NOT be concluded from |
 |---|---|---|
-| `live` | an affirmative signal was observed | — |
+| `live` | an affirmative signal was observed, **at least one of which did not come from the component whose health is being asserted** | harness state alone — see class 4 below |
 | `blocked_by_game` | an **independent read confirms** the game is holding a view or state the board cannot leave | harness state alone; a probe failure (FR-051) |
 | `blocked_by_harness` | the harness's belief and the engine's answer **disagree**, with the engine permitting what the harness refuses | elapsed time; the harness's belief alone |
 | `unreachable` | the harness **cannot obtain an engine answer at all** | a game answer it did receive |
@@ -237,6 +237,19 @@ it, and elapsed silence cannot leak into the verdict.
   eligible until a disposition exists.
 - **At least one observation independent of the component under suspicion** (FR-010). A
   classification about the harness's own state is not derivable from harness state alone.
+- **A `live` disposition resting only on harness state is recorded `undetermined`** (FR-010,
+  SC-028). **Class 4 is why**, and it is the most expensive clause in this model: the screen probe
+  answers `recognized=true, has_blocking_prompt=false` with a full-screen modal up, so the harness
+  is not merely wrong but *confidently* wrong, about the one proposition that makes a watchdog stand
+  down. A detector consulting harness state does not fail to notice — **it agrees, and certifies a
+  dead board as healthy, repeatedly.** No elapsed-silence fallback rescues it, because the harness
+  is not silent. So "the run looks fine" is **not a conclusion the classifier may reach from harness
+  telemetry**, however much of it there is. Class 4 adds no sixth disposition — a board held by a
+  modal is still `blocked_by_game` — it adds the case where no candidate opens at all.
+- **Every detector, probe and comparison must be able to return "I do not know"** (FR-060). One that
+  structurally cannot is an **allowlist being read as a detector** and is not accepted: used to
+  permit, unknown means deny and the failure is a visible false refusal; used to detect, unknown
+  means "nothing there" and the failure is an invisible, confident false all-clear.
 - **`undetermined` is a correct outcome of the detector, not a failure of it** (FR-015). Under it,
   only rung 0 is eligible, and the classifier degrades toward the cheapest, least destructive rung
   and toward reporting. **Never escalate on uncertainty.**
@@ -534,6 +547,8 @@ so nobody can demonstrate it passes ordinary gameplay.
 |---|---|---|
 | Stranded full-screen diplomacy view | a healthy turn showing a registered, agent-answered view | live |
 | `has_blocking_prompt` permanently true while the engine permits end turn | belief and engine **agree** — the detector must fire **zero** times regardless of elapsed time | integration |
+| **Class 4**: the screen probe answering `recognized=true, has_blocking_prompt=false` with a full-screen modal up (`EndGameMenu`) | a genuinely clear board answering the same way — the classifier must reach `live` there, and must **not** reach `live` on the class-4 input | integration |
+| A detector asked *"show me an input on which you return unknown"* (FR-060) | — this **is** the control; a detector that cannot produce one is an allowlist read as a detector | contract |
 | Tuner unreachable: lock held by a **live** run | lock left by a **finished** run — the two must be distinguished, not merged | integration |
 | Tuner unreachable: connection inside the ~2 s close tail | a connection outside it | integration |
 | Client death arriving as a bare transport error (real TCP reset) | a clean EOF, which is already handled | integration |
@@ -644,3 +659,6 @@ Two consequences worth stating, because both are places a name could be read as 
 | **I16** | Every detector has a negative control; for reconciliation, a *correct system a naive check calls diverged* | `FailureFixture` pair |
 | **I17** | Nothing this feature reads or records reaches the playing agent | FR-048; audited per release (SC-020) |
 | **I18** | The watchdog's remit is **harness game runs**, never arbitrary commands | The monitor is constructed from a `run_id` and can only observe and act on that run |
+| **I19** | A `live` disposition never rests only on state produced by the component whose health it asserts | `StallClassification` validation; proven against the class-4 reproduction |
+| **I20** | Every detector, probe and check can return "I do not know" | FR-060's per-release enumeration; a check that cannot is an allowlist read as a detector |
+| **I21** | **Absence and unobservability never share a representation, anywhere** | The single rule behind I3 (`unavailable` ≠ `absent`), I8 (`unverified` ≠ `diverged`) and I20 (*I cannot tell* ≠ *nothing is wrong*) |
