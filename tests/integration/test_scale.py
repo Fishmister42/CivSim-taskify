@@ -32,14 +32,21 @@ modelled here, since this feature does not control it.
 
 **Amended 2026-09-22 (T282): wall clock is the tripwire, not the assertion.**
 Twelve of the timed cases clear `BUDGET_SECONDS` by 7x or more and are left
-exactly as they were. One did not -- `/compare` rendered as HTML, at 1.4x --
-and a 1.4x margin against an in-memory fake measures the scheduler as much as
-the code. It failed twice on a box running this project's own parallel suites
-and was dismissed both times, which is the real cost of a thin bound: it does
-not catch regressions, it teaches readers to ignore red. That case now carries
-a work-done assertion -- `/compare` pays exactly one series read per compared
-run -- and keeps its clock only as this docstring's unbounded-loop tripwire,
-at a ceiling derived from measurement. See `COMPARE_HTML_TRIPWIRE_SECONDS`.
+exactly as they were. The two `/compare` cases did not -- 1.4x for the HTML
+rendering, 1.6x for the JSON one -- and a margin that thin against an in-memory
+fake measures the scheduler as much as it measures the code. Both now carry a
+work-done assertion instead, `/compare` pays exactly one series read per
+compared run, and keep their clocks only as this docstring's unbounded-loop
+tripwire at ceilings derived from measurement.
+
+Measuring it properly found something worth carrying forward, so it is recorded
+with those constants rather than here: this box is **not** quiet, and the
+"quiet box" premise both earlier dismissals rested on was wrong in both
+directions. It runs a live Civ VI client as its normal state, and on one
+unchanged binary the same request measured anywhere from 1.08 s to 3.71 s. The
+spread is larger than the smallest regression the assertion was supposed to
+catch, which is the case for counting reads rather than seconds, made by the
+numbers instead of by argument. See `COMPARE_HTML_TRIPWIRE_SECONDS`.
 """
 
 from __future__ import annotations
@@ -65,48 +72,72 @@ JSON = {"Accept": "application/json"}
 #: SC-008's bound, verbatim.
 BUDGET_SECONDS = 2.0
 
-#: MEASURED 2026-09-22, unloaded box, five samples of the `/compare` HTML case at
-#: 55 runs x 320 turns: 1.18 / 1.25 / 1.32 / 1.37 / 1.42 s. The worst is the
-#: figure kept here, because a tripwire is sized against the bad sample, not the
-#: median. The same run measured `/runs` HTML at 0.23-0.31 s (a 7x margin against
-#: `BUDGET_SECONDS`) and the `/compare` JSON sibling at 1.15-1.26 s.
-COMPARE_HTML_MEASURED_SECONDS = 1.42
+# --------------------------------------------------------------------------
+# The two `/compare` tripwires, and the measurement they came from (T282)
+# --------------------------------------------------------------------------
+#
+# MEASURED 2026-09-22 against the `long_catalog_client` fixture (55 runs x 320
+# turns), four runs on the project's Linux node. Every sample, in seconds:
+#
+#   A,  5 samples   HTML 1.18 1.25 1.32 1.37 1.42 | JSON 1.15 1.16 1.16 1.22 1.26
+#   B,  5 samples   HTML 1.22 1.22 1.23 1.28 1.54 | JSON 1.02 1.05 1.07 1.08 1.13
+#   C, 12 samples   HTML 1.08 .. 1.87 (med 1.28)  | JSON 1.30 .. 1.63 (med 1.34)
+#   D, 12 samples   HTML 1.37 .. 3.71 (med 2.01)  | JSON 1.42 .. 3.54 (med 1.75)
+#
+# **State the conditions, because the conditions are the finding.** T282 was
+# written on the premise that these cases pass "on a quiet box" and that the
+# only load was this project's own parallel suites. That premise does not hold
+# and the first version of this comment repeated it. Checked directly while
+# measuring: `/proc/loadavg` read 8.48 across 12 cores, with `Civ6` at 92% of a
+# core -- the LIVE lane's own game, which is the normal working state of this
+# machine, not an anomaly -- plus another lane's `pytest` and a `qemu`. The
+# 15-minute average held at 7.69, so runs A through D were *all* contended and
+# none of them is an unloaded number. Run D is the same box a few minutes later
+# with the samples interleaved; it is not a different machine, it is the same
+# machine's tail.
+#
+# Two things follow, and they are the whole of why this task existed:
+#
+# 1. **The spread is larger than the regression.** The cheapest real regression
+#    this composition can have is a doubled walk, which is 2x. The measured
+#    spread on one unchanged binary is 1.08 s to 3.71 s, which is 3.4x. A
+#    wall-clock assertion here cannot separate a doubled walk from a Tuesday.
+#    That is not a tuning problem to be fixed with a better constant; it is the
+#    reason the assertion moved to
+#    `test_comparing_five_long_runs_pays_one_series_read_per_run`, which counts
+#    the reads and answered the doubled walk exactly: 5 series reads -> 10, and
+#    1600 turn reads -> 3200.
+# 2. **Five samples is not a measurement.** Run A's worst was 1.42 s and the
+#    first ceiling here was built on it. Twelve samples on the same box found
+#    1.87 s, and interleaved, 3.71 s. A tripwire is sized against the tail, so
+#    a sample count too small to *contain* the tail produces a number that
+#    looks derived and is not. Anyone re-deriving these: take the worst of at
+#    least a dozen, and record the load you took it under.
 
-#: The `/compare` HTML tripwire, re-derived (T282).
+#: Worst observed, run D. Not a typical cost -- a bound on the observed tail.
+COMPARE_HTML_MEASURED_SECONDS = 3.71
+COMPARE_JSON_MEASURED_SECONDS = 3.54
+
+#: The `/compare` tripwires. **These are not SC-008 bounds and must not be read
+#: as any claim about `/compare` being fast enough** -- that claim is
+#: `test_comparing_five_long_runs_pays_one_series_read_per_run`, which holds at
+#: production scale in a way a clock against an in-memory fake never could.
+#: What survives here is only the module docstring's *unbounded-loop* tripwire,
+#: so these are sized against that failure and nothing finer.
 #:
-#: **Why this case is not on `BUDGET_SECONDS`.** At 1.42 s measured against a
-#: 2.0 s bound it had a 1.4x margin, where every other timed case in this module
-#: clears its budget by 7x or more. It failed repeatedly on 2026-09-22 and was
-#: twice dismissed as "load on this box"; the load was this project's own
-#: parallel suites, and on a quiet box with one suite running it passes. So
-#: there is no product defect here -- but a 1.4x wall-clock margin against an
-#: in-memory fake is not a signal. It reports scheduler contention as an SC-008
-#: product failure, and it did, twice, and was believed neither time. A test
-#: that cries wolf is worse than no test: it trains the next reader to dismiss
-#: the red, which is exactly how a real regression gets waved through.
-#:
-#: **What replaced it as the assertion.** SC-008's `/compare` check is not
-#: weakened, it is moved to where it holds:
-#: `test_comparing_five_long_runs_pays_one_series_read_per_run` counts the reads
-#: the route actually makes, on the argument
-#: `test_the_catalog_row_reads_only_the_turns_it_shows` already makes below --
-#: a timing assertion against an in-memory fake "would go green again on a
-#: faster machine even if the series read came back". The read count is the
-#: load-immune form of the same claim, and it is strictly stronger: it fails on
-#: the *cause* (an accidentally quadratic composition) rather than on its
-#: wall-clock symptom.
-#:
-#: **Why 4x and not a round number.** This number stays only as the
-#: unbounded-loop tripwire the module docstring is built around, so it is sized
-#: against that failure, which is order-of-magnitude. The regression this
-#: fixture exists for -- T075's catalog row reading the whole series to keep one
-#: turn -- cost ten seconds where the fixed row costs 0.27 s: a ~37x blow-up. 4x
-#: catches anything of that shape with room to spare. At the other end, the
-#: contention that actually produced today's red pushed 1.42 s past 2.0 s, i.e.
-#: by under 1.5x; 4x leaves that nearly three times' headroom, so a shared core
-#: cannot trip it. `BUDGET_SECONDS` is untouched for every case that clears it
-#: 7x over, `/runs` on this same page included.
-COMPARE_HTML_TRIPWIRE_SECONDS = 4.0 * COMPARE_HTML_MEASURED_SECONDS  # 5.68 s
+#: **Why 2x the worst observed, and not a round number.** The band between what
+#: this box does unchanged (tail 3.71 s) and what a scale regression costs is
+#: what a ceiling has to land in. Above: a composition quadratic in turns costs
+#: 320x the per-turn work, ~102k reads against 1600, i.e. minutes -- it trips
+#: this, and pytest's own 10-minute timeout behind it. Below: 2x the observed
+#: tail leaves headroom over a box already running a live game, a foreign
+#: pytest and a VM, which is the contention that produced today's red and got
+#: dismissed twice. What deliberately does *not* trip these is a 2x-3x
+#: regression; that is the read count's job, and putting it here too would only
+#: rebuild the flake. `BUDGET_SECONDS` stays verbatim on every case that clears
+#: it 7x over, `/runs` on this same page included.
+COMPARE_HTML_TRIPWIRE_SECONDS = 2.0 * COMPARE_HTML_MEASURED_SECONDS  # 7.42 s
+COMPARE_JSON_TRIPWIRE_SECONDS = 2.0 * COMPARE_JSON_MEASURED_SECONDS  # 7.08 s
 
 #: The run's shape. `HEAVY_FROM` onward is the late game the task describes;
 #: `HEAVY_STEPS` is "running into hundreds of steps".
@@ -186,14 +217,32 @@ def _timed(client: Any, path: str) -> tuple[Any, float]:
     return response, time.perf_counter() - started
 
 
-def _assert_within_budget(client: Any, path: str) -> Any:
+def _assert_within_budget(client: Any, path: str, ceiling: float = BUDGET_SECONDS) -> Any:
+    """Assert SC-008's bound, or -- for the two `/compare` cases -- a tripwire.
+
+    `ceiling` defaults to SC-008's number and every caller but those two leaves
+    it alone. The two that pass it explain themselves at their call site and in
+    `COMPARE_HTML_TRIPWIRE_SECONDS`; the parameter exists so that exception is
+    one visible argument rather than a second timing helper that drifts.
+    """
     response, elapsed = _timed(client, path)
     assert response.status_code == 200, f"{path} -> {response.status_code}: {response.text[:300]}"
-    assert elapsed < BUDGET_SECONDS, (
-        f"{path} took {elapsed:.2f}s against a {TURNS}-turn run; SC-008 allows "
-        f"{BUDGET_SECONDS}s and this is the in-memory fake, so a real store has "
-        f"no headroom left"
-    )
+    if ceiling == BUDGET_SECONDS:
+        assert elapsed < ceiling, (
+            f"{path} took {elapsed:.2f}s against a {TURNS}-turn run; SC-008 allows "
+            f"{BUDGET_SECONDS}s and this is the in-memory fake, so a real store has "
+            f"no headroom left"
+        )
+    else:
+        assert elapsed < ceiling, (
+            f"{path} took {elapsed:.2f}s against a {ceiling:.2f}s ceiling. That "
+            f"ceiling is sized for an unbounded loop, not for a tight margin -- "
+            f"it is 2x the worst this box was measured at while running a live "
+            f"game -- so this is not scheduler noise. Look for a walk composed "
+            f"on top of another walk, and check "
+            f"test_comparing_five_long_runs_pays_one_series_read_per_run, which "
+            f"names the composition directly"
+        )
     return response
 
 
@@ -368,10 +417,22 @@ def test_comparing_five_long_runs_stays_within_budget(long_catalog_client):
     the read cannot be narrowed the way the catalog's could. US4 note 3 called
     this composition the point of the scale test and it had only ever been
     measured against 30-turn runs.
+
+    **On the tripwire rather than `BUDGET_SECONDS` (T282).** This is the HTML
+    case's sibling and it has the same problem for the same reason: measured
+    1.02-3.54 s on this box, against a 2.0 s bound. Left on SC-008's number it
+    would simply have become the module's thinnest wall-clock margin the moment
+    the HTML one was fixed -- relocating the defect rather than removing it,
+    and guaranteeing somebody re-derived it in a fortnight. What it still
+    asserts is below the clock: the series really covers 300+ turns, which is
+    what stops a truncating read from looking fast. The cost claim is
+    `test_comparing_five_long_runs_pays_one_series_read_per_run`.
     """
     runs = ",".join(f"run-{n:02d}" for n in range(1, 6))
     body = _assert_within_budget(
-        long_catalog_client, f"/compare?runs={runs}&metrics=science_output,culture_output"
+        long_catalog_client,
+        f"/compare?runs={runs}&metrics=science_output,culture_output",
+        ceiling=COMPARE_JSON_TRIPWIRE_SECONDS,
     ).json()
     assert len(body["runs"]) == 5
     assert all(
@@ -506,26 +567,34 @@ def test_the_html_catalog_pages_stay_within_budget_at_full_scale(
     The module argues HTML is where an unbounded loop shows up, and then timed
     HTML for three single-run routes only. These are the two catalog pages.
 
-    `/runs` is on SC-008's bound verbatim and clears it 7x over. `/compare` is
-    on `COMPARE_HTML_TRIPWIRE_SECONDS`, which is derived from a measurement
-    rather than from the success criterion, and the constant's own comment says
-    why and what took over the SC-008 claim -- this is a tripwire for an
-    unbounded loop, not the `/compare` scale assertion, which is now
-    `test_comparing_five_long_runs_pays_one_series_read_per_run`.
+    `/runs` stays on SC-008's bound verbatim; it measured 0.16-0.50 s across the
+    runs recorded with the constants below, so it clears 2.0 s by 4x at its
+    observed worst and 10x at its median, and is nowhere near the band where
+    this module's flake lived. `/compare` is on `COMPARE_HTML_TRIPWIRE_SECONDS`,
+    derived from a measurement rather than from the success criterion; the
+    constant's own comment says why and what took over the SC-008 claim -- this
+    is a tripwire for an unbounded loop, not the `/compare` scale assertion,
+    which is now `test_comparing_five_long_runs_pays_one_series_read_per_run`.
     """
     started = time.perf_counter()
     response = long_catalog_client.get(path, headers={"Accept": "text/html"})
     elapsed = time.perf_counter() - started
 
     assert response.status_code == 200
-    assert elapsed < ceiling, (
-        f"{path} rendered in {elapsed:.2f}s against a {ceiling:.2f}s ceiling. "
-        f"That ceiling is sized for an unbounded loop, not for a tight margin, "
-        f"so this is not scheduler noise -- look for a walk that composed on "
-        f"top of another walk, and check "
-        f"test_comparing_five_long_runs_pays_one_series_read_per_run, which "
-        f"names the composition directly"
-    )
+    if ceiling == BUDGET_SECONDS:
+        assert elapsed < ceiling, (
+            f"{path} rendered in {elapsed:.2f}s; SC-008 allows {BUDGET_SECONDS}s "
+            f"and this is the in-memory fake, so a real store has no headroom left"
+        )
+    else:
+        assert elapsed < ceiling, (
+            f"{path} rendered in {elapsed:.2f}s against a {ceiling:.2f}s ceiling. "
+            f"That ceiling is 2x the worst this box was measured at while running "
+            f"a live game, so this is not scheduler noise -- look for a walk that "
+            f"composed on top of another walk, and check "
+            f"test_comparing_five_long_runs_pays_one_series_read_per_run, which "
+            f"names the composition directly"
+        )
 
 
 def test_the_catalog_row_reads_only_the_turns_it_shows(long_catalog_client):
