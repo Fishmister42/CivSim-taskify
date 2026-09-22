@@ -1,4 +1,4 @@
-# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 21:12 EDT)
+# Loop state — overwrite on every hypervisor cycle (last: 2026-09-21 21:27 EDT)
 
 This file is the compact, current state of the spec-completion loop. The append-only history is
 `hypervisor-log.md`; the play record is GitHub issue #3; coordination is issue #1. A fresh session
@@ -42,13 +42,15 @@ reads the constitution, this file, then issue #1's tail, and continues.
 ## Agents running now
 | lane | scope | files | started |
 |---|---|---|---|
-| Live S7 (Fable fork) | S6 was killed by an API 529 at ~20:47 right after launching the builder re-trial; its run paused at 14 s with no turn, and the client was found DOWN at 21:06. S7: diagnose the pause and the client death from the store + client logs, relaunch, load `…-end2` (t56), then `--goal use_a_builder` → Settler → second city → every feasible goal, entries 12+ on #3, hand off on context with `…-end3` | client; `spikes/gameplay-2026-09-21/goal-08-…` | 21:08 |
-| orphan hygiene (Opus) | a killed driver leaves a run `playing` forever (run-02168773 since 19:36): orphan detection on write-mode open + runner start (lock absent / holder pid dead → `paused`, reason `orphaned`, evidence recorded) and `civsim store repair [--dry-run]` | `run/lifecycle.py`, `run/runner.py`, `store/`, `operator/store_cli.py`, tests | 21:10 |
+| Live S7 (Fable fork) | **client SEGFAULTED** (kernel: `Civ6 segfault at b0 in libGameCore_XP2.so`, 20:46:35, during Stage 6's first turn on worktree 454b2f8 — the first live sweep with tonight's repaired bodies; the harness saw only ConnectionResetError, stop_reason None). Steam would not respawn the client (2 tries); trying `-applaunch`, Steam dialog check, Steam restart (20-min cap). Then: load `…-end2`, one 1-turn coverage block at 454b2f8 under crash watch; if it crashes, same block at 14f7418 to confirm the bisect; then the guard patch | client | 21:08 |
+| crash diff (Fable fork, headless) | `git diff 14f7418..454b2f8 -- lua/`: every new engine call that runs at turn start / probe / sweep, ranked for null dereference on this board (no governors, no religion, no congress, no spies; city-state/barbarian player slots), with Firaxis' own guard for each; guard patch + lupa tests; `spikes/client-segfault-2026-09-21.md` | `lua/**`, tests | 21:25 |
+| orphan hygiene (Opus, retried ×2 after API 500s) | orphan detection on write-mode open + runner start; `civsim store repair [--dry-run]` | `run/lifecycle.py`, `run/runner.py`, `store/`, `operator/store_cli.py`, tests | 21:21 |
 
-Head `454b2f8` (production fix: lone-argument guard + `dispatch_result` on every step); live worktree at
-`454b2f8`. Audit complete (`a606729`, `e076f83`, `03efcac`, `98e7ccd`, `46d30af`), all unverified live.
-API outage ~20:47–21:05 (529s); the hypervisor's cron survived, the fork did not. Coverage at 20:29:
-actions applied live 11 of 41, images 287 of 619 steps, spend $13.40 cumulative.
+**Rule from the crash:** a method that exists is not a method that is safe to call on every object; every
+new engine call is guarded the way Firaxis guards it, and "unverified live" now means "may crash the
+client" until a one-turn crash-watched block has run it. **Do not play from 454b2f8 unguarded; the last
+hash known not to crash on this board is 14f7418.** Head `454b2f8`+ (main tree fine for headless work).
+Coverage at 20:29: actions applied live 11 of 41, images 287 of 619 steps, spend $13.40 cumulative.
 
 ## Queue, in order (2026-09-22)
 1. Owner's OK to launch. 2. From the worktree at head: verify live `cities.set_production` (once the
