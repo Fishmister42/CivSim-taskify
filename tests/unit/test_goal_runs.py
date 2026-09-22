@@ -55,6 +55,7 @@ from live.goal_run import (  # noqa: E402
     format_feasibility,
     load_goals,
     parse_goal,
+    reached_state,
     resolve_chain,
     run_chain,
     summarize,
@@ -990,128 +991,426 @@ def test_driver_stops_at_the_turn_cap_without_success() -> None:
     assert result["success_check"]["met"] is False
 
 
-class FakeRunnerFinishedBeforeStop:
-    """Reproduces block-10 (2026-09-22 live defect, spec 002): the run reaches FINISHED **on its
-    own** before the driver's own stop trigger gets a chance to call `request_stop` -- exactly
-    the race a run's own `stop_condition: turn_reached` and this driver's turn-cap backstop can
-    land in when they watch the identical recorded-turn signal. `get_status` reports FINISHED
-    from the first poll onward (matching block-10's timeline, where `status.lifecycle_state` was
-    already "finished" in the very poll that went on to evaluate the turn cap), and
-    `request_stop` still raises the same `HarnessError` the real runner raises for an
-    already-terminal run.
+# --------------------------------------------------------------------------
+# 4b. Stopping a run that has already stopped (2026-09-22 live defect)
+# --------------------------------------------------------------------------
+#
+# Five blocks under `specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/` died this way --
+# block-02, -10, -15, -17 and -20. Each `timeline.txt` shows the identical three lines: the poll
+# reports `finished turn=N`, the driver then says "turn cap N reached -- stopping the run" (or,
+# for block-02, "REACHED at recorded turn 3 -- stopping the run"), and the block ABORTS with
+# `HarnessError: a run already in a terminal lifecycle state cannot be stopped`. That the status
+# already said `finished` *in the same poll* is the whole point: this was never a race, it was an
+# ordering defect, and the fix is for a stopped run never to be asked to stop.
+#
+# The axis these twins vary is **whether the run is already stopped when the stop trigger fires**
+# -- not the goal, not the cap, not the stop reason. Everything else is held identical.
+
+
+class RecordingRunner:
+    """A `drive_goal` runner double whose stop behaviour is scripted independently of its status.
+
+    One class for every twin below so the axis under test is the only thing that differs between
+    them: `states` drives `get_status`, `stop_raises` decides what `request_stop` does, and
+    `state_after_stop` is what the run looks like *afterwards* -- which is the thing the fixed
+    driver consults instead of reading the error's text.
     """
 
-    def __init__(self, states: list[FakeStatus]) -> None:
+    def __init__(
+        self,
+        states: list[FakeStatus],
+        *,
+        stop_raises: BaseException | None = None,
+        state_after_stop: FakeStatus | None = None,
+    ) -> None:
         self._states = states
+        self._stop_raises = stop_raises
+        self._state_after_stop = state_after_stop
         self.stop_requests: list[str] = []
         self.polls = 0
 
     def get_status(self, run_id: Any) -> FakeStatus:
-        index = min(self.polls, len(self._states) - 1)
         self.polls += 1
-        return self._states[index]
+        if self.stop_requests and self._state_after_stop is not None:
+            return self._state_after_stop
+        return self._states[min(self.polls - 1, len(self._states) - 1)]
 
     def request_stop(self, run_id: Any) -> None:
         self.stop_requests.append(str(run_id))
-        raise HarnessError(
-            "a run already in a terminal lifecycle state cannot be stopped",
-            detail={"run_id": run_id, "lifecycle_state": "finished"},
-        )
+        if self._stop_raises is not None:
+            raise self._stop_raises
+        self._states.append(FakeStatus(LifecycleState.FINISHED, self._states[-1].current_turn, 1))
 
 
-def test_stopping_an_already_terminal_run_still_produces_a_complete_result() -> None:
-    """2026-09-22 live defect (block-10): the driver called `request_stop` on a run the runner
-    had already finished on its own; the resulting `HarnessError` propagated out of `drive_goal`
-    uncaught, aborting result assembly one level up (`run_chain`/`main` in `goal_run.py`) so no
-    summary body was ever written for this part. Stopping an already-terminal run is the benign
-    outcome it looks like -- the run already reached the state the stop call wanted -- and must
-    not abort anything.
+def _at_cap_records() -> Any:
+    """Two recorded turns for `found_second_city`, never founding the second city.
 
-    FAILS without the fix: `drive_goal` raises `HarnessError` instead of returning, because the
-    unfixed code calls `runner.request_stop(run_id)` directly with no handling for "already
-    terminal". Confirmed failing against a pre-fix backup copy of `goal_run.py` (never via
-    `git stash`/`git reset`) before this fix was written.
+    Shared by every twin in this section so the fixtures differ on the axis under test alone.
     """
-    goal = load_goals()["found_second_city"]
-    at_cap = records(
+    return records(
         (1, observation(cities=[city(65536)], units=[unit(1, "UNIT_SETTLER")]),
          "units.move_to", "applied"),
         (2, observation(cities=[city(65536)], units=[unit(1, "UNIT_SETTLER")]),
          "turn.end_turn", "applied"),
     )
-    runner = FakeRunnerFinishedBeforeStop([FakeStatus(LifecycleState.FINISHED, 2, 1)])
 
-    # The load-bearing assertion: this call must return, not raise.
-    result = drive_goal(
-        goal,
+
+def _drive_at_cap(runner: Any) -> dict[str, Any]:
+    """`drive_goal` at its turn cap against *runner* -- identical arguments for every twin."""
+    return drive_goal(
+        load_goals()["found_second_city"],
         runner=runner,
         run_id="run-fake",
-        read_records=lambda: at_cap,
+        read_records=_at_cap_records,
         turn_cap=2,
         sleep=lambda _s: None,
     )
 
-    # request_stop was still attempted (and still raced) -- the driver just no longer treats
-    # that race as fatal.
+
+def test_turn_cap_stop_asks_a_run_that_is_still_playing_to_stop() -> None:
+    """POSITIVE TWIN. The run is still playing when the turn cap trips, so the stop is a real
+    request and must actually be made -- otherwise "never ask a stopped run to stop" would be
+    satisfiable by never asking anything, and the cap backstop would silently stop working.
+    """
+    runner = RecordingRunner([FakeStatus(LifecycleState.PLAYING, 2, 1)])
+    result = _drive_at_cap(runner)
+
     assert runner.stop_requests == ["run-fake"]
     assert result["stop_reason"] == "turn_cap"
+    assert result["final_state"] == "finished"
 
-    # "complete" means result assembly actually ran to the end: the fields `drive_goal` only
-    # fills in after the poll loop, which an uncaught exception would have skipped entirely.
+
+def test_turn_cap_stop_on_an_already_finished_run_is_success_and_never_asks() -> None:
+    """NEGATIVE TWIN, and the live defect itself (block-10/-15/-17/-20's exact shape).
+
+    The status in the driver's hand already says `finished` -- the state the stop was going to
+    ask for. The structural fix is that the request is never made, so the error edge in
+    `runner.py:546-553` is not merely caught, it is not reached.
+
+    FAILS before the fix in two different ways: the unfixed original raised `HarnessError` out of
+    `drive_goal`; 62d990b's version called `request_stop` anyway and matched on the error's exact
+    message text.
+    """
+    runner = RecordingRunner(
+        [FakeStatus(LifecycleState.FINISHED, 2, 1)],
+        stop_raises=HarnessError(
+            "a run already in a terminal lifecycle state cannot be stopped",
+            detail={"run_id": "run-fake", "lifecycle_state": "finished"},
+        ),
+    )
+
+    # Load-bearing: this returns rather than raising...
+    result = _drive_at_cap(runner)
+
+    # ...and it returns because the stop was never attempted, not because an error was swallowed.
+    assert runner.stop_requests == []
+    assert result["stop_reason"] == "turn_cap"
+
+    # "Complete" means assembly ran past the poll loop -- the fields an escaping exception ate.
     assert result["final_state"] == "finished"
     assert result["turns_recorded"] == [1, 2]
     assert result["success_check"] is not None
-
-    # And the goal genuinely was not reached -- reflecting a real evaluation, not a default left
-    # over from an aborted run.
-    assert result["reached"] is False
-    assert result["evaluated"] is True
+    assert reached_state(result) == "not_reached"
 
 
-def test_reached_false_is_distinguishable_from_never_evaluated() -> None:
-    """`reached` starts False and is only ever set True by an evaluation (2026-09-22 live
-    defect), so a run that was NEVER EVALUATED must not be indistinguishable, in the artefact,
-    from one evaluated and found wanting. This is the assertion that stops the defect recurring:
-    a reader of `result.json` who only checks `reached` cannot tell these two parts apart, but
-    `evaluated` says so directly.
+def test_a_run_that_stops_between_the_status_read_and_the_stop_request_is_success() -> None:
+    """The genuine (never-yet-observed live) window: the status said PLAYING, so the driver asked
+    for the stop, and the run finished on its own in between. The stop's postcondition holds, so
+    this is success -- and the driver establishes that by looking at what the run *is*.
     """
-    goal = load_goals()["found_second_city"]
-
-    # Genuinely evaluated: the run played to its turn cap, and the predicate was checked against
-    # real recorded steps and found false.
-    at_cap = records(
-        (1, observation(cities=[city(65536)], units=[unit(1, "UNIT_SETTLER")]),
-         "units.move_to", "applied"),
-        (2, observation(cities=[city(65536)], units=[unit(1, "UNIT_SETTLER")]),
-         "turn.end_turn", "applied"),
+    runner = RecordingRunner(
+        [FakeStatus(LifecycleState.PLAYING, 2, 1)],
+        stop_raises=HarnessError(
+            "a run already in a terminal lifecycle state cannot be stopped",
+            detail={"run_id": "run-fake", "lifecycle_state": "finished"},
+        ),
+        state_after_stop=FakeStatus(LifecycleState.FINISHED, 2, 1),
     )
-    evaluated_result = drive_goal(
-        goal,
-        runner=FakeRunner(_playing(6)),
+    result = _drive_at_cap(runner)
+
+    assert runner.stop_requests == ["run-fake"]
+    assert result["final_state"] == "finished"
+    assert reached_state(result) == "not_reached"
+
+
+def test_the_stop_is_decided_by_the_runs_state_not_by_the_errors_wording() -> None:
+    """The dependency 62d990b's fix rested on -- `exc.message == "<exact sentence>"` -- is gone.
+
+    Same axis as the twin above, moved one step: the run is in the same already-stopped state,
+    but the error carries a *different* message. A driver that matched the wording would re-raise
+    here and abort the block the first time anyone reworded `runner.py:551`. A driver that asks
+    the run what it is does not care.
+    """
+    runner = RecordingRunner(
+        [FakeStatus(LifecycleState.PLAYING, 2, 1)],
+        stop_raises=HarnessError("stop refused: this run is over", detail={"run_id": "run-fake"}),
+        state_after_stop=FakeStatus(LifecycleState.FINISHED, 2, 1),
+    )
+    result = _drive_at_cap(runner)
+
+    assert runner.stop_requests == ["run-fake"]
+    assert result["final_state"] == "finished"
+
+
+def test_a_stop_failure_that_leaves_the_run_stoppable_still_propagates() -> None:
+    """The other side of that axis, and the one that keeps the fix honest: the *same* canonical
+    "already terminal" wording, but the run is still PLAYING afterwards -- so the stop genuinely
+    did not happen and this is a real failure. It must still escape.
+    """
+    runner = RecordingRunner(
+        [FakeStatus(LifecycleState.PLAYING, 2, 1)],
+        stop_raises=HarnessError(
+            "a run already in a terminal lifecycle state cannot be stopped",
+            detail={"run_id": "run-fake", "lifecycle_state": "finished"},
+        ),
+        state_after_stop=FakeStatus(LifecycleState.PLAYING, 2, 1),
+    )
+    with pytest.raises(HarnessError):
+        _drive_at_cap(runner)
+
+
+# --------------------------------------------------------------------------
+# 4c. The block's record survives its own teardown
+# --------------------------------------------------------------------------
+
+
+class _FakeRecorder:
+    """`demo_landed_run.Recorder`'s surface, with a `write()` that can be made to fail.
+
+    `Recorder.write()` (`tests/live/demo_landed_run.py:158-187`) re-encodes every captured frame
+    into a GIF -- for block-17 that was 63 MB -- at the exact moment the process is unwinding.
+    It used to run *before* `result.json` was written.
+    """
+
+    def __init__(self, *, write_raises: BaseException | None = None) -> None:
+        self._write_raises = write_raises
+        self.stopped = False
+
+    def note(self, text: str) -> None:
+        pass
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def write(self, out: Path) -> dict[str, Any]:
+        if self._write_raises is not None:
+            raise self._write_raises
+        return {"frames": 3, "gif": "harness-landed-run.gif", "gif_kb": 1}
+
+
+class _FakeDemo:
+    def __init__(self, recorder: _FakeRecorder) -> None:
+        self._recorder = recorder
+
+    def get_host_platform(self) -> object:
+        return object()
+
+    def Recorder(self, host: object) -> _FakeRecorder:  # noqa: N802 - mirrors the real name
+        return self._recorder
+
+
+def _run_main_with(
+    monkeypatch: pytest.MonkeyPatch,
+    out: Path,
+    recorder: _FakeRecorder,
+    part: dict[str, Any] | None,
+) -> int:
+    """`goal_run.main` with the client, the recorder and the chain itself replaced by fakes."""
+
+    def fake_run_chain(chain: Any, parts: list[dict[str, Any]], **_kwargs: Any) -> None:
+        if part is not None:
+            parts.append(part)
+
+    monkeypatch.setattr(goal_run, "_demo", lambda: _FakeDemo(recorder))
+    monkeypatch.setattr(goal_run, "run_chain", fake_run_chain)
+    return goal_run.main([str(out), "--goal", "found_second_city", "--provider", "fake"])
+
+
+def test_the_record_is_on_disk_before_the_recording_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A teardown that fails must not take the block's record with it.
+
+    The ordering *is* the guarantee: `result.json` and `summary.md` are written before anything
+    that can raise runs, so the only way to lose the record is to fail before there is one.
+    """
+    part = drive_goal(
+        load_goals()["found_second_city"],
+        runner=RecordingRunner([FakeStatus(LifecycleState.PLAYING, 2, 1)]),
         run_id="run-fake",
-        read_records=lambda: at_cap,
+        read_records=_at_cap_records,
+        turn_cap=2,
+        sleep=lambda _s: None,
+    )
+    out = tmp_path / "block"
+    code = _run_main_with(
+        monkeypatch, out, _FakeRecorder(write_raises=RuntimeError("GIF encode blew up")), part
+    )
+
+    assert code == 1  # the goal was evaluated and not reached
+    written = json.loads((out / "result.json").read_text(encoding="utf-8"))
+    # The part's body survived the teardown failure -- this is what the aborted blocks lost.
+    assert [p["goal"] for p in written["parts"]] == ["found_second_city"]
+    assert written["parts"][0]["turns_recorded"] == [1, 2]
+    assert written["recording"] == {"error": "RuntimeError: GIF encode blew up"}
+    assert "found_second_city" in (out / "summary.md").read_text(encoding="utf-8")
+
+
+def test_the_recording_is_still_recorded_when_the_teardown_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POSITIVE TWIN along the same axis (does the teardown fail?): writing the record first must
+    not cost the record its recording block, which `summary.md` quotes.
+    """
+    out = tmp_path / "block"
+    recorder = _FakeRecorder()
+    _run_main_with(monkeypatch, out, recorder, None)
+
+    written = json.loads((out / "result.json").read_text(encoding="utf-8"))
+    assert recorder.stopped is True
+    assert written["recording"]["gif"] == "harness-landed-run.gif"
+
+
+# --------------------------------------------------------------------------
+# 4d. `reached`: three states, not two (2026-09-22 live defect)
+# --------------------------------------------------------------------------
+#
+# THE AXIS IS EVALUATION STATUS. Every fixture below uses the same goal, the same cap and the
+# same success predicate; the only thing that varies between the three is whether the predicate
+# was evaluated and, if so, what it said. A twin set that varied the goal or the target value
+# would pin the fixtures rather than the contract.
+
+
+def _drive(read_records: Any, runner: Any) -> dict[str, Any]:
+    return drive_goal(
+        load_goals()["found_second_city"],
+        runner=runner,
+        run_id="run-fake",
+        read_records=read_records,
         turn_cap=2,
         sleep=lambda _s: None,
     )
 
-    # Never evaluated: the run paused immediately, before the store ever recorded a single step,
-    # so the success predicate was never checked against anything.
-    never_evaluated_result = drive_goal(
-        goal,
-        runner=FakeRunner([FakeStatus(LifecycleState.PAUSED, 1, 3)]),
-        run_id="run-fake-2",
-        read_records=lambda: records(),
-        turn_cap=15,
-        sleep=lambda _s: None,
+
+def _three_evaluation_states() -> dict[str, dict[str, Any]]:
+    """One result per evaluation status, all for the same goal at the same cap."""
+    founded = records(
+        (1, observation(cities=[city(65536)], units=[unit(1, "UNIT_SETTLER")]),
+         "units.move_to", "applied"),
+        (2, observation(cities=[city(65536), city(65537)]), "units.found_city", "applied"),
     )
+    return {
+        # Evaluated, and the predicate held.
+        "evaluated_true": _drive(lambda: founded, FakeRunner(_playing(6))),
+        # Evaluated against real recorded steps, and the predicate did not hold.
+        "evaluated_false": _drive(_at_cap_records, FakeRunner(_playing(6))),
+        # Never evaluated: the run paused before the store recorded a single step, so the
+        # predicate was never checked against anything at all.
+        "not_evaluated": _drive(
+            records, FakeRunner([FakeStatus(LifecycleState.PAUSED, 1, 3)])
+        ),
+    }
 
-    # Both say "reached: False" -- identical on that one field.
-    assert evaluated_result["reached"] is False
-    assert never_evaluated_result["reached"] is False
 
-    # Only `evaluated` tells them apart.
-    assert evaluated_result["evaluated"] is True
-    assert never_evaluated_result["evaluated"] is False
+def test_the_three_evaluation_states_are_three_distinct_records() -> None:
+    """The defect: `reached` initialised False and was only ever set by an evaluation, so "never
+    evaluated" and "evaluated and false" were the same bytes in `result.json`.
+
+    This is the assertion that fails if the three states ever collapse back into two -- it counts
+    them. It does not care *how* they are distinguished, only that a reader of the artefact can.
+    """
+    results = _three_evaluation_states()
+
+    # Sanity: the axis really is evaluation status -- two of the three agree on `reached`.
+    assert [r["reached"] for r in results.values()] == [True, False, False]
+
+    # Three inputs, three distinguishable records, read back the way `result.json` is read.
+    shapes = {
+        name: json.loads(json.dumps({k: r[k] for k in ("reached", "reached_reason")}, default=str))
+        for name, r in results.items()
+    }
+    assert len({json.dumps(s, sort_keys=True) for s in shapes.values()}) == 3
+
+    # And the three-way state is available without every consumer re-deriving it.
+    assert [reached_state(r) for r in results.values()] == [
+        "reached",
+        "not_reached",
+        "not_evaluated",
+    ]
+
+
+def test_an_unevaluated_reached_names_why_rather_than_asserting_a_negative() -> None:
+    """The 882758e shape: a body that cannot answer says so by name (`government_rows_without
+    _hash`, `no_local_player`) instead of emitting the empty/negative value as if it were the
+    answer. `reached_reason is None` is exactly the claim "read this `reached` as an answer".
+    """
+    results = _three_evaluation_states()
+
+    assert results["evaluated_true"]["reached_reason"] is None
+    assert results["evaluated_false"]["reached_reason"] is None
+    assert results["not_evaluated"]["reached_reason"] == "no_recorded_steps"
+    # Every reason is enumerated, so a consumer can test membership instead of string-matching.
+    assert results["not_evaluated"]["reached_reason"] in goal_run.REACHED_NOT_EVALUATED_REASONS
+
+    # `reached` stays bool-typed for every consumer that already reads it as one.
+    assert all(isinstance(r["reached"], bool) for r in results.values())
+
+
+def test_the_chain_verdict_distinguishes_no_parts_from_an_evaluated_failure() -> None:
+    """Same axis, one level up -- and the level the live blocks actually published.
+
+    block-02, -10, -15, -17 and -20 each wrote `"parts": []` beside a flat `"reached": false`:
+    a negative claim about a goal nothing had ever evaluated. block-02's was worse than unknown,
+    it was wrong -- its `timeline.txt` records `REACHED at recorded turn 3`.
+    """
+    evaluated_false = _drive(_at_cap_records, FakeRunner(_playing(6)))
+
+    aborted = {"parts": [], "aborted": "HarnessError: ..."}
+    goal_run.set_chain_verdict(aborted)
+    played_out = {"parts": [evaluated_false]}
+    goal_run.set_chain_verdict(played_out)
+    never_evaluated = _drive(records, FakeRunner([FakeStatus(LifecycleState.PAUSED, 1, 3)]))
+    unevaluated_part = {"parts": [never_evaluated]}
+    goal_run.set_chain_verdict(unevaluated_part)
+
+    # All three still say `reached: false` -- that field alone cannot tell them apart.
+    assert [c["reached"] for c in (aborted, played_out, unevaluated_part)] == [False, False, False]
+
+    assert reached_state(aborted) == "not_evaluated"
+    assert aborted["reached_reason"] == "no_parts_recorded"
+    assert reached_state(played_out) == "not_reached"
+    assert played_out["reached_reason"] is None
+    assert reached_state(unevaluated_part) == "not_evaluated"
+    assert unevaluated_part["reached_reason"] == "part_not_evaluated"
+
+    # The summary a human reads must not call an unevaluated chain a failure.
+    assert "**NOT EVALUATED** (no_parts_recorded)" in summarize(aborted)
+    assert "NOT EVALUATED" not in summarize(played_out)
+
+
+def test_run_preparation_failure_is_an_unknown_not_a_negative() -> None:
+    """The run never started, so there was nothing to evaluate -- a third producer of a `reached`
+    that is a placeholder, and it must name itself like the others.
+    """
+    part = goal_run.mark_not_evaluated(
+        {"goal": "found_second_city"}, goal_run.REACHED_NOT_EVALUATED_RUN_PREPARATION_FAILED
+    )
+    assert reached_state(part) == "not_evaluated"
+    assert part["reached"] is False
+    assert part["evaluated"] is False
+    assert part["reached_reason"] == "run_preparation_failed"
+
+
+def test_evaluated_and_reached_reason_cannot_disagree() -> None:
+    """`evaluated` (the boolean 62d990b introduced, which existing consumers read) and
+    `reached_reason` (the named unknown) are written by the same two functions and nowhere else,
+    so the two cannot drift into contradicting one another.
+    """
+    for result in _three_evaluation_states().values():
+        assert result["evaluated"] is (result["reached_reason"] is None)
 
 
 def test_driver_stops_when_the_starting_observation_makes_the_goal_infeasible() -> None:

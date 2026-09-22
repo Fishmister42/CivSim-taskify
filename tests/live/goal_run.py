@@ -1176,20 +1176,20 @@ def run_goal(
         run_id = runner.start(config_path)
     except RunPreparationFailed as exc:
         recorder.note(f"goal {goal.goal_id}: run preparation FAILED: {exc}")
-        return {
-            "goal": goal.goal_id,
-            "title": goal.title,
-            "turn_cap": turns,
-            "provider": provider,
-            "provider_policy": provider_policy,
-            "reached": False,
-            # The run never started, so the success predicate was never checked against a
-            # recorded observation -- `reached: False` here must not be read as "evaluated and
-            # found wanting" (2026-09-22 live defect: absence and negative sharing one field).
-            "evaluated": False,
-            "blocked_by": goal.blocked_by,
-            "error": str(exc),
-        }
+        # The run never started, so the success predicate was never checked against a recorded
+        # observation. `reached: False` here must not be read as "evaluated and found wanting".
+        return mark_not_evaluated(
+            {
+                "goal": goal.goal_id,
+                "title": goal.title,
+                "turn_cap": turns,
+                "provider": provider,
+                "provider_policy": provider_policy,
+                "blocked_by": goal.blocked_by,
+                "error": str(exc),
+            },
+            REACHED_NOT_EVALUATED_RUN_PREPARATION_FAILED,
+        )
     recorder.note(f"goal {goal.goal_id}: run {run_id}")
 
     result = drive_goal(
@@ -1216,29 +1216,159 @@ def run_goal(
     return result
 
 
-def _request_stop_unless_already_terminal(
-    runner: Any, run_id: Any, *, note: Callable[[str], None]
-) -> None:
-    """Ask the runner to stop -- unless it already reached a terminal state on its own.
+# --------------------------------------------------------------------------
+# 3a. `reached`: an answer, or a named reason there is no answer
+# --------------------------------------------------------------------------
+#
+# 2026-09-22 live defect. `reached` was initialised `False` and only ever set `True` by an
+# evaluation, so a run that was NEVER EVALUATED -- one that recorded no step, or never started at
+# all, or whose chain aborted before any part completed -- was indistinguishable in `result.json`
+# from one that WAS evaluated and found wanting. Absence and negative shared one representation,
+# and the only place the difference survived was a human reading `timeline.txt`.
+#
+# The shape here is 882758e's, applied to this artefact. That commit's ruling was that a body
+# which cannot answer must say so by name -- `government_rows_without_hash`, `no_local_player` --
+# rather than emit the empty/negative value as though it were the answer. So: the value field
+# `reached` keeps its bool type and its meaning for every existing consumer, and a sibling
+# *reason* field carries the unknown explicitly. `reached_reason is None` is the assertion "this
+# `reached` is a real evaluated answer"; anything else names why it is not.
+#
+# The mechanical test this has to pass -- *could this ever return "I do not know"?* -- is
+# answered by the reason field being non-null in exactly the cases where the answer is unknown.
 
-    2026-09-22 live defect (block-10): a run's own ``stop_condition`` and this driver's own stop
-    triggers (success, the turn-cap backstop) can watch the identical signal -- the store's
-    recorded turn count -- and resolve within the same poll. When the runner gets there first,
-    ``request_stop`` raises ``HarnessError`` because the run is already terminal; but that
-    terminal state *is* the state this call was trying to reach. Same ruling as the lock context
-    manager earlier today: a run that has already reached the state you were driving it to has
-    not failed to get there. So only this specific "already terminal" error is swallowed here --
-    it must never abort result assembly. Any other ``HarnessError`` from ``request_stop`` (an
-    unknown run id, for instance) is a real failure and still propagates.
+#: No step was ever recorded, so the success predicate was never checked against an observation.
+REACHED_NOT_EVALUATED_NO_RECORDED_STEPS = "no_recorded_steps"
+#: `Runner.start` refused the configuration: the run never existed, let alone played.
+REACHED_NOT_EVALUATED_RUN_PREPARATION_FAILED = "run_preparation_failed"
+#: Chain level: not one part completed, so there is nothing to have evaluated (the shape every
+#: 2026-09-22 aborted block wrote: `parts: []` beside a bare `reached: false`).
+REACHED_NOT_EVALUATED_NO_PARTS_RECORDED = "no_parts_recorded"
+#: Chain level: a part exists but was itself never evaluated, so the chain's verdict inherits
+#: that part's unknown instead of reporting it as a negative.
+REACHED_NOT_EVALUATED_PART_NOT_EVALUATED = "part_not_evaluated"
+
+#: Every reason a `reached` value is *not* an evaluated answer. Enumerated so a consumer can
+#: check membership rather than string-match, and so a new reason cannot be added without
+#: appearing here.
+REACHED_NOT_EVALUATED_REASONS = (
+    REACHED_NOT_EVALUATED_NO_RECORDED_STEPS,
+    REACHED_NOT_EVALUATED_RUN_PREPARATION_FAILED,
+    REACHED_NOT_EVALUATED_NO_PARTS_RECORDED,
+    REACHED_NOT_EVALUATED_PART_NOT_EVALUATED,
+)
+
+
+def mark_not_evaluated(result: dict[str, Any], reason: str) -> dict[str, Any]:
+    """Record on *result* that ``reached`` is a placeholder, and name why -- the 882758e shape.
+
+    ``reached`` stays ``False`` so every consumer that reads it as a bool keeps working and keeps
+    being right (a goal that was never evaluated was certainly not reached). ``reached_reason``
+    carries the unknown. ``evaluated`` is written here too, and *only* here and in
+    :func:`mark_evaluated`, so the boolean and the reason cannot drift into disagreeing.
     """
+    if reason not in REACHED_NOT_EVALUATED_REASONS:  # pragma: no cover - defensive
+        raise ValueError(f"unknown not-evaluated reason {reason!r}")
+    result["reached"] = False
+    result["evaluated"] = False
+    result["reached_reason"] = reason
+    return result
+
+
+def mark_evaluated(result: dict[str, Any], *, reached: bool) -> dict[str, Any]:
+    """Record on *result* that the success predicate was actually checked, and what it said.
+
+    This is the only way ``reached`` becomes a claim rather than a placeholder: ``reached_reason``
+    goes to ``None``, which is precisely the assertion "read this ``reached`` as an answer".
+    """
+    result["reached"] = reached
+    result["evaluated"] = True
+    result["reached_reason"] = None
+    return result
+
+
+def set_chain_verdict(results: dict[str, Any]) -> dict[str, Any]:
+    """Write the chain-level ``reached`` / ``evaluated`` / ``reached_reason`` onto *results*.
+
+    The chain's verdict is only an answer if every part of it is. Before this existed, the
+    top-level ``reached`` was ``bool(parts and all(p["reached"] for p in parts))`` -- so an
+    aborted block with ``parts: []`` published ``reached: false``, a flat negative claim about a
+    goal nothing had ever looked at. Every one of the 2026-09-22 aborted blocks (block-02, -10,
+    -15, -17, -20) wrote exactly that, and block-02's was a lie: its run had reached its goal at
+    turn 3.
+    """
+    parts = results.get("parts") or []
+    if not parts:
+        return mark_not_evaluated(results, REACHED_NOT_EVALUATED_NO_PARTS_RECORDED)
+    if any(reached_state(part) == "not_evaluated" for part in parts):
+        return mark_not_evaluated(results, REACHED_NOT_EVALUATED_PART_NOT_EVALUATED)
+    return mark_evaluated(results, reached=all(part.get("reached") for part in parts))
+
+
+def reached_state(result: Mapping[str, Any]) -> str:
+    """The three-way state of *result*: ``not_evaluated`` | ``reached`` | ``not_reached``.
+
+    The one place the three states are derived, so a consumer never has to re-derive the
+    absence/negative distinction (and re-collapse it) for itself. An older-shaped artefact with
+    no ``reached_reason`` key reads as an evaluated answer, which is what it was written to mean.
+    """
+    if result.get("reached_reason") is not None:
+        return "not_evaluated"
+    return "reached" if result.get("reached") else "not_reached"
+
+
+def _already_stopped(lifecycle_state: Any) -> bool:
+    """Whether *lifecycle_state* is one a run cannot leave -- i.e. the run is already stopped.
+
+    The single definition of "stopped" this driver uses, so the loop's break condition and the
+    stop path cannot drift apart into disagreeing about what terminal means.
+    """
+    from civsim_harness.models.run import LifecycleState
+
+    return lifecycle_state in (LifecycleState.FINISHED, LifecycleState.FAILED)
+
+
+def _stop_run_unless_already_stopped(
+    runner: Any, run_id: Any, *, status: Any, note: Callable[[str], None]
+) -> None:
+    """Bring the run to a stop. A run that is already stopped is the success case, not an error.
+
+    2026-09-22 live defect, five blocks (block-02, -10, -15, -17, -20 under
+    ``spikes/gameplay-2026-09-22/``): ``Runner.request_stop`` raises ``HarnessError`` for a run
+    already in ``finished``/``failed`` (``src/civsim_harness/run/runner.py:546-553``), that
+    exception escaped ``drive_goal``, and ``main``'s handler recorded the whole block as
+    ``aborted`` with ``parts: []`` -- throwing away the finished run's entire result body,
+    including block-02's, which had *reached its goal* at turn 3.
+
+    Two structural changes over 62d990b's first attempt, which swallowed the error by comparing
+    ``exc.message`` to a literal:
+
+    1. **The edge is not taken.** Every one of those five timelines logged ``finished`` in the
+       *same poll* that then asked the run to stop -- the status saying "already stopped" was in
+       the caller's hand at the moment of the call. This was never a race; it was an ordering
+       defect. So the stop is not attempted at all when the status in hand already says stopped:
+       there is nothing left for this call to accomplish.
+    2. **What remains is decided by the run's state, not by an error string.** For the genuine
+       (never-yet-observed) window where a run finishes between that status read and this call,
+       the question asked is *what is the run now?* -- not *what did the error say?*. A driver
+       whose correctness depends on an exact message in ``runner.py`` breaks silently the day
+       that message is reworded; a driver that re-reads the lifecycle state depends on the
+       property it actually cares about. Any failure that leaves the run in a state it could
+       still be stopped from is a real failure and still propagates.
+    """
+    if _already_stopped(status.lifecycle_state):
+        note(
+            f"run {run_id} is already {status.lifecycle_state.value} -- nothing to stop; "
+            "the state this stop wanted is the state the run is in"
+        )
+        return
     try:
         runner.request_stop(run_id)
-    except HarnessError as exc:
-        if exc.message != "a run already in a terminal lifecycle state cannot be stopped":
+    except HarnessError:
+        if not _already_stopped(runner.get_status(run_id).lifecycle_state):
             raise
         note(
-            f"run {run_id} was already terminal when stop was requested -- "
-            "that is the benign race this is, not a failure to stop"
+            f"run {run_id} stopped on its own between the status read and the stop request -- "
+            "the state this stop wanted is the state the run is in"
         )
 
 
@@ -1275,22 +1405,19 @@ def drive_goal(
     """
     from civsim_harness.models.run import LifecycleState
 
-    terminal = {LifecycleState.FINISHED, LifecycleState.FAILED}
     result: dict[str, Any] = {
         "goal": goal.goal_id,
         "title": goal.title,
         "run_id": str(run_id),
         "turn_cap": turn_cap,
-        "reached": False,
-        # Distinct from `reached`: True only once the success predicate has actually been
-        # checked against a recorded observation. Without this, "never evaluated" and "evaluated
-        # and false" both read as `reached: False` in the artefact (2026-09-22 live defect).
-        "evaluated": False,
         "reached_at_turn": None,
         "prerequisites_met": None,
         "blocked_by": goal.blocked_by,
         "stop_reason": None,
     }
+    # The run has not been evaluated yet, and says so by name rather than by an unqualified
+    # `reached: False` that a reader cannot tell from a real negative.
+    mark_not_evaluated(result, REACHED_NOT_EVALUATED_NO_RECORDED_STEPS)
     prerequisites_checked = False
     last_key: tuple[Any, ...] | None = None
     started = time.perf_counter()
@@ -1320,20 +1447,20 @@ def drive_goal(
                     f"({unmet}); stopping the run"
                 )
                 result["stop_reason"] = "prerequisites_not_met"
-                _request_stop_unless_already_terminal(runner, run_id, note=note)
+                _stop_run_unless_already_stopped(runner, run_id, status=status, note=note)
 
         if records.steps:
             success, _bindings = _evaluate_against_store(goal, records, catalog_root=catalog_root)
-            result["evaluated"] = True
-            if success.met and not result["reached"]:
-                result["reached"] = True
+            already_reached = result["reached"]
+            mark_evaluated(result, reached=already_reached or success.met)
+            if success.met and not already_reached:
                 result["reached_at_turn"] = records.turns_recorded[-1]
                 result["stop_reason"] = "success"
                 note(
                     f"goal {goal.goal_id}: REACHED at recorded turn "
                     f"{result['reached_at_turn']} -- stopping the run"
                 )
-                _request_stop_unless_already_terminal(runner, run_id, note=note)
+                _stop_run_unless_already_stopped(runner, run_id, status=status, note=note)
             elif (
                 records.turns_recorded
                 and records.turns_recorded[-1] >= turn_cap
@@ -1341,9 +1468,9 @@ def drive_goal(
             ):
                 result["stop_reason"] = "turn_cap"
                 note(f"goal {goal.goal_id}: turn cap {turn_cap} reached -- stopping the run")
-                _request_stop_unless_already_terminal(runner, run_id, note=note)
+                _stop_run_unless_already_stopped(runner, run_id, status=status, note=note)
 
-        if status.lifecycle_state in terminal:
+        if _already_stopped(status.lifecycle_state):
             break
         if status.lifecycle_state is LifecycleState.PAUSED:
             note(f"goal {goal.goal_id}: run paused -- this part's terminal state")
@@ -1353,11 +1480,15 @@ def drive_goal(
     records = read_records()
     success, _bindings = _evaluate_against_store(goal, records, catalog_root=catalog_root)
     if records.steps:
-        result["evaluated"] = True
-    if success.met and not result["reached"]:
-        result["reached"] = True
-        result["reached_at_turn"] = records.turns_recorded[-1] if records.steps else None
-        result["stop_reason"] = result["stop_reason"] or "success"
+        # There is something to have evaluated, so `reached` becomes an answer here whichever way
+        # it falls. Without recorded steps nothing is claimed: `reached` stays a placeholder and
+        # `reached_reason` keeps saying `no_recorded_steps`, because `check_predicate` against an
+        # empty store returns `met=False` -- a shape that reads exactly like a real negative.
+        already_reached = result["reached"]
+        mark_evaluated(result, reached=already_reached or success.met)
+        if success.met and not already_reached:
+            result["reached_at_turn"] = records.turns_recorded[-1]
+            result["stop_reason"] = result["stop_reason"] or "success"
     result.update(
         {
             "final_state": status.lifecycle_state.value,
@@ -1456,13 +1587,19 @@ def summarize(results: Mapping[str, Any]) -> str:
         f" (policy `{results.get('provider_policy')}`) | started {results.get('started_at')} "
         f"| finished {results.get('finished_at')}"
     )
+    if reached_state(results) == "not_evaluated":
+        # Said in the header, because this is the line a reader of an aborted block reaches first
+        # and the one that used to read as a flat "not reached" about a goal nobody looked at.
+        lines.append(
+            f"- chain verdict: **NOT EVALUATED** ({results.get('reached_reason')})"
+            + (f" -- aborted: {results['aborted']}" if results.get("aborted") else "")
+        )
     for part in parts:
-        if part.get("reached"):
+        state = reached_state(part)
+        if state == "reached":
             status_label = "REACHED"
-        elif part.get("evaluated") is False:
-            # Explicit `False`, not merely falsy/missing -- an older-shaped part (no `evaluated`
-            # key) keeps reading as "not reached" rather than silently flipping label.
-            status_label = "NOT EVALUATED"
+        elif state == "not_evaluated":
+            status_label = f"NOT EVALUATED ({part.get('reached_reason')})"
         else:
             status_label = "not reached"
         lines.append("")
@@ -1655,8 +1792,14 @@ def run_chain(
         )
         parts.append(part)
         if not part.get("reached"):
+            state = reached_state(part)
+            why = (
+                f"never evaluated ({part.get('reached_reason')})"
+                if state == "not_evaluated"
+                else "not reached"
+            )
             recorder.note(
-                f"goal {goal.goal_id} not reached; the chain stops here "
+                f"goal {goal.goal_id} {why}; the chain stops here "
                 f"(a later part starts from a state that never arrived)"
             )
             break
@@ -1724,16 +1867,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         recorder.note(f"ABORTED: {type(exc).__name__}: {exc}")
         results["aborted"] = f"{type(exc).__name__}: {exc}"
     finally:
-        recorder.stop()
-        results["recording"] = recorder.write(out)
+        # ORDERING IS THE GUARANTEE (2026-09-22). The block's own record goes to disk *before*
+        # anything that can raise runs. `recorder.write()` decodes and re-encodes every captured
+        # frame into a GIF -- a long, memory-hungry, failure-capable step at the exact moment the
+        # process is already unwinding -- and it used to run first, so a failure there took the
+        # whole record with it. Now the result body is durable first and the recording is an
+        # amendment to an artefact that already exists.
+        def write_record() -> None:
+            (out / "result.json").write_text(
+                json.dumps(results, indent=2, default=str), encoding="utf-8"
+            )
+            (out / "summary.md").write_text(summarize(results), encoding="utf-8")
+
         results["finished_at"] = datetime.now(UTC).isoformat()
-        results["reached"] = bool(
-            results["parts"] and all(p.get("reached") for p in results["parts"])
-        )
-        (out / "result.json").write_text(
-            json.dumps(results, indent=2, default=str), encoding="utf-8"
-        )
-        (out / "summary.md").write_text(summarize(results), encoding="utf-8")
+        set_chain_verdict(results)
+        write_record()
+        try:
+            recorder.stop()
+            results["recording"] = recorder.write(out)
+        except BaseException as exc:  # noqa: BLE001 - a lost recording is not a lost record
+            recorder_error = f"{type(exc).__name__}: {exc}"
+            print(f"  recording FAILED to write: {recorder_error}", flush=True)
+            results["recording"] = {"error": recorder_error}
+        results["finished_at"] = datetime.now(UTC).isoformat()
+        write_record()
         print(json.dumps(results, indent=2, default=str))
     return 0 if results.get("reached") else 1
 
