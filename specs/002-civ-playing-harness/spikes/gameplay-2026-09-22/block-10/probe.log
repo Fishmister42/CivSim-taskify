@@ -1,0 +1,44 @@
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	43	30	0	true	false
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	0	0	0	false	false
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	43	30	0	true	false
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	0	0	0	false	false
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	43	30	0	true	false
+nexus: discarding unmatched output: PlotInfo::OnCitySelectionChanged	0	65536	0	0	0	false	false
+connected; InGame=132 GameCore_Tuner=10
+baseline turn_state: {"is_waiting_for_other_players": false, "turn_number": 4, "is_local_player_turn": true}
+baseline screen: {"screen": "world", "prompt_options": [], "raw_screen_id": "InGame", "has_blocking_prompt": false, "recognized": true}
+baseline units: {"units": [{"has_queued_orders": false, "is_fortified": false, "charges_remaining": 0, "plot": {"y": 31, "x": 43}, "available_promotions": [], "movement_remaining": 2, "build_options": [], "unit_id": 131073, "available_builds": [], "can_found_city": false, "owner_is_local_player": true, "reachable_plots": [{"y": 31, "x": 43}, {"y": 30, "x": 43}, {"y": 32, "x": 44}, {"y": 30, "x": 44}, {"y": 31, "x": 42}, {"y": 31, "x": 44}, {"y": 32, "x": 43}], "is_selected": true, "max_movement": 2, "owner_player_id": 0, "unit_type": "UNIT_WARRIOR"}]}
+baseline cities: {"cities": [{"can_buy_with_faith": false, "name": "LOC_CITY_NAME_PASARGADAE", "plot": {"y": 30, "x": 43}, "gold_available": 15, "owner_is_local_player": true, "owner_player_id": 0, "purchasable_with_faith": [], "production_queue": ["UNIT_SCOUT"], "population": 1, "purchasable_with_gold": [], "can_bu
+round-trip floor (units.state, 8 samples): [0.0665, 0.067, 0.0666, 0.0663, 0.0666, 0.067, 0.0668, 0.0665]
+settler: null
+other unit: {"has_queued_orders": false, "is_fortified": false, "charges_remaining": 0, "plot": {"y": 31, "x": 43}, "available_promotions": [], "movement_remaining": 2, "build_options": [], "unit_id": 131073, "available_builds": [], "can_found_city": false, "owner_is_local_player": true, "reachable_plots": [{"y": 31, "x": 43}, {"y": 30, "x": 43}, {"y": 32, "x": 44}, {"y": 30, "x": 44}, {"y": 31, "x": 42}, {"y
+
+CLASS camera.move
+  camera.move      camera.move        dispatch=0.05s first_observed=Nones polls=134 NOT_OBSERVED_WITHIN_DEADLINE
+  camera.move      camera.move        dispatch=0.0502s first_observed=Nones polls=134 NOT_OBSERVED_WITHIN_DEADLINE
+  camera.move      camera.move        dispatch=0.0504s first_observed=Nones polls=134 NOT_OBSERVED_WITHIN_DEADLINE
+  camera.move      camera.move        dispatch=0.0499s first_observed=Nones polls=134 NOT_OBSERVED_WITHIN_DEADLINE
+  camera.move      camera.move        dispatch=0.0501s first_observed=Nones polls=134 NOT_OBSERVED_WITHIN_DEADLINE
+  camera.move      camera.move        dispatch=0.0333s first_observed=Nones polls=134 NOT_OBSERVED_WITHIN_DEADLINE
+
+CLASS units.select / cities.select (alternating, real transitions)
+  cities.select    cities.select      dispatch=0.0332s first_observed=0.1337s polls=1 OBSERVED
+  units.select     units.select       dispatch=0.0329s first_observed=0.167s polls=1 OBSERVED
+  cities.select    cities.select      dispatch=0.033s first_observed=0.1334s polls=1 OBSERVED
+  units.select     units.select       dispatch=0.0338s first_observed=0.1664s polls=1 OBSERVED
+  cities.select    cities.select      dispatch=0.033s first_observed=0.1333s polls=1 OBSERVED
+  units.select     units.select       dispatch=0.0332s first_observed=0.1667s polls=1 OBSERVED
+
+CLASS units.move_to (non-settler unit only)
+  units.select     units.select       dispatch=0.033s first_observed=0.1666s polls=1 OBSERVED
+  units.move_to    units.move_to      dispatch=0.0667s first_observed=0.1668s polls=1 OBSERVED
+  units.select     units.select       dispatch=0.0334s first_observed=0.1667s polls=1 OBSERVED
+  units.move_to    units.move_to      dispatch=0.0664s first_observed=0.1668s polls=1 OBSERVED
+  attempt 2: no reachable plot other than its own (movement spent?)
+
+wrote /home/matt/CivSolver/specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/block-10/latency-probe.json
+10/16 dispatches had their effect observed
+  camera.move      n=0 raw=[]
+  cities.select    n=3 raw=[0.1337, 0.1334, 0.1333]
+  units.move_to    n=2 raw=[0.1668, 0.1668]
+  units.select     n=5 raw=[0.167, 0.1664, 0.1667, 0.1666, 0.1667]

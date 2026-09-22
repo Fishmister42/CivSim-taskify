@@ -1,0 +1,45 @@
+Traceback (most recent call last):
+  File "/home/matt/CivSolver-live/src/civsim_harness/nexus/client.py", line 469, in connect
+    reader, writer = await asyncio.wait_for(
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/streams.py", line 48, in open_connection
+    transport, _ = await loop.create_connection(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 1122, in create_connection
+    raise exceptions[0]
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 1104, in create_connection
+    sock = await self._connect_sock(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 1007, in _connect_sock
+    await self.sock_connect(sock, address)
+  File "/usr/lib/python3.12/asyncio/selector_events.py", line 651, in sock_connect
+    return await fut
+           ^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/selector_events.py", line 691, in _sock_connect_cb
+    raise OSError(err, f'Connect call failed {address}')
+ConnectionRefusedError: [Errno 111] Connect call failed ('127.0.0.1', 4318)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/matt/CivSolver/specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/block-09/latency_probe.py", line 358, in <module>
+    raise SystemExit(asyncio.run(main()))
+                     ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/matt/CivSolver/specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/block-09/latency_probe.py", line 170, in main
+    indices = await client.connect()
+              ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/matt/CivSolver-live/src/civsim_harness/nexus/client.py", line 474, in connect
+    raise PreflightError(
+civsim_harness.errors.PreflightError: Could not connect to the Nexus tuner interface | detail={'host': '127.0.0.1', 'port': 4318, 'reason': "[Errno 111] Connect call failed ('127.0.0.1', 4318)"}
