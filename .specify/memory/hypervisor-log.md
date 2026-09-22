@@ -1023,3 +1023,86 @@ detection-pass `ConnectionResetError` and `stop_reason None` (finding: a death d
 sweep is not named). Relaunch ×3 spawned nothing: Steam's dialog says the owner is playing Slay the
 Spire 2 on another computer and continuing would disconnect him — clicked Cancel, did not launch.
 Client down; resume from `…-end2` (t56); bisect 454b2f8 vs 14f7418 before any chain run. $0 spent.
+
+### Convergence re-check 001/003 — 2026-09-22 (attempt 2, both specs, NOT CONVERGED on arrival)
+
+Both were reported CONVERGED on 2026-09-21 (001: 75/75, 003: 46/46). This was an honest
+re-check and both came back **NOT CONVERGED**: nine findings, two HIGH, all now closed.
+Reports: `specs/001-unified-web-interface/analyze-2026-09-22.md`,
+`specs/003-match-tracking-store/analyze-2026-09-22.md`. Commits `54d89aa`, `9597bbd`,
+`9120fce`, `3beea75`.
+
+**What was verified rather than trusted.** 001's ten Phase 9 fixes were re-checked against the
+code, not against `tasks.md`'s claims. All ten landed with real code and real tests. Nothing was
+a claim without a code path. So none of what follows is last pass's work undone.
+
+**Where last pass's shape went.** 2026-09-21 named it: *a check written from the same mental
+model as the code inherits that model's blind spot*. Re-running that lens would mostly re-find
+its own fixes, so this pass audited where the class migrates to once checks are widened —
+artifacts that assert a number the code computes, in-code prose that instructs a future
+contributor, and statements made before the other deliverable landed. All three produced
+findings, and two bigger things turned up that fit neither.
+
+**The two that matter.**
+
+1. **003 FR-006 had no check of any kind (T047).** "The store MUST expose no operation that
+   deletes or edits a turn, step, capture, event or model call" was enforced by omission. The
+   surface really was clean, but nothing asserted it and `FR-006` appeared nowhere in the feature.
+   `delete_turn_cycle()` added tomorrow would have left the whole suite green while breaking the
+   immutability floor Principle III rests on. `MUTATING_OPERATIONS` now publishes the closed
+   surface as data, with a partition over the Protocol *and* the concrete adapter (MRO-walking,
+   read set pinned literally so the partition is not a tautology) plus a delete/edit vocabulary
+   scan. Revert-confirmed. The fix pattern had existed one package away the whole time, built for
+   `civsim_web`'s client rather than for the store that holds the records.
+
+2. **003's SC-005 test had stopped testing (T053).**
+   `test_the_real_pre_feature_file_migrates_and_reads_back` read `civsim-match-store.db` and
+   called `pytest.skip("already at 1.1; nothing to migrate")`. Ordinary use of this host migrated
+   that file on 2026-09-21 — it now holds 44 runs — so from that moment the test skipped at
+   runtime **on the only machine that has the file**, and `assert len(before) == 10`, SC-005's
+   entire claim, was dead code. Nothing was red; a skip reads as "not applicable here". This is
+   the **fourth** check this project has found that was not checking — after `_read_setting`,
+   `doctor`'s hard-coded `0`, and the four narrow audits — and the first that was not merely
+   narrow but wholly inert. It is also a **distinct failure mode** from the three before it: those
+   were written wrong, this one was written right and *aged out*. Worth naming: **a fixture the
+   system under test keeps writing to is not a fixture.** Repointed at the frozen
+   `…v1.0.bak-20260921T152108Z` snapshot; the skip is now an assertion.
+
+**And repointing it immediately caught a live interaction nobody had seen.** The snapshot holds
+`run-54a3cefb…`, left `preparing` with no identity lock. A default write-mode open runs the
+open-time orphan sweep (`9f200d5`, the 002 lane's work in 003's files) and correctly pauses it. So
+**SC-005's and V3's "every run reads back unchanged" is true of the migration and false of a
+default open**, and nobody knew because the test had been skipping since the day the sweep landed.
+Resolved by separating the claims, not relaxing either: migration fidelity with
+`orphan_sweep=False`, and **W6 now asserted against a real store file** — the sweep pauses exactly
+the lockless run and moves no other run's lifecycle state. `test_orphans.py` builds fixtures that
+*are* orphans; this file merely *is* one, which is the stronger evidence and the first of its kind.
+
+**The rest.** 003: the contract's Operations block was two operations short of its own Protocol
+(`list_captures`, `trend_exclusion` — and T1 already cited the latter in prose while the block did
+not declare it); T1's "research R14" citation named an item about scale checks, and the wrong
+citation had spread to six further places, all now R6; W6 documents the orphan sweep; the CLI
+ships eight commands where six were documented; SC-004's $1.424694 is asserted rather than only
+recorded; FR-018's six named yields are exercised. 001: `quickstart.md` pinned `167/91/49` where
+`doctor` prints `180/103/50`, and the fix deliberately does **not** pin the number — four of those
+five counts are over 002's data model, and putting a cross-deliverable count in 001's CI is how a
+guard becomes something contributors edit to make green; `port.py`'s three probe docstrings still
+ordered a contributor to delete Protocols that Phase 9 had decided to keep.
+
+**One finding was produced by a fix (001 T078).** T077's new docstrings say "the probe is the
+graceful-degradation path, and here is the test that holds it". True of two probes; false of
+`CaptureBlobReader`, whose `503` was asserted **absent** and never asserted to fire, so it could
+have been deleted or replaced with a placeholder image with the suite green. Writing down a
+guarantee forces the question of whether it is held — the cheapest audit of the week.
+
+**Suite.** Baseline at `c7b5654`: 2138 passed / 19 skipped / 0 failed (203.89 s). Final at the
+tree these commits contain: **2147 passed / 18 skipped / 0 failed** (205.27 s) — +9 assertions and
+−1 skip, which is exactly this pass: nine new checks, and SC-005's test running instead of
+skipping. Only markdown changed after that run. `ruff` clean; `mypy --strict` clean over `store/`.
+The `/compare` render-budget case passed in both runs. The real store file and its `.bak` snapshot
+were only ever copied; mtimes verified unchanged. Every fix carries a revert confirmation that was
+run and recorded.
+
+**One ask, outside this lane's paths.** `src/civsim_harness/operator/store_cli.py`'s module
+docstring says "Seven commands, all over the published contract" above a list of eight. Not edited
+here; reported rather than taken unilaterally.
