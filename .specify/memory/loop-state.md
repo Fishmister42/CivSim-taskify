@@ -98,8 +98,11 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
   enough" or "retry enough times". Say so in the brief, or the fix gets "improved" into a retry.
 - **Grade every close-out claim by evidence tier, never present them flat**: applied-and-verified
   (store record + reproduction) / applied-but-resting-on-an-assumption / not demonstrated / in flight
-  and unproven. A summary that gives all four the same confidence is this project's own pattern
-  applied to its report.
+  and unproven / **retracted**. A summary that gives them the same confidence is this project's own
+  pattern applied to its report. **Retractions stay in, attached to the lane that made them** — on
+  2026-09-22 two of three were *measurement errors that looked like product defects*, and that rate is
+  itself a finding: it is the strongest argument for the readback sweep, and a summary of only the
+  survivors would present the lane as more reliable than its own evidence supports.
 - **A reconciliation pass closes every lane-day**: before reporting, verify each task claimed complete
   against the **code**, not against the agent's report, and tick or leave open with a reason. Twice on
   2026-09-22 a task was reported complete and was not, and both times the gap was found by reading the
