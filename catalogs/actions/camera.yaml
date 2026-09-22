@@ -28,8 +28,31 @@
   capability_id: camera.control
   availability_predicate: >
     target >= 0.05 and target <= 1.0
+  # T321: NOT `camera.zoom == target`. The engine does not return the requested float — it answered
+  # 0.049999713897705 for a requested 0.05 and 0.99999952316284 for a requested 1.0 (MEASURED from
+  # decision_steps, 2026-09-22, replaying each rejected step against the observation its own confirm
+  # poll read). Exact equality recorded 39 of 47 confirmed-failed zooms as refused while the camera
+  # was demonstrably on target, so live-coverage numbers understated.
+  #
+  # The tolerance is written HERE, in the declaration, rather than as an epsilon inside the
+  # evaluator: a tolerance is a number someone can quietly widen until anything passes, so it
+  # belongs where a reviewer diffs it, and no other predicate's `==` inherits a fuzzy comparison.
+  # It needs no new grammar — binary `-` between numerics and `<=` are already permitted
+  # (catalogs/README.md §4), so act/predicates.py is unchanged by this task. It also keeps d74a4c7's
+  # design instead of working around it: `_eval_binop` raises on a non-numeric operand, so an absent
+  # `camera.zoom` or an absent `target` makes this UNEVALUABLE, exactly as the `==` form became —
+  # the camera polarity tests pass unchanged, which is the proof.
+  #
+  # Magnitude, against the measurement: largest error on a zoom that LANDED is 4.768e-07 (2^-21);
+  # smallest error on a zoom that genuinely did NOT land is 0.293. Six orders of magnitude apart, so
+  # 1e-3 is not a judgement call between close numbers — ~2000x above the observed engine error and
+  # ~293x below the smallest real miss. ASSUMPTION: every requested zoom in the store was an
+  # endpoint (0.05 or 1.0); the engine's error on a mid-range request is not measured, and 1e-3 is
+  # chosen with that margin. tests/unit/test_predicates.py holds both a positive control at the
+  # values the engine actually returns and negative controls 1.1e-3 away that must keep refusing —
+  # widening this number turns those red by design.
   verification_predicate: >
-    camera.zoom == target
+    camera.zoom - target <= 0.001 and target - camera.zoom <= 0.001
   target_kind: number
   target_hint: >
     a zoom level from 0.05 (closest) to 1.0 (farthest)

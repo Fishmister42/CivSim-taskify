@@ -346,9 +346,22 @@ def _refuse_unresolved_operand(
     ``policies.change_government``'s ``player.current_government == target``, and the five other
     ``<field> == target`` verifications), ``None != "war"`` is ``True``
     (``diplomacy.make_peace``, the eleven ``prompts.*`` screen checks), and ``None not in [...]``
-    is ``True`` (``prompts.ai_diplomatic_approach``, CONFIRMED LIVE once in the merged store).
+    is ``True`` (``prompts.ai_diplomatic_approach`` -- see the correction below).
     Each of those ``True``s is read by :func:`civsim_harness.act.verify.verify_execution` as
     ``applied`` -- a no-op recorded as a success that nothing in the data could ever reveal.
+
+    **CORRECTED 2026-09-22 (headless lane, T321 pass): the LIVE instance does not reproduce.**
+    This docstring previously read "``prompts.ai_diplomatic_approach``, CONFIRMED LIVE once in the
+    merged store", and T311 recorded it as the project's own headline claim of the day. Re-derived
+    from the instrument rather than relayed: ``prompts.ai_diplomatic_approach`` has **96 steps in
+    the current store and ZERO with a null target** -- in either store file (the
+    ``v1.0.bak-20260921T152108Z`` snapshot carries none of this action at all). Its 10 ``applied``
+    results all carry a real, non-null target. **The defect SHAPE is real and reproduces against
+    the evaluator**, which is why this function exists and why it is unchanged by the correction;
+    what is withdrawn is only the claim that a live store record demonstrates it. Treat the fix as
+    closing an enumerated hazard, not an observed fabrication -- and note the direction this
+    correction runs: a record BETTER than the truth (a claimed fabrication that did not happen) is
+    the credibility-costly kind, so it is withdrawn explicitly rather than quietly softened.
 
     T310 enumerated this for the observation field, T311 for the left operand of ``in``/``not in``;
     both were left for a per-declaration fix, and a per-declaration guard conjunct is a rule every
@@ -407,8 +420,11 @@ def _apply_comparison(op: ast.cmpop, left: Any, right: Any, predicate: str) -> b
             return bool(left >= right)
         # T314: these two used to carry their own `right is None` special cases -- `bool(right is
         # not None and left in right)` and `bool(right is None or left not in right)`. The second
-        # of those is exactly the fabrication T311 confirmed live (an absent collection read as
-        # "the target is not in it", i.e. success). Both are now subsumed by
+        # of those is exactly the fabrication T311 enumerated (an absent collection read as
+        # "the target is not in it", i.e. success). T311 recorded that instance as CONFIRMED LIVE;
+        # it does NOT reproduce -- see `_refuse_unresolved_operand`'s own CORRECTED block. The
+        # shape is real against the evaluator; the live record is withdrawn. Both are now subsumed
+        # by
         # `_refuse_unresolved_operand`, which has already rejected either operand being an
         # absence-`None` before this is reached, and did so for EVERY operator rather than these
         # two. A `None` that survives to here can only be an explicit `null` literal the author

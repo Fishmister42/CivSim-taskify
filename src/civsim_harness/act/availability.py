@@ -68,11 +68,20 @@ target legal in *either* view was accepted in *both*.
 
 So an argument is checked against the range the view the board *is currently in* declares, not
 against the union of every view's. The check is derived entirely from the catalog: which action
-this is comes from its own verification predicate (``camera.zoom == target`` -- the declaration's
-own statement that it puts the camera at ``target``), the current view comes from the observation's
+this is comes from its own verification predicate -- the declaration's own statement that it puts
+``camera.zoom`` at ``target`` -- the current view comes from the observation's
 ``camera.read_state`` mode, and the range comes from that view's ``camera_requirements.zoom_range``.
 Nothing about ``(0.2, 1.0)`` is written down here; changing ``catalogs/observations/views.yaml``
 changes what this refuses, which is the only way the check and the declaration cannot drift apart.
+
+**That recognition is by SYMBOL, not by the text of the comparison** (T321). It used to require the
+rendered shape ``camera.zoom == target``, and giving that predicate a tolerance instead of exact
+float equality -- a change to ``catalogs/actions/camera.yaml`` alone, touching no Python -- silently
+un-geared this whole check: a 0.05 zoom requested in world mode went from refused to **authorised**.
+:func:`_sets_camera_zoom` carries the full account; the short version is that a matcher whose
+non-match means "nothing there" produces a confident false all-clear, and this one guards a
+Principle I property. Two existing tests caught it and a ratchet in
+``tests/unit/test_camera_validation.py`` now pins that the guard still finds its action.
 """
 
 from __future__ import annotations
@@ -91,6 +100,7 @@ from civsim_harness.act.predicates import (
     evaluate_expression,
     evaluate_predicate,
     membership_collection,
+    predicate_attribute_chains,
     predicate_root_names,
     resolve_selected_subject_target,
     split_conjuncts,
@@ -198,11 +208,14 @@ def availability_by_action(
 #: has no business depending on the run loop for a single literal, and the literal is catalog data.
 CAMERA_STATE_DECLARATION_ID: Final = "camera.read_state"
 
-#: The symbol a declaration uses to say "the camera's zoom". A camera action that declares
-#: ``camera.zoom == target`` as its verification predicate is, by its own declaration, the action
-#: that puts the camera at ``target`` -- which is how :func:`_sets_camera_zoom` finds it without
-#: this module hard-coding the id ``camera.zoom``.
-_CAMERA_ZOOM_SYMBOL: Final = "camera.zoom"
+#: The symbol a declaration uses to say "the camera's zoom", as the
+#: (namespace, attribute) pair :func:`predicate_attribute_chains` yields. An action whose
+#: verification predicate constrains this symbol against ``target`` is, by its own declaration, the
+#: action that puts the camera at ``target`` -- which is how :func:`_sets_camera_zoom` finds it
+#: without this module hard-coding the id ``camera.zoom``. T321: the pair, not the rendered text
+#: ``camera.zoom == target``, because the guard must survive a rewrite of the comparison; see
+#: :func:`_sets_camera_zoom` for the Principle I regression that taught us the difference.
+_CAMERA_ZOOM_CHAIN: Final[tuple[str, str]] = ("camera", "zoom")
 
 
 class CrossViewZoom(StrEnum):
@@ -337,25 +350,39 @@ def _out_of_current_view_range(
 
 def _sets_camera_zoom(declaration: ParityDeclaration) -> bool:
     """Whether *declaration* says, in its own verification predicate, that it puts the camera's
-    zoom at ``target`` (``camera.zoom == target``, either way round)."""
+    zoom at ``target``.
+
+    **Keyed on the symbols the declaration constrains, never on the shape of the comparison
+    between them** (T321). This used to require the literal node shape ``camera.zoom == target``,
+    matched with :func:`ast.unparse` over each conjunct. That read as a virtue -- it found the
+    action without hard-coding the id ``camera.zoom`` -- and it was a latent Principle I hazard,
+    because **a declaration it failed to recognise was silently ungeared rather than loudly
+    broken**: :func:`_out_of_current_view_range` returns ``None`` for anything this says ``False``
+    to, so a non-match reads as "not a zoom action", i.e. *nothing there*. That is this project's
+    own named failure mode -- an allowlist read as a detector, whose failure is a confident false
+    all-clear rather than a visible refusal.
+
+    It fired for real: giving ``camera.zoom`` a tolerance instead of exact float equality (T321,
+    a change touching only ``catalogs/actions/camera.yaml``) removed the ``==`` shape, the T276
+    per-view range guard stopped applying, and a zoom of 0.05 requested in world mode -- a camera
+    state no view declares and no human occupies -- was **authorised** instead of refused. Two
+    pre-existing tests in ``tests/unit/test_camera_validation.py`` caught it immediately; a ratchet
+    there now also pins that exactly one shipped action is recognised, so a silent zero can never
+    again pass for "no zoom action exists".
+
+    The predicate's *meaning* is what the guard needs: this action's success is defined by
+    ``camera.zoom`` standing in some declared relation to the requested ``target``. Both symbols
+    present is exactly that, and it survives any future rewrite of the relation -- while still
+    refusing a predicate that constrains the zoom without reference to the target
+    (``camera.zoom <= 1.0``) or names a target without constraining the zoom
+    (``camera.mode == target``).
+    """
     predicate = declaration.verification_predicate
     if not predicate:
         return False
-    for conjunct in split_conjuncts(predicate):
-        try:
-            node = ast.parse(conjunct, mode="eval").body
-        except SyntaxError:  # pragma: no cover - split_conjuncts only emits parseable operands
-            continue
-        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
-            continue
-        if not isinstance(node.ops[0], ast.Eq):
-            continue
-        if {ast.unparse(node.left), ast.unparse(node.comparators[0])} == {
-            _CAMERA_ZOOM_SYMBOL,
-            "target",
-        }:
-            return True
-    return False
+    return _CAMERA_ZOOM_CHAIN in predicate_attribute_chains(
+        predicate
+    ) and "target" in predicate_root_names(predicate)
 
 
 def _declares_mode(declaration: ParityDeclaration, mode: str) -> bool:

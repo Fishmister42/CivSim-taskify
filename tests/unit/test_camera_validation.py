@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from civsim_harness.act.availability import CROSS_VIEW_ZOOM, CrossViewZoom
+from civsim_harness.act.availability import CROSS_VIEW_ZOOM, CrossViewZoom, _sets_camera_zoom
 from civsim_harness.act.camera import (
     CAMERA_ACTION_DECLARATION_IDS,
     CAMERA_MOVE,
@@ -33,6 +33,7 @@ from civsim_harness.act.camera import (
 from civsim_harness.act.dispatch import DispatchOutcome, DispatchStatus, rejection_to_execution
 from civsim_harness.capability.loader import Catalog, load_catalog
 from civsim_harness.capability.registry import CapabilityRegistry
+from civsim_harness.models.catalog import DeclarationKind
 from civsim_harness.models.common import (
     CatalogVersionRef,
     DecisionStepId,
@@ -413,3 +414,85 @@ def test_authorized_outcome_matches_dispatch_outcome_shape(
     )
 
     assert isinstance(outcome, DispatchOutcome)
+
+
+# --------------------------------------------------------------------------
+# T321 (2026-09-22, headless lane): the coupling that nearly shipped a Principle I regression.
+#
+# `_sets_camera_zoom` decides whether the T276 per-view range guard applies, and it used to decide
+# it by matching the EXACT text of a verification predicate: `camera.zoom == target`. Its own
+# comment presented that as a virtue -- "which is how `_sets_camera_zoom` finds it without this
+# module hard-coding the id `camera.zoom`". Changing `camera.zoom`'s predicate to a tolerance form
+# (T321) removed that shape, and the guard stopped applying: a zoom of 0.05 in world mode -- a
+# camera state no view declares and no human occupies -- went from `rejected` to `authorized`.
+#
+# It failed in the DANGEROUS direction (authorising, not refusing), and only these two pre-existing
+# tests caught it. Naming what held: `test_a_strategic_zoom_asked_for_in_world_mode_is_refused...`
+# and `test_the_cross_view_answer_is_held_rather_than_guessed` both went red immediately, on a
+# change whose diff touched only a catalog predicate and no Python at all. They earned their keep.
+#
+# But those two tests only fail because the shipped catalog happens to have exactly one zoom action.
+# The matcher's real defect is that a non-match reads as "not a zoom action" -- "nothing there" --
+# which is this project's own named failure mode: an allowlist read as a detector produces a
+# confident false all-clear. The remedy is the one already adopted elsewhere: make the unknown
+# explicit. The matcher now keys on the SYMBOLS the declaration constrains (`camera.zoom` against
+# `target`) rather than the shape of the comparison between them, so any future rewrite of the
+# comparison keeps working; and the ratchet below asserts the guard still finds its action, so a
+# silent zero can never be mistaken for "no zoom action exists".
+# --------------------------------------------------------------------------
+
+
+def test_exactly_one_shipped_action_is_recognised_as_setting_the_camera_zoom(
+    real_catalog: Catalog,
+) -> None:
+    """THE RATCHET. The T276 view-range guard only runs on declarations `_sets_camera_zoom`
+    recognises, and a declaration it fails to recognise is silently ungeared rather than loudly
+    broken. Pin the recognition to the catalog: exactly one shipped action must be found, and it
+    must be `camera.zoom`. Confirmed FAILING against the T321 catalog with the pre-T321 matcher
+    (zero actions recognised, guard silently disabled, 0.05-in-world-mode authorised)."""
+    recognised = {
+        declaration.declaration_id
+        for declaration in real_catalog.declarations.values()
+        if declaration.kind is DeclarationKind.ACTION and _sets_camera_zoom(declaration)
+    }
+
+    assert recognised == {CAMERA_ZOOM}, (
+        "the per-view zoom guard no longer recognises the action it exists to guard -- if "
+        "camera.zoom's verification predicate changed shape, teach the matcher the symbols it "
+        "constrains, never re-tighten it to one comparison's text"
+    )
+
+
+def test_the_zoom_guard_survives_a_predicate_rewrite_that_keeps_its_meaning(
+    real_catalog: Catalog,
+) -> None:
+    """The matcher must key on WHAT the declaration constrains, not HOW it writes the constraint.
+    Each rewrite below says the same thing -- this action puts `camera.zoom` at `target` -- and the
+    guard must recognise every one of them. The exact-text matcher recognised only the first."""
+    declaration = real_catalog.declarations[CAMERA_ZOOM]
+
+    for predicate in (
+        "camera.zoom == target\n",
+        "camera.zoom - target <= 0.001 and target - camera.zoom <= 0.001\n",
+        "target == camera.zoom\n",
+        "target - camera.zoom <= 0.001 and camera.zoom - target <= 0.001\n",
+    ):
+        rewritten = declaration.model_copy(update={"verification_predicate": predicate})
+        assert _sets_camera_zoom(rewritten) is True, predicate
+
+
+def test_a_declaration_that_does_not_constrain_the_zoom_is_not_recognised(
+    real_catalog: Catalog,
+) -> None:
+    """THE NEGATIVE CONTROL. Loosening the matcher must not make it match everything -- an action
+    that never mentions `camera.zoom`, or mentions it without a `target`, is not the zoom action."""
+    declaration = real_catalog.declarations[CAMERA_ZOOM]
+
+    for predicate in (
+        "camera.mode == target\n",
+        "camera.target_plot == target and camera.target_is_revealed\n",
+        "camera.zoom <= 1.0\n",  # constrains the zoom, but not against the requested target
+        "game.turn_number == observed_turn_number + 1\n",
+    ):
+        rewritten = declaration.model_copy(update={"verification_predicate": predicate})
+        assert _sets_camera_zoom(rewritten) is False, predicate

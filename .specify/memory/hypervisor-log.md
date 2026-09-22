@@ -1836,6 +1836,27 @@ fact.
 
 ### T310/T311: the same six declarations are vulnerable on BOTH operands
 
+> **🔴 CORRECTED 2026-09-22 (headless lane, T321 pass) — the "Confirmed live" sentence below is
+> WITHDRAWN. The entry is otherwise unchanged and still stands beneath this block.**
+> Re-derived from the store rather than relayed: `prompts.ai_diplomatic_approach` has **96 steps in
+> the current store and ZERO with a null target**, in **either** store file — the
+> `v1.0.bak-20260921T152108Z` snapshot carries none of this action at all — and its 10 `applied`
+> results **all carry a real, non-null target**. So the specific record cited below
+> (`prompt.options == ["Goodbye"]` with `target: null`, passing at `confirm_attempts: 1`) is not
+> reproducible against either store this node holds.
+> **What survives, and it is most of it:** the left-operand defect *shape* is real, reproduces
+> against the evaluator, and the fix landed anyway at `d74a4c7` — which closed 25 fabrications,
+> three of them instances neither T310 nor T311 had enumerated. The seven-declaration enumeration
+> below stands as static analysis. **What is withdrawn is only the live demonstration**, and with
+> it T311's billing as "the project's own headline claim of the day".
+> **Why this one is worth the ink:** nearly every other finding today under-reported — a record
+> *worse* than the truth, which is recoverable. This is the other kind: a fabrication we claimed
+> and cannot show, a record *better* than the truth. That is the credibility-costly direction, and
+> it poisons the sound claims beside it, so it is withdrawn explicitly rather than quietly softened.
+> Corrected in place, here and at `specs/002-civ-playing-harness/tasks.md`'s T311 entry and both
+> sites in `src/civsim_harness/act/predicates.py`, because a correction filed where corrections go
+> never reaches whoever reads the claim.
+
 Worth stating explicitly, because the obvious reading is wrong. It is **not** six declarations exposed
 on the observation side and a different set exposed on the target side. It is the **same six**,
 independently, on **both**:

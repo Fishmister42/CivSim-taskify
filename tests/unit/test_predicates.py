@@ -20,6 +20,7 @@ grammar is caught here rather than only in prose.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -983,6 +984,121 @@ def test_camera_move_polarity_absent_target_is_revealed_is_false_not_true() -> N
     assert bindings["camera"].get("target_is_revealed") is None
 
     _assert_never_confirms(declaration.verification_predicate, bindings)
+
+
+# --------------------------------------------------------------------------
+# T321 (2026-09-22, headless lane): `camera.zoom` verified `camera.zoom == target`, an EXACT float
+# equality against a value the engine does not return. MEASURED from `decision_steps`, by replaying
+# each rejected step against the observation the confirm poll actually read (the next step's
+# recorded observation IS that final re-read -- its `assembled_at` is 1 ms before the step's
+# `verified_at`, on all 118 camera steps):
+#
+#   requested 0.05 -> engine re-read 0.049999713897705   (error 2.861e-07)
+#   requested 1.0  -> engine re-read 0.99999952316284    (error 4.768e-07, exactly 2^-21)
+#
+# 39 of 47 `verification_failed` zoom steps had the camera demonstrably ON the requested target and
+# were recorded `rejected`. The remaining 8 are genuine: the camera never left 0.70710706710815.
+#
+# **Why the whole suite stayed green.** The parametrized
+# `test_real_camera_verification_predicates_evaluate_correctly`
+# above IS a positive control and it DOES pass -- because it compares `0.5` against a target of
+# `0.5`, an exactly-equal float the engine never produces. A positive control that production
+# cannot reach is not a positive control: it pins the success direction with the one input the real
+# system cannot generate, so the defect stays invisible. The cases below are the same control fed
+# the values the engine ACTUALLY returns.
+#
+# **Where the tolerance lives, and why there.** A float comparison needs a declared tolerance, and a
+# tolerance is a number someone can quietly widen until anything passes. So it is NOT a constant in
+# the evaluator: it is written into `catalogs/actions/camera.yaml`'s own predicate text as a pair of
+# `-`/`<=` conjuncts the grammar already supports (catalogs/README.md §4 allows binary `+`/`-`
+# between numerics). The evaluator is UNCHANGED by this task. Consequences that matter:
+#   * widening the tolerance means editing the declaration, in the diff, where review sees it;
+#   * no other predicate silently inherits a fuzzy `==`;
+#   * `d74a4c7`'s design is preserved rather than worked around -- `_eval_binop` already raises
+#     `PredicateEvaluationError` on a non-numeric operand, so an absent `camera.zoom` or an absent
+#     `target` makes `camera.zoom - target` UNEVALUABLE, exactly as the `==` form became. The
+#     polarity tests above still pass unchanged, which is the proof.
+#
+# **Magnitude, against the measurement rather than taste.** Largest observed error on a zoom that
+# LANDED: 4.768e-07. Smallest observed error on a zoom that genuinely did NOT land: 0.293. Six
+# orders of magnitude of separation, so 1e-3 is not a judgement call between close numbers -- it
+# sits ~2000x above the observed engine error and ~293x below the smallest real miss.
+# ASSUMPTION, stated because it is an extrapolation: every requested zoom in the store was an
+# endpoint (0.05 or 1.0). The engine's error on a MID-RANGE request is not measured. 1e-3 is chosen
+# with that margin in mind; if a mid-range zoom ever lands outside it the negative controls below
+# are what will say so.
+# --------------------------------------------------------------------------
+
+
+#: The exact values the engine re-read for each requested zoom, lifted from `decision_steps`.
+_MEASURED_ENGINE_ZOOM: Mapping[float, float] = {
+    0.05: 0.049999713897705,
+    1.0: 0.99999952316284,
+}
+
+
+def _real_camera_zoom_predicate() -> str:
+    catalog = load_catalog(CATALOG_ROOT)
+    declaration = CapabilityRegistry(catalog=catalog).resolve("camera.zoom")
+    assert declaration.verification_predicate is not None
+    return declaration.verification_predicate
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+@pytest.mark.parametrize(("target", "engine_zoom"), sorted(_MEASURED_ENGINE_ZOOM.items()))
+def test_real_camera_zoom_confirms_the_value_the_engine_actually_returns(
+    target: float, engine_zoom: float
+) -> None:
+    """THE POSITIVE CONTROL PRODUCTION CAN REACH. The camera went where it was told; the record
+    must say `applied`. Confirmed FAILING against the unfixed catalog (`camera.zoom == target`
+    returns False for both rows, which is precisely the 39 mis-recorded refusals)."""
+    observation = _camera_observation(
+        {"mode": "world", "zoom": engine_zoom, "target_is_revealed": True}
+    )
+    bindings = build_predicate_bindings(observation=observation, target=target)
+
+    assert evaluate_predicate(_real_camera_zoom_predicate(), bindings) is True
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+@pytest.mark.parametrize(
+    ("target", "engine_zoom", "why"),
+    [
+        # The real misses, measured: the camera never left its resting zoom.
+        (0.05, 0.70710706710815, "camera stayed at its resting zoom; 8 such steps in the store"),
+        (1.0, 0.70710706710815, "same, for a zoom-out request"),
+        # THE RATCHET. Just outside 1e-3. If anyone widens the declared tolerance even to 2e-3,
+        # this row goes red and names the thing they broke -- which is the whole point of putting
+        # the number in the catalog rather than in a constant nobody diffs.
+        (0.5, 0.5011, "1.1e-3 away: outside the declared tolerance, and must stay a refusal"),
+        (0.5, 0.4989, "same magnitude on the low side"),
+    ],
+)
+def test_real_camera_zoom_still_refuses_a_genuinely_wrong_zoom(
+    target: float, engine_zoom: float, why: str
+) -> None:
+    """THE NEGATIVE CONTROL. A tolerance is only honest if something still fails. Every row here
+    must stay `False` -- a camera that did not go where it was told is a real refusal and the
+    record must keep saying so."""
+    observation = _camera_observation(
+        {"mode": "world", "zoom": engine_zoom, "target_is_revealed": True}
+    )
+    bindings = build_predicate_bindings(observation=observation, target=target)
+
+    assert evaluate_predicate(_real_camera_zoom_predicate(), bindings) is False, why
+
+
+@pytest.mark.skipif(not CATALOG_ROOT.is_dir(), reason="repo catalogs/ directory not present")
+def test_camera_zoom_tolerance_is_declared_in_the_catalog_not_hidden_in_the_evaluator() -> None:
+    """The tolerance must be visible in the declaration a reviewer reads. `==` alone cannot express
+    one, so its absence from the predicate text is exactly the state this task found; and an
+    evaluator-side epsilon would make every other `==` in the catalog silently fuzzy."""
+    predicate = _real_camera_zoom_predicate()
+
+    assert "==" not in predicate, (
+        "camera.zoom must not verify by exact float equality -- that is the T321 defect"
+    )
+    assert "0.001" in predicate, "the tolerance must be a literal in the catalog declaration"
 
 
 # --------------------------------------------------------------------------
