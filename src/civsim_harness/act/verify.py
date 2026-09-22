@@ -49,6 +49,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from civsim_harness.act.liveness import emit_confirm_liveness, emit_harness_liveness
 from civsim_harness.act.predicates import (
     PredicateEvaluationError,
     build_predicate_bindings,
@@ -266,6 +267,7 @@ async def confirm_execution[ReadT](
     target: Any = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    emit: Callable[[str, Mapping[str, Any]], None] = emit_harness_liveness,
 ) -> tuple[ExecutionVerification, ReadT]:
     """Verify one dispatched action, re-reading until it confirms or *timeout_s* runs out.
 
@@ -299,6 +301,15 @@ async def confirm_execution[ReadT](
             attempts=attempts,
             elapsed_s=monotonic() - started,
         )
+        # T290: this is the single longest legitimate operation in the harness --
+        # `run/decision_loop.py::END_TURN_CONFIRM_TIMEOUT_S` and
+        # `run/turn_cycle.py::BACKSTOP_CONFIRM_TIMEOUT_S` are both 200 s, because an end turn
+        # is confirmed only once every AI player has taken theirs. Until now it polled every
+        # two seconds and said nothing, so under a watchdog that reads three minutes of
+        # silence as stuck, the first healthy thing killed would be this loop, during exactly
+        # the slow turn its raised bound exists to accommodate. The bound is untouched; the
+        # wait is now readable. See `act/liveness.py` for what is and is not in the record.
+        emit_confirm_liveness(declaration=declaration, window=window, emit=emit)
         verification = verify_execution(
             declaration=declaration,
             pre_observation=pre_observation,

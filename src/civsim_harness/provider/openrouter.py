@@ -47,6 +47,7 @@ from civsim_harness.config.secrets import provider_key_name, require_secret
 from civsim_harness.errors import HarnessError, PreflightError
 from civsim_harness.models.common import Cost, ModelRef
 from civsim_harness.models.records import CallOutcome
+from civsim_harness.provider.liveness import provider_call_liveness
 from civsim_harness.provider.port import (
     DecisionRequest,
     DecisionResponse,
@@ -198,17 +199,29 @@ class OpenRouterProvider:
         headers = self._build_headers()
 
         start = time.monotonic()
-        try:
-            response = self._client.post(
-                "/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=self._timeout_s,
-            )
-        except httpx.HTTPError:
-            return self._outcome_only_response(
-                request, self._elapsed_ms(start), CallOutcome.FAILED
-            )
+        # T290: this `post` is the longest silent window in the harness -- up to
+        # `self._timeout_s` (120 s by default) with a blocking call and no progress callback,
+        # and MEASURED at 146 s on the live driver logs of 2026-09-22 with not one line
+        # published in between. The bound is unchanged; what changes is that the wait now
+        # publishes what it is waiting for and for how long, so a healthy slow call stops
+        # reading like a dead process to a watchdog. See `provider/liveness.py`.
+        with provider_call_liveness(
+            provider=request.model.provider,
+            model=request.model.model,
+            step_index=request.step_index,
+            bound_s=self._timeout_s,
+        ):
+            try:
+                response = self._client.post(
+                    "/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=self._timeout_s,
+                )
+            except httpx.HTTPError:
+                return self._outcome_only_response(
+                    request, self._elapsed_ms(start), CallOutcome.FAILED
+                )
 
         latency_ms = self._elapsed_ms(start)
 

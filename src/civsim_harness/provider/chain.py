@@ -51,6 +51,10 @@ from civsim_harness.errors import HarnessError, ProviderChainExhausted
 from civsim_harness.models.common import EventId, ModelRef, RunId, Timestamp
 from civsim_harness.models.config import ModelConfig
 from civsim_harness.models.records import CallOutcome, RunEvent, RunEventType
+from civsim_harness.provider.liveness import (
+    PROVIDER_CHAIN_RETRY,
+    emit_provider_liveness,
+)
 from civsim_harness.provider.port import DecisionRequest, DecisionResponse, ModelProvider
 
 
@@ -245,6 +249,13 @@ class ProviderChain:
                         turn_number=turn_number,
                         step_index=request.step_index,
                         detail={**failure_detail, "delay_s": delay_s},
+                    )
+                    # T290: `_record_event` reaches the *store*, which a watchdog polling the
+                    # driver log cannot see. This chain can legitimately spend several
+                    # 120 s attempts in a row, so the log gets the same fact as well --
+                    # harness telemetry only, no prompt or response content.
+                    emit_provider_liveness(
+                        PROVIDER_CHAIN_RETRY, {**failure_detail, "delay_s": delay_s}
                     )
                     self._sleep(delay_s)
                     # else: retries exhausted for this model; fall through to fallback.
