@@ -1851,3 +1851,65 @@ independently, on **both**:
 to fabricate.** Any repair must check **both sides of the comparison** for absent-or-null and pin the
 resolved polarity in a test, or it closes the visible half of the defect and leaves the invisible half
 in place — which is worse than not fixing it, because the task would be marked done.
+
+### The reversal: four agreeing sources were four instruments reporting where they stopped (2026-09-22)
+
+By late afternoon four figures agreed that `ACTION_CONFIRM_TIMEOUT_S = 4.0` was wrong by an order of
+magnitude: a city founding still unconfirmed at **7.291 s**, `units.move_to` at **9.63 s**, end-turn's
+**11.5–16.9 s** fast regime, and the owner, watching the screen directly, reporting **30–60 s per
+interaction**. It looked overwhelming.
+
+**A sub-second probe reversed it.** Poll interval 0.10 s, each poll its own tuner command, measured
+bare-command round-trip floor 0.0663–0.0670 s (n=8):
+
+```
+cities.select  n=3   0.1337, 0.1334, 0.1333 s
+units.select   n=5   0.1670, 0.1664, 0.1667, 0.1666, 0.1667 s
+units.move_to  n=2   0.1668, 0.1668 s
+camera.move    n=6   NOT OBSERVED in 20 s, 134 polls each
+```
+
+**Every sample was observed on poll #1** — volunteered by the probe, not asked for. So 0.133–0.167 s
+is **the instrument's own floor, not the game's latency**: these actions were already complete the
+first instant anything could look. **They are upper bounds, not measurements.** A less careful report
+would have handed over "select settles in 0.167 s" and been wrong in the direction that sounds
+precise.
+
+**Why the four agreed: none of them measured a settle time.** Each was a **lower bound produced by
+something giving up** — a bound expiring, a poll loop ending. That is not four independent
+confirmations; it is four instruments reporting where they stopped. And the owner's 30–60 s is not
+even the same quantity: he is watching a **human-visible interaction cycle dominated by ~48.5-second
+model calls**, not an action's settle time. **0.167 s and "about a minute" are both true and about
+different things.**
+
+**So the store's 7.2–7.5 s cluster is two phenomena wearing one shape:** a genuinely slow class
+(`units.found_city`, still unsatisfied at 7.291 s) and **a stopped clock** — a predicate that was
+never going to become true, timing out at the bound and looking like slowness.
+
+**Raising the bound would have waited longer, moved both numbers, and confirmed the wrong
+explanation.** That is the manufactured-confirmation trap, named two hours earlier the same day, and
+this lane was about to walk into it on what looked like overwhelming evidence.
+
+**The only reason it stayed legible: the predicate fix was landed first, with touching the bound in
+the same commit explicitly forbidden.** Had both landed together, the founding would have started
+passing, the number would have moved, and the bound would have taken the credit for a predicate fix.
+
+**What replaces the bound work: per-class settle-time measurement with an instrument that can resolve
+below 0.1 s, plus the predicate sweep. No uniform number, and nobody proposes one.** Note the
+distinction that survives: `END_TURN_CONFIRM_TIMEOUT_S`/`BACKSTOP_CONFIRM_TIMEOUT_S` at 200 s remain
+defensible — an end turn genuinely waits on every AI player, a real slow class with measured 11.5–16.9 s
+fast and 75–155 s slow regimes. **`ACTION_CONFIRM_TIMEOUT_S` is the one that must not be raised
+uniformly**, because the classes beneath it differ by two orders of magnitude.
+
+**Four actions are now proven to have landed while scored `rejected`:** the city founding (Pasargadae
+in the next observation), the production order (`production_queue ["UNIT_SCOUT"]` on the board), and
+two moves. **The refused column is not a list of failures. It is a list of things the harness could
+not see.**
+
+**Third instance of the lone-argument defect, code-confirmed.** `camera.move`'s dispatch returned
+`{"target_plot": {"x": {"y": 31, "x": 44}}, "ok": true}` — the plot table **nested under `x`**.
+`lua/ingame/camera.lua:66` is `CivSim_Camera_Move(x, y)`, two scalars with **no table guard**, so the
+dispatcher's last-positional `target` lands in `x` with `y` nil; `UI.LookAtPlot(table, nil)` does not
+throw, so `ok` is true and `camera.target_plot == target` is unsatisfiable. **`units.move_to` received
+exactly this guard on 2026-09-21 and `camera.move` never did** — the fix pattern was already in the
+tree, for the third time.
