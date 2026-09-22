@@ -1,0 +1,202 @@
+  [16:42:16] recording started: every frame via the production capture_window() (window-scoped)
+  [16:42:16] goal found_second_city: objective written to goal-found_second_city.md (objective text only)
+  [16:42:16] PRODUCTION: Runner.start(run-config.yaml) [goal=found_second_city provider=stochastic provider_policy=uniform provider_script=None turn_cap=6]
+  [16:42:17] goal found_second_city: run run-8957e76183ef42a18d032ac977713709
+  [16:42:17] goal found_second_city: playing turn=1 step=None
+  [16:42:49] goal found_second_city: playing turn=2 step=None
+  [16:43:19] goal found_second_city: playing turn=3 step=None
+  [16:43:58] goal found_second_city: playing turn=4 step=None
+  [16:44:44] goal found_second_city: playing turn=5 step=None
+  [16:45:15] goal found_second_city: playing turn=6 step=None
+  [16:45:51] goal found_second_city: finished turn=6 step=None
+  [16:45:52] goal found_second_city: turn cap 6 reached -- stopping the run
+  [16:45:52] run run-8957e76183ef42a18d032ac977713709 is already finished -- nothing to stop; the state this stop wanted is the state the run is in
+  [16:45:52] goal found_second_city not reached; the chain stops here (a later part starts from a state that never arrived)
+{
+  "goal": "found_second_city",
+  "chain": [
+    "found_second_city"
+  ],
+  "provider": "stochastic",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "provider_script": null,
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T20:42:16.303155+00:00",
+  "parts": [
+    {
+      "goal": "found_second_city",
+      "title": "Found a second city",
+      "run_id": "run-8957e76183ef42a18d032ac977713709",
+      "turn_cap": 6,
+      "reached_at_turn": null,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": "turn_cap",
+      "reached": false,
+      "evaluated": true,
+      "reached_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "player.units.settler_count >= 1",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "finished",
+      "elapsed_s": 214.7,
+      "success_predicate": "player.cities.count >= observed_start_cities_count + 1",
+      "success_check": {
+        "predicate": "player.cities.count >= observed_start_cities_count + 1",
+        "met": false,
+        "reason": null
+      },
+      "steps": 44,
+      "turns_recorded": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "actions": {
+        "prompts.tech_civic_completed": {
+          "unavailable_to_human_now": 2
+        },
+        "camera.set_view_mode": {
+          "applied": 2
+        },
+        "diplomacy.declare_war": {
+          "unavailable_to_human_now": 1
+        },
+        "units.found_city": {
+          "unavailable_to_human_now": 3
+        },
+        "cities.set_production": {
+          "unavailable_to_human_now": 1
+        },
+        "units.select": {
+          "applied": 1
+        },
+        "turn.end_turn": {
+          "applied": 6
+        },
+        "prompts.congress_intro": {
+          "unavailable_to_human_now": 2
+        },
+        "prompts.boost_unlocked": {
+          "unavailable_to_human_now": 1
+        },
+        "cities.purchase_with_gold": {
+          "unavailable_to_human_now": 4
+        },
+        "religion.select_belief": {
+          "unavailable_to_human_now": 2
+        },
+        "diplomacy.send_delegation": {
+          "unavailable_to_human_now": 1,
+          "verification_failed": 2
+        },
+        "great_people.recruit": {
+          "unavailable_to_human_now": 1
+        },
+        "camera.zoom": {
+          "applied": 2
+        },
+        "policies.slot_policy": {
+          "verification_failed": 1
+        },
+        "prompts.natural_disaster": {
+          "unavailable_to_human_now": 1
+        },
+        "prompts.congress_vote": {
+          "unavailable_to_human_now": 2
+        },
+        "units.move_to": {
+          "verification_failed": 1,
+          "applied": 2
+        },
+        "prompts.ai_diplomatic_approach": {
+          "applied": 2
+        },
+        "religion.found_religion": {
+          "verification_failed": 1
+        },
+        "cities.select": {
+          "applied": 1
+        },
+        "research.set_civic": {
+          "applied": 1
+        },
+        "religion.select_pantheon": {
+          "unavailable_to_human_now": 1
+        }
+      },
+      "actions_applied": {
+        "camera.set_view_mode": 2,
+        "units.select": 1,
+        "turn.end_turn": 6,
+        "camera.zoom": 2,
+        "units.move_to": 2,
+        "prompts.ai_diplomatic_approach": 2,
+        "cities.select": 1,
+        "research.set_civic": 1
+      },
+      "provider": "stochastic",
+      "provider_policy": "uniform",
+      "game_start_turn": 79,
+      "store": {
+        "run": {
+          "lifecycle_state": "finished",
+          "stop_resolution": "turn_reached",
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 6,
+        "decision_steps": 44,
+        "save_points": 6,
+        "captures": 56,
+        "run_events": 152,
+        "model_calls": 44,
+        "turns_recorded": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "captures_shown_to_agent": 0,
+        "capture_screening": [
+          "withheld"
+        ],
+        "model_calls_served": [
+          "stochastic/uniform-v1"
+        ],
+        "model_cost_usd": 0,
+        "model_input_tokens": 0,
+        "model_output_tokens": 0
+      }
+    }
+  ],
+  "finished_at": "2026-09-22T20:46:12.513742+00:00",
+  "reached": false,
+  "evaluated": true,
+  "reached_reason": null,
+  "recording": {
+    "frames": 204,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 11161,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t071s.png",
+      "keyframe_2_t144s.png",
+      "keyframe_3_t215s.png"
+    ],
+    "capture_failures": 0
+  }
+}

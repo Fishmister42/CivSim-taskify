@@ -1,0 +1,14 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal found_second_city: objective written to goal-found_second_city.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=found_second_city provider=stochastic provider_policy=uniform provider_script=None turn_cap=6]
+t+000s  goal found_second_city: run run-8957e76183ef42a18d032ac977713709
+t+000s  goal found_second_city: playing turn=1 step=None
+t+033s  goal found_second_city: playing turn=2 step=None
+t+063s  goal found_second_city: playing turn=3 step=None
+t+102s  goal found_second_city: playing turn=4 step=None
+t+148s  goal found_second_city: playing turn=5 step=None
+t+178s  goal found_second_city: playing turn=6 step=None
+t+215s  goal found_second_city: finished turn=6 step=None
+t+215s  goal found_second_city: turn cap 6 reached -- stopping the run
+t+215s  run run-8957e76183ef42a18d032ac977713709 is already finished -- nothing to stop; the state this stop wanted is the state the run is in
+t+215s  goal found_second_city not reached; the chain stops here (a later part starts from a state that never arrived)
