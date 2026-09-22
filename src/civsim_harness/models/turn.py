@@ -18,6 +18,7 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
+from civsim_harness.models.catalog import HudCorner
 from civsim_harness.models.common import (
     CaptureId,
     CapturePath,
@@ -204,6 +205,145 @@ class WithheldReason(StrEnum):
     CAPTURE_FAILED = "capture_failed"
 
 
+class ScreeningTechnique(StrEnum):
+    """The content gate's techniques, named so coverage can be asserted as data.
+
+    Defined here rather than in ``parity.screening`` because since T297 it is part of a
+    *persisted* record shape (:class:`CaptureScreeningMetrics`), and the vocabulary a stored
+    record uses belongs with the record. ``parity.screening`` re-exports this exact object under
+    the same name, so there is one enum and not two that can drift.
+
+    A reject category is only *screened* if at least one of these can actually run against it on
+    the attempt in hand. Before this enum existed the category-to-technique relationship was
+    implicit in ``DefaultContentDetector.detect``'s three ``if`` blocks, so a category no
+    technique addressed silently produced "no matches" -- indistinguishable from "checked and
+    clean". Publishing it as data is what lets ``unaddressed_reject_categories`` tell those two
+    apart, and lets a test assert the invariant over every shipped profile.
+    """
+
+    BORDER_RING = "border_ring"
+    CORNER_OVERLAY = "corner_overlay"
+    DECLARED_TEXT = "declared_text"
+
+
+class FrameEdge(StrEnum):
+    """A frame edge the border-ring technique measures its band on."""
+
+    TOP = "top"
+    BOTTOM = "bottom"
+    LEFT = "left"
+    RIGHT = "right"
+
+
+class CornerVarianceMetric(HarnessModel):
+    """One corner's side of the corner-overlay comparison, as the two numbers that made it.
+
+    ``variance`` is the mean per-channel variance of the corner patch; ``reference_variance`` is
+    what the technique divided it by. The ratio the threshold is applied to is
+    ``variance / reference_variance`` -- stored as the pair rather than the quotient so a reader
+    can see *which* reference was used and recompute the ratio under any other threshold.
+    ``reference_is_hud_peer`` records that choice: true when the view declared this corner as its
+    own HUD and the reference is the busiest *other* declared HUD corner, false when it is the
+    whole-frame variance (T283).
+    """
+
+    corner: HudCorner
+    variance: float
+    reference_variance: float
+    reference_is_hud_peer: bool
+
+
+class BorderEdgeMetric(HarnessModel):
+    """One edge band's side of the border-ring comparison, as the two numbers that made it.
+
+    ``uniformity_stddev`` is the band's own mean per-channel standard deviation (how flat it is);
+    ``interior_color_delta`` is the mean absolute per-channel distance between the band's mean and
+    the frame interior's mean (how different it is from the scene under it).
+
+    Note what is deliberately *absent*: the band's mean colour itself. Only the distance between
+    two means is kept, which is a scalar about a relationship and not a sample of the frame.
+    """
+
+    edge: FrameEdge
+    uniformity_stddev: float
+    interior_color_delta: float
+
+
+class CaptureScreeningMetrics(HarnessModel):
+    """The statistics the content gate derived for one capture, kept instead of the frame (T297).
+
+    **These must be derived at screening time and persisted with the capture record, because they
+    cannot be recovered afterwards.** That ordering is the whole point of this type. A withheld
+    frame is never stored (SC-019) and a delivered frame's blob is not guaranteed to outlive the
+    run, so any statistic not computed while the pixels were in memory is gone permanently. The
+    project has already paid for learning this: all 421 withheld captures from the 2026-09-21
+    gameplay blocks were stored with ``blob_ref = NULL``, which is correct under Principle I and
+    left exactly zero evidence with which to evaluate the gate's own thresholds. T283's narrowing
+    of the corner technique therefore had to be argued from **one synthetic frame** (1.53 clean
+    vs 1.84 contaminated against a 1.8 threshold, with a 220x60 overlay missed entirely at 1.71),
+    and nobody could say whether 1.8 was a threshold or a coin toss.
+
+    **Why this is not "store the frame, but smaller".** A withheld frame is the capture *most*
+    likely to contain the operator's desktop -- a FireTuner window, a notification toast, a panel
+    -- which is precisely the data T265 agreed to hash rather than keep. Retaining it to evaluate
+    the gate would turn the gate into an archive of the thing it exists to suppress. What is kept
+    here instead is roughly a dozen scalars describing *relationships between regions*: variances,
+    a standard deviation per edge, a distance between two means. No pixel, no colour, no
+    dimension-per-region breakdown, no hash of the image, and no text. Nothing here can
+    reconstruct an image, and nothing here is about the operator rather than about the detector.
+
+    In particular ``text_match`` is the declared-text technique's verdict as a **boolean**. The
+    token strings that produced it come from enumerating the operator's whole desktop and may
+    never be recorded anywhere durable (``tests/contract/test_window_title_boundary.py``); the
+    distribution only ever needed to know *whether* a category matched.
+
+    The exact key set of this model, and of its two element types, is asserted in
+    ``tests/contract/test_screening_metrics_boundary.py`` so that widening the payload is a red
+    test rather than a quiet Principle I regression.
+
+    Fields that are image-derived are ``None``/empty exactly when the frame could not be decoded:
+    an undecodable frame is withheld by the detector (research R7), and recording statistics it
+    never computed would be a fabrication.
+    """
+
+    #: The resolved screening profile's name -- the catalog key that decides which reject
+    #: categories were in play, and therefore the grouping key any distribution needs.
+    profile_name: str
+    frame_width: int = Field(ge=0)
+    frame_height: int = Field(ge=0)
+    #: Mean per-channel variance of the whole frame; the default reference for an undeclared
+    #: corner. ``None`` when the frame could not be decoded.
+    whole_frame_variance: float | None = None
+    corner_metrics: list[CornerVarianceMetric] = Field(default_factory=list)
+    border_edge_metrics: list[BorderEdgeMetric] = Field(default_factory=list)
+    #: Whether a text-evidence source ran at all. ``False`` with ``text_match`` ``False`` means
+    #: "never looked", which is emphatically not "looked and found nothing".
+    text_evidence_available: bool
+    #: The declared-text technique's verdict, never its tokens.
+    text_match: bool
+    #: Which techniques actually executed against this frame.
+    techniques_run: list[ScreeningTechnique] = Field(default_factory=list)
+    #: Which of them reported evidence. A subset of ``techniques_run``.
+    techniques_fired: list[ScreeningTechnique] = Field(default_factory=list)
+    #: The reject-category ids the findings were attributed to (catalog ids, sorted).
+    reject_categories_matched: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _enforce_metric_invariants(self) -> CaptureScreeningMetrics:
+        fired = set(self.techniques_fired)
+        run = set(self.techniques_run)
+        if not fired <= run:
+            raise ValueError(
+                "a technique cannot have fired without having run: "
+                f"{sorted(fired - run)} fired but did not run"
+            )
+        if self.text_match and not self.text_evidence_available:
+            raise ValueError(
+                "text_match cannot be true when no text-evidence source ran (T297/T264)"
+            )
+        return self
+
+
 class ScreenCapture(HarnessModel):
     """An image of the game's own view, bound to one run, turn, and decision step
     (FR-015, FR-025, FR-030).
@@ -230,6 +370,11 @@ class ScreenCapture(HarnessModel):
     # Content-addressed; null when withheld.
     blob_ref: str | None = None
     capture_path: CapturePath
+    #: T297: the statistics the content gate derived while the pixels were in memory. Present on
+    #: *both* populations -- a detector is only evaluable against delivered and withheld frames
+    #: together -- and ``None`` only when no frame reached the content gate at all (a host-level
+    #: failure, or a source/geometry/provenance withhold that short-circuits before decode).
+    screening_metrics: CaptureScreeningMetrics | None = None
 
     @model_validator(mode="after")
     def _enforce_withholding_invariant(self) -> ScreenCapture:

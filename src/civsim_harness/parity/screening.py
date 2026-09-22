@@ -136,7 +136,23 @@ from civsim_harness.models.common import (
     RunId,
     Timestamp,
 )
-from civsim_harness.models.turn import ScreenCapture, ScreeningStatus, WithheldReason
+from civsim_harness.models.turn import (
+    BorderEdgeMetric,
+    CaptureScreeningMetrics,
+    CornerVarianceMetric,
+    FrameEdge,
+    ScreenCapture,
+    ScreeningStatus,
+    ScreeningTechnique,
+    WithheldReason,
+)
+
+#: Re-exported so ``from civsim_harness.parity.screening import ScreeningTechnique`` keeps working
+#: and, more importantly, so there is exactly one such enum. It moved to ``models.turn`` in T297
+#: when it became part of a persisted record shape
+#: (:class:`~civsim_harness.models.turn.CaptureScreeningMetrics`); a copy here would be a second
+#: vocabulary free to drift from the stored one. (It is used throughout this module as well, so
+#: this is a genuine import, not a re-export shim that a linter would strip.)
 
 # --------------------------------------------------------------------------
 # screening_profiles.yaml loading (data this module reads, never edits)
@@ -906,6 +922,52 @@ _BORDER_UNIFORMITY_STDDEV_MAX: Final[float] = 12.0
 _BORDER_INTERIOR_DELTA_MIN: Final[float] = 40.0
 
 
+def _border_ring_statistics(image: Image.Image) -> tuple[BorderEdgeMetric, ...]:
+    """The per-edge numbers :func:`_border_ring_is_suspect` decides on, without the decision.
+
+    Split out in T297 so the statistic that is *persisted* is the statistic the verdict was
+    computed from. The verdict below is a pure function of this tuple and the two module
+    constants, so the recorded numbers cannot describe a different comparison than the one that
+    actually ran -- there is only one computation.
+    """
+    width, height = image.size
+    thickness = min(_BORDER_THICKNESS_PX, width // 4, height // 4)
+    inset = thickness * 3
+    if thickness < 1 or width <= inset * 2 or height <= inset * 2:
+        return ()
+
+    interior_mean = ImageStat.Stat(image.crop((inset, inset, width - inset, height - inset))).mean
+    edges = {
+        FrameEdge.TOP: image.crop((0, 0, width, thickness)),
+        FrameEdge.BOTTOM: image.crop((0, height - thickness, width, height)),
+        FrameEdge.LEFT: image.crop((0, 0, thickness, height)),
+        FrameEdge.RIGHT: image.crop((width - thickness, 0, width, height)),
+    }
+    metrics: list[BorderEdgeMetric] = []
+    for edge, band in edges.items():
+        stat = ImageStat.Stat(band)
+        metrics.append(
+            BorderEdgeMetric(
+                edge=edge,
+                uniformity_stddev=sum(stat.stddev) / len(stat.stddev),
+                interior_color_delta=sum(
+                    abs(a - b) for a, b in zip(stat.mean, interior_mean, strict=True)
+                )
+                / len(stat.mean),
+            )
+        )
+    return tuple(metrics)
+
+
+def _border_ring_verdict(metrics: tuple[BorderEdgeMetric, ...]) -> bool:
+    """The border-ring decision, as a pure function of the recorded statistics."""
+    return any(
+        metric.uniformity_stddev <= _BORDER_UNIFORMITY_STDDEV_MAX
+        and metric.interior_color_delta >= _BORDER_INTERIOR_DELTA_MIN
+        for metric in metrics
+    )
+
+
 def _border_ring_is_suspect(image: Image.Image) -> bool:
     """A generic recording/capture-border detector: a flat band overlaid at any edge.
 
@@ -918,31 +980,12 @@ def _border_ring_is_suspect(image: Image.Image) -> bool:
     gradient) *and* a distinctly different colour from the scene it sits on
     top of, which is what a capture-tool recording border looks like
     regardless of which colour any particular platform happens to draw it in.
-    """
-    width, height = image.size
-    thickness = min(_BORDER_THICKNESS_PX, width // 4, height // 4)
-    inset = thickness * 3
-    if thickness < 1 or width <= inset * 2 or height <= inset * 2:
-        return False
 
-    interior_mean = ImageStat.Stat(image.crop((inset, inset, width - inset, height - inset))).mean
-    edges = (
-        image.crop((0, 0, width, thickness)),
-        image.crop((0, height - thickness, width, height)),
-        image.crop((0, 0, thickness, height)),
-        image.crop((width - thickness, 0, width, height)),
-    )
-    for edge in edges:
-        stat = ImageStat.Stat(edge)
-        mean_stddev = sum(stat.stddev) / len(stat.stddev)
-        color_delta = sum(abs(a - b) for a, b in zip(stat.mean, interior_mean, strict=True)) / len(
-            stat.mean
-        )
-        is_flat = mean_stddev <= _BORDER_UNIFORMITY_STDDEV_MAX
-        is_distinct_from_scene = color_delta >= _BORDER_INTERIOR_DELTA_MIN
-        if is_flat and is_distinct_from_scene:
-            return True
-    return False
+    Since T297 this is the two-line composition of :func:`_border_ring_statistics` and
+    :func:`_border_ring_verdict`; the behaviour is unchanged, but the numbers behind the
+    behaviour now survive the frame.
+    """
+    return _border_ring_verdict(_border_ring_statistics(image))
 
 
 # PROVENANCE OF THE THREE CONSTANTS BELOW -- stated honestly, because the honest answer is
@@ -1042,6 +1085,24 @@ def _corner_overlay_is_suspect(
     a 220x60 patch on the bottom-left minimap reaches only 1.71) is **not** caught by
     this technique. It is not a residual-risk-free change; it is a technique that now
     carries information where it previously fired on everything.
+
+    Since T297 this is the composition of :func:`_corner_overlay_statistics` and
+    :func:`_corner_overlay_verdict`; the behaviour is unchanged, but the four ratios behind the
+    behaviour -- the ones nobody could produce for the 421 withheld frames -- now survive it.
+    """
+    _, metrics = _corner_overlay_statistics(image, hud_corners=hud_corners)
+    return _corner_overlay_verdict(metrics)
+
+
+def _corner_overlay_statistics(
+    image: Image.Image, *, hud_corners: frozenset[HudCorner] = frozenset()
+) -> tuple[float, tuple[CornerVarianceMetric, ...]]:
+    """The whole-frame variance and the per-corner comparison :func:`_corner_overlay_is_suspect`
+    decides on, without the decision.
+
+    Every corner is measured, including ones the abs-min floor will discard -- the floor is a
+    *threshold*, and a distribution that only contains the values which cleared a threshold
+    cannot be used to evaluate it. That is the mistake this whole task exists to stop repeating.
     """
     width, height = image.size
     whole_stat = ImageStat.Stat(image)
@@ -1053,32 +1114,28 @@ def _corner_overlay_is_suspect(
         variances[corner] = sum(stat.var) / len(stat.var)
 
     declared = frozenset(hud_corners) & frozenset(variances)
+    metrics: list[CornerVarianceMetric] = []
     for corner, corner_variance in variances.items():
-        if corner_variance < _CORNER_VARIANCE_ABS_MIN:
-            continue
         peers = [variances[other] for other in declared if other is not corner]
-        reference = max(peers) if (corner in declared and peers) else whole_variance
-        if corner_variance >= reference * _CORNER_VARIANCE_RATIO_MIN:
-            return True
-    return False
+        use_peer = corner in declared and bool(peers)
+        metrics.append(
+            CornerVarianceMetric(
+                corner=corner,
+                variance=corner_variance,
+                reference_variance=max(peers) if use_peer else whole_variance,
+                reference_is_hud_peer=use_peer,
+            )
+        )
+    return whole_variance, tuple(metrics)
 
 
-class ScreeningTechnique(StrEnum):
-    """The content gate's techniques, named so coverage can be asserted as data.
-
-    A reject category is only *screened* if at least one of these can actually
-    run against it on the attempt in hand. Before this enum existed the
-    category-to-technique relationship was implicit in
-    :meth:`DefaultContentDetector.detect`'s three ``if`` blocks, so a category
-    no technique addressed silently produced "no matches" -- indistinguishable
-    from "checked and clean". Publishing it as data is what lets
-    :func:`unaddressed_reject_categories` tell those two apart, and lets a test
-    assert the invariant over every shipped profile.
-    """
-
-    BORDER_RING = "border_ring"
-    CORNER_OVERLAY = "corner_overlay"
-    DECLARED_TEXT = "declared_text"
+def _corner_overlay_verdict(metrics: tuple[CornerVarianceMetric, ...]) -> bool:
+    """The corner-overlay decision, as a pure function of the recorded statistics."""
+    return any(
+        metric.variance >= _CORNER_VARIANCE_ABS_MIN
+        and metric.variance >= metric.reference_variance * _CORNER_VARIANCE_RATIO_MIN
+        for metric in metrics
+    )
 
 
 #: Which category-id tokens each *image* technique addresses. These two stay id-derived on
@@ -1166,6 +1223,88 @@ def unaddressed_reject_categories(
             & available_techniques
         )
     )
+
+
+@dataclass(frozen=True)
+class FrameStatistics:
+    """Everything both image techniques compute for one frame, plus their verdicts (T297).
+
+    The point of this object is *ordering*: it is produced once, while the decoded image is in
+    memory, and both the gate's decision and the persisted
+    :class:`~civsim_harness.models.turn.CaptureScreeningMetrics` are built from the same instance.
+    The verdicts are properties over the stored numbers rather than separately computed flags, so
+    "what was recorded" and "what was decided on" are the same computation by construction, not
+    by a test that has to notice they drifted.
+
+    ``decoded`` is ``False`` when the frame could not be opened at all; ``width``/``height`` then
+    come from the frame's own declaration and every statistic is empty. That case is a withhold
+    (research R7), and the record says which statistics do not exist rather than inventing them.
+    """
+
+    width: int
+    height: int
+    decoded: bool
+    whole_frame_variance: float | None
+    corners: tuple[CornerVarianceMetric, ...]
+    border_edges: tuple[BorderEdgeMetric, ...]
+
+    @property
+    def border_ring_is_suspect(self) -> bool:
+        return _border_ring_verdict(self.border_edges)
+
+    @property
+    def corner_overlay_is_suspect(self) -> bool:
+        return _corner_overlay_verdict(self.corners)
+
+
+def derive_frame_statistics(
+    frame: CaptureFrame, *, hud_corners: frozenset[HudCorner] = frozenset()
+) -> FrameStatistics:
+    """Compute both image techniques' statistics for *frame*, once.
+
+    **Call this while the pixels exist or not at all.** Nothing downstream can recompute it: a
+    withheld frame is never persisted (SC-019) and must not be, so these numbers are the only
+    trace of what the gate saw. See :class:`~civsim_harness.models.turn.CaptureScreeningMetrics`
+    for why that constraint is the task rather than an inconvenience in it.
+    """
+    image = _decode_frame(frame)
+    if image is None:
+        return FrameStatistics(
+            width=frame.width,
+            height=frame.height,
+            decoded=False,
+            whole_frame_variance=None,
+            corners=(),
+            border_edges=(),
+        )
+    whole_frame_variance, corners = _corner_overlay_statistics(image, hud_corners=hud_corners)
+    width, height = image.size
+    return FrameStatistics(
+        width=width,
+        height=height,
+        decoded=True,
+        whole_frame_variance=whole_frame_variance,
+        corners=corners,
+        border_edges=_border_ring_statistics(image),
+    )
+
+
+@dataclass(frozen=True)
+class DetectionReport:
+    """What a detection run found *and* what it measured getting there (T297).
+
+    ``matches`` is exactly what :meth:`DefaultContentDetector.detect` returns; the other three
+    fields are the evidence that used to be discarded the moment the boolean was produced.
+    ``techniques_run`` is which techniques had a category to decide on this attempt, and
+    ``techniques_fired`` is the subset that reported evidence -- kept apart because "ran and found
+    nothing" and "never ran" are the distinction this gate has already failed open on twice
+    (T264, T299).
+    """
+
+    matches: frozenset[str]
+    statistics: FrameStatistics
+    techniques_run: frozenset[ScreeningTechnique]
+    techniques_fired: frozenset[ScreeningTechnique]
 
 
 class ContentDetector(Protocol):
@@ -1288,15 +1427,60 @@ class DefaultContentDetector:
         detected_text_tokens: frozenset[str],
         text_vocabulary: TextVocabulary = NO_TEXT_VOCABULARY,
         hud_corners: frozenset[HudCorner] = frozenset(),
+        statistics: FrameStatistics | None = None,
     ) -> frozenset[str]:
-        if not reject_categories:
-            return frozenset()
+        return self.detect_detailed(
+            frame,
+            reject_categories=reject_categories,
+            detected_text_tokens=detected_text_tokens,
+            text_vocabulary=text_vocabulary,
+            hud_corners=hud_corners,
+            statistics=statistics,
+        ).matches
 
-        image = _decode_frame(frame)
-        if image is None:
-            return frozenset(reject_categories)
+    def detect_detailed(
+        self,
+        frame: CaptureFrame,
+        *,
+        reject_categories: frozenset[str],
+        detected_text_tokens: frozenset[str],
+        text_vocabulary: TextVocabulary = NO_TEXT_VOCABULARY,
+        hud_corners: frozenset[HudCorner] = frozenset(),
+        statistics: FrameStatistics | None = None,
+    ) -> DetectionReport:
+        """:meth:`detect`, plus the statistics and the per-technique verdicts behind it (T297).
+
+        *statistics* lets the caller hand in the :class:`FrameStatistics` it is going to persist,
+        so the numbers in the record are literally the numbers this decision was taken on rather
+        than a second, separately-decoded derivation of them. Omitted, they are derived here.
+        """
+        stats = (
+            statistics
+            if statistics is not None
+            else derive_frame_statistics(frame, hud_corners=hud_corners)
+        )
+        if not reject_categories:
+            return DetectionReport(
+                matches=frozenset(),
+                statistics=stats,
+                techniques_run=frozenset(),
+                techniques_fired=frozenset(),
+            )
+
+        if not stats.decoded:
+            # Research R7: an image that cannot be proven clean is withheld, never passed on the
+            # assumption it is probably fine. No technique ran, and the report says so -- the
+            # record must not later read as "three techniques examined this and one fired".
+            return DetectionReport(
+                matches=frozenset(reject_categories),
+                statistics=stats,
+                techniques_run=frozenset(),
+                techniques_fired=frozenset(),
+            )
 
         matches: set[str] = set()
+        techniques_run: set[ScreeningTechnique] = set()
+        techniques_fired: set[ScreeningTechnique] = set()
 
         def _categories_for(technique: ScreeningTechnique) -> set[str]:
             return {
@@ -1306,24 +1490,69 @@ class DefaultContentDetector:
             }
 
         border_categories = _categories_for(ScreeningTechnique.BORDER_RING)
-        if border_categories and _border_ring_is_suspect(image):
-            matches.update(border_categories)
+        if border_categories:
+            techniques_run.add(ScreeningTechnique.BORDER_RING)
+            if stats.border_ring_is_suspect:
+                techniques_fired.add(ScreeningTechnique.BORDER_RING)
+                matches.update(border_categories)
 
         overlay_categories = _categories_for(ScreeningTechnique.CORNER_OVERLAY)
-        if overlay_categories and _corner_overlay_is_suspect(image, hud_corners=hud_corners):
-            matches.update(overlay_categories)
+        if overlay_categories:
+            techniques_run.add(ScreeningTechnique.CORNER_OVERLAY)
+            if stats.corner_overlay_is_suspect:
+                techniques_fired.add(ScreeningTechnique.CORNER_OVERLAY)
+                matches.update(overlay_categories)
 
-        for category in _categories_for(ScreeningTechnique.DECLARED_TEXT):
+        text_categories = _categories_for(ScreeningTechnique.DECLARED_TEXT)
+        if text_categories:
+            techniques_run.add(ScreeningTechnique.DECLARED_TEXT)
+        for category in text_categories:
             # T299: the words that indicate this category are declared in the catalog, not split
             # out of the category's own name. Any one group matching is a match; every word in
             # that group must be present, so a single stray token still cannot fire the gate.
             if any(group <= detected_text_tokens for group in text_vocabulary[category]):
+                techniques_fired.add(ScreeningTechnique.DECLARED_TEXT)
                 matches.add(category)
 
-        return frozenset(matches)
+        return DetectionReport(
+            matches=frozenset(matches),
+            statistics=stats,
+            techniques_run=frozenset(techniques_run),
+            techniques_fired=frozenset(techniques_fired),
+        )
 
 
 DEFAULT_CONTENT_DETECTOR: Final[DefaultContentDetector] = DefaultContentDetector()
+
+
+def _content_metrics(
+    *,
+    profile_name: str,
+    statistics: FrameStatistics,
+    text_evidence_available: bool,
+    techniques_run: frozenset[ScreeningTechnique],
+    techniques_fired: frozenset[ScreeningTechnique],
+    matches: frozenset[str],
+) -> CaptureScreeningMetrics:
+    """Assemble the persisted record from the statistics this attempt actually computed.
+
+    Nothing is measured here -- everything comes from *statistics*, which was derived once from
+    the decoded frame. This function only reshapes it, and drops the one thing that may not be
+    kept: the declared-text technique's evidence becomes the boolean ``text_match``.
+    """
+    return CaptureScreeningMetrics(
+        profile_name=profile_name,
+        frame_width=statistics.width,
+        frame_height=statistics.height,
+        whole_frame_variance=statistics.whole_frame_variance,
+        corner_metrics=list(statistics.corners),
+        border_edge_metrics=list(statistics.border_edges),
+        text_evidence_available=text_evidence_available,
+        text_match=ScreeningTechnique.DECLARED_TEXT in techniques_fired,
+        techniques_run=sorted(techniques_run),
+        techniques_fired=sorted(techniques_fired),
+        reject_categories_matched=sorted(matches),
+    )
 
 
 def _check_content(
@@ -1332,7 +1561,15 @@ def _check_content(
     *,
     profiles: ScreeningProfiles,
     detector: ContentDetector,
-) -> str | None:
+) -> tuple[str | None, CaptureScreeningMetrics | None]:
+    """Run the content gate, returning its failure detail (if any) **and** what it measured.
+
+    The metrics are the T297 half. They are returned on *every* path that reached a frame --
+    clean, matched, and "no technique covers this category" alike -- because a detector is only
+    evaluable against both populations, and because the coverage withhold is the shape that
+    accounts for most of a Linux run's withholds today. Recording only the frames the detector
+    got as far as judging would rebuild the same blind spot one gate earlier.
+    """
     declared_profile_key = declaration.screening_profile
     assert declared_profile_key is not None  # guaranteed for kind == view
 
@@ -1344,9 +1581,36 @@ def _check_content(
         # Unreachable through a loaded catalog (ParityDeclaration validates the declared value at
         # load), and deliberately not fatal here: a run must not die mid-turn over a declaration,
         # and it must not screen against a profile nobody asked for either. Withheld, saying so.
+        # No profile resolved means no profile name to group a statistic under, and no reject set
+        # to say what was looked for. The frame is withheld and nothing is recorded about it --
+        # an unlabelled measurement is not evidence.
         return (
             f"the view's declared screening_profile could not be resolved: {exc.message} "
-            f"(detail: {exc.detail}); no profile means no certified screening"
+            f"(detail: {exc.detail}); no profile means no certified screening",
+            None,
+        )
+
+    hud_corners = frozenset(declaration.hud_corners or ())
+    text_evidence_available = attempt.detected_text_tokens is not None
+    # T297, and the ordering that is the whole lesson: derive the statistics HERE, while the
+    # frame is in hand, before any branch can return. Every exit below either carries them or is
+    # a path where no frame was ever measured; none of them can be reconstructed later, because
+    # a withheld frame is never stored and must not be.
+    statistics = derive_frame_statistics(attempt.frame, hud_corners=hud_corners)
+
+    def metrics_for(
+        *,
+        techniques_run: frozenset[ScreeningTechnique] = frozenset(),
+        techniques_fired: frozenset[ScreeningTechnique] = frozenset(),
+        matches: frozenset[str] = frozenset(),
+    ) -> CaptureScreeningMetrics:
+        return _content_metrics(
+            profile_name=profile.name,
+            statistics=statistics,
+            text_evidence_available=text_evidence_available,
+            techniques_run=techniques_run,
+            techniques_fired=techniques_fired,
+            matches=matches,
         )
 
     # Coverage BEFORE findings (Principle I). "No technique reported a match" only means the
@@ -1373,25 +1637,53 @@ def _check_content(
     unscreened = profile.reject - covered - excluded
     if unscreened:
         noun = "category" if len(unscreened) == 1 else "categories"
+        # The statistics are still recorded: the frame was measured even though the gate could
+        # not certify it, and this is the withhold shape a Linux run produces most of.
         return (
             f"no available screening technique addresses reject {noun} {sorted(unscreened)} "
             f"of profile {profile.name!r} (capture_scope {profile.capture_scope.name!r}); the "
-            "frame cannot be certified against it (withheld rather than passed unscreened)"
+            "frame cannot be certified against it (withheld rather than passed unscreened)",
+            metrics_for(),
         )
 
-    matches = detector.detect(
-        attempt.frame,
-        reject_categories=profile.reject,
-        detected_text_tokens=attempt.detected_text_tokens or frozenset(),
-        text_vocabulary=vocabulary,
-        # T283: the view's own statement of where the game keeps its HUD. Absent means nothing is
-        # declared, which is the strict reading (every corner judged against the whole frame).
-        hud_corners=frozenset(declaration.hud_corners or ()),
-    )
+    detect_detailed = getattr(detector, "detect_detailed", None)
+    if callable(detect_detailed):
+        report: DetectionReport = detect_detailed(
+            attempt.frame,
+            reject_categories=profile.reject,
+            detected_text_tokens=attempt.detected_text_tokens or frozenset(),
+            text_vocabulary=vocabulary,
+            # T283: the view's own statement of where the game keeps its HUD. Absent means
+            # nothing is declared, which is the strict reading (every corner judged against the
+            # whole frame).
+            hud_corners=hud_corners,
+            # The same object that will be persisted -- so "what was recorded" and "what was
+            # decided on" are one computation, not two that agree today.
+            statistics=statistics,
+        )
+        matches = report.matches
+        metrics = metrics_for(
+            techniques_run=report.techniques_run,
+            techniques_fired=report.techniques_fired,
+            matches=report.matches,
+        )
+    else:
+        # An injected detector that does not report its own technique verdicts. Its findings are
+        # honoured, and the image statistics still stand (this module measured them, not the
+        # detector); what cannot be claimed is which technique fired, so nothing is.
+        matches = detector.detect(
+            attempt.frame,
+            reject_categories=profile.reject,
+            detected_text_tokens=attempt.detected_text_tokens or frozenset(),
+            text_vocabulary=vocabulary,
+            hud_corners=hud_corners,
+        )
+        metrics = metrics_for(matches=matches)
+
     if matches:
         noun = "category" if len(matches) == 1 else "categories"
-        return f"content gate matched reject {noun}: {sorted(matches)}"
-    return None
+        return f"content gate matched reject {noun}: {sorted(matches)}", metrics
+    return None, metrics
 
 
 # --------------------------------------------------------------------------
@@ -1425,6 +1717,12 @@ class ScreeningOutcome:
     withheld_reason: WithheldReason | None
     failed_gate: ScreeningGate | None
     detail: str | None
+    #: T297: what the content gate measured, for the record. ``None`` exactly when no frame
+    #: reached the content gate -- an earlier gate short-circuited, or the caller built this
+    #: outcome for a host-level failure where there is no frame at all. Optional with a default
+    #: so every existing construction of this dataclass stays valid; a caller that cannot supply
+    #: metrics is stating that none were derived, which is the honest reading.
+    metrics: CaptureScreeningMetrics | None = None
 
     @property
     def is_clean(self) -> bool:
@@ -1436,12 +1734,34 @@ _CLEAN_OUTCOME: Final[ScreeningOutcome] = ScreeningOutcome(
 )
 
 
-def _withhold(gate: ScreeningGate, detail: str) -> ScreeningOutcome:
+def _clean(metrics: CaptureScreeningMetrics | None) -> ScreeningOutcome:
+    """A clean outcome carrying what the gate measured to reach it.
+
+    Clean captures are recorded with statistics too, and that is not symmetry for its own sake: a
+    detector is only evaluable against **both** populations. The retro-audit's 188 delivered
+    frames are the one real clean sample this project has, and they exist only as prose in a
+    spike document because nothing ever persisted the numbers.
+    """
+    if metrics is None:
+        return _CLEAN_OUTCOME
+    return ScreeningOutcome(
+        status=ScreeningStatus.SCREENED_CLEAN,
+        withheld_reason=None,
+        failed_gate=None,
+        detail=None,
+        metrics=metrics,
+    )
+
+
+def _withhold(
+    gate: ScreeningGate, detail: str, metrics: CaptureScreeningMetrics | None = None
+) -> ScreeningOutcome:
     return ScreeningOutcome(
         status=ScreeningStatus.WITHHELD,
         withheld_reason=_GATE_WITHHELD_REASON[gate],
         failed_gate=gate,
         detail=detail,
+        metrics=metrics,
     )
 
 
@@ -1474,13 +1794,13 @@ def screen_capture(
     if provenance_failure is not None or declaration is None:
         return _withhold(ScreeningGate.PROVENANCE, provenance_failure or "provenance check failed")
 
-    content_failure = _check_content(
+    content_failure, metrics = _check_content(
         attempt, declaration, profiles=profiles, detector=resolved_detector
     )
     if content_failure is not None:
-        return _withhold(ScreeningGate.CONTENT, content_failure)
+        return _withhold(ScreeningGate.CONTENT, content_failure, metrics)
 
-    return _CLEAN_OUTCOME
+    return _clean(metrics)
 
 
 # --------------------------------------------------------------------------
@@ -1530,4 +1850,10 @@ def build_screen_capture(
         retained_as_evidence=True,
         blob_ref=blob_ref if is_clean else None,
         capture_path=attempt.capture_path,
+        # T297. This is the *only* trace of what the gate saw on a withheld frame, and it has to
+        # be attached here because there is no later moment at which it could be: the pixels are
+        # gone by the time this record is written and, for a withheld capture, they were never
+        # ours to keep. Note it is not conditioned on ``is_clean`` -- unlike the blob, which is
+        # forced to ``None`` above, the statistics are exactly as necessary on the withheld side.
+        screening_metrics=outcome.metrics,
     )

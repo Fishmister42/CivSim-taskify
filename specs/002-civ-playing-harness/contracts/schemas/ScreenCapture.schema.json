@@ -1,5 +1,29 @@
 {
   "$defs": {
+    "BorderEdgeMetric": {
+      "additionalProperties": false,
+      "description": "One edge band's side of the border-ring comparison, as the two numbers that made it.\n\n``uniformity_stddev`` is the band's own mean per-channel standard deviation (how flat it is);\n``interior_color_delta`` is the mean absolute per-channel distance between the band's mean and\nthe frame interior's mean (how different it is from the scene under it).\n\nNote what is deliberately *absent*: the band's mean colour itself. Only the distance between\ntwo means is kept, which is a scalar about a relationship and not a sample of the frame.",
+      "properties": {
+        "edge": {
+          "$ref": "#/$defs/FrameEdge"
+        },
+        "interior_color_delta": {
+          "title": "Interior Color Delta",
+          "type": "number"
+        },
+        "uniformity_stddev": {
+          "title": "Uniformity Stddev",
+          "type": "number"
+        }
+      },
+      "required": [
+        "edge",
+        "uniformity_stddev",
+        "interior_color_delta"
+      ],
+      "title": "BorderEdgeMetric",
+      "type": "object"
+    },
     "CapturePath": {
       "description": "Which screen-capture mechanism served a run or a capture (research R6).\n\nOne member per platform's decided primary/fallback path, plus ``NONE``\nfor a run with no capture mechanism available at all (visually degraded\nunder FR-050 -- valid and recorded, never an error on its own).\n``Run.capture_path`` may be ``NONE``; ``ScreenCapture.capture_path``\nnever is, since a capture record only exists once some mechanism was\nactually attempted.",
       "enum": [
@@ -13,12 +37,157 @@
       "title": "CapturePath",
       "type": "string"
     },
+    "CaptureScreeningMetrics": {
+      "additionalProperties": false,
+      "description": "The statistics the content gate derived for one capture, kept instead of the frame (T297).\n\n**These must be derived at screening time and persisted with the capture record, because they\ncannot be recovered afterwards.** That ordering is the whole point of this type. A withheld\nframe is never stored (SC-019) and a delivered frame's blob is not guaranteed to outlive the\nrun, so any statistic not computed while the pixels were in memory is gone permanently. The\nproject has already paid for learning this: all 421 withheld captures from the 2026-09-21\ngameplay blocks were stored with ``blob_ref = NULL``, which is correct under Principle I and\nleft exactly zero evidence with which to evaluate the gate's own thresholds. T283's narrowing\nof the corner technique therefore had to be argued from **one synthetic frame** (1.53 clean\nvs 1.84 contaminated against a 1.8 threshold, with a 220x60 overlay missed entirely at 1.71),\nand nobody could say whether 1.8 was a threshold or a coin toss.\n\n**Why this is not \"store the frame, but smaller\".** A withheld frame is the capture *most*\nlikely to contain the operator's desktop -- a FireTuner window, a notification toast, a panel\n-- which is precisely the data T265 agreed to hash rather than keep. Retaining it to evaluate\nthe gate would turn the gate into an archive of the thing it exists to suppress. What is kept\nhere instead is roughly a dozen scalars describing *relationships between regions*: variances,\na standard deviation per edge, a distance between two means. No pixel, no colour, no\ndimension-per-region breakdown, no hash of the image, and no text. Nothing here can\nreconstruct an image, and nothing here is about the operator rather than about the detector.\n\nIn particular ``text_match`` is the declared-text technique's verdict as a **boolean**. The\ntoken strings that produced it come from enumerating the operator's whole desktop and may\nnever be recorded anywhere durable (``tests/contract/test_window_title_boundary.py``); the\ndistribution only ever needed to know *whether* a category matched.\n\nThe exact key set of this model, and of its two element types, is asserted in\n``tests/contract/test_screening_metrics_boundary.py`` so that widening the payload is a red\ntest rather than a quiet Principle I regression.\n\nFields that are image-derived are ``None``/empty exactly when the frame could not be decoded:\nan undecodable frame is withheld by the detector (research R7), and recording statistics it\nnever computed would be a fabrication.",
+      "properties": {
+        "border_edge_metrics": {
+          "items": {
+            "$ref": "#/$defs/BorderEdgeMetric"
+          },
+          "title": "Border Edge Metrics",
+          "type": "array"
+        },
+        "corner_metrics": {
+          "items": {
+            "$ref": "#/$defs/CornerVarianceMetric"
+          },
+          "title": "Corner Metrics",
+          "type": "array"
+        },
+        "frame_height": {
+          "minimum": 0,
+          "title": "Frame Height",
+          "type": "integer"
+        },
+        "frame_width": {
+          "minimum": 0,
+          "title": "Frame Width",
+          "type": "integer"
+        },
+        "profile_name": {
+          "title": "Profile Name",
+          "type": "string"
+        },
+        "reject_categories_matched": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reject Categories Matched",
+          "type": "array"
+        },
+        "techniques_fired": {
+          "items": {
+            "$ref": "#/$defs/ScreeningTechnique"
+          },
+          "title": "Techniques Fired",
+          "type": "array"
+        },
+        "techniques_run": {
+          "items": {
+            "$ref": "#/$defs/ScreeningTechnique"
+          },
+          "title": "Techniques Run",
+          "type": "array"
+        },
+        "text_evidence_available": {
+          "title": "Text Evidence Available",
+          "type": "boolean"
+        },
+        "text_match": {
+          "title": "Text Match",
+          "type": "boolean"
+        },
+        "whole_frame_variance": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Whole Frame Variance"
+        }
+      },
+      "required": [
+        "profile_name",
+        "frame_width",
+        "frame_height",
+        "text_evidence_available",
+        "text_match"
+      ],
+      "title": "CaptureScreeningMetrics",
+      "type": "object"
+    },
+    "CornerVarianceMetric": {
+      "additionalProperties": false,
+      "description": "One corner's side of the corner-overlay comparison, as the two numbers that made it.\n\n``variance`` is the mean per-channel variance of the corner patch; ``reference_variance`` is\nwhat the technique divided it by. The ratio the threshold is applied to is\n``variance / reference_variance`` -- stored as the pair rather than the quotient so a reader\ncan see *which* reference was used and recompute the ratio under any other threshold.\n``reference_is_hud_peer`` records that choice: true when the view declared this corner as its\nown HUD and the reference is the busiest *other* declared HUD corner, false when it is the\nwhole-frame variance (T283).",
+      "properties": {
+        "corner": {
+          "$ref": "#/$defs/HudCorner"
+        },
+        "reference_is_hud_peer": {
+          "title": "Reference Is Hud Peer",
+          "type": "boolean"
+        },
+        "reference_variance": {
+          "title": "Reference Variance",
+          "type": "number"
+        },
+        "variance": {
+          "title": "Variance",
+          "type": "number"
+        }
+      },
+      "required": [
+        "corner",
+        "variance",
+        "reference_variance",
+        "reference_is_hud_peer"
+      ],
+      "title": "CornerVarianceMetric",
+      "type": "object"
+    },
+    "FrameEdge": {
+      "description": "A frame edge the border-ring technique measures its band on.",
+      "enum": [
+        "top",
+        "bottom",
+        "left",
+        "right"
+      ],
+      "title": "FrameEdge",
+      "type": "string"
+    },
+    "HudCorner": {
+      "description": "A frame corner a view declares as holding the game's own HUD (T283).\n\nSee ``parity.screening._corner_overlay_is_suspect`` for what the content gate does with it:\na declared corner is not exempt, it is judged against the *other declared HUD corners*\ninstead of against the whole frame, which is what makes the detector sharper rather than\nmore permissive.",
+      "enum": [
+        "top_left",
+        "top_right",
+        "bottom_left",
+        "bottom_right"
+      ],
+      "title": "HudCorner",
+      "type": "string"
+    },
     "ScreeningStatus": {
       "enum": [
         "screened_clean",
         "withheld"
       ],
       "title": "ScreeningStatus",
+      "type": "string"
+    },
+    "ScreeningTechnique": {
+      "description": "The content gate's techniques, named so coverage can be asserted as data.\n\nDefined here rather than in ``parity.screening`` because since T297 it is part of a\n*persisted* record shape (:class:`CaptureScreeningMetrics`), and the vocabulary a stored\nrecord uses belongs with the record. ``parity.screening`` re-exports this exact object under\nthe same name, so there is one enum and not two that can drift.\n\nA reject category is only *screened* if at least one of these can actually run against it on\nthe attempt in hand. Before this enum existed the category-to-technique relationship was\nimplicit in ``DefaultContentDetector.detect``'s three ``if`` blocks, so a category no\ntechnique addressed silently produced \"no matches\" -- indistinguishable from \"checked and\nclean\". Publishing it as data is what lets ``unaddressed_reject_categories`` tell those two\napart, and lets a test assert the invariant over every shipped profile.",
+      "enum": [
+        "border_ring",
+        "corner_overlay",
+        "declared_text"
+      ],
+      "title": "ScreeningTechnique",
       "type": "string"
     },
     "WithheldReason": {
@@ -75,6 +244,17 @@
     "run_id": {
       "title": "Run Id",
       "type": "string"
+    },
+    "screening_metrics": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CaptureScreeningMetrics"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "screening_status": {
       "$ref": "#/$defs/ScreeningStatus"

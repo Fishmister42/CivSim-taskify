@@ -458,8 +458,40 @@ turn, **and decision step** (FR-015, FR-025, FR-030).
 | `retained_as_evidence` | bool | |
 | `blob_ref` | string? | Content-addressed; null when withheld |
 | `capture_path` | enum | Which mechanism produced it (R6) |
+| `screening_metrics` | object? | What the content gate measured (T297); null when no frame reached it |
+
+`screening_metrics` (`CaptureScreeningMetrics`) is the derived-statistics record that exists
+*because* the pixels do not:
+
+| Field | Type | Notes |
+|---|---|---|
+| `profile_name` | string | The resolved screening profile — the grouping key for any distribution |
+| `frame_width` / `frame_height` | int | The frame size no threshold was ever recorded against |
+| `whole_frame_variance` | float? | Mean per-channel variance; null when the frame could not be decoded |
+| `corner_metrics` | list | Per corner: `corner`, `variance`, `reference_variance`, `reference_is_hud_peer` |
+| `border_edge_metrics` | list | Per edge: `edge`, `uniformity_stddev`, `interior_color_delta` |
+| `text_evidence_available` | bool | Whether a text-evidence source ran at all |
+| `text_match` | bool | The declared-text verdict **as a boolean, never the tokens** |
+| `techniques_run` / `techniques_fired` | list[enum] | `border_ring` \| `corner_overlay` \| `declared_text` |
+| `reject_categories_matched` | list[string] | The catalog ids the findings were attributed to |
 
 **Validation**:
+
+- **`screening_metrics` must be derived at screening time and persisted with the capture record,
+  because it cannot be recovered afterwards** (T297). A withheld frame is never stored and must not
+  be — it is the capture most likely to hold the operator's desktop — so any statistic not computed
+  while the pixels were in memory is gone permanently. All 421 withheld captures from the
+  2026-09-21 gameplay blocks were stored with `blob_ref = NULL`, which is correct, and left zero
+  evidence with which to evaluate the content gate's own thresholds; T283's narrowing had to be
+  argued from one synthetic frame.
+- It is recorded on **both** populations, `screened_clean` and `withheld` alike — a detector is
+  only evaluable against both — and is null only when no frame reached the content gate (a
+  host-level failure, or a source/geometry/provenance withhold that short-circuits before decode).
+- **Nothing in it may describe the frame's contents or the operator's desktop.** It is roughly a
+  dozen scalars about *relationships between regions*: no pixel, no colour, no text, no hash of the
+  image. The exact key set is asserted in `tests/contract/test_screening_metrics_boundary.py` so
+  that widening it is a red test rather than a Principle I regression dressed as a Principle III
+  improvement.
 
 - **A withheld capture is never stored and never shown** — it is recorded as an event with its
   reason, not persisted as an image (FR-025, FR-030, SC-019).
