@@ -1,0 +1,121 @@
+{
+  "goal": "use_a_builder",
+  "chain": [
+    "build_a_builder",
+    "use_a_builder"
+  ],
+  "provider": "openrouter",
+  "provider_seed": 0,
+  "provider_policy": "uniform",
+  "store": "/home/matt/CivSolver/civsim-match-store.db",
+  "started_at": "2026-09-22T13:42:39.452267+00:00",
+  "parts": [
+    {
+      "goal": "build_a_builder",
+      "title": "Build a Builder in your capital",
+      "run_id": "run-e90d69673dd4458aa60e8cd8bc1daa5d",
+      "turn_cap": 8,
+      "reached": true,
+      "reached_at_turn": 3,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": "success",
+      "prerequisites": [
+        {
+          "predicate": "player.cities.count >= 1",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "player.cities.available_productions != []",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "finished",
+      "elapsed_s": 196.0,
+      "success_predicate": "player.units.builder_count >= observed_start_builder_count + 1",
+      "success_check": {
+        "predicate": "player.units.builder_count >= observed_start_builder_count + 1",
+        "met": true,
+        "reason": null
+      },
+      "steps": 9,
+      "turns_recorded": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "actions": {
+        "cities.select": {
+          "applied": 3
+        },
+        "cities.set_production": {
+          "applied": 2
+        },
+        "turn.end_turn": {
+          "applied": 3,
+          "verification_failed": 1
+        }
+      },
+      "actions_applied": {
+        "cities.select": 3,
+        "cities.set_production": 2,
+        "turn.end_turn": 3
+      },
+      "provider": "openrouter",
+      "provider_policy": "uniform",
+      "game_start_turn": 62,
+      "store": {
+        "run": {
+          "lifecycle_state": "finished",
+          "stop_resolution": "operator_stop",
+          "host_support_tier": "validated",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "xcomposite"
+        },
+        "turn_cycles": 4,
+        "decision_steps": 9,
+        "save_points": 4,
+        "captures": 17,
+        "run_events": 16,
+        "model_calls": 9,
+        "turns_recorded": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "captures_shown_to_agent": 4,
+        "capture_screening": [
+          "screened_clean",
+          "withheld"
+        ],
+        "model_calls_served": [
+          "openrouter/anthropic/claude-sonnet-5"
+        ],
+        "model_cost_usd": 0.3226,
+        "model_input_tokens": 150941,
+        "model_output_tokens": 2068
+      }
+    }
+  ],
+  "aborted": "RuntimeError: tuner unreachable: Could not connect to the Nexus tuner interface | detail={'host': '127.0.0.1', 'port': 4318, 'reason': \"[Errno 111] Connect call failed ('127.0.0.1', 4318)\"}",
+  "recording": {
+    "frames": 261,
+    "gif": "harness-landed-run.gif",
+    "gif_kb": 29311,
+    "keyframes": [
+      "keyframe_0_t000s.png",
+      "keyframe_1_t097s.png",
+      "keyframe_2_t193s.png",
+      "keyframe_3_t286s.png"
+    ],
+    "capture_failures": 0
+  },
+  "finished_at": "2026-09-22T13:47:53.394032+00:00",
+  "reached": true
+}

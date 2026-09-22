@@ -1,0 +1,12 @@
+t+000s  recording started: every frame via the production capture_window() (window-scoped)
+t+000s  goal build_a_builder: objective written to goal-build_a_builder.md (objective text only)
+t+000s  PRODUCTION: Runner.start(run-config.yaml) [goal=build_a_builder provider=openrouter provider_policy=uniform turn_cap=8]
+t+002s  goal build_a_builder: run run-d3d0368b0cf34ff7ad782a41e539d8c0
+t+002s  goal build_a_builder: playing turn=1 step=None
+t+070s  goal build_a_builder: playing turn=2 step=None
+t+099s  goal build_a_builder: playing turn=3 step=None
+t+147s  goal build_a_builder: playing turn=4 step=None
+t+147s  goal build_a_builder: REACHED at recorded turn 3 -- stopping the run
+t+178s  goal build_a_builder: finished turn=4 step=None
+t+178s  goal use_a_builder: objective written to goal-use_a_builder.md (objective text only)
+t+268s  ABORTED: RuntimeError: tuner unreachable: Could not connect to the Nexus tuner interface | detail={'host': '127.0.0.1', 'port': 4318, 'reason': "[Errno 111] Connect call failed ('127.0.0.1', 4318)"}

@@ -1,0 +1,113 @@
+{
+  "goal": "move_unit_to_plot",
+  "chain": [
+    "move_unit_to_plot"
+  ],
+  "provider": "stochastic",
+  "provider_seed": 71,
+  "provider_policy": "coverage",
+  "store": "/home/matt/CivSolver-live/civsim-match-store.db",
+  "started_at": "2026-09-22T14:30:51.334545+00:00",
+  "parts": [
+    {
+      "goal": "move_unit_to_plot",
+      "title": "Move a unit to a plot it can reach",
+      "run_id": "run-5cf209a76e73420d80efae6295cbc83d",
+      "turn_cap": 2,
+      "reached": false,
+      "reached_at_turn": null,
+      "prerequisites_met": true,
+      "blocked_by": null,
+      "stop_reason": null,
+      "prerequisites": [
+        {
+          "predicate": "player.units.count >= 1",
+          "met": true,
+          "reason": null
+        },
+        {
+          "predicate": "player.units.movable_count >= 1",
+          "met": true,
+          "reason": null
+        }
+      ],
+      "final_state": "finished",
+      "elapsed_s": 225.6,
+      "success_predicate": "observed_applied_units_move_to >= 1",
+      "success_check": {
+        "predicate": "observed_applied_units_move_to >= 1",
+        "met": false,
+        "reason": null
+      },
+      "steps": 7,
+      "turns_recorded": [
+        1
+      ],
+      "actions": {
+        "policies.slot_policy": {
+          "verification_failed": 1
+        },
+        "units.select": {
+          "applied": 1
+        },
+        "diplomacy.send_delegation": {
+          "unavailable_to_human_now": 1
+        },
+        "diplomacy.declare_war": {
+          "verification_failed": 1
+        },
+        "camera.move": {
+          "out_of_parity_camera": 1
+        },
+        "saves.save_game": {
+          "applied": 1
+        },
+        "turn.end_turn": {
+          "verification_failed": 1
+        }
+      },
+      "actions_applied": {
+        "units.select": 1,
+        "saves.save_game": 1
+      },
+      "provider": "stochastic",
+      "provider_policy": "coverage",
+      "game_start_turn": 67,
+      "store": {
+        "run": {
+          "lifecycle_state": "finished",
+          "stop_resolution": "defeat",
+          "host_support_tier": "supported",
+          "record_completeness_status": "complete",
+          "comparability_status": "visually_degraded",
+          "game_build": "linux/1.0.12.9",
+          "capture_path": "none"
+        },
+        "turn_cycles": 1,
+        "decision_steps": 7,
+        "save_points": 1,
+        "captures": 9,
+        "run_events": 19,
+        "model_calls": 7,
+        "turns_recorded": [
+          1
+        ],
+        "captures_shown_to_agent": 0,
+        "capture_screening": [
+          "withheld"
+        ],
+        "model_calls_served": [
+          "stochastic/coverage-v1"
+        ],
+        "model_cost_usd": 0,
+        "model_input_tokens": 0,
+        "model_output_tokens": 0
+      }
+    }
+  ],
+  "recording": {
+    "frames": 0
+  },
+  "finished_at": "2026-09-22T14:34:37.864254+00:00",
+  "reached": false
+}
