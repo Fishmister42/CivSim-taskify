@@ -1,0 +1,32 @@
+{
+ "congress": {
+  "local_player_favor": 0,
+  "is_in_session": true,
+  "active_resolutions": [
+   {
+    "resolution_id": -109000071,
+    "name": "Espionage Pact",
+    "resolution_type": "WC_RES_ESPIONAGE_PACT"
+   },
+   {
+    "resolution_id": -1073144994,
+    "name": "Public Works Program",
+    "resolution_type": "WC_RES_PUBLIC_WORKS"
+   },
+   {
+    "resolution_id": 334823573,
+    "name": "Diplomatic Victory",
+    "resolution_type": "WC_RES_DIPLOVICTORY"
+   }
+  ]
+ },
+ "screen": {
+  "screen": "prompt.congress_intro",
+  "prompt_options": [
+   "accept"
+  ],
+  "raw_screen_id": "WorldCongressIntro",
+  "has_blocking_prompt": true,
+  "recognized": true
+ }
+}
