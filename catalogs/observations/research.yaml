@@ -9,7 +9,17 @@
   parity_basis: >
     Open the Research or Civics tree screen and look at the highlighted current item and the
     set of unlocked, researchable entries.
-  context: GameCore_Tuner
+  # MEASURED (2026-09-22, static): moved from GameCore_Tuner to InGame. `PlayerCulture:CanProgress`
+  # is bound only on the InGame side (`GameCore::Cache::Lua::IPlayerCulture::lCanProgress`; there is
+  # no `GameCore::Lua::IPlayerCulture::lCanProgress` in libGameCore_{Base,XP1,XP2}.so), so in
+  # GameCore_Tuner the body's `culture.CanProgress and` guard short-circuited on every row and
+  # `researchable_civics` was `[]` on all 914 store records and every block probe -- making
+  # `research.set_civic` unreachable by construction. `PlayerTechs:CanResearch` is bound on BOTH
+  # sides, which is the only reason `researchable_techs` ever answered. Firaxis calls both from
+  # InGame screens (civicstree.lua:1279, civicschooser.lua:68, techtree.lua:1107,
+  # researchchooser.lua:71). The cities.state precedent, 1d0b372; the same move, 882758e.
+  # UNVERIFIED LIVE.
+  context: InGame
   capability_id: research.read
   output_schema:
     type: object
@@ -23,4 +33,9 @@
       researchable_civics:
         type: array
         items: { type: string }
+      # Why a list is empty, when the body could not ask the question at all -- never a silent
+      # `[]`, which is indistinguishable from "the game is offering nothing" and which is exactly
+      # how `research.set_civic` stayed unreachable unnoticed. The 882758e convention.
+      researchable_techs_reason: { type: string }
+      researchable_civics_reason: { type: string }
   introduced_in_version: "2026.09.1"

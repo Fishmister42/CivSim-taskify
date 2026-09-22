@@ -1,5 +1,7 @@
 -- lua/gamecore/research.lua
--- Context: GameCore_Tuner (read-only).
+-- Context: InGame (read-only) -- see the block above the civics loop. The file's path is
+-- historical; the context a body runs in is the `context:` key of its catalog declaration, not
+-- its directory (the same split 882758e left behind for government/great_people/religion).
 -- Backs declaration_id: research.state (catalogs/observations/research.yaml), capability_id: research.read.
 --
 -- SANDBOX CONSTRAINT (specs/002-civ-playing-harness/spikes/lua-api-verification-linux.md, P5):
@@ -57,24 +59,81 @@ local function CivSim_JsonEncode(value)
 end
 
 local function CivSim_Research_GetState()
+    -- The check every shipped screen makes first (the 882758e guard): never touch a player object
+    -- with no local player, and say so rather than answering with an empty list.
     local localPlayer = Game.GetLocalPlayer()
+    if localPlayer == nil or localPlayer == -1 then
+        return {
+            researchable_techs = {},
+            researchable_civics = {},
+            researchable_techs_reason = "no_local_player",
+            researchable_civics_reason = "no_local_player",
+        }
+    end
     local player = Players[localPlayer]
     local techs = player:GetTechs()   -- Player:GetTechs()
     local culture = player:GetCulture() -- Player:GetCulture()
 
+    -- MEASURED (2026-09-22, static): `researchable_civics` was `[]` on every record in the store
+    -- -- 914 decision steps and every block probe of 2026-09-21/22 -- while `researchable_techs`,
+    -- built by the loop directly above it, was non-empty at every one, and `current_civic` (read
+    -- off this same `culture` object, two lines below) was populated. That asymmetry is the whole
+    -- finding, and it is a CONTEXT fault, not a missing name:
+    --
+    --   nm -DC libGameCore_XP2.so:
+    --     GameCore::Lua::IPlayerTechs::lCanResearch              <- GameCore_Tuner side: PRESENT
+    --     GameCore::Cache::Lua::IPlayerTechs::lCanResearch       <- InGame side:          present
+    --     GameCore::Lua::IPlayerCulture::lGetProgressingCivic    <- GameCore_Tuner side: PRESENT
+    --     GameCore::Cache::Lua::IPlayerCulture::lCanProgress     <- InGame side:          present
+    --     (GameCore::Lua::IPlayerCulture::lCanProgress           <- GameCore_Tuner side: ABSENT)
+    --
+    -- `GameCore::Cache::Lua::` is the InGame binding and `GameCore::Lua::` the GameCore_Tuner one
+    -- -- pinned by T213's own measurements: `Unit:GetUnitType()` is nil in GameCore_Tuner and
+    -- answers InGame, and `lGetUnitType` exists only under `Cache`; `GetMovesRemaining` answers in
+    -- both and is bound in both. So in GameCore_Tuner `culture.CanProgress` is nil, the
+    -- `culture.CanProgress and` guard short-circuited on every row, and the field became an `[]`
+    -- indistinguishable from "the game is offering no civic" -- which made
+    -- `research.set_civic`'s availability predicate (`target in player.researchable_civics`)
+    -- unsatisfiable for the whole history of the harness.
+    --
+    -- Firaxis calls it only from InGame screens, both of them, and calls CanResearch from the
+    -- matching pair:
+    --   base/assets/ui/screens/civicstree.lua:1279   playerCulture:CanProgress(civicID)
+    --   base/assets/ui/choosers/civicschooser.lua:68 pPlayerCulture:CanProgress(iCivic)
+    --   base/assets/ui/screens/techtree.lua:1107     playerTechs:CanResearch(techID)
+    --   base/assets/ui/choosers/researchchooser.lua:71 pPlayerTechs:CanResearch(iTech)
+    -- `CanResearch` only ever worked here because it happens to be bound on BOTH sides.
+    --
+    -- This declaration therefore moves to context InGame (catalogs/observations/research.yaml),
+    -- the context both of its trees run in -- the cities.state precedent 1d0b372, and the same
+    -- move 882758e made for government/great_people/religion. Every accessor this body names is
+    -- bound on the Cache/InGame side, so nothing else in it changes meaning.
+    -- UNVERIFIED LIVE: no client was launched for this change.
     local researchableTechs = {}
-    for row in GameInfo.Technologies() do -- UNVERIFIED: GameInfo table iteration idiom
-        local techType = row.Index -- UNVERIFIED: index vs hash usage
-        if techs.CanResearch and techs:CanResearch(techType) then -- UNVERIFIED: CanResearch accessor
-            researchableTechs[#researchableTechs + 1] = row.TechnologyType
+    local techsReason = nil
+    if techs.CanResearch == nil then
+        techsReason = "can_research_unavailable_in_context"
+    else
+        for row in GameInfo.Technologies() do -- UNVERIFIED: GameInfo table iteration idiom
+            local techType = row.Index -- UNVERIFIED: index vs hash usage
+            if type(techType) == "number" and techs:CanResearch(techType) then
+                researchableTechs[#researchableTechs + 1] = row.TechnologyType
+            end
         end
     end
 
     local researchableCivics = {}
-    for row in GameInfo.Civics() do -- UNVERIFIED
-        local civicType = row.Index
-        if culture.CanProgress and culture:CanProgress(civicType) then -- UNVERIFIED
-            researchableCivics[#researchableCivics + 1] = row.CivicType
+    local civicsReason = nil
+    if culture.CanProgress == nil then
+        -- Never a silent `[]`: an accessor this context does not bind is "I cannot answer", not
+        -- "the game is offering nothing".
+        civicsReason = "can_progress_unavailable_in_context"
+    else
+        for row in GameInfo.Civics() do -- UNVERIFIED
+            local civicType = row.Index
+            if type(civicType) == "number" and culture:CanProgress(civicType) then
+                researchableCivics[#researchableCivics + 1] = row.CivicType
+            end
         end
     end
 
@@ -95,6 +154,10 @@ local function CivSim_Research_GetState()
         current_civic = currentCivicType,
         researchable_techs = researchableTechs,
         researchable_civics = researchableCivics,
+        -- Present only when the list could not be asked at all. A Lua table cannot carry a nil
+        -- key, so a nil reason simply does not appear in the encoded object.
+        researchable_techs_reason = techsReason,
+        researchable_civics_reason = civicsReason,
     }
 end
 
