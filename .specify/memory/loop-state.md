@@ -35,6 +35,11 @@ judgement with a lookup.** "Do you believe the lock fix is good?" gets a yes —
 "Which line releases it on each exit path?" found the gap. The second question is narrower, duller,
 and answerable without talking yourself into anything. Prefer the dull lookup; a rule that asks for an
 assessment is a rule that returns the assessor's priors.
+**And the lookup's own failure mode: run it on EACH thing you are about to claim, not on one and then
+generalise.** A `git diff` of one file was read, its authorship extended to two others nobody opened,
+and the result reported as "reading the diff" — which made an inference sound verified. A lookup
+answers exactly the question asked of it and nothing adjacent. Three people touched that claim and
+there was one partial lookup between them.
 - **Never wait on a background-task notification.** Run long steps in the foreground under
   `timeout` (< 600 s per command), or poll a detached process's log in a bounded loop. Live stages
   send the hypervisor a heartbeat (SendMessage) at least every 20 minutes.
