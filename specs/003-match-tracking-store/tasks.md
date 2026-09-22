@@ -225,3 +225,98 @@ Task: "30,000-step scale test in tests/unit/test_store_scale.py"                
   reported to the hypervisor.
 - The real store file is only ever **copied**; nothing in these tasks writes to it.
 - Never report a pass that was not observed: T045/T046 record what ran and what did not.
+
+---
+
+## Phase 9: Convergence (2026-09-22)
+
+`/speckit-converge` re-check, attempt 2, against the shipped code after all 46 prior tasks were
+`[X]` and the suite green at head `c7b5654` (**2138 passed / 19 skipped / 0 failed**, 203.89 s).
+Assessed: FR-001 – FR-029, the buildable success criteria (SC-001 – SC-009), US1 – US5's
+acceptance scenarios, the Edge Cases, `contracts/match-tracking-store.md`'s W1–W5 / R1–R8 /
+T1–T4 / V1–V6 / B1, plan.md's C1 – C3, and Constitution Principles I, III, IV and VI.
+Report: [analyze-2026-09-22.md](./analyze-2026-09-22.md).
+
+**No constitution MUST is violated and nothing below is a Principle I leak.** The import boundary
+still holds statically and at runtime, atomicity still survives 354 injected faults and a real
+`SIGKILL`, and trend exclusion is still the store's rule rather than the reader's. The findings
+have one shape in common, and it is not last pass's: **this store's published surface has grown
+past the document that publishes it, and one requirement is enforced by nothing but the absence
+of the code that would break it.** A contract narrower than its Protocol is how 001 ended up with
+four probed capabilities; a requirement with no check is how `_read_setting` and `doctor`'s
+hard-coded `0` survived.
+
+- [ ] T047 **HIGH** Assert structurally that the store exposes no operation that deletes or edits a
+  record, per FR-006 (missing). **The finding**: FR-006's second clause — "the store MUST expose no
+  operation that deletes or edits a turn, step, capture, event or model call" — is satisfied today
+  by omission and by nothing else. Every `def` on `MatchStore` (`store/port.py`),
+  `MatchTrackingStore` (`store/contract.py`) and `SqliteMatchStore` (`store/sqlite_adapter.py`,
+  `store/sqlite_reads.py`) was read: the mutating surface is exactly `create_run`, `update_run`,
+  the nine `write_*`, `mark_turn_superseded`, `archive_run` and `import_run`, and nothing deletes
+  or edits. **Nothing asserts that.** There is no operation enumeration as data anywhere in
+  `civsim_harness/store/`, no AST or `hasattr` scan, and the identifier `FR-006` appears nowhere in
+  this feature's code or tests — every repo hit is 002's unrelated FR-006, the run-identity lock.
+  Adding `delete_turn_cycle()` tomorrow would leave all 2138 tests green while breaking the
+  immutability floor this store inherits verbatim from the 002 contract and that Principle III
+  depends on. **The fix pattern already exists one package away and was built for the wrong port**:
+  `tests/contract/test_read_only_boundary.py` enumerates `READ_OPERATIONS`/`WRITE_OPERATIONS` as
+  data and AST-scans against them — for `civsim_web`'s *client*, not for the store that actually
+  holds the records. Do the same here: publish the permitted mutating operations as data beside the
+  Protocol, and assert no other mutating operation exists on `MatchTrackingStore` or
+  `SqliteMatchStore`. **Pair it with a negative control that is run and recorded** — a guard nobody
+  has watched fail is the same defect again.
+- [ ] T048 **MEDIUM** Publish `list_captures` and `trend_exclusion` in the contract's Operations
+  block, per `contracts/match-tracking-store.md` (contradicts). The block declares 17 operations;
+  `MatchTrackingStore` in `store/contract.py` declares 19.
+  `list_captures(run_id) -> list[ScreenCapture]` (contract.py:487) is called by
+  `store/coverage.py:849` and pinned by
+  `test_us2_r5_list_captures_enumerates_one_run_s_records_without_reading_a_blob`;
+  `trend_exclusion(run_id) -> ExcludedRun | None` (contract.py:517) is called by
+  `operator/store_cli.py:276` and pinned by three tests in `tests/contract/test_match_tracking_store.py`.
+  **Rule T1 already refers to `trend_exclusion` in its own prose while the block above it does not
+  declare it**, so the document disagrees with itself; `list_captures` appears in no artifact at
+  all — not the contract, not `data-model.md`, not this file. Add both with their rule ids
+  (`list_captures` under R5, `trend_exclusion` under T1). This is the same failure 001 spent four
+  tasks absorbing, beginning again from the publishing side.
+- [ ] T049 **MEDIUM** Correct rule T1's research citation, per `contracts/match-tracking-store.md`
+  and `research.md` (contradicts). T1 attributes the `game_turn_did_not_advance` exclusion reason to
+  "research R14". `research.md`'s R14 is **"Scale checks (SC-002, SC-008)"**, and the phrase appears
+  nowhere in R1 – R14. The behaviour is real and well built
+  (`store/completeness.py::turns_whose_game_turn_did_not_advance`,
+  `contract.py::ExclusionReason.GAME_TURN_DID_NOT_ADVANCE`, `sqlite_reads.py:737`, six cases in
+  `tests/unit/test_completeness.py`) and `data-model.md` §3.5 documents it properly — only the
+  citation is wrong. R6 ("Trend exclusion rule and the visually-degraded question") is the item that
+  should carry the decision and today carries nothing about it. Either extend R6 and point T1 at it,
+  or drop the citation and let `data-model.md` be the reference. A citation to a research item that
+  does not discuss the thing reads as due diligence that did not happen.
+- [ ] T050 **MEDIUM** Document the open-time orphan sweep and the shipped `civsim store` surface,
+  per `contracts/match-tracking-store.md` W1 – W5 and `quickstart.md` (partial).
+  `SqliteMatchStore.__init__` (`store/sqlite_adapter.py:109-150`) now runs `sweep_orphans` on every
+  **write-mode** open, pausing runs whose identity lock is absent or whose holder pid is dead and
+  recording a `lifecycle_transition` event with `reason: orphaned` — a write that happens before the
+  caller has issued one, in a rule set meant to be the complete statement of what this store writes
+  and when. The implementation is **correct** (skipped entirely for `read_only=True`, so W5 holds,
+  and the docstring says so), which is exactly why this is a documentation gap rather than a defect.
+  Alongside it the CLI ships nine commands — `info`, `migrate`, `runs`, `model-calls`, `coverage`,
+  `export`, `import`, `repair` — where T036 and `quickstart.md` name six. Add a **W6** stating the
+  sweep, its write-mode-only scope, and its relationship to W5, and list the shipped CLI surface.
+  **`coverage` and `repair` were authored by the 002 lane in this feature's files** (`9f200d5`): the
+  job here is to document what ships, not to claim the commands or move them.
+- [ ] T051 **LOW** Assert SC-004's reconciliation instead of only recording it, per SC-004
+  (partial). The `$1.424694` total over the five priced runs of 2026-09-21 exists only in
+  `validation-results.md` as a manual T045 observation; `tests/` contains no hit for `1.42`,
+  `1.424694` or `SC-004`. `tests/unit/test_store_schema.py::test_the_real_pre_feature_file_migrates_and_reads_back`
+  already opens a **copy** of the real file behind a `skipif` and asserts run and model-call counts —
+  it is the natural home for the dollar total and does not have it, so a migration change that
+  mis-derived costs would pass. Add the total there; it stays skipped on any host without the file,
+  which is the correct behaviour. The observation was honestly made and honestly recorded — this
+  converts the project's own evidence into a check, it does not doubt it.
+- [ ] T052 **LOW** Exercise FR-018's four unused metric names, per FR-018 (partial). FR-018 names
+  "science, culture, gold, faith, production and food per turn, plus city and unit counts".
+  `store/trends.py::turn_metrics` is a generic pass-through of `TurnCycle.yields`' numeric non-bool
+  keys, so all six work by construction — but `gold`, `faith`, `production` and `food` appear in no
+  fixture in `tests/unit/test_store_trends.py` or `tests/contract/test_match_tracking_store.py`.
+  Add the four to one existing fixture so the requirement's named set is demonstrated rather than
+  implied. **The real-data half stays blocked on 002** and stays recorded as such: 002's
+  `compute_yields` is a no-op, so all six yield series are empty on every run this project has
+  recorded (`validation-results.md`, plan.md Cross-spec follow-ups). Nothing here fabricates a yield.
