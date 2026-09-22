@@ -476,7 +476,15 @@ there was one partial lookup between them.
   **Do not fix it by defaulting the reason to a string.** A default would make the 131 look
   explained. Make the unknown explicit: a withhold with no determined cause must SAY it had no
   determined cause.
-- **✅ THE PRODUCTION CHAIN WORKS — `cities.select` then `cities.set_production` — demonstrated live
+- **⚠️ CORRECTED — the production chain was NOT first demonstrated today, and the hypervisor published
+  that claim without running the lookup.** `cities.select` → `cities.set_production` had already landed
+  **four times earlier on 2026-09-22 (13:22, 13:36, 13:42, 13:44 — all served `openrouter`, i.e.
+  MODEL-chosen)**, plus once stochastic at 17:44. **Block 36 is the fifth demonstration, not the
+  first.** The claim came from a brief, was repeated to the owner twice, and the answer was in a
+  column already queried. **What block 36 does contribute, narrowly and truly: it ran on a board
+  carrying no Builder and met `builder_count >= start + 1`, so the Builder's ARRIVAL is
+  attributable.** Original entry follows, still accurate about what block 36 itself did.
+- **✅ The chain works — `cities.select` then `cities.set_production` — re-demonstrated live
   2026-09-22 (block 36, `run-8becab23…`, provider=scripted).** `cities.select(65536)` applied, then
   `cities.set_production(UNIT_BUILDER)` applied, and the **next observation reads back
   `production_queue: ['UNIT_BUILDER']`**. That chain had never been demonstrated and it blocks five of
@@ -507,6 +515,43 @@ there was one partial lookup between them.
   was unmeasured (every stored sample was a range endpoint). Measured today: a requested `0.5`
   returned `0.50000047683716` — error **4.768e-07**, the same magnitude as the endpoint samples, well
   inside the declared `0.001`. **The assumption is closed by a number, not by an argument.**
+- **🛑 LIVE FABRICATION, STILL OPEN: `prompts.ai_diplomatic_approach` records `applied` for a no-op,
+  and `d74a4c7` does NOT close it.** Verification is `target not in prompt.options` — **a negative
+  over a CONTAINER, satisfied whenever the container stops containing the target for any reason.**
+  14 records, each looked up individually rather than generalised: **all 14 at
+  `confirm_elapsed_s = 0.0` with `result: true`**, none taking one poll interval. Nine target
+  `"Goodbye"`, twice at the same step index in one run, and an operator watched the view stay up
+  afterwards.
+  **Verified by ancestry and timestamp, not assumed: two of the fourteen fired with the fix in the
+  running tree** — `d74a4c7` landed 15:16, `34b029a` carries it, the worktree advanced ~16:25, block
+  37 ran 17:20:48, and the applies are at **17:20:51 and 17:20:57**. **So "25 fabrications closed" is
+  true and does not cover this one.**
+  **Working hypothesis, to be tested not adopted: `d74a4c7` closes ABSENCE, and this is EMPTINESS.**
+  `prompt.options` may be present-and-empty once the prompt is answered or gone, and
+  `'Goodbye' not in []` is legitimately True. **An empty list is a value** — this project's own rule,
+  biting at a level above where the fix was aimed.
+  **Consequence: `answer_first_meeting` scores on this action, so block 37's `reached: true` rests on
+  it** — graded applied-but-resting-on-a-doubted-assumption, not proof a leader was answered.
+  **General form: a verification predicate phrased as a negative over a container can be satisfied by
+  the container emptying, and a confirm delay cannot help — a predicate true immediately is true
+  immediately however long you wait.**
+- **🛑 5 of 5 `units.move_to` "rejections" in block 37 DEMONSTRABLY LANDED** — every unit on its exact
+  target in the next step's own observation. Confirms gave up at **5.6–5.8 s against
+  `ACTION_CONFIRM_TIMEOUT_S = 4.0`**, whose comment cites a single +1 s move as its entire basis.
+  **This does NOT reopen the sub-second finding**: that probe measured `units.select`, which still
+  confirms at 0.0. `units.move_to` is a different class, never measured against the 4.0. **No number
+  proposed — the reads are ~50 s later behind a model call, so they give a floor, not a ceiling.**
+  Under-reporting direction, so **coverage understates `units.move_to` (all-time 23/81).**
+- **The model SAW the unmapped modal and the telemetry overruled it, five times in writing.** With
+  frames flowing, the model could see the "Era Makes History" card while `game.screen_state` answered
+  `has_blocking_prompt: false`, and it reconciled in favour of the telemetry every time, saying so.
+  **The frame and the telemetry disagreed and the defect made the telemetry win** — the watchlist
+  finding corroborated by a second, independent instrument. **This is why a frame must never become
+  an input to the thing it checks, and equally why it is worth having.**
+- **Request composition, measured (block 37):** 19,725 input / 151 output tokens per call.
+  **Observation is only ~34%** (~6,777 tok, of which `map.state` alone is 56%); **~66% is
+  non-observation scaffolding** — system prompt, action catalog, objective — with the **catalog
+  listing alone roughly 2× the entire board state.** Reported, not optimised.
 - **A query that returns the same empty answer for your control as for your subject is broken, not
   conclusive.** A sweep read `outcome: None` for everything including the control, because the
   execution record nests under `decision` rather than beside it. **The control caught a broken query
