@@ -920,6 +920,89 @@ exemption list can only ratchet down.
 
 ---
 
+## R22 — "The value speaks and nobody listens": the discarded load-bearing return
+
+**Decision**: a fourth **narrow, semantic** structural check, rostered as data in
+`tests/contract/test_consumed_returns.py` (T300), sibling to `test_reachability.py`,
+`test_gate_inputs.py` (R21) and `test_long_phase_liveness.py`. Same idiom, a different member of the
+R21 family — and the one that proves the family is not confined to logging or telemetry.
+
+**The shape.** *A function whose return value is the entire product of calling it, invoked at a
+production call site that discards it.* The call type-checks, the function keeps its own unit tests
+(which bind the return and assert on it), the suite stays green, and the value evaporates. It is one
+node below what `test_reachability.py` can see: the symbol **does** have a caller — the caller simply
+throws away what it came for. Where `test_long_phase_liveness.py` catches *the phase does not speak*,
+this catches *the value speaks and nobody listens*.
+
+**The worked example, verified independently by two agents and confirmed still present at HEAD on
+2026-09-22.** `run/composition.py:746` is `debug_menu_preflight(host, home=home)` as a bare
+`ast.Expr`, sitting between `:745 catalog_result = catalog_preflight(catalog)` and
+`:747 host_gate_result = evaluate_host_gate(support_probe)` — **both neighbours bind, this one does
+not.** `debug_menu_preflight` is a recorder, not a gate: it reports rather than raises for all three
+of its non-plain readings, so its return *is* the call. `models/run.py` already carries
+`debug_menu_state`, and the store already round-trips it. Consequence: **no run ever made carries
+whether it was played with `EnableDebugMenu` on** — on the host that shipped with the debug menu
+**ON**, which is what the originating spike was about — while three documents said it was recorded.
+
+**The part that indicts the documentation, not just the code.** This defect was already written down
+in prose in **three** places — `run/preparation.py:452`, `debug_menu_preflight`'s own docstring at
+`run/preparation.py:503` ("the caller does not record it yet"), and
+`tests/contract/test_match_store_port.py:1274` — and enforced in **zero**. A finding recorded three
+times and checked never is the same failure as a gate that is correct and unwired: knowledge that
+cannot fail. That is the argument for a check rather than a fourth paragraph.
+
+**A second instance, found by the scan itself.** `run/composition.py:991` is
+`turn_timer_preflight(read_turn_timer=snapshot.read_turn_timer)`, also bare, 245 lines further down
+the same function. Half of that function is a gate (an active timer raises, so refusing the run
+survives a discard) and half is a record: `VERIFIED_NONE` carries the turn-timer name and hash
+actually confirmed safe, and `UNVERIFIED` exists — in its own docstring's words — so that "the run's
+own record carries an explicit *this precondition was never confirmed* fact rather than silently
+proceeding as though it had passed". Discarded, the finished run cannot distinguish *confirmed no
+timer* from *never managed to read one*, which is exactly the distinction `UNVERIFIED` was added to
+preserve after a live host advanced turns 1→6 untouched under `TURNTIMER_STANDARD`. This one was not
+written down anywhere before T300.
+
+**The unit of the scan is `ast.Expr`, not `ast.Call` — and it must unwrap `ast.Await`.** An
+`ast.Call` in any other position (argument, right-hand side, `with` item, `if` test, f-string field,
+`return`) has its value consumed by the surrounding expression; only a call that *is* a statement has
+thrown its return away. Two spellings are that shape: `ast.Expr(ast.Call)` and
+`ast.Expr(ast.Await(ast.Call))`. **A scan written against the sync shape alone passes `await f()`
+silently** — which would be the discarded-return check containing an instance of the discarded-return
+defect. `run/composition.py` has bare awaited calls in exactly that position today
+(`refresh_state_indices` at `:839`, `:849`, `:928`), so the async form is live here, not
+hypothetical. The negative control for it is mandatory and is named in the test file.
+
+**Why the roster is hand-curated, measured rather than assumed.** A read-only AST sweep of
+`src/civsim_harness` on 2026-09-22 found **186 distinct callee names in bare-statement position**;
+only **28** have a non-`None`, non-scalar return annotation at all; and the two largest populations
+are `execute` (43 sites) and `write_run_event` (40) — both of which are *supposed* to be discarded, a
+cursor and an append-only event id nobody downstream needs. The instructive near miss is
+`preflight_chain` (`run/composition.py:748`), discarded and **correctly so**: its own docstring says
+callers "may log/audit it" while the gate itself is the raise. "Flag every discarded return" would
+therefore yield ~150 findings of which a handful matter — allowlisted down to nothing, a check that
+cannot fail in the way that matters. That is R21's measured-and-rejected outcome arriving by a second
+route, and it is recorded here so the broad version is not rebuilt.
+
+**What the check covers and what it does not.** It covers bare-statement calls, sync and awaited, in
+the **`src/`** partition, whose callee is on the roster and which is not allowlisted. It does **not**
+generalise to all unused returns; does **not** judge whether a *bound* value is then used correctly
+(binding is the falsifiable line); does **not** scan `tests/`, where discarding a return is often the
+assertion itself; and does **not** ask whether a function has any caller at all — that is
+`test_reachability.py`'s question, and duplicating it would produce two checks that fail together and
+neither of which is the right place to fix it. Matching is by name, not resolved type, erring toward
+a false FAIL rather than a false PASS.
+
+**How it ratchets.** Roster entries are `(function, defining module, return type, why the return is
+load-bearing, what a discard means)`. Four failure shapes: an unflagged violation, a stale exemption
+(the site now binds — the entry must go), an exemption naming no roster entry, and a roster entry
+naming a module or `def` that does not exist. Every allowlist entry must cite a task or finding id
+**and** name an owning lane, because this finding's history is precisely that of a defect recorded
+three times and owned by nobody. `run/composition.py` belongs to the LIVE lane, so both violations
+land allowlisted to it rather than fixed from here; the moment either call site binds, its exemption
+fails as stale.
+
+---
+
 ## Resolved unknowns summary
 
 | Technical Context field | Resolution | Ref |
