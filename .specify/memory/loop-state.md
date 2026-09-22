@@ -252,6 +252,13 @@ there was one partial lookup between them.
   `EXITCODE:143` (128+15, SIGTERM) settled it, and `tests/unit` ran **1294 passed with the suspect file
   included** — impossible if it deadlocked. A plausible mechanism was supplied and presented as
   investigation. **Before escalating, reconcile every report you already hold about the same artefact.**
+- **TWO CORRECT RULES CAN PRODUCE A WRONG OUTCOME IN THE GAP BETWEEN THEM — and reviewing either in
+  isolation finds nothing.** A category distinct from "a check that cannot fail": there, one mechanism
+  is defective; here, **no individual rule is wrong and the result still is.** Worked example below —
+  `timeout 900` in the accepted test command against "foreground commands stay under 600 s", split by
+  agents at 590, against a suite that had outgrown it, producing a false *blocking* escalation.
+  **So audit rules in PAIRS where they touch the same action**, and when an agent silently reconciles
+  two of your rules by splitting the difference, that split is a finding — ask what it reconciled.
 - **The suite has outgrown a 590 s wrapper.** A clean run is ~250 s; under a live client at ~89% of a
   core plus concurrent suites it exceeds 590. **My own rules conflicted** — the accepted command says
   `timeout 900`, the no-waiting rule says foreground commands stay under 600 s, and agents split the
