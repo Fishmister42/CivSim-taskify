@@ -84,6 +84,13 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
     three timing-or-budget, all 46 passing alone in 42 s. Without this clause the rule fails in a way
     that does not matter, trains everyone to discount it, and stops being a check.
 - **Only lane leads commit and push. Nested sub-agents never do**, however finished the work looks.
+- **Announce a boundary crossing BEFORE making it**, and **check the tree for unannounced crossings
+  before requesting a suite slot** — one `git status`, at the natural checkpoint. The other lane's
+  protection against having its half-finished edits swept into your commit is knowing they exist.
+  **An instruction is not a control if nobody verifies it**: a brief said "stop and report before
+  editing that file", the agent edited it anyway, and nobody looked — which is this project's whole
+  finding about other people's code, turned on our own process. Stage only your own hunks
+  (`git apply --cached`) when a shared file carries another lane's work.
 - **"What measurement is this number from?" is a standing question at review, not a courtesy.**
   Three times on 2026-09-22 a threshold was set, or nearly set, without measuring what it bounds: the
   45 s end-turn confirm bound against an advance landing 75–155 s; a 5.5 s reconnect budget nearly
