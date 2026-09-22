@@ -32,6 +32,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from typer.core import TyperGroup
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from civsim_harness.errors import HarnessError, NexusError, PreflightError
@@ -196,6 +198,78 @@ def test_run_status_view_carries_only_the_fr053_named_fields() -> None:
         "comparability_status",
         "archived",
         "disk_headroom_gb",
+    }
+
+
+def _flatten_command_paths(group: TyperGroup, prefix: tuple[str, ...] = ()) -> set[str]:
+    paths: set[str] = set()
+    for name, command in group.commands.items():
+        path = (*prefix, name)
+        if isinstance(command, TyperGroup):
+            paths |= _flatten_command_paths(command, path)
+        else:
+            paths.add(" ".join(path))
+    return paths
+
+
+def test_operator_control_surface_command_roster_is_closed() -> None:
+    """FR-053 bounds the operator *control* surface's own view of live run
+    state -- not every command this console script happens to ship.
+
+    `civsim store ...` (`operator/store_cli.py`) is deliverable 3's (003's) own
+    record-inspection tooling -- run records, per-call model-call metrics, a
+    coverage scorecard -- deliberately mounted on the same `civsim` console
+    script under FR-011/FR-015/FR-017, not FR-053 (see this module's docstring
+    and contracts/operator-surface.md's "FR-053 bound" section). It is
+    deliberately excluded below rather than pinned by this test.
+
+    Everything else `civsim` registers -- top-level commands plus every
+    `run`/`audit`/`saves`/`seedset` subcommand -- *is* the operator control
+    surface this requirement bounds, and is pinned here the same way
+    `test_the_docstring_roster_is_the_registered_command_set` pins
+    `store_cli`'s roster: adding a new `civsim <verb>` anywhere on this
+    surface (one that printed turn records, decisions, or metrics, say) has to
+    change this set, which is the point -- it forces a deliberate look at
+    FR-053 rather than shipping unnoticed alongside `run status`'s closed
+    schema.
+    """
+    click_app = get_command(cli.app)
+    assert isinstance(click_app, TyperGroup)
+    assert "store" in click_app.commands, (
+        "this test's exclusion of `store` assumes it is still mounted; if it moved, the "
+        "exclusion below needs re-checking, not silently dropping"
+    )
+
+    all_paths = _flatten_command_paths(click_app)
+    control_surface = {path for path in all_paths if not path.startswith("store ")}
+
+    assert control_surface == {
+        "version",
+        "doctor",
+        "run start",
+        "run pause",
+        "run resume",
+        "run stop",
+        "run status",
+        "run resume-from",
+        "run branch",
+        "run archive",
+        "run abandon",
+        "audit parity",
+        "audit prompts",
+        "audit decisions",
+        "audit steps",
+        "audit loop",
+        "audit capabilities",
+        "audit recovery",
+        "audit completeness",
+        "audit lineage",
+        "audit immutability",
+        "audit builds",
+        "audit models",
+        "audit secrets",
+        "saves reap",
+        "seedset accept-build",
     }
 
 
@@ -747,7 +821,19 @@ def test_run_start_exits_nonzero_when_the_run_lands_in_failed_state(
     assert "failed" in result.output.lower()
 
 
+@pytest.mark.client
 def test_doctor_command_runs_cleanly_end_to_end(cli_runner: CliRunner, tmp_path: Path) -> None:
+    """Marked `client` (2026-09-22): unlike every other `run_doctor` test in this file,
+    this one injects NO host and NO `nexus_client_factory`. It goes through the real
+    `cli.doctor`, which calls `get_host_platform()` for the real per-platform adapter,
+    runs `probe_host_support(host)` against it, calls `locate_game_process()` on the
+    real process table, and -- because `run_doctor`'s `nexus_client_factory` default is
+    the bare `NexusClient` class -- opens a socket to the FireTuner's DEFAULT endpoint.
+    That is the operator's live client, not a `FakeNexusServer` on an ephemeral port.
+    The other fourteen `run_doctor` call sites in this module all pass a fake host and a
+    fake client factory and stay in the default run. See `pyproject.toml`'s `client`
+    marker; run this one with `pytest -m client` on a machine that owns the client.
+    """
     cli.configure_store_factory(lambda path: SqliteMatchStore(path))
     result = cli_runner.invoke(
         cli.app,

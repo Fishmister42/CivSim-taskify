@@ -8,9 +8,27 @@ parity|prompts|decisions|steps|loop|capabilities|recovery|completeness|
 lineage|immutability|builds|models|secrets``) named in
 ``contracts/operator-surface.md``.
 
-The CLI never presents turn records, decisions, metrics, or captures (FR-053,
-Principle VI) -- ``run status`` returns exactly ``operator.schemas.RunStatusView``,
-the same closed shape ``GET /runs/{id}/status`` (``operator/api.py``) returns.
+**FR-053's bound is on the operator *control* surface's own view of live run
+state -- not on every command this console script ships.** ``run status``
+returns exactly ``operator.schemas.RunStatusView``, the same closed shape
+``GET /runs/{id}/status`` (``operator/api.py``) returns, and never presents
+turn records, decisions, metrics, or captures (FR-053, Principle VI); that
+closed shape and the roster of every other command on this control surface
+(everything above except ``store``) are both pinned as data in
+``tests/unit/test_operator_api.py``. ``civsim store ...`` (``store_app``,
+``operator/store_cli.py``) is a different thing under a different
+requirement: deliverable 3's (003's) own record-inspection tooling -- run
+records (``store runs``), per-call model-call metrics (``store
+model-calls``), a claimed-versus-demonstrated coverage scorecard (``store
+coverage``) -- deliberately mounted on the same ``civsim`` console script
+rather than a second binary (see the ``app.add_typer(store_app, ...)`` call
+below). It is out of FR-053's scope, not a violation of it: FR-053 exists so
+the operator's own live-run-state view cannot drift from the unified
+interface's (Principle VI); the store's record tooling *is* the unified
+interface's own recorded data, inspected directly -- a different boundary
+(FR-011, FR-015, FR-017), not a second presentation of the same one. See
+``contracts/operator-surface.md``'s "FR-053 bound" section for the same
+statement in the contract.
 
 **Runner wiring.** This module resolves a runner through an overridable
 factory, wired at import to :func:`default_runner_factory` -- which composes
