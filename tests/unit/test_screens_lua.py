@@ -96,9 +96,14 @@ function M.reset(open_states, hidden_states)
     M.diplomacy_closes = true
     M.rect_errors = false
     M.fail_close_session = false
+    M.fail_add_response = false
     M.commemorations_allowed = 1
     M.session_by_player = {}
     M.closed_sessions = {}
+    M.responses = {}
+    M.selection_rows = {}
+    M.drop_selection_table = false
+    M.reply_choices = nil
     M.controls = {}
     for _, s in ipairs(open_states) do M.controls["/InGame/" .. s] = make_control(s, false) end
     for _, s in ipairs(hidden_states) do M.controls["/InGame/" .. s] = make_control(s, true) end
@@ -263,6 +268,36 @@ function Locale.Lookup(tag)
     return tag
 end
 
+-- The gameplay database's own `DiplomacySelections` rows, read exactly as Firaxis' shared
+-- statement code reads them (diplomacystatementsupport.lua:77-84): `DB.Query` returns a table of
+-- rows with `Text` and `Key`, and `ApplyStatement` puts `Locale.Lookup(Text)` on the button.
+-- `M.selection_rows` is a list of {text_tag, key}; `M.drop_selection_table` scripts a build where
+-- the query is unavailable at all.
+M.selection_rows = {}
+M.drop_selection_table = false
+DB = {}
+function DB.Query(sql)
+    if M.drop_selection_table then error("stubbed DB.Query failure") end
+    local rows = {}
+    for _, row in ipairs(M.selection_rows) do
+        rows[#rows + 1] = { Text = row[1], Key = row[2] }
+    end
+    return rows
+end
+
+function M.set_selections(rows)
+    -- rows: list of {label, key} -- the label is registered as its own text tag so
+    -- `Locale.Lookup(tag)` renders it back, which is what the real table does one step removed.
+    M.selection_rows = {}
+    for _, row in ipairs(rows) do
+        M.locale[row[1]] = row[1]
+        M.selection_rows[#M.selection_rows + 1] = { row[1], row[2] }
+    end
+end
+
+M.responses = {}
+
+
 -- Open diplomacy sessions, found the way base/assets/ui/civ6common.lua:688-698 finds them.
 Players = {}
 M.session_by_player = {}
@@ -282,6 +317,15 @@ function DiplomacyManager.CloseSession(sessionID)
     -- The scene fades out: the conversation container stops being visible.
     local container = M.controls[DIPLO .. "/ConversationContainer"]
     if container ~= nil then container.hidden = true end
+end
+-- MEASURED 2026-09-21, 12:35 EDT: AddResponse answered the greeting and the session STAYED OPEN
+-- with the leader's reply, so the stub replaces the offered choices rather than closing anything.
+function DiplomacyManager.AddResponse(sessionID, playerID, response)
+    if M.fail_add_response then error("stubbed AddResponse failure") end
+    M.responses[#M.responses + 1] = { session_id = sessionID, response = response }
+    if M.reply_choices ~= nil then
+        M.set_diplomacy_conversation(M.reply_choices, {}, {})
+    end
 end
 
 ContextPtr = {}
@@ -1128,9 +1172,11 @@ def test_the_conversations_exit_choice_closes_the_session_rather_than_answering_
     assert list(stubs.closed_sessions.values()) == [4242]
 
 
-def test_a_statement_choice_still_goes_through_the_click_and_says_so(lua: tuple[Any, Any]) -> None:
-    """Only the exit gets the CloseSession route: reconstructing a statement from its label could
-    answer something other than what the agent chose."""
+def test_a_label_that_resolves_to_no_key_falls_back_to_the_click_and_says_why(
+    lua: tuple[Any, Any],
+) -> None:
+    """With no `DiplomacySelections` row matching the label there is nothing to resolve it to, so
+    the button a human clicks is used and the reason is recorded rather than swallowed."""
     runtime, stubs = lua
     _diplomacy(runtime, stubs, mode="conversation", texts=[*_GREETING, _GOODBYE])
     stubs.set_open_session(3, 4242)
@@ -1140,7 +1186,9 @@ def test_a_statement_choice_still_goes_through_the_click_and_says_so(lua: tuple[
     assert result["ok"] is False
     assert result["reason"] == "requires_host_click"
     assert result["path"] == "host_click"
+    assert result["path_reason"] == "choice_key_unresolved"
     assert list(stubs.closed_sessions.values()) == []
+    assert list(stubs.responses.values()) == []
 
 
 def test_the_exit_choice_falls_back_to_the_click_when_no_session_can_be_proved(
@@ -1155,7 +1203,7 @@ def test_the_exit_choice_falls_back_to_the_click_when_no_session_can_be_proved(
     )
     assert result["reason"] == "requires_host_click"
     assert result["path"] == "host_click"
-    assert result["exit_fallback_reason"] == "no_open_session_found"
+    assert result["path_reason"] == "no_open_session_found"
     assert list(stubs.closed_sessions.values()) == []
 
 
@@ -1167,7 +1215,7 @@ def test_several_open_sessions_are_never_guessed_between(lua: tuple[Any, Any]) -
     result = dict(
         runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GOODBYE)
     )
-    assert result["exit_fallback_reason"] == "several_open_sessions"
+    assert result["path_reason"] == "several_open_sessions"
     assert result["open_session_count"] == 2
     assert list(stubs.closed_sessions.values()) == []
 
@@ -1183,3 +1231,202 @@ def test_a_failing_close_session_is_returned_as_itself(lua: tuple[Any, Any]) -> 
     assert result["ok"] is False
     assert result["path"] == "close_session"
     assert "stubbed CloseSession failure" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Answering a statement: the call its own button makes, chosen by its own key
+# ---------------------------------------------------------------------------
+
+#: The first-meeting greeting exactly as the store recorded it at game turn 42
+#: (`run-d0933ca8...`), with the keys the shipped data gives those two rows
+#: (diplomacystatements_firstmeet.xml:164-178: Sort 0 is CHOICE_POSITIVE, Sort 1 is CHOICE_EXIT).
+_FIRST_MEET_ACCEPT = "Would you like to visit our nearby city and sample our hospitality?"
+_FIRST_MEET_DECLINE = "Thanks for the introduction, but we have no time for further pleasantries."
+_FIRST_MEET_ROWS = [
+    [_FIRST_MEET_ACCEPT, "CHOICE_POSITIVE"],
+    [_FIRST_MEET_DECLINE, "CHOICE_EXIT"],
+]
+_LEADER_REPLY = ["Goodbye"]
+
+
+def _first_meeting(runtime: Any, stubs: Any, *, rows: list[list[str]] = None) -> None:
+    """The turn-42 greeting: both choices offered, both resolvable to their own keys."""
+    _diplomacy(
+        runtime, stubs, mode="conversation", texts=[_FIRST_MEET_ACCEPT, _FIRST_MEET_DECLINE]
+    )
+    stubs.set_selections(
+        runtime.table(*[runtime.table(*row) for row in (rows or _FIRST_MEET_ROWS)])
+    )
+    stubs.set_open_session(3, 4242)
+    stubs.reply_choices = runtime.table(*_LEADER_REPLY)
+
+
+def test_accepting_a_first_meeting_adds_the_response_its_own_button_adds(
+    lua: tuple[Any, Any],
+) -> None:
+    """MEASURED 2026-09-21: three goal runs stuck 16 of 16 steps here, `prompt_options` identical
+    at every step, so nothing the harness did reached the game. What DID answer this same greeting
+    (12:35 EDT, operator scripting) was `DiplomacyManager.AddResponse`, which is exactly what the
+    button's own handler calls for `CHOICE_POSITIVE` (diplomacyactionview.lua:524-526)."""
+    runtime, stubs = lua
+    _first_meeting(runtime, stubs)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"](
+            "prompt.diplomatic_approach", _FIRST_MEET_ACCEPT
+        )
+    )
+    assert result["ok"] is True
+    assert result["path"] == "add_response"
+    assert result["mechanism"] == "DiplomacyManager.AddResponse"
+    assert result["choice_key"] == "CHOICE_POSITIVE"
+    assert result["response"] == "POSITIVE"
+    assert result["session_id"] == 4242
+    sent = [dict(r) for r in stubs.responses.values()]
+    assert sent == [{"session_id": 4242, "response": "POSITIVE"}]
+
+
+def test_a_landed_statement_answer_leaves_the_conversation_open_with_new_choices(
+    lua: tuple[Any, Any],
+) -> None:
+    """MEASURED 12:35 EDT: the response landed and the session STAYED OPEN -- the leader answered
+    and the scene was still up. The result says so, and says what is offered now; that is what the
+    verification predicate reads (`target not in prompt.options`)."""
+    runtime, stubs = lua
+    _first_meeting(runtime, stubs)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"](
+            "prompt.diplomatic_approach", _FIRST_MEET_ACCEPT
+        )
+    )
+    assert result["still_in_conversation"] is True
+    assert list(result["offered_after"].values()) == _LEADER_REPLY
+    assert _FIRST_MEET_ACCEPT not in list(result["offered_after"].values())
+
+
+def test_a_first_meeting_decline_is_the_exit_even_though_it_never_says_goodbye(
+    lua: tuple[Any, Any],
+) -> None:
+    """The second choice of a first meeting is `CHOICE_EXIT` carrying its OWN text
+    (diplomacystatements_firstmeet.xml:172-178), not the generic `LOC_DIPLO_CHOICE_EXIT`. Matching
+    the string "Goodbye" could never have caught it; resolving by key does."""
+    runtime, stubs = lua
+    _first_meeting(runtime, stubs)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"](
+            "prompt.diplomatic_approach", _FIRST_MEET_DECLINE
+        )
+    )
+    assert result["ok"] is True
+    assert result["path"] == "close_session"
+    assert result["choice_key"] == "CHOICE_EXIT"
+    assert list(stubs.closed_sessions.values()) == [4242]
+    assert list(stubs.responses.values()) == []
+
+
+@pytest.mark.parametrize(
+    ("key", "response"),
+    [
+        ("CHOICE_POSITIVE", "POSITIVE"),
+        ("CHOICE_NEGATIVE", "NEGATIVE"),
+        ("CHOICE_IGNORE", "RESPONSE_IGNORE"),
+    ],
+)
+def test_each_response_key_sends_the_response_the_shipped_handler_sends(
+    lua: tuple[Any, Any], key: str, response: str
+) -> None:
+    """diplomacyactionview.lua:524-532, reproduced and nothing added."""
+    runtime, stubs = lua
+    _first_meeting(runtime, stubs, rows=[[_FIRST_MEET_ACCEPT, key]])
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"](
+            "prompt.diplomatic_approach", _FIRST_MEET_ACCEPT
+        )
+    )
+    assert result["response"] == response
+    assert [dict(r)["response"] for r in stubs.responses.values()] == [response]
+
+
+def test_a_consequential_statement_keeps_the_click_path_with_its_key_recorded(
+    lua: tuple[Any, Any],
+) -> None:
+    """The war / peace / deal / demand keys (diplomacyactionview.lua:493-521) each have their own
+    catalog action. Firing one off a label lookup is not a risk worth taking for a convenience, so
+    they stay on the button a human clicks and the record says exactly why."""
+    runtime, stubs = lua
+    _first_meeting(runtime, stubs, rows=[[_FIRST_MEET_ACCEPT, "CHOICE_DECLARE_SURPRISE_WAR"]])
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"](
+            "prompt.diplomatic_approach", _FIRST_MEET_ACCEPT
+        )
+    )
+    assert result["reason"] == "requires_host_click"
+    assert result["path"] == "host_click"
+    assert result["path_reason"] == "choice_key_not_directly_answerable"
+    assert result["choice_key"] == "CHOICE_DECLARE_SURPRISE_WAR"
+    assert list(stubs.responses.values()) == []
+
+
+def test_a_label_two_keys_render_to_is_never_resolved_to_either(lua: tuple[Any, Any]) -> None:
+    """An ambiguous label is dropped from the map rather than guessed at; the click still works."""
+    runtime, stubs = lua
+    _first_meeting(
+        runtime,
+        stubs,
+        rows=[[_FIRST_MEET_ACCEPT, "CHOICE_POSITIVE"], [_FIRST_MEET_ACCEPT, "CHOICE_NEGATIVE"]],
+    )
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"](
+            "prompt.diplomatic_approach", _FIRST_MEET_ACCEPT
+        )
+    )
+    assert result["path"] == "host_click"
+    assert result["path_reason"] == "choice_key_unresolved"
+    assert list(stubs.responses.values()) == []
+
+
+def test_an_unreadable_selection_table_still_answers_a_plain_goodbye(
+    lua: tuple[Any, Any],
+) -> None:
+    """Without the table there is one signal that still stands on its own -- the generic exit text
+    -- and it must keep working, because that is the conversation a leader's reply ends with."""
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=[_GOODBYE])
+    stubs.drop_selection_table = True
+    stubs.set_open_session(3, 4242)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"]("prompt.diplomatic_approach", _GOODBYE)
+    )
+    assert result["path"] == "close_session"
+    assert result["choice_key"] == "CHOICE_EXIT"
+    assert list(stubs.closed_sessions.values()) == [4242]
+
+
+def test_an_unreadable_selection_table_records_that_as_the_reason_for_a_click(
+    lua: tuple[Any, Any],
+) -> None:
+    runtime, stubs = lua
+    _diplomacy(runtime, stubs, mode="conversation", texts=[_FIRST_MEET_ACCEPT])
+    stubs.drop_selection_table = True
+    stubs.set_open_session(3, 4242)
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"](
+            "prompt.diplomatic_approach", _FIRST_MEET_ACCEPT
+        )
+    )
+    assert result["path"] == "host_click"
+    assert result["path_reason"] == "selection_table_unreadable"
+
+
+def test_a_failing_add_response_is_returned_as_itself(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    _first_meeting(runtime, stubs)
+    stubs.fail_add_response = True
+    result = dict(
+        runtime.globals()["CivSim_Screens"]["respond"](
+            "prompt.diplomatic_approach", _FIRST_MEET_ACCEPT
+        )
+    )
+    assert result["ok"] is False
+    assert result["path"] == "add_response"
+    assert "stubbed AddResponse failure" in result["error"]
+    assert result["still_in_conversation"] is True

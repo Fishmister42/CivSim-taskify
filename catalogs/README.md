@@ -21,11 +21,18 @@ from scattered predicate strings. It is data/reference for the swarm, not a proj
 
 ## 2. Context split
 
-- `lua/gamecore/*.lua` runs in `GameCore_Tuner` — read-only, faster, cannot issue orders or reach
-  UI-bound surfaces.
-- `lua/ingame/*.lua` runs in `InGame` — the only context that can issue orders, change production,
-  or reach UI-bound surfaces (diplomacy, World Congress, screens).
-- A declaration's `context` field must match the Lua file that backs its `capability_id`.
+- `lua/gamecore/*.lua` is **read-only** — it observes, it never issues an order.
+- `lua/ingame/*.lua` is **write/act** — orders, production changes, and anything that touches a
+  UI-bound surface (diplomacy, World Congress, screens).
+- The directory says read-vs-write, **not** which tuner context the declaration runs in. The
+  declaration's own `context` field is authoritative, and several read-only files are declared
+  `InGame` because the accessors they need do not exist in `GameCore_Tuner`: `units.state`
+  (T213 — `GetUnitType`, `GetReachableMovement`, `CanStartOperation` are InGame-only),
+  `cities.state`, `yields.state`, and — since the 2026-09-21 accessor audit — `congress.state`
+  (`Game.GetWorldCongress()` is MEASURED nil in `GameCore_Tuner`) and `espionage.state` (a spy is
+  a unit, so it needs `unit:GetUnitType()`).
+- `GameCore_Tuner` is read-only and faster; prefer it when every accessor a body needs answers
+  there, and record the measurement when one does not.
 
 ## 3. Lua file conventions
 
@@ -172,7 +179,9 @@ spy.is_available` rather than needing a separate existence check bolted on.
 - `unit.plot` (plot-ref: `{x, y}`)
 - `unit.movement_remaining` (number)
 - `unit.reachable_plots` (list<plot-ref>)
-- `unit.queued_path` (object or null: `{destination: plot-ref}`)
+- `unit.has_queued_orders` (boolean) — the unit is mid-operation, the badge a human sees on its
+  flag. Replaced `unit.queued_path` on 2026-09-21: that field's guard called a method the unit
+  does not have and its `destination` was hard-coded nil, so it could never answer anything.
 - `unit.can_found_city` (boolean)
 - `unit.available_promotions` (list<string>)
 - `unit.charges_remaining` (number or null)
@@ -271,6 +280,7 @@ why. Retiring a claim is a catalog change like any other — bump `catalogs/VERS
 | 2026-09-21 (`2026.09.6`) | action `prompts.natural_disaster`, screen id `prompt.natural_disaster` | **Added, measured live.** Gathering Storm's natural-disaster cinematic (`dlc/expansion2/ui/additions/naturaldisasterpopup.xml`, `/InGame/NaturalDisasterPopup`) blocked play and made the game refuse every save at game turn 42 while the probe reported `world`; a human dismisses it with its header `Close` button. Acknowledged through that button (real click at its own rectangle). |
 | 2026-09-21 (`2026.09.8`) | action `prompts.era_dedication`, screen id `prompt.era_dedication` | **Added, measured live.** Gathering Storm's era dedication chooser (`dlc/expansion2/ui/additions/dedicationpopup.lua`, `/InGame/DedicationPopup`, reached through `<AddUserInterfaces>` at `dlc/expansion2/expansion2.modinfo:302-306`, which is why it appears in no shipped `ingame.xml`) blocked play for 41 steps in gameplay block 20 while the probe reported `world`; the model read it off the delivered frame and was refused at 40 of those steps. Answered by clicking a commemoration card and then `Confirm`, which the popup keeps disabled until the allowed number are ticked (`dedicationpopup.lua:200-203`, `:206-217`). Its X dequeues without dedicating anything (`:225-227`) and is a recorded fallback only. |
 | 2026-09-21 (`2026.09.8`) | action `prompts.congress_intro`, screen id `prompt.congress_intro` | **Added, measured live.** The World Congress "Begin Voting" welcome card (`dlc/expansion2/ui/additions/worldcongressintro.xml:13`, `/InGame/WorldCongressIntro`) came up over the Classical-era review at game turn 57 and stalled the run as `UnknownScreenEncountered` — the state was watched but mapped to no id. Its one button runs `OnClose` (`worldcongressintro.lua:26-29`), which dequeues the card **and** raises `WorldCongressIntro_ShowWorldCongress` to open the session; the `DequeuePopup` fallback only does the first half, and says so. |
+| 2026-09-21 (`2026.09.12`) | action `prompts.ai_diplomatic_approach` — answer route and `verification_predicate` | **Corrected, from the store.** Three goal runs stuck 16 of 16 steps on this action after a reload onto a first-meeting greeting; across all 16 steps of `run-d0933ca8…` the recorded `prompt_options` were byte-identical, so the answer never reached the game. Two defects. (a) The answer went out as a host click on the conversation button, a path never demonstrated on a leader scene; it now resolves the choice's own `CHOICE_*` key from the game's `DiplomacySelections` rows (`DB.Query`, as `diplomacystatementsupport.lua:77-84` reads them) and makes the call its own handler makes — `AddResponse` for `CHOICE_POSITIVE`/`NEGATIVE`/`IGNORE`, `CloseSession` for `CHOICE_EXIT` (`diplomacyactionview.lua:489-534`) — with the click kept as a recorded fallback. (b) The predicate asked for the conversation to be gone, but a correct answer leaves it open with the leader's reply; it is now `target not in prompt.options`, true both when the leader has replied and when the session ended, false when nothing changed. Also: a first meeting's decline is `CHOICE_EXIT` under its own text, so matching the string "Goodbye" never caught it. |
 
 Both retirements are evidenced, with file:line citations into Firaxis's shipped UI Lua, by
 `specs/002-civ-playing-harness/spikes/screens-unmapped-2026-09-21.md`. The same write-up examined

@@ -429,37 +429,103 @@ local CIVSIM_DIPLOMACY_STATE = "DiplomacyActionView"
 local CIVSIM_DIPLOMACY_CONVERSATION_CONTAINER = "ConversationContainer"
 local CIVSIM_DIPLOMACY_SELECTION_STACK = "ConversationSelectionStack"
 
--- MEASURED 2026-09-21 (live stage, game turn 58): an AI-initiated conversation offered exactly one
--- choice, "Goodbye". The model chose it 16 times and the scene was still up after every one.
--- "Goodbye" is not a statement response at all -- it is the conversation's EXIT. In the popup's own
--- handler `OnSelectConversationDiplomacyStatement` (diplomacyactionview.lua:488-493) the key
--- `CHOICE_EXIT` is branched off BEFORE every `DiplomacyManager.AddStatement` /
--- `AddResponse` case and runs `ExitConversationMode()` (:310-330), whose whole effect is
--- `DiplomacyManager.CloseSession(ms_ActiveSessionID)` (:323). So the session has to be closed; no
--- statement can answer it.
+-- MEASURED 2026-09-21 (live stage, game turns 42 and 58; store runs `run-d0933ca8...` and its two
+-- siblings). Two separate faults, both fatal to answering a leader:
 --
--- The key itself is private to that context, but the LABEL is not, and the exit choice's label is
--- not guessed at here: every `CHOICE_EXIT` selection in every shipped statement file carries the
--- one text tag `LOC_DIPLO_CHOICE_EXIT` (base/assets/gameplay/data/diplomacystatements_firstmeet.xml
--- :200-201, _delegation.xml:218-219, _warning.xml:947-948, and so on -- grep 2026-09-21 finds no
--- other text on that key), rendered "Goodbye" in en_US
--- (base/assets/text/en_us/diplomacystatements_common_text.xml:107-109). `Locale.Lookup` of that
--- same tag from InGame returns the same string the game put on the button, in whatever language
--- the client is running, so the comparison is against the game's own text rather than a literal.
+-- 1. THE ANSWER DID NOT LAND. After a reload onto Georgia's first-meeting greeting, three goal runs
+--    stuck 16 of 16 steps on `prompts.ai_diplomatic_approach`. Read back out of the store: at every
+--    one of those 16 steps `prompt_options` was byte-identical --
+--    ["Would you like to visit our nearby city and sample our hospitality?", "Thanks for the
+--    introduction, but we have no time for further pleasantries."] -- and the target was the first
+--    of them. The options never changed, so nothing the harness did reached the game. The host
+--    click on a conversation `SelectionButton` had never been demonstrated live; what HAD been
+--    demonstrated, at 12:35 EDT on the same greeting, was
+--    `specs/002-civ-playing-harness/spikes/gameplay-2026-09-21/operator_answer_greeting.py`:
+--    `DiplomacyManager.AddResponse(sessionID, localPlayer, "NEGATIVE")` returned ok, the leader
+--    answered, and the session stayed open with a new set of choices.
+-- 2. THE EXIT WAS DETECTED BY THE WRONG THING. The previous pass matched the exit choice by its
+--    label being `Locale.Lookup("LOC_DIPLO_CHOICE_EXIT")` ("Goodbye"). A first meeting's decline is
+--    `CHOICE_EXIT` too, but it carries its OWN text -- e.g.
+--    `<Key>CHOICE_EXIT</Key><Text>LOC_DIPLO_CHOICE_FIRST_MEET_DECLINE_VISIT</Text>`
+--    (base/assets/gameplay/data/diplomacystatements_firstmeet.xml:172-178, and the same shape at
+--    :155-162, :186-193, :213-218, :228-234). Matching "Goodbye" could never have recognised it.
 --
--- `ms_ActiveSessionID` is private too, so the session is found the way Firaxis's own shared code
--- finds it: loop the player slots and ask `DiplomacyManager.FindOpenSessionID(localPlayer, other)`
+-- So the answer is resolved by the selection's own KEY, and the key is not guessed at: it is read
+-- from the same gameplay-database rows `ExtractStatement` itself reads to build the buttons.
+-- `DiplomacySupport_ExtractStatement` -> `GetStatementFromQuery` runs
+-- `DB.Query("SELECT Text, Tooltip, Key, Sort, DiplomaticActionType from DiplomacySelections ...")`
+-- (base/assets/ui/diplomacystatementsupport.lua:77-84) and `ApplyStatement` puts
+-- `Locale.Lookup(selection.Text)` on the button (diplomacyactionview.lua:592). Looking up the same
+-- table from InGame and localising the same `Text` therefore reproduces the exact string on the
+-- button, and hands back the `Key` behind it. A label that more than one distinct key renders to is
+-- dropped from the map rather than resolved to either -- no guessing.
+--
+-- With the key in hand, the call made is the one the popup's own handler
+-- `OnSelectConversationDiplomacyStatement` makes for that key (diplomacyactionview.lua:489-534):
+--   * `CHOICE_EXIT`     -> `ExitConversationMode()` (:491-492), whose whole effect is
+--                          `DiplomacyManager.CloseSession(ms_ActiveSessionID)` (:310-330, :323).
+--   * `CHOICE_POSITIVE` -> `DiplomacyManager.AddResponse(session, localPlayer, "POSITIVE")` (:525-526)
+--   * `CHOICE_NEGATIVE` -> `... "NEGATIVE"` (:528-529)   [the route measured live at 12:35 EDT]
+--   * `CHOICE_IGNORE`   -> `... "RESPONSE_IGNORE"` (:531-532)
+-- Every other key in that switch -- the `CHOICE_DECLARE_*_WAR` family, `CHOICE_MAKE_PEACE`,
+-- `CHOICE_MAKE_DEAL`, `CHOICE_MAKE_DEMAND` (:493-521) -- is deliberately NOT reproduced here. Those
+-- are consequential moves with their own catalog actions (`diplomacy.declare_war`,
+-- `diplomacy.make_peace`), and issuing one off a label lookup is not a risk worth taking for a
+-- convenience; they stay on the click path with the key recorded, so the record says exactly why.
+--
+-- `ms_ActiveSessionID` is private, so the session is found the way Firaxis's own shared code finds
+-- it: loop the player slots and ask `DiplomacyManager.FindOpenSessionID(localPlayer, other)`
 -- (base/assets/ui/civ6common.lua:688-698, the identical loop). Exactly one open session is the
--- unambiguous case and the only one this closes; with none or several it falls back to the click,
--- recording why, rather than closing a session it cannot prove is the one on screen.
+-- unambiguous case and the only one acted on; with none or several it falls back to the click,
+-- recording why, rather than answering a session it cannot prove is the one on screen.
 --
--- UNVERIFIED LIVE: the CloseSession route. `path` in the answer's result says which one ran.
+-- UNVERIFIED LIVE: the key lookup and the POSITIVE/EXIT routes. `path` on every answer result says
+-- which route ran (`add_response`, `close_session` or `host_click`) and `choice_key` says what the
+-- label resolved to, so the next first meeting settles it from the record alone.
 local CIVSIM_DIPLOMACY_EXIT_TEXT_KEY = "LOC_DIPLO_CHOICE_EXIT"
+local CIVSIM_DIPLOMACY_EXIT_CHOICE_KEY = "CHOICE_EXIT"
+
+-- The shipped handler's own key -> response mapping, nothing added (diplomacyactionview.lua
+-- :524-532).
+local CIVSIM_DIPLOMACY_RESPONSE_BY_KEY = {
+    CHOICE_POSITIVE = "POSITIVE",
+    CHOICE_NEGATIVE = "NEGATIVE",
+    CHOICE_IGNORE = "RESPONSE_IGNORE",
+}
 
 local function CivSim_DiplomacyExitLabel()
     local ok, text = pcall(function() return Locale.Lookup(CIVSIM_DIPLOMACY_EXIT_TEXT_KEY) end)
     if ok and type(text) == "string" and text ~= "" then return text end
     return nil
+end
+
+-- Rendered button label -> the `CHOICE_*` key behind it, built from the game's own
+-- `DiplomacySelections` rows. A label two different keys render to is dropped: an ambiguous label
+-- resolves to nothing and falls through to the click, which is what a human does anyway.
+local function CivSim_DiplomacyKeyByLabel()
+    local okQ, rows = pcall(function()
+        return DB.Query("SELECT Text, Key from DiplomacySelections")
+    end)
+    if not okQ or rows == nil then return nil end
+    local byLabel, ambiguous = {}, {}
+    local okI = pcall(function()
+        for _, row in ipairs(rows) do
+            local text, key = row.Text, row.Key
+            if type(text) == "string" and type(key) == "string" then
+                local okL, label = pcall(function() return Locale.Lookup(text) end)
+                if okL and type(label) == "string" and label ~= "" then
+                    if byLabel[label] ~= nil and byLabel[label] ~= key then
+                        ambiguous[label] = true
+                    else
+                        byLabel[label] = key
+                    end
+                end
+            end
+        end
+    end)
+    if not okI then return nil end
+    for label in pairs(ambiguous) do byLabel[label] = nil end
+    return byLabel
 end
 
 local function CivSim_DiplomacyOpenSessionIds()
@@ -968,95 +1034,143 @@ local function CivSim_Screens_AcknowledgePopup(promptType, descriptor, optionId)
     return result
 end
 
--- Answer an AI leader's statement by clicking the choice button a human would click. The callback
--- on that button was registered inside DiplomacyActionView's own state and closes over the
--- selection's `Key` and the live session id (diplomacyactionview.lua:591-601), so clicking it runs
--- `OnSelectConversationDiplomacyStatement(key)` there with the right arguments. That is the whole
--- reason this goes through the control and not through `DiplomacyManager.AddStatement` directly:
--- the key -> statement mapping is a 200-line switch in that handler, and reproducing it here would
--- be guessing at which statement a visible label means.
+-- Answer an AI leader's statement with the call that statement's own button makes.
 --
--- There is deliberately NO fallback for a STATEMENT choice. If the button cannot be clicked, the
--- answer fails and is recorded as a failure, so the run stalls honestly rather than firing a
--- reconstructed `DiplomacyManager.AddStatement` call that might answer something other than what
--- the agent chose. The conversation's EXIT choice is the one exception, and it is not a
--- reconstruction: its own handler's entire effect is `DiplomacyManager.CloseSession` -- see
--- CIVSIM_DIPLOMACY_EXIT_TEXT_KEY above and the turn-58 measurement that forced it. The result's
--- `path` says which route ran (`close_session` or `host_click`).
+-- MEASURED LIVE 2026-09-21, in order:
+--  * blocks 13-14, game turn 42: `control:CallCallback(Mouse.eLClick)` returned without error and
+--    did nothing. `CallCallback` appears nowhere in Firaxis' shipped UI Lua (grep 2026-09-21), so
+--    it is not an engine API for firing a registered callback, and nothing reachable from InGame
+--    can invoke the closure `ApplyStatement` registers on the button
+--    (diplomacyactionview.lua:599-602). A documented Firetuner gap (constitution, Principle II).
+--  * game turn 42, 12:35 EDT, operator scripting: `DiplomacyManager.AddResponse(session,
+--    localPlayer, "NEGATIVE")` answered the SAME greeting -- the leader replied and the session
+--    stayed open with a new set of choices
+--    (specs/002-civ-playing-harness/spikes/gameplay-2026-09-21/operator_answer_greeting.py).
+--  * game turn 58 and the three goal runs after the turn-42 reload: answering by handing the
+--    harness the button's rectangle for a host click changed NOTHING -- `prompt_options` was
+--    byte-identical at all 16 steps of `run-d0933ca8...`. The click path has never been
+--    demonstrated on a conversation button, only on the era card.
 --
--- MEASURED LIVE 2026-09-21 (gameplay blocks 13 and 14, game turn 42, Georgia's greeting):
--- `control:CallCallback(Mouse.eLClick)` returned without error and did nothing -- the offered
--- choices were identical at all 16 steps and the leader never answered. `CallCallback` appears
--- nowhere in Firaxis' shipped UI Lua (steamassets/base/assets/ui, grep 2026-09-21), so it is not
--- an engine API for firing a registered callback; nothing reachable from InGame can invoke the
--- closure `ApplyStatement` registered on the button (diplomacyactionview.lua:599-602), and the
--- statement key it closes over is not readable from outside that state (`GetSessionInfo` exposes
--- only ToPlayer/FromPlayer). That is a documented Firetuner gap (constitution, Principle II).
+-- So the direct call is the primary route and the click is the fallback, not the other way round.
+-- The call is chosen by the selection's own `CHOICE_*` key, read from the game's own
+-- `DiplomacySelections` rows (see CIVSIM_DIPLOMACY_RESPONSE_BY_KEY above for the mapping and the
+-- shipped line numbers), never invented from the label. Keys outside that small set -- the war,
+-- peace, deal and demand statements -- deliberately keep the click path with the key recorded:
+-- firing one of those off a label lookup is not a risk worth taking, and each has its own catalog
+-- action.
 --
--- What a human does is click the button, so this function now returns the button's own on-screen
--- rectangle (`GetScreenOffset` + `GetSizeVal`, the accessors diplomacyactionview.lua:1876 itself
--- uses for `UI.SetLeaderPosition`) and asks the harness to perform that click through the host's
--- synthetic-input port at the rectangle's centre. Nothing else is touched: the same button, the
--- same click, the game's own handler. Without a host click the answer stays `ok = false` with
--- reason `requires_host_click`, and the action's verification predicate decides `applied`.
--- UNVERIFIED LIVE until the first greeting answered this way is recorded.
+-- One answer is not the end of it: the leader replies and the session stays open until the
+-- conversation's own exit is taken (measured, block 9). `still_in_conversation` and
+-- `offered_after` say so, and the action verifies on the chosen statement no longer being offered
+-- rather than on the scene closing -- see `prompts.ai_diplomatic_approach` in
+-- catalogs/actions/prompts.yaml.
+--
+-- Every result carries `path` (`add_response` / `close_session` / `host_click`) and, when it is
+-- not the direct call, `path_reason` saying what stopped it. UNVERIFIED LIVE: the key lookup, the
+-- POSITIVE route and the CloseSession route.
 local function CivSim_Screens_AnswerDiplomaticApproach(promptType, optionId)
     local choices = CivSim_DiplomacyStatementChoices()
     if choices == nil then
         return { ok = false, reason = "not_in_conversation_mode", prompt = promptType,
                  option = optionId }
     end
-    local offered = {}
-    for _, choice in ipairs(choices) do offered[#offered + 1] = choice.text end
-    local exitLabel = CivSim_DiplomacyExitLabel()
+    local offered, chosen = {}, nil
     for _, choice in ipairs(choices) do
-        if choice.text == optionId then
-            -- The conversation's Exit ("Goodbye") is not a statement and cannot be answered as
-            -- one -- see CIVSIM_DIPLOMACY_EXIT_TEXT_KEY above for the turn-58 measurement. It
-            -- closes the session, which is exactly what its own handler does.
-            if exitLabel ~= nil and choice.text == exitLabel then
-                local sessions = CivSim_DiplomacyOpenSessionIds()
-                if #sessions == 1 then
-                    local okC, err = pcall(function()
-                        DiplomacyManager.CloseSession(sessions[1])
-                    end)
-                    local remaining = CivSim_DiplomacyStatementChoices()
-                    return {
-                        ok = okC, path = "close_session",
-                        mechanism = "DiplomacyManager.CloseSession",
-                        prompt = promptType, option = optionId, session_id = sessions[1],
-                        still_in_conversation = (remaining ~= nil and #remaining > 0),
-                        error = (not okC) and tostring(err) or nil,
-                    }
-                end
-                -- Zero or several open sessions: which one is on screen is not provable from
-                -- here, so fall through to the button a human clicks, saying why.
-                exitLabel = nil
-                choice.exit_fallback_reason = (#sessions == 0)
-                    and "no_open_session_found" or "several_open_sessions"
-                choice.open_session_count = #sessions
-            end
-            -- MEASURED LIVE 2026-09-21 (game turn 42, Georgia's greeting): a click at the
-            -- unscaled position hit empty scene; one at the position scaled by the UI's own
-            -- screen size answered the greeting (see CivSim_Screens_HostClickRequest).
-            local request = CivSim_Screens_HostClickRequest(choice.control)
-            if request == nil then
-                local okO, ox = pcall(function() return choice.control:GetScreenOffset() end)
-                return {
-                    ok = false, reason = "control_rect_unreadable", prompt = promptType,
-                    option = optionId, error = (not okO) and tostring(ox) or "GetSizeVal unavailable",
-                }
-            end
-            request.prompt = promptType
-            request.option = optionId
-            request.path = "host_click"
-            request.exit_fallback_reason = choice.exit_fallback_reason
-            request.open_session_count = choice.open_session_count
-            return request
+        offered[#offered + 1] = choice.text
+        if choice.text == optionId and chosen == nil then chosen = choice end
+    end
+    if chosen == nil then
+        return { ok = false, reason = "option_not_offered", prompt = promptType, option = optionId,
+                 offered = offered }
+    end
+
+    -- Which selection is this, in the game's own vocabulary?
+    local keyByLabel = CivSim_DiplomacyKeyByLabel()
+    local choiceKey = keyByLabel ~= nil and keyByLabel[optionId] or nil
+    if choiceKey == nil then
+        -- The table was unreadable, or the label resolved to no key or to more than one. Fall back
+        -- on the one signal that stands on its own: the generic exit text, which is what the
+        -- previous pass matched and is still right for the plain "Goodbye" conversations.
+        local exitLabel = CivSim_DiplomacyExitLabel()
+        if exitLabel ~= nil and optionId == exitLabel then
+            choiceKey = CIVSIM_DIPLOMACY_EXIT_CHOICE_KEY
         end
     end
-    return { ok = false, reason = "option_not_offered", prompt = promptType, option = optionId,
-             offered = offered }
+    local pathReason = nil
+    if choiceKey == nil then
+        pathReason = (keyByLabel == nil) and "selection_table_unreadable" or "choice_key_unresolved"
+    end
+
+    local response = choiceKey ~= nil and CIVSIM_DIPLOMACY_RESPONSE_BY_KEY[choiceKey] or nil
+    local isExit = (choiceKey == CIVSIM_DIPLOMACY_EXIT_CHOICE_KEY)
+    if pathReason == nil and response == nil and not isExit then
+        pathReason = "choice_key_not_directly_answerable"
+    end
+
+    if pathReason == nil then
+        local sessions = CivSim_DiplomacyOpenSessionIds()
+        if #sessions ~= 1 then
+            pathReason = (#sessions == 0) and "no_open_session_found" or "several_open_sessions"
+            -- fall through to the click, recording the count
+            local request = CivSim_Screens_HostClickRequest(chosen.control)
+            if request ~= nil then
+                request.prompt, request.option = promptType, optionId
+                request.path, request.path_reason = "host_click", pathReason
+                request.choice_key = choiceKey
+                request.open_session_count = #sessions
+                return request
+            end
+            return { ok = false, reason = "control_rect_unreadable", prompt = promptType,
+                     option = optionId, path = "host_click", path_reason = pathReason,
+                     choice_key = choiceKey, open_session_count = #sessions }
+        end
+
+        local sessionID = sessions[1]
+        local okD, err
+        if isExit then
+            okD, err = pcall(function() DiplomacyManager.CloseSession(sessionID) end)
+        else
+            okD, err = pcall(function()
+                DiplomacyManager.AddResponse(sessionID, Game.GetLocalPlayer(), response)
+            end)
+        end
+        -- What the screen shows now, read back the same way the probe reads it.
+        local remaining = CivSim_DiplomacyStatementChoices()
+        local after = {}
+        if remaining ~= nil then
+            for _, choice in ipairs(remaining) do after[#after + 1] = choice.text end
+        end
+        return {
+            ok = okD,
+            path = isExit and "close_session" or "add_response",
+            mechanism = isExit and "DiplomacyManager.CloseSession"
+                or "DiplomacyManager.AddResponse",
+            prompt = promptType, option = optionId, choice_key = choiceKey,
+            response = response, session_id = sessionID,
+            still_in_conversation = (remaining ~= nil and #remaining > 0),
+            offered_after = after,
+            error = (not okD) and tostring(err) or nil,
+        }
+    end
+
+    -- The click a human makes, with the reason the direct call was not available recorded next to
+    -- it: the button's own on-screen rectangle (`GetScreenOffset` + `GetSizeVal`, the accessors
+    -- diplomacyactionview.lua:1876 itself uses for `UI.SetLeaderPosition`), clicked at its centre
+    -- through the host's synthetic-input port.
+    local request = CivSim_Screens_HostClickRequest(chosen.control)
+    if request == nil then
+        local okO, ox = pcall(function() return chosen.control:GetScreenOffset() end)
+        return {
+            ok = false, reason = "control_rect_unreadable", prompt = promptType,
+            option = optionId, path = "host_click", path_reason = pathReason,
+            choice_key = choiceKey,
+            error = (not okO) and tostring(ox) or "GetSizeVal unavailable",
+        }
+    end
+    request.prompt, request.option = promptType, optionId
+    request.path, request.path_reason = "host_click", pathReason
+    request.choice_key = choiceKey
+    return request
 end
 
 -- Answer the era dedication chooser by clicking what a human clicks, ONE click per dispatch --
@@ -1203,10 +1317,22 @@ local function CivSim_Screens_RespondToPrompt(promptType, optionId)
     if promptType == "prompt.congress_vote" then
         return CivSim_Screens_AnswerCongressPhase(promptType, optionId)
     end
-    local ok, result = pcall(function()
-        return UI.RespondToPrompt(promptType, optionId) -- UNVERIFIED
-    end)
-    return { ok = (ok and result ~= false), prompt = promptType, option = optionId }
+    -- ACCESSOR AUDIT (2026-09-21, spikes/lua-accessor-audit-2026-09-21.md): this used to fall
+    -- through to `UI.RespondToPrompt(promptType, optionId)`, a name that appears in none of
+    -- Firaxis' 645 shipped Lua files and in none of the shipped binaries' UI binding tables. No
+    -- such primitive can exist: a popup answers by releasing the engine hold it took
+    -- (`UI.ReferenceCurrentEvent()` / `UI.ReleaseEventID()`, base/assets/ui/popupmanager.lua:52-61
+    -- and :95-98) after ITS OWN button's callback has run
+    -- (base/assets/ui/popups/popupdialog.lua:215-217). There is nothing generic that stands in for
+    -- a specific button, so a prompt with no mapped control cannot be answered at all -- and the
+    -- honest report of that is the prompt's name, not a bare `ok = false` that looks like the
+    -- click was tried and refused.
+    return {
+        ok = false,
+        reason = "prompt_has_no_mapped_control",
+        prompt = promptType,
+        option = optionId,
+    }
 end
 
 CivSim_Screens = {

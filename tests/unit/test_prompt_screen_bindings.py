@@ -233,3 +233,68 @@ def test_every_prompt_action_dispatches_to_the_one_generic_respond_function(
         )
         == "respond"
     )
+
+
+# ---------------------------------------------------------------------------
+# `prompts.ai_diplomatic_approach`'s verification, after the turn-42 live negative
+# ---------------------------------------------------------------------------
+
+_GREETING_ACCEPT = "Would you like to visit our nearby city and sample our hospitality?"
+_GREETING_DECLINE = "Thanks for the introduction, but we have no time for further pleasantries."
+
+
+def _verifies(registry: CapabilityRegistry, *, target: str, after: dict[str, Any]) -> bool:
+    """The real catalog predicate for the approach, through the real evaluator, against the
+    post-execution observation the run loop re-assembles."""
+    from civsim_harness.act.predicates import build_predicate_bindings, evaluate_predicate
+
+    declaration = registry.resolve(DeclarationId("prompts.ai_diplomatic_approach"))
+    assert declaration.verification_predicate is not None
+    bindings = build_predicate_bindings(observation=_observation(after), target=target)
+    return evaluate_predicate(declaration.verification_predicate, bindings)
+
+
+def _conversation(options: Sequence[str]) -> dict[str, Any]:
+    return {
+        "screen": "prompt.diplomatic_approach",
+        "raw_screen_id": "DiplomacyActionView",
+        "recognized": True,
+        "has_blocking_prompt": bool(options),
+        "prompt_options": list(options),
+    }
+
+
+def test_a_statement_answer_verifies_on_the_leader_having_replied(
+    registry: CapabilityRegistry,
+) -> None:
+    """MEASURED 2026-09-21, 12:35 EDT: a correct answer leaves the conversation OPEN -- the leader
+    replies and the session stays up until its own exit choice is taken. The old predicate asked
+    for the conversation to be gone, so a landed answer could never verify."""
+    assert (
+        _verifies(registry, target=_GREETING_ACCEPT, after=_conversation(["Goodbye"])) is True
+    )
+
+
+def test_the_exit_answer_verifies_on_the_conversation_being_gone(
+    registry: CapabilityRegistry,
+) -> None:
+    """Taking the exit ends the session: nothing is offered, so the chosen option is not either.
+    One predicate covers both endings without pretending they are the same event."""
+    world = {
+        "screen": "world",
+        "raw_screen_id": "InGame",
+        "recognized": True,
+        "has_blocking_prompt": False,
+        "prompt_options": [],
+    }
+    assert _verifies(registry, target=_GREETING_DECLINE, after=world) is True
+
+
+def test_an_answer_that_changed_nothing_still_fails_verification(
+    registry: CapabilityRegistry,
+) -> None:
+    """MEASURED 2026-09-21: `prompt_options` was byte-identical at all 16 steps of
+    `run-d0933ca8...` -- the swallowed answer this predicate exists to catch. Loosening the
+    predicate must not lose that."""
+    unchanged = _conversation([_GREETING_ACCEPT, _GREETING_DECLINE])
+    assert _verifies(registry, target=_GREETING_ACCEPT, after=unchanged) is False

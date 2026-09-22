@@ -93,35 +93,59 @@
     one of the open prompt's offered options (prompt_options)
   introduced_in_version: "2026.09.1"
 
-# MEASURED live 2026-09-21 (live stage, game turn 58): a conversation offered exactly one choice,
-# "Goodbye", the model chose it 16 times, and the leader scene was still up after every one.
-# "Goodbye" is the conversation's EXIT, not a statement: `OnSelectConversationDiplomacyStatement`
-# branches `CHOICE_EXIT` off before every statement case and runs `ExitConversationMode()`, whose
-# whole effect is `DiplomacyManager.CloseSession` (diplomacyactionview.lua:488-493, :310-330).
-# The answer now recognises that choice by the game's own text for it (`LOC_DIPLO_CHOICE_EXIT`,
-# the single text tag every shipped `CHOICE_EXIT` selection carries) and closes the session;
-# every other choice is still answered by clicking its own button. The result records which
-# route ran. It remains one answer per step: a leader replies and the session stays open until
-# the conversation's own Exit is taken, so the probe reports the prompt again with the new
-# options (measured 2026-09-21, block 9).
+# MEASURED live 2026-09-21, three findings, all from the store rather than from reasoning.
+#
+# 1. The answer did not land. After a reload onto Georgia's first-meeting greeting at game turn 42,
+#    three goal runs stuck 16 of 16 steps here. Across all 16 steps of `run-d0933ca8...`,
+#    `prompt_options` was byte-identical -- the greeting's two choices, never a reply -- so nothing
+#    the harness did reached the game. Handing the harness the button's rectangle for a host click
+#    had never been demonstrated on a conversation button, only on the era card. What HAD been
+#    demonstrated, on this same greeting at 12:35 EDT, was
+#    `DiplomacyManager.AddResponse(session, localPlayer, "NEGATIVE")`. So the direct call the
+#    button's own handler makes is now the primary route and the click is the fallback. The call
+#    is chosen by the selection's `CHOICE_*` key, read from the game's own `DiplomacySelections`
+#    rows (`DB.Query`, as diplomacystatementsupport.lua:77-84 reads them) rather than inferred
+#    from the label: `CHOICE_POSITIVE`/`CHOICE_NEGATIVE`/`CHOICE_IGNORE` -> `AddResponse`,
+#    `CHOICE_EXIT` -> `CloseSession` (diplomacyactionview.lua:489-534). The war, peace, deal and
+#    demand keys keep the click path with the key recorded -- they have their own catalog actions
+#    and are not worth firing off a label lookup.
+#
+# 2. The verification predicate could never pass for a statement. It asked for the conversation to
+#    be gone, but a correct statement answer leaves it OPEN: the leader replies and the session
+#    stays up until the conversation's own exit is taken (measured 12:35 EDT, and again in block
+#    9). It now verifies on the chosen statement no longer being offered, which is true both when
+#    the leader has replied with a new set of choices and when the session has closed (an ended
+#    conversation offers nothing at all).
+#
+# 3. The exit was being recognised by the wrong thing. A first meeting's decline IS `CHOICE_EXIT`
+#    but carries its own text -- `<Key>CHOICE_EXIT</Key><Text>LOC_DIPLO_CHOICE_FIRST_MEET_DECLINE_
+#    VISIT</Text>` (diplomacystatements_firstmeet.xml:172-178, and four more of that shape) --
+#    so matching the generic "Goodbye" string could never have caught it. Resolving by key does.
 
 - declaration_id: prompts.ai_diplomatic_approach
   kind: action
-  summary: Respond to an AI civilization's diplomatic-approach prompt.
+  summary: >
+    Respond to an AI civilization's diplomatic-approach prompt ({"target": the choice's text as
+    prompt_options lists it}). One answer per step: the leader replies and the conversation stays
+    open with a new set of choices until its own exit choice is taken.
   parity_basis: >
     An AI leader's diplomatic-approach prompt appears when they open a diplomatic conversation;
-    pick a response in that prompt. The conversation's own "Goodbye" choice is offered too --
-    it is a button a human can click, and taking it leaves the conversation.
+    pick one of the reply buttons under the leader. The conversation's own decline/leave choice is
+    offered too -- it is a button a human can click, and taking it leaves the conversation.
   context: InGame
   capability_id: prompts.orders
   availability_predicate: >
     game.has_blocking_prompt and game.current_screen == "prompt.diplomatic_approach"
     and target in prompt.options
+  # NOT "the conversation is gone": a correct answer keeps it open with the leader's reply (see
+  # finding 2 above). The chosen statement is no longer on offer in both the cases that count --
+  # the leader replied, or the session ended and nothing is offered at all -- and is still on offer
+  # when nothing happened, which is exactly the swallowed-click case this must keep catching.
   verification_predicate: >
-    game.current_screen != "prompt.diplomatic_approach"
+    target not in prompt.options
   target_kind: option
   target_hint: >
-    one of the open prompt's offered options (prompt_options)
+    one of the open prompt's offered options (prompt_options), exactly as it is written there
   introduced_in_version: "2026.09.1"
 
 - declaration_id: prompts.declare_war_response
