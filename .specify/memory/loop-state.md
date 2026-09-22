@@ -96,6 +96,10 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
   the chain-leg refusal tail needs no measurement if the legs **reuse the session** and never reconnect —
   correct whether the tail is 2 s or 90 s. A measurement only constrains fixes of the form "wait long
   enough" or "retry enough times". Say so in the brief, or the fix gets "improved" into a retry.
+- **Grade every close-out claim by evidence tier, never present them flat**: applied-and-verified
+  (store record + reproduction) / applied-but-resting-on-an-assumption / not demonstrated / in flight
+  and unproven. A summary that gives all four the same confidence is this project's own pattern
+  applied to its report.
 - **A reconciliation pass closes every lane-day**: before reporting, verify each task claimed complete
   against the **code**, not against the agent's report, and tick or leave open with a reason. Twice on
   2026-09-22 a task was reported complete and was not, and both times the gap was found by reading the
