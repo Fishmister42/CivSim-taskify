@@ -73,6 +73,26 @@ class RecordCompletenessStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+class DebugMenuState(StrEnum):
+    """Whether ``EnableDebugMenu`` could be read from ``AppOptions.txt`` at preflight, and if so
+    what it said (T204 hardening item 1; ``spikes/principle-i-debugmenu-linux.md``).
+
+    Lives here rather than beside its reader in ``run/preparation.py`` because it is a field of
+    :class:`Run`, and ``models/`` is the foundation layer -- it may not import from ``run/``.
+    ``run.preparation`` re-exports this name, so existing imports of it from there keep working.
+
+    This is **provenance, never a gate**. The originating spike ran the tuner three ways with the
+    debug menu on and off and found the callable surface byte-identical, so there is no Principle I
+    tension to enforce; what the spike asked for is that a run's parity configuration be
+    "reconstructible from its record alone rather than from a claim about how the host was set up",
+    which is what recording this on the ``Run`` is for.
+    """
+
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+    UNKNOWN = "unknown"
+
+
 class ComparabilityStatus(StrEnum):
     """FR-050."""
 
@@ -119,6 +139,15 @@ class Run(HarnessModel):
     client_identity: dict[str, Any] = Field(default_factory=dict)
     game_build: str
     game_build_acceptance_ref: AcceptanceId | None = None
+    # T280: the host's `EnableDebugMenu` setting as read at preflight, so "was this run made with
+    # the debug menu on?" is answerable from the record rather than from a claim about the host.
+    # Run provenance in exactly the sense `game_build` and `host_platform` are, and structurally
+    # subject to the same Principle I property they are: nothing in `Run` has a path into context
+    # assembly, which consumes catalog capability outputs only (`parity/filter.py`, FR-018).
+    # Optional because runs recorded before this field existed have no answer, and because the
+    # reader itself can honestly return `UNKNOWN`; `None` means "this run never asked", which is a
+    # different fact from `UNKNOWN` ("asked, could not tell") and must not be conflated with it.
+    debug_menu_state: DebugMenuState | None = None
     host_platform: dict[str, Any] = Field(default_factory=dict)
     host_support_tier: HostSupportTier
     archived_at: Timestamp | None = None

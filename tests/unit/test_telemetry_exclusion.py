@@ -315,6 +315,10 @@ def test_enforce_parity_boundary_raises_when_decision_request_leaks_telemetry() 
         "run_configuration",
         "wall_clock",
         "game_build",
+        # T280: `Run.debug_menu_state` is provenance of the same kind as `game_build` above, and
+        # must be caught by the same key-name net rather than relying on nothing ever putting it
+        # in an observation.
+        "debug_menu_state",
     ],
 )
 def test_structural_scan_flags_a_telemetry_shaped_key_nested_in_observation_value(

@@ -63,12 +63,33 @@ turn may, provided D3's atomicity still holds from the caller's point of view.
 
 | # | Requirement | Why |
 |---|---|---|
-| **D1** | `write_turn_cycle` returns only after the record is durable. A buffered or best-effort acknowledgement is a contract violation | FR-013 — the end-turn action is issued on the strength of this return |
+| **D1** | `write_turn_cycle` returns only after the record is durable. A buffered or best-effort acknowledgement is a contract violation | FR-013 — the harness advances past the turn on the strength of this return (and, on the `ended_on_no_progress` exit alone, issues the end-turn action itself on it). See the note below |
 | **D2** | Any write failure raises. The harness halts the run; it must never be able to interpret a failure as "continue" | FR-013, edge case: store unreachable |
 | **D3** | `write_turn_cycle` is atomic: a turn is wholly present or wholly absent, never half-written | Edge case: crash between executing an action and persisting the turn |
 | **D4** | Writes are idempotent on `(run_id, turn_number, attempt_index)` — a retried write after an ambiguous failure must not duplicate | Recovery re-writes are expected, not exceptional |
 | **D5** | Captures and save-point references go through this port. Nothing the record depends on may exist only in local or ephemeral form | FR-051 |
 | **D6** | `ping()` failure before turn 1 aborts preparation rather than starting a run that cannot record | Edge case: store unreachable |
+
+**What D1 gates, precisely** *(corrected 2026-09-22, T279)*. D1's "Why" column used to read "the
+end-turn action is issued on the strength of this return", flatly. That is true of exactly one of the
+three turn exits. For `ended_by_agent` and `end_turn_unconfirmed` — the two commonest — the end turn
+is the **agent's own declared decision**, and FR-008 requires such a decision to be executed and
+verified inside the decision step loop, recorded like any other decision; `run/turn_cycle.py`'s
+`_end_turn` dispatches nothing for those two cases because the order already left the harness. Only
+`ended_on_no_progress` (the FR-014 backstop, which by T113 has no agent decision to dispatch) issues
+its end turn strictly downstream of this return. What D1 gates in every case is the **advance**: the
+harness's own bookkeeping, and any further action this process sends the client. D1 is not weakened
+by this — a buffered acknowledgement is still a contract violation, because a run that believes a
+turn is recorded when it is not is the failure FR-013 exists to prevent — but implementers should
+know what they are actually holding the line for. The dispatch-to-commit window for the agent's own
+end turn is covered by the turn-start quicksave (FR-007) and the abandoned-attempt rule (FR-047),
+which is the same crash D3's "Why" column below names.
+
+**FR-013 / FR-008, unresolved.** FR-013 as written ("MUST NOT end a turn until that turn's complete
+record has been persisted") and FR-008 as written ("the agent issues an end-turn decision, which MUST
+itself be a declared catalog entry recorded like any other decision") cannot both be literally true
+of the shipped design, because the record of a turn cannot exist until the decision that ends it has
+been executed. This is flagged, not silently resolved here — see T279.
 
 **Atomicity note**: D3 is why the turn is one write rather than several. A turn whose decisions
 landed but whose observations did not would be a record that looks complete and is not — exactly the

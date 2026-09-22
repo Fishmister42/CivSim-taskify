@@ -1,12 +1,29 @@
 """The write-before-advance guard (T046).
 
 FR-013 makes a successful, durably-acknowledged `write_turn_cycle` call a
-*precondition* of ending a turn -- the end-turn action is issued "on the
-strength of" that return (contracts/match-store-port.md D1), and invariant
-I3 states it plainly: "No turn ends before its complete record is durably
-persisted."
+*precondition* of the harness advancing past a turn -- the advance happens
+"on the strength of" that return (contracts/match-store-port.md D1).
 
-This module makes that a structural property of the code rather than a
+**What this guard does and does not hold** (narrowed 2026-09-22, T279).
+It holds the *advance*, not the client-side end turn. For the two
+commonest outcomes -- `ended_by_agent` and `end_turn_unconfirmed` -- the
+`Game.EndTurn()`-equivalent Lua dispatch is the **agent's own declared
+decision**, executed and verified inside the decision step loop, because
+FR-008 requires an end turn to be "recorded like any other decision"; it
+has therefore already left the harness by the time a complete turn record
+exists to write at all, and `run/turn_cycle.py`'s `_end_turn` callable
+dispatches nothing in those cases. Only the `ended_on_no_progress`
+backstop exit (FR-014, T113 -- which has no agent decision to dispatch)
+issues its end turn downstream of this module, inside the `end_turn`
+callable. So what a `TurnPersistedToken` is proof of, and the only thing
+it should ever be read as proof of, is: *this exact turn attempt is
+durable, so the harness may now advance its own bookkeeping and send the
+client its next action.* Anyone extending this module should not read the
+tests below as coverage of the agent's in-loop dispatch -- they pass a
+fake `end_turn` callable and can only prove this guard orders its own
+callable.
+
+This module makes the advance a structural property of the code rather than a
 convention a caller has to remember to uphold. `TurnPersistedToken` is the
 credential: the *only* function in this codebase that constructs one is
 `persist_turn_before_advance` below, and it can only reach the line that
@@ -18,18 +35,18 @@ so a failed write propagates straight out and no token is ever produced
 (D2, FR-013, invariant I3): "a failed write raises and halts the run."
 
 `advance_turn` is the consuming half: the only sanctioned way in this
-module to invoke an end-turn callable, and its signature *requires* a
+module to invoke the advance callable, and its signature *requires* a
 `TurnPersistedToken` -- there is no overload that accepts a bare
 run/turn/attempt triple instead. A caller with no token has nothing to pass
 here. The intended usage is that the harness's turn loop imports and calls
 only `write_then_advance` (or the `persist_turn_before_advance` /
-`advance_turn` pair, when the write and the end-turn call happen in
-different places) from this module, and never calls its own end-turn
-primitive directly -- at which point "was the write acknowledged before we
-advanced?" stops being a question a reviewer has to trace through the run
-loop by hand and becomes a question the type checker already answered:
-nothing else in the run loop's signatures can produce a
-`TurnPersistedToken`, so nothing else can call end-turn.
+`advance_turn` pair, when the write and the advance happen in different
+places) from this module, and never advances on its own -- at which point
+"was the write acknowledged before we advanced?" stops being a question a
+reviewer has to trace through the run loop by hand and becomes a question
+the type checker already answered: nothing else in the run loop's
+signatures can produce a `TurnPersistedToken`, so nothing else can
+advance.
 """
 
 from __future__ import annotations

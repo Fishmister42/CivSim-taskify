@@ -29,10 +29,17 @@ run on this raise.
 **Persist, then end (FR-013, invariant I3).** The whole finished attempt -- every decision step in
 order, each with its observation, decision, execution outcome, and model call, plus the turn's
 yields -- is handed to ``store.guard.write_then_advance`` as one ``TurnCycleRecord`` (T117). That
-function's own contract is what makes "no turn ends before its complete record is durably
-persisted" structural rather than a convention this module has to remember: there is no code path
-here, or anywhere else, that can reach an end-turn callable without first having
-``write_turn_cycle`` return successfully.
+function's own contract is what makes "nothing advances before this turn's complete record is
+durably persisted" structural rather than a convention this module has to remember: there is no
+code path here, or anywhere else, that can reach the advance callable without first having
+``write_turn_cycle`` return successfully. *(Narrowed 2026-09-22, T279: this used to claim no code
+path can "reach an end-turn callable" without the write, which is not what this module does and
+never was -- for ``ended_by_agent`` and ``end_turn_unconfirmed`` the client-side end turn is the
+agent's own in-loop decision, dispatched well before this write, exactly as FR-008 requires and
+exactly as the next paragraph has always described. What the write gates is the advance: this
+module's own seal on the attempt, the re-derived run completeness, and any further action this
+process sends the client. The dispatch-to-commit window is covered by the turn-start quicksave and
+the abandoned-attempt/``RecoveryEngine`` path, not by this ordering.)*
 
 **What "issue the end-turn action" means here, concretely.** The literal ``Game.EndTurn()``-
 equivalent Lua call (``UI.RequestAction(ActionTypes.ACTION_ENDTURN)``, ``catalogs/actions/

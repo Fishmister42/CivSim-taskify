@@ -60,11 +60,14 @@ seam pattern already used throughout this codebase (``HostPlatform``,
 4. :func:`debug_menu_preflight` (**T204 hardening item 1**): reads ``EnableDebugMenu`` from
    ``AppOptions.txt`` -- the same file already located via
    ``HostPlatform.resolve_game_directories()`` for ``EnableTuner`` -- and returns it for the
-   caller to record on the run. A live-client spike
-   (``specs/002-civ-playing-harness/spikes/principle-i-debugmenu-linux.md``) found the tuner's own
-   callable surface byte-identical across three separate comparisons with the debug menu on and
-   off, so there is no constitutional tension (Principle I) to enforce here -- this function
-   **records the setting, it never refuses a run over it**.
+   caller to record on the run. **The caller does not yet do so** (T280, 2026-09-22):
+   ``run/composition.py:746`` calls this function and discards the return, so no run made to date
+   carries the setting. ``Run.debug_menu_state`` is the field that holds it once that one line
+   binds its return; until then, treat this as *read and available*, not *recorded*. A live-client
+   spike (``specs/002-civ-playing-harness/spikes/principle-i-debugmenu-linux.md``) found the
+   tuner's own callable surface byte-identical across three separate comparisons with the debug
+   menu on and off, so there is no constitutional tension (Principle I) to enforce here -- this
+   function **reads the setting, it never refuses a run over it**.
 5. :func:`turn_timer_preflight` (**T204 hardening item 2**): verifies, via an injected reader,
    that this run is not using a turn timer before it starts. A live spike originally attributed a
    validation host's turns advancing on their own (``spikes/load-path-linux.md``) to auto-end-turn
@@ -118,6 +121,7 @@ from civsim_harness.errors import BuildMismatchError, NexusError, PreflightError
 from civsim_harness.host.port import HostPlatform
 from civsim_harness.models.common import BuildAcceptance, CapabilityId, CatalogVersionRef
 from civsim_harness.models.config import RunConfiguration, SeedSet
+from civsim_harness.models.run import DebugMenuState
 from civsim_harness.nexus.sentinels import LUA_JSON_PRELUDE, lua_print_json
 from civsim_harness.observe.game_build import is_platform_transition
 
@@ -437,26 +441,26 @@ def catalog_preflight(catalog: Catalog) -> CatalogPreflightResult:
 
 
 # --------------------------------------------------------------------------
-# T204 hardening item 1 -- EnableDebugMenu, read and recorded (never enforced)
+# T204 hardening item 1 -- EnableDebugMenu, read at preflight (never enforced)
+#
+# **Not yet recorded on the run** (T280, 2026-09-22). This header used to say
+# "read and recorded". The read half is real and tested below; the recorded
+# half is not, and saying otherwise made a guarantee nobody held. `Run` now
+# carries a `debug_menu_state` field for it (`models/run.py`), and the store
+# round-trips that field like every other `Run` field, but the one remaining
+# producer-side line is in `run/composition.py`, which belongs to another
+# lane: `:746` calls `debug_menu_preflight(host, home=home)` and **discards
+# the return**, where both adjacent gates bind theirs. Until that return is
+# bound and passed into the `Run` (and into `BranchSource` on the branch
+# path), no run carries an answer to "was this made with EnableDebugMenu 1?"
+# -- on a host that shipped with the debug menu ON, which is what the
+# originating spike was about.
 # --------------------------------------------------------------------------
 
-
-class DebugMenuState(Enum):
-    """Whether ``EnableDebugMenu`` could be read from ``AppOptions.txt``, and if so what it said.
-
-    ``spikes/principle-i-debugmenu-linux.md``'s own live-client spike ran the tuner three separate
-    ways with ``EnableDebugMenu`` on and off -- a curated symbol probe, a full namespace
-    enumeration, and the Lua state table -- and found all three byte-identical in both modes.
-    There is therefore no constitutional tension to enforce here (Principle I): the tuner's own
-    callable surface does not widen with the debug menu on. What the spike's own recommendation
-    asks for is *recording*, not refusing -- "so a run's parity configuration is reconstructible
-    from its record alone rather than from a claim about how the host was set up" -- which is
-    exactly what this enum and :func:`debug_menu_preflight` exist to do, and nothing more.
-    """
-
-    ENABLED = "enabled"
-    DISABLED = "disabled"
-    UNKNOWN = "unknown"
+# `DebugMenuState` now lives in `models/run.py`, because it is a field of `Run` and `models/` is
+# the foundation layer (it may not import from `run/`). It is imported at the top of this module,
+# so `run.preparation.DebugMenuState` still resolves -- to the one enum, not a second copy that
+# would compare unequal to it.
 
 
 @dataclass(frozen=True)
@@ -498,6 +502,13 @@ def debug_menu_preflight(
 ) -> DebugMenuPreflightResult:
     """Read ``EnableDebugMenu`` from ``AppOptions.txt`` at preflight and return it for the caller
     to record on the run (T204 hardening item 1; ``spikes/principle-i-debugmenu-linux.md``).
+
+    **The caller does not record it yet** (T280, 2026-09-22): ``run/composition.py:746`` calls this
+    and discards the return, so no run in the store answers "was this made with
+    ``EnableDebugMenu 1``?". :attr:`~civsim_harness.models.run.Run.debug_menu_state` is where the
+    answer belongs and the store already round-trips it; what is missing is binding this return at
+    that call site and passing ``.state`` into the ``Run``. Do not read the sentence above as a
+    guarantee that it happens today.
 
     Uses the same ``AppOptions.txt`` path ``HostPlatform.resolve_game_directories()`` already
     resolves for ``EnableTuner`` (research R1). **Never raises, and never refuses a run on this

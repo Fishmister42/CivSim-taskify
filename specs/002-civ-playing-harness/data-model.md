@@ -252,7 +252,7 @@ preparing ──> playing <──> waiting_on_model
 | `visually_degraded` | bool | Derived: true if any step ran without its images (FR-050) |
 | `yields` | object | Per-turn yields and outcomes recorded after execution |
 | `started_at` / `ended_at` | timestamp | Out-of-game; unbounded duration is expected, not anomalous |
-| `persisted_at` | timestamp | Must precede the end-turn action (FR-013) |
+| `persisted_at` | timestamp | Must precede the harness's advance past this turn (FR-013; see invariant 2 below for why this is not "precedes the end-turn action") |
 
 The turn no longer carries an `observation_id`: observations are per decision step. A turn holds an
 *ordered sequence* of steps, and that sequence is what makes the turn reconstructable (FR-012).
@@ -262,7 +262,19 @@ The turn no longer carries an `observation_id`: observations are per decision st
 1. **No turn without its quicksave.** `save_point_id` is non-nullable; a failed quicksave means the
    turn never comes into existence as an attempt (FR-007, SC-004).
 2. **Write before advance.** `persisted_at` must be set and the store write acknowledged before the
-   end-turn action is issued. A failed write halts the run (FR-013).
+   harness advances past this turn. A failed write halts the run (FR-013).
+   *(Corrected 2026-09-22, T279. This previously read "before the end-turn action is issued", which
+   is true only of the `ended_on_no_progress` exit. For `ended_by_agent` and `end_turn_unconfirmed`
+   the end turn is the **agent's own declared decision**, and FR-008 requires it to be executed and
+   verified inside the decision loop like any other decision — so the in-client order has already
+   left the harness by the time the record exists to be written at all. What the acknowledged write
+   gates is everything after it: the harness's own bookkeeping (`store.guard`'s advance, the run's
+   re-derived `record_completeness_status`), and any further action this process sends the client.
+   The gap between the agent's dispatch and the commit is covered by the turn-start quicksave
+   (invariant 1) plus the abandoned-attempt rule (invariant 3): a crash there is replayed from that
+   turn's own save and the interrupted attempt is retained, which is the crash case D3's "Why"
+   column in contracts/match-store-port.md already named. See the FR-013/FR-008 note in that
+   contract.)*
 3. **Exactly one authoritative attempt** per `(run_id, turn_number)`. A replayed turn marks the
    earlier attempt `abandoned` and retains it (FR-047).
 4. **The turn ends in exactly one of two ways, and they are distinguishable.** `ended_by_agent`

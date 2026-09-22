@@ -322,8 +322,22 @@ tier below Validated produces marked, degraded runs rather than unmarked ones.
 **Initial check: PASS.** **Post-design re-check: PASS.**
 
 - No game-state write path bypasses turn-by-turn persistence: `run/turn_cycle.py` is the only
-  component permitted to call the end-turn action, and it is sequenced strictly after a successful
-  `MatchStore` commit; a failed or timed-out write raises and halts the run (FR-013, FR-051).
+  component permitted to **advance** the harness past a turn, and that advance is sequenced strictly
+  after a successful `MatchStore` commit; a failed or timed-out write raises and halts the run
+  (FR-013, FR-051). *(Corrected 2026-09-22, T279 — the earlier wording said "the only component
+  permitted to call the end-turn action", which the code does not do and was never going to: for
+  `ended_by_agent` and `end_turn_unconfirmed`, the two commonest outcomes, the agent's end turn is a
+  **declared decision dispatched inside the T110 loop**, executed and verified through the same
+  `act.dispatch`/`act.verify` path as every other decision, because FR-008 requires exactly that. So
+  the in-client order can, and normally does, precede the commit. What the commit gates is everything
+  downstream of it: the harness's own bookkeeping, the `preparing`/`playing` advance the run is told
+  about, and any further action this process sends the client. Only `ended_on_no_progress` — the
+  FR-014 backstop, which has no agent decision to dispatch — has the end-turn dispatch itself
+  strictly after the write, in `_dispatch_backstop_end_turn`. The crash window this opens for the
+  other two is covered rather than ignored: the turn-start quicksave (FR-007) and the
+  abandoned-attempt rule (FR-047) mean a turn lost between dispatch and commit is replayed from its
+  own save by `RecoveryEngine` and retained as an abandoned attempt, not silently missing — which is
+  the same window D3's own "Why" column already named.)*
 - Nothing exists only in ephemeral form: captures and save-point references are written through the
   same store port as records (FR-051). The local reference adapter is a *storage implementation* of
   that port, not a second, bypassing path.

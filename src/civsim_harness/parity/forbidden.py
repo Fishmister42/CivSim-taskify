@@ -155,6 +155,13 @@ _HARNESS_TELEMETRY_PHRASES: tuple[_ForbiddenPhrase, ...] = (
     _phrase(ForbiddenCategory.HARNESS_TELEMETRY, "game build", "game", "build"),
     _phrase(ForbiddenCategory.HARNESS_TELEMETRY, "harness client identity", "client", "identity"),
     _phrase(ForbiddenCategory.HARNESS_TELEMETRY, "host platform telemetry", "host", "platform"),
+    # T280: `Run.debug_menu_state` is run provenance in exactly the sense the three phrases above
+    # are -- a fact about how the *host* was configured, not about the game the agent is playing.
+    # It gets its own entry here for the same reason they have theirs: `Run` fields have no path
+    # into context assembly today, but this net is what catches the day some observation
+    # declaration starts carrying one anyway. Note the pre-existing "cheat" phrase does not cover
+    # it -- {debug, menu, state} matches nothing above without this line.
+    _phrase(ForbiddenCategory.HARNESS_TELEMETRY, "debug menu state", "debug", "menu"),
 )
 
 _ALL_PHRASES: tuple[_ForbiddenPhrase, ...] = _GAME_STATE_PHRASES + _HARNESS_TELEMETRY_PHRASES

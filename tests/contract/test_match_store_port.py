@@ -23,11 +23,13 @@ from pathlib import Path
 import pytest
 
 from civsim_harness.errors import StoreWriteError
+from civsim_harness.models.common import RunId
 from civsim_harness.models.config import RunConfiguration
 from civsim_harness.models.decision import Decision
 from civsim_harness.models.records import ModelCall, RunEvent, RunEventType, SavePoint
-from civsim_harness.models.run import Run
+from civsim_harness.models.run import DebugMenuState, RecordCompletenessStatus, Run
 from civsim_harness.models.turn import DecisionStep, Observation, ScreenCapture, TurnCycle
+from civsim_harness.store.completeness import record_completeness_status
 from civsim_harness.store.guard import (
     TurnPersistedToken,
     advance_turn,
@@ -1134,6 +1136,109 @@ def test_advance_turn_requires_a_token_from_persist_turn_before_advance(
 
     assert isinstance(token, TurnPersistedToken)
     assert advance_turn(token, lambda t: t.turn_cycle_id) == record.turn_cycle.turn_cycle_id
+
+
+def test_a_failed_write_leaves_the_runs_own_bookkeeping_un_advanced(
+    store: SqliteMatchStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T279 -- the invariant this guard *actually* holds, asserted without a fake.
+
+    The two tests above hand `write_then_advance` a **fake** `end_turn`
+    callable, so all they can prove is that the guard orders its own
+    callable; they are blind to the client-side end turn, which for
+    `ended_by_agent` and `end_turn_unconfirmed` is the agent's own declared
+    decision, dispatched inside `run/decision_loop.py` well before this
+    write ever happens (FR-008). This test deliberately does **not** try to
+    fake coverage of that dispatch. It pins the narrower thing that is true
+    of every exit: no *bookkeeping* the harness derives about a run can
+    advance past a turn whose write did not land.
+
+    Turn 1 here is genuinely attempted -- its quicksave is recorded, which
+    is what FR-007 guarantees exists before any observation or action for
+    that turn -- and then its record write raises, on a store that is
+    simply unreachable rather than on a second conflicting write (the
+    sibling above can only reach `StoreWriteError` by re-writing an
+    existing key, which leaves a turn record behind and so cannot show
+    this). The run then halts, which is the other half of what FR-013
+    demands: "MUST halt the run rather than advance if persistence fails."
+
+    Two things must hold afterwards. The advance callable was never
+    invoked, and the store holds no turn 1 -- a regression that caught
+    `StoreWriteError` inside the guard, or minted a token before the write
+    returned, fails right there. And the halted run's derived completeness
+    reports `has_gaps`, not `complete`: the lost turn is *visible in the
+    record*, which is the Principle III property the write-before-advance
+    ordering exists to protect. A derivation change that let a halted run
+    with a recorded quicksave and no turn record read `complete` would make
+    the failed write invisible, and would fail here while every other guard
+    test still passed.
+    """
+    run_id = RunId("run-guard-bookkeeping")
+    store.create_run(
+        _make_run(run_id, "cfg-guard-bookkeeping"), _make_config("cfg-guard-bookkeeping")
+    )
+    store.write_save_point(_make_save_point(f"{run_id}-sp1-0", run_id, 1))
+
+    def failing_write(record: TurnCycleRecord) -> str:
+        raise StoreWriteError("store unreachable", detail={"run_id": run_id})
+
+    monkeypatch.setattr(store, "write_turn_cycle", failing_write)
+
+    advanced = False
+
+    def advance(token: TurnPersistedToken) -> None:
+        nonlocal advanced
+        advanced = True
+
+    with pytest.raises(StoreWriteError):
+        write_then_advance(store, _make_turn_cycle_record(run_id, 1, 0), advance)
+
+    assert advanced is False
+    assert store.get_turn_cycle(run_id, 1) is None
+
+    # FR-013's second clause: the run halts rather than advancing. Only then is the trailing
+    # attempted-but-unrecorded turn a gap rather than a turn legitimately still in flight
+    # (`sqlite_reads._turn_gaps_body`'s own actively-playing carve-out).
+    store.update_run(run_id, lifecycle_state="failed")
+    assert record_completeness_status(store, run_id) is RecordCompletenessStatus.HAS_GAPS
+
+
+def test_debug_menu_state_round_trips_as_run_provenance(store: SqliteMatchStore) -> None:
+    """T280: `Run.debug_menu_state` survives `create_run` -> `get_run` unchanged, so
+    "was this run made with `EnableDebugMenu 1`?" is answerable from the record.
+
+    The store side needs no schema change for this -- `create_run` persists the whole `Run` as
+    `run_json` -- but "needs no change" is a claim worth pinning rather than assuming, because it
+    is the claim that makes the remaining producer-side work a single line in
+    `run/composition.py` (bind `debug_menu_preflight`'s return, which that call site discards
+    today, and pass `.state` here).
+
+    `None` and `UNKNOWN` are asserted as distinct on purpose. `None` means this run never asked;
+    `UNKNOWN` means it asked and `AppOptions.txt` could not tell it (absent file, no entry,
+    unreadable -- all three of which `debug_menu_preflight` reports rather than raising). Collapsing
+    them would turn "we did not look" into "we looked and could not see", which is precisely the
+    kind of un-held guarantee this field exists to stop.
+    """
+    for run_id, state in (
+        ("run-dbg-enabled", DebugMenuState.ENABLED),
+        ("run-dbg-disabled", DebugMenuState.DISABLED),
+        ("run-dbg-unknown", DebugMenuState.UNKNOWN),
+    ):
+        run = _make_run(run_id).model_copy(update={"debug_menu_state": state})
+        store.create_run(run, _make_config(f"cfg-{run_id}"))
+
+        reread = store.get_run(RunId(run_id))
+
+        assert reread is not None
+        assert reread.debug_menu_state is state
+        assert reread.model_dump(mode="json")["debug_menu_state"] == state.value
+
+    # A run that never asked is distinguishable from one that asked and could not tell.
+    store.create_run(_make_run("run-dbg-absent"), _make_config("cfg-run-dbg-absent"))
+    absent = store.get_run(RunId("run-dbg-absent"))
+    assert absent is not None
+    assert absent.debug_menu_state is None
+    assert absent.debug_menu_state is not DebugMenuState.UNKNOWN
 
 
 # --------------------------------------------------------------------------

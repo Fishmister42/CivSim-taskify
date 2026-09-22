@@ -288,7 +288,21 @@ def test_the_real_pre_feature_file_migrates_and_reads_back(tmp_path: Path) -> No
         for run_id, raw in before.items():
             run = store.get_run(run_id)
             assert run is not None
-            assert run.model_dump(mode="json") == raw, (
+            dumped = run.model_dump(mode="json")
+            # A key the *model* gained after this snapshot was frozen is not the migration
+            # rewriting anything -- the stored `run_json` on disk is untouched, and the field
+            # reads back as its `None` default, meaning "this run never recorded that fact"
+            # (T280 added `debug_menu_state` this way). Such keys are allowed through here, but
+            # only while they are `None`: a new field that read back as a *value* would mean
+            # something invented an answer for a run that never gave one, which is the same
+            # defect this assertion exists to catch. Everything the snapshot actually stored is
+            # still compared exactly, so a dropped key or a changed value fails as it always did.
+            invented = {k: v for k, v in dumped.items() if k not in raw and v is not None}
+            assert not invented, (
+                f"{run_id}: the migration produced values for fields the 1.0 snapshot never "
+                f"stored, which is inventing history, not preserving it: {invented}"
+            )
+            assert {k: v for k, v in dumped.items() if k in raw} == raw, (
                 f"{run_id} did not survive the 1.0 -> 1.1 migration unchanged (V3, SC-005)"
             )
         assert len(store.list_runs()) == 10
