@@ -918,11 +918,28 @@ above:
   The Linux `XComposite`/`NameWindowPixmap` path now returns real, correctly-ordered `BGRA8` pixels
   and is occlusion-immune through the harness's own code
   (`spikes/r6-xcomposite-readback-linux.md`), and the landed-code demo captured 12 real frames
-  *of Civilization VI* through it (`run-9505f323`). **No frame has yet been shown to the agent on
-  any platform**: on Linux every capture was withheld by the provenance gate (this build has no
-  camera look-at getter, so `target_revealed` cannot be confirmed) and, until T252 landed, the
-  probe never credited the X11 hygiene pass and the raw `BGRA8` frame had no wire media type;
-  elsewhere the extraction is unwritten. Linux/Wayland capture remains stubbed (T257).
+  *of Civilization VI* through it (`run-9505f323`).
+  **Corrected 2026-09-22 (T288). This passage previously read "No frame has yet been shown to the
+  agent on any platform". That was false, and false in the unsafe direction.** Measured read-only
+  from a copy of `civsim-match-store.db` on 2026-09-22: of **843** captures, **396** are
+  `screened_clean` and **314 carry `shown_to_agent = true`** across **24** runs (290 dated
+  2026-09-21, 24 dated 2026-09-22), and **301 of 670 `model_calls` carry an image**. The
+  provenance gate accounts for **316** of the **447** withholds, not all captures; the other 131
+  are `non_player_ui`. Real frames of Civilization VI have reached a model, in volume.
+  **Why this mattered more than a stale number:** SC-009 and SC-019 are release-*blocking* audit
+  obligations, and their real-frame test T194 (`tests/live/test_capture_hygiene.py`) has never
+  run. An auditor reading the old sentence would have concluded that no real-frame audit was
+  owed. **It is owed, on 301 delivered images, and it is unpaid.** Worse, the gate could not have
+  caught the contaminant in any of them: until 2026-09-22 the content gate's declared-text
+  technique was dead in production because no caller supplied `detected_text_tokens`, leaving
+  eight of ten reject categories -- `firetuner_window` among them -- undetectable on every
+  platform (T264). A separate retro-audit of the delivered backlog examined 188 distinct frames,
+  by eye and programmatically, and found **0 contaminated, 301 clean, 0 unknown**. The correct
+  wording for any sign-off citing that audit is **"no contamination was found"**, never "the
+  screening gate held" -- and every frame in it was captured *before* the fail-closed fix landed,
+  so it is evidence about the backlog and says nothing for or against that fix. Image delivery is
+  now closed on all three platforms until the text-evidence plumbing lands. Linux/Wayland capture
+  remains stubbed (T257); Windows and macOS pixel extraction is unwritten.
 - **The Linux live node depends on Steam and is not available on demand.** Civ VI refuses to launch
   without a running, signed-in Steam client, and an account can be in a game on only one machine at
   a time — so live work is pre-empted whenever the owner is playing. Scheduling constraint, not a
