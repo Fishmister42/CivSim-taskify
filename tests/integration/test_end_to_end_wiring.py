@@ -28,10 +28,12 @@ two things a real client does that the harness immediately checks afterwards.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import os
 import subprocess
 import sys
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -882,6 +884,85 @@ def test_a_raise_between_lock_acquire_and_hand_off_still_releases_it(tmp_path: P
         "the lock file is still on disk after an exception between acquire and hand-off -- "
         "exactly the production defect this test is written to catch"
     )
+
+
+def test_a_raise_between_commit_and_stop_resolution_still_releases_the_lock_at_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gap `test_a_raise_between_lock_acquire_and_hand_off_still_releases_it` does NOT cover:
+    `RunIdentityLock.guard`'s own `finally` only protects the span up to `lock_handle.commit()`
+    (`run/composition.py:~1140`) -- after that, the guard's `with` block has already exited (the
+    lock's remaining lifetime was deliberately handed to the run, per `RunLockHandle.commit`'s own
+    docstring), so an exception raised anywhere past that point -- which, measured against the
+    real runner, is most of `Runner._play_run`'s own terminal paths (an operator stop, or any of
+    `RecoveryLimitReached`/`SaveAddressingError`/`UnknownScreenEncountered`/
+    `ProviderChainExhausted`/the unclassified tail landing the run in `paused`/`failed`) -- never
+    reaches `composition.py`'s `evaluate_stop_facts`, and the lock is never released by anything
+    still on the stack. This is that shape, reproduced directly against `RunIdentityLock`/
+    `RunLockHandle` (production code, real lock file, no fake game needed: the leak is in the lock
+    module's own contract, not in anything the game wiring does).
+
+    A run that never reaches stop-resolution must still not wedge the run identity forever once
+    this *process* exits -- `RunLockHandle.commit` arms a process-exit backstop for exactly this,
+    which this test triggers directly (standing in for the interpreter's own `atexit` dispatch,
+    without touching the real global `atexit` registry -- pytest, coverage, and everything else
+    also registered there must keep working after this test runs).
+    """
+    registered: list[Any] = []
+    unregistered: list[Any] = []
+    monkeypatch.setattr(
+        atexit, "register", lambda fn, *a, **k: (registered.append(fn), fn)[1]
+    )
+    monkeypatch.setattr(atexit, "unregister", lambda fn: unregistered.append(fn))
+
+    lock_dir = tmp_path / "run-locks"
+    lock = RunIdentityLock(lock_dir)
+    run_id = RunId("run-post-commit-raise")
+    lock_path = lock_dir / f"{run_id}.lock.json"
+
+    class _SimulatedMidRunFailure(Exception):
+        """Stands in for e.g. `RecoveryLimitReached` -- a `HarnessError` `Runner._handle_run_
+        failure` routes to `paused`/`failed` WITHOUT ever calling `evaluate_stop_facts`."""
+
+    with pytest.raises(_SimulatedMidRunFailure):
+        with lock.guard(run_id=run_id, client_pid=os.getpid(), now=datetime.now(UTC)) as handle:
+            # T227/T289: exactly `run/composition.py:1140`'s own call -- past this point, the
+            # guard's `finally` will NOT release the lock; the run is on its own.
+            handle.commit()
+            # ...the drive phase would begin here, in a separate scheduled coroutine the guard's
+            # own stack frame is long gone by the time it runs (`Runner._begin` schedules
+            # `_play_run` as its own task) -- this raise stands in for any of the several
+            # terminal paths that reach neither `evaluate_stop_facts` nor a later `prepare()`.
+            raise _SimulatedMidRunFailure("simulated failure after commit, before stop-resolution")
+
+    # commit() must have armed exactly one process-exit backstop for this run id -- if it did
+    # not, nothing is left to release the lock once this process exits, and everything below
+    # would (correctly) fail.
+    assert len(registered) == 1, (
+        "commit() did not arm a process-exit backstop; a run that raises after commit() and "
+        "before stop-resolution would leak its lock forever once this process exits"
+    )
+    # The guard's own `finally` must NOT have released a committed lock -- unchanged from
+    # `0187345`, and the whole reason a backstop is needed at all.
+    assert lock_path.exists(), (
+        "the guard released a COMMITTED lock on its own -- that would break resume-from/branch, "
+        "which need the lock held for as long as the run is genuinely still playing"
+    )
+    assert not unregistered, "nothing released the lock yet, so nothing should be disarmed yet"
+
+    # Stand in for the interpreter's own exit sequence invoking the one backstop it has for this
+    # run id -- this is the load-bearing step: without Part 1's fix, `registered` is empty above
+    # and this line is unreachable; with it, this is what actually happens at process exit.
+    registered[0]()
+
+    # The load-bearing assertion: the lock the run never released itself is gone once this
+    # process's own exit sequence has run -- an exception between `commit()` and stop-resolution
+    # no longer wedges the run identity forever.
+    assert not lock_path.exists(), (
+        "the lock file is still on disk after the process-exit backstop ran -- an exception "
+        "between commit() and stop-resolution still leaks the lock"
+    )
+    assert unregistered == [registered[0]], "the fired backstop must disarm itself"
 
 
 # --------------------------------------------------------------------------

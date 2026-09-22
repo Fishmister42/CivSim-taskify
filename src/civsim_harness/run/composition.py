@@ -1133,10 +1133,18 @@ async def _prepare_connected_run(
             ),
         )
 
-        # T227: hand this lock's remaining lifetime to the run itself -- it is about to be
+        # T227/T289: hand this lock's remaining lifetime to the run itself -- it is about to be
         # registered in run_contexts and will keep playing turns long after this guard's own
-        # `with` block exits, so only evaluate_stop_facts / the terminal-run sweep may release
-        # it from here on (RunLockHandle.commit's own docstring).
+        # `with` block exits. evaluate_stop_facts (below) and the terminal-run sweep
+        # (_release_terminal_run_clients) release it on the paths that reach them, but most of
+        # this runner's own terminal paths (an operator stop, or most HarnessErrors that land a
+        # run in paused/failed) reach NEITHER -- commit() itself arms a process-exit backstop for
+        # exactly that gap (RunLockHandle.commit's own docstring has the measured path list and
+        # what the backstop does and does not cover). That backstop is a DIFFERENT mechanism from
+        # the orphan sweep (run/orphans.py): this closes the in-process leak (an exception, an
+        # abort, a stop, while this process is still the one that could clean up after itself);
+        # the orphan sweep closes the hard-kill case, where this process never gets the chance to
+        # run anything at all. Neither makes the other redundant.
         lock_handle.commit()
 
         return PreparedRun(run=playing_run, stop_condition=config.stop_condition)

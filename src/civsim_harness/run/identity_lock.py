@@ -19,9 +19,10 @@ must never be raced.
 
 from __future__ import annotations
 
+import atexit
 import json
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -114,11 +115,33 @@ class RunLockHandle:
     stay held for as long as the run keeps playing turns -- long after the `with` block that
     claimed it has returned. `commit()` is how a caller says "this lock's lifetime is no longer
     this guard's to manage" -- once called, `__exit__` leaves the lock exactly as it is, and
-    releasing it becomes some *other*, later call's job (`run/composition.py`'s own
-    `evaluate_stop_facts`, when the run reaches a stop resolution, or the terminal-run sweep in
-    `_release_terminal_run_clients` as a backstop for the paths that never reach that). A caller
-    that never commits -- because preparation failed, or raised -- gets the lock released
-    automatically, which is the whole point.
+    releasing it becomes some *other*, later call's job. A caller that never commits -- because
+    preparation failed, or raised -- gets the lock released automatically, which is the whole
+    point.
+
+    **What releases it after `commit()` (T227/T289, and the gap this closes).** Measured against
+    the real runner (`run/runner.py`), only two of its several terminal paths ever reach
+    `run/composition.py`'s own `evaluate_stop_facts` -- the ordinary per-turn stop-resolution
+    check, and the mid-turn game-over read. Every other exit `Runner._play_run` can take
+    (an operator-requested stop, or any of the `HarnessError`s `_handle_run_failure` routes to
+    `paused`/`failed`: `RecoveryLimitReached`, `SaveAddressingError`, `UnknownScreenEncountered`,
+    `ProviderChainExhausted`, the unclassified tail) finishes the run WITHOUT ever calling it.
+    `_release_terminal_run_clients` is a second, narrower backstop -- but only for the paths
+    above, and only if this *same process* later prepares *another* run. Neither is a guarantee
+    for a run that raises, is stopped, or fails and the process then exits without ever starting
+    a fresh preparation. `commit()` closes that gap itself: it arms a process-exit backstop
+    (`RunIdentityLock._arm_exit_backstop`) that fires, once, if nothing else has released this
+    run id's lock by the time this process exits -- covering every one of the paths above, not by
+    enumerating them, but by not needing to know which one ran. It is disarmed the moment any
+    real release happens first, so it never fires a second time over a live re-acquisition.
+
+    **What this still does not cover, on purpose.** A hard kill (`SIGKILL`, or any signal Python
+    cannot handle) stops this process before even the exit backstop can run -- nothing inside this
+    process can catch that. That is a *different* mechanism's job (the orphan sweep,
+    `run/orphans.py`: it detects a lock whose recorded holder is gone and clears it from
+    whichever *later* process next looks), not a duplicate of this one. This closes the
+    in-process leak (exception/abort/stop while the process stays alive); that closes the case
+    where the process itself never got the chance to run any cleanup at all.
 
     **Double release is safe, by construction.** `release()` here is idempotent (tracked by
     `_released`, on top of `RunIdentityLock.release` itself already unlinking with
@@ -144,7 +167,15 @@ class RunLockHandle:
         """Hand this lock's remaining lifetime to the run it was claimed for. After this call,
         the `with run_lock.guard(...)` scope that produced this handle will NOT release the lock
         when it exits -- call this only once the run is genuinely going to keep needing the lock
-        past that scope (registered somewhere a later, real release will find it)."""
+        past that scope.
+
+        This is also the moment a process-exit backstop is armed for this run id (this class's
+        own docstring explains why one is needed and what it does and does not cover) -- a
+        caller does not opt into that separately; committing this handle's lifetime to the run
+        IS committing to guaranteeing it comes back, one way or another, before this process
+        does."""
+        if self._run_id is not None:
+            self._lock._arm_exit_backstop(self._run_id)
         self._committed = True
 
     def release(self) -> None:
@@ -169,6 +200,12 @@ class RunIdentityLock:
 
     def __init__(self, lock_dir: Path = DEFAULT_LOCK_DIR) -> None:
         self._lock_dir = lock_dir
+        # T227/T289: one armed process-exit backstop per run id that has been `commit()`-ed but
+        # not yet released -- see `_arm_exit_backstop` and `RunLockHandle.commit`'s own docstring
+        # for why this exists and what it does not cover. Populated only by `_arm_exit_backstop`,
+        # drained only by `release` (whichever path -- `evaluate_stop_facts`, the terminal-run
+        # sweep, an explicit early release, or this backstop firing itself -- gets there first).
+        self._exit_backstops: dict[RunId, Callable[[], None]] = {}
 
     def acquire(self, *, run_id: RunId, client_pid: int, now: Timestamp) -> ActiveRunLock:
         """Acquire the lock for *run_id* attached to *client_pid*.
@@ -206,8 +243,48 @@ class RunIdentityLock:
         return lock
 
     def release(self, run_id: RunId) -> None:
-        """Release *run_id*'s lock, if held. A no-op if it is not."""
+        """Release *run_id*'s lock, if held. A no-op if it is not.
+
+        Also disarms *run_id*'s process-exit backstop, if `_arm_exit_backstop` ever armed one --
+        this is the one place every release path (the handle's own `release`, `composition.py`'s
+        `evaluate_stop_facts`, `_release_terminal_run_clients`, and the backstop calling this very
+        method on itself at process exit) converges, so whichever gets here first both drops the
+        lock file and disarms the others. A lock that was never committed, or never had a
+        backstop armed for some other reason, disarms nothing here -- `pop(..., None)` is the
+        no-op for that.
+        """
+        backstop = self._exit_backstops.pop(run_id, None)
+        if backstop is not None:
+            atexit.unregister(backstop)
         self._path_for(run_id).unlink(missing_ok=True)
+
+    def _arm_exit_backstop(self, run_id: RunId) -> None:
+        """Guarantee *run_id*'s lock is released by the time this process exits, even if nothing
+        else in this process ever releases it (`RunLockHandle.commit`'s own docstring has the
+        full reasoning for why this is needed and what it does not cover).
+
+        Idempotent per run id -- a second call while one is already armed is a no-op, so
+        `RunLockHandle.commit` being called more than once (already itself idempotent) never
+        double-registers. The registered callback closes over `run_id`, not `self` alone, and
+        calls this instance's own `release` -- the same idempotent, file-unlinking, backstop-
+        disarming release every other caller uses, so a backstop that fires is indistinguishable
+        from any other caller releasing the lock a moment sooner.
+
+        `atexit` -- not a runner callback -- is the mechanism on purpose: it is guaranteed by the
+        interpreter itself to run for a normal exit, `sys.exit`, or an exception that propagates
+        to the top, regardless of which of this codebase's own code paths were on the stack when
+        that happened or whether any of them remembered to call anything. It is not, and cannot
+        be, guaranteed to run for a hard kill (`SIGKILL`) or `os._exit` -- see this method's
+        caller's docstring for why that gap belongs to the orphan sweep instead.
+        """
+        if run_id in self._exit_backstops:
+            return
+
+        def _release_at_exit() -> None:
+            self.release(run_id)
+
+        self._exit_backstops[run_id] = _release_at_exit
+        atexit.register(_release_at_exit)
 
     @contextmanager
     def guard(
