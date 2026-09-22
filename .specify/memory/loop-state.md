@@ -380,25 +380,81 @@ there was one partial lookup between them.
   ask about absence **on purpose** (`spy.mission != null`) and the first draft destroyed that idiom.
 - **A positive control that production cannot reach is not a positive control.** `camera.zoom`
   verifies `camera.zoom == target` and the engine answers `0.049999713897705` for a requested `0.05`,
-  so working zooms record as refused (T321): **zoom 49 rejected / 0 applied, set_view_mode 69 / 0**,
-  against a control of `cities.set_production` 5 applied / 117 rejected **in the same query**.
-  Nothing was red because `tests/unit/test_predicates.py:850` **is** a positive control and **passes**
-  — it compares `0.5` to `0.5`, an exactly-equal float the engine never produces. **This means our
-  coverage numbers understate.** Not to be rolled in: `camera.move`'s 48 refusals carry
-  `out_of_parity_camera` with `dispatch_result: null`, never dispatched, because the agent asked to
-  look at fog. **That is Principle I working, and burying a good refusal inside a bug report is its
-  own defect.**
+  so working zooms record as refused (T321). Nothing was red because
+  `tests/unit/test_predicates.py:850` **is** a positive control and **passes** — it compares `0.5`
+  to `0.5`, an exactly-equal float the engine never produces. **FIXED 2026-09-22 (headless):** the
+  tolerance is declared in `catalogs/actions/camera.yaml` itself (`camera.zoom - target <= 0.001 and
+  target - camera.zoom <= 0.001`), never as an evaluator epsilon — a tolerance is a number someone
+  can quietly widen, so it belongs where a reviewer diffs it. No evaluator change: `_eval_binop`
+  already raises on a non-numeric operand, so absence stays **unevaluable** exactly as `d74a4c7`
+  made it. Magnitude against the measurement: largest error on a zoom that LANDED 4.768e-07,
+  smallest on one that genuinely did not 0.293 — six orders of magnitude apart.
+  **🔴 THREE CORRECTIONS to the counts as first written, all found by replaying the store:**
+  1. **The three camera actions are three different defects, not one.** `camera.zoom` is the float
+     bug (39 of 47 confirm-failures had the camera ON target). **`camera.set_view_mode` compares
+     STRINGS** — 66 of its 69 refusals replay **True** at HEAD, so a float tolerance cannot touch
+     it and folding its 69 into T321 would be the same error as folding in `camera.move`.
+  2. **None of the recorded camera refusals were caused by the float.** Every one of the 118 camera
+     steps in the store was produced by a tree in which `build_predicate_bindings` hardcoded
+     `"camera": {}` — the live worktree sat at `c211605` until ~15:14, and `44e8d01` (T308, the
+     camera binding) is not its ancestor. So those counts are **T308's defect**, already fixed; the
+     float defect is established **by reproduction at HEAD**, not by them. Quote it that way.
+     **Falsifiable prediction: `camera.set_view_mode` should start applying from the next block run
+     after 15:14. If it still records False, the binding is not the cause and the finding is live.**
+  3. **`camera.move`'s 48 refusals are NOT demonstrably "the agent asked to look at fog."** The
+     recorded targets are bare `{"x": .., "y": ..}` and **no observation schema in the catalog emits
+     a plot carrying `is_revealed`**, so `target.is_revealed` resolves `None` → falsy, always. The
+     refusal direction is correct and fail-closed, but the *reason* is a field the predicate never
+     had, not a fogged plot — and the phantom-field ratchet cannot see it, because
+     `UNCHECKED_PREDICATE_NAMESPACES` skips the whole `target` namespace by design. **Still out of
+     scope for T321; now open on its own terms.** A fail-safe phantom, which is why it survived.
 - **A query that returns the same empty answer for your control as for your subject is broken, not
   conclusive.** A sweep read `outcome: None` for everything including the control, because the
   execution record nests under `decision` rather than beside it. **The control caught a broken query
   that would otherwise have read as a dramatic finding.**
+- **🛑 A Lua pattern class matches BYTES, and `%c` is locale-dependent, so it eats UTF-8.**
+  `value:gsub('[%c"\\]', ...)` at `lua/ingame/great_people.lua:31` **and 26 other copies** escapes any
+  byte `iscntrl()` accepts, which under the client's locale includes **C1, `0x80–0x9F`** — and UTF-8
+  continuation bytes live in `0x80–0xBF`. **The two ranges overlap and the frame is severed.**
+  Measured: the Great Artist **Kamāl ud-Dīn Behzād** breaks every observation read with
+  `UnicodeDecodeError: can't decode byte 0xc4`. `ā` is `C4 81` — the trailing byte **is** C1, escaped
+  to literal `\u0081`, lead byte left raw → **broken**. `ī` is `C4 AB` — trailing byte is not C1 →
+  **survives**. **Same name, same frame, which makes it its own discriminating control.**
+  Any game string with a byte in `0x80–0x9F` kills the tuner connection, so most of Latin Extended-A
+  is a live hazard: leader, city, city-state and great-person names. **Board-state dependent**, which
+  is why three runs died on it today and none before: the name entered the roster mid-block. **Not
+  caused by the advance** — `nexus/codec.py` is unchanged across it and block 31 hit it at `c211605`.
+  Fix: restrict the class to ASCII controls so bytes `>= 0x80` pass through, **as one shared helper,
+  not 27 edits**. Trap: `%z` vs `\0` differs between Lua 5.1 and 5.2.
+- **The path that records WHY a run failed must not be able to fail the same way the run did.**
+  When the read above raised, `run/runner.py`'s error-recording path raised the **same**
+  `UnicodeDecodeError`, leaving the run `lifecycle_state: playing` forever with its driver polling a
+  status that would never change. **"Still playing" and "died and could not say why" must not share a
+  representation.**
 - **`nm -DC` silence is not evidence that an accessor is unbound.** No `l*Favor*` symbol exists on any
   player interface, yet `strings -a` finds `GetFavor` and Firaxis' own shipped XP2 UI calls
   `Players[id]:GetFavor()`. **Some Lua bindings exist only as name strings with no exported
   trampoline.** The symbol table is sound as a *positive* discriminator (that is how `CanProgress`
   was settled) and **unsound as a negative**. Do not run a sweep that reads silence as proof.
 
-## 🛑 Release-blocking, open (found 2026-09-22) — images are gated OFF by design
+## 🛑 Release-blocking — ⚠️ THE STATED MECHANISM NO LONGER DESCRIBES `0e91a10` (re-read 15:55)
+**Do not act on the section below without checking which head you are on.** At `0e91a10`, which the
+live worktree now runs, **both halves of the defect are closed**: `0e91a10` carries T265, which
+supplies the declared-text tokens at `run/decision_loop.py:513`, and `observe/capture.py:309` now
+resolves `expected_process` itself so the source gate's identity check runs on a real capture.
+Measured on this box: `list_window_titles()` returns 14 windows and 34 tokens (not None), every view
+declares `screening_profile: platform`, and **`unaddressed_reject_categories(linux/platform) == []`**
+— so the fail-closed rule no longer withholds, and **image delivery may be OPEN**.
+**NOT established: whether a real frame then clears the provenance, geometry and image checks.**
+Zero captures exist at this head. Block 31's 18 frames all failed `provenance_failure` at the
+*previous* head, and `act/camera.py`, `lua/ingame/camera.lua` and `views.yaml`'s `hud_corners` all
+changed in the advance. **GATE: before any block runs at this head, read ONE capture and establish
+what happened to it.** Treat delivery as plausibly open until then.
+**Also note P2 could never have discriminated**: block 31, at a head *without* `483017c`, already
+showed `shown_to_agent {False: 18}` and `sum(image_count) 0`. **The presence of a withheld reason
+cannot separate the content gate from the provenance gate — only the reason's value can.**
+
+### The original finding, as recorded (true of `c211605` and earlier)
 **The content screening gate cannot detect the FireTuner window in production, on any platform.**
 `parity/screening.py`'s declared-text technique fires only when a category's tokens are a subset of
 `detected_text_tokens`, which defaults to `frozenset()` and which **no production caller ever
