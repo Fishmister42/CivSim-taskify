@@ -408,6 +408,26 @@ there was one partial lookup between them.
      had, not a fogged plot — and the phantom-field ratchet cannot see it, because
      `UNCHECKED_PREDICATE_NAMESPACES` skips the whole `target` namespace by design. **Still out of
      scope for T321; now open on its own terms.** A fail-safe phantom, which is why it survived.
+- **🛑 A detector that matches a predicate's RENDERED TEXT is disarmed by any legitimate change to
+  that predicate — silently, on a diff touching no Python at all.** Fixing `camera.zoom`'s float
+  comparison un-geared the T276 per-view zoom guard, because `act/availability.py::_sets_camera_zoom`
+  recognised the zoom action by matching the string `camera.zoom == target`, **and its own comment
+  sold that indirection as a virtue.** Removing the `==` shape took a 0.05 zoom requested in world
+  mode — a camera state no view declares — from **refused to AUTHORISED**. That is a Principle I
+  regression in the dangerous direction, produced by a catalog-only change.
+  **It is the allowlist-read-as-detector shape once more: a non-match means "nothing there", so the
+  failure is a confident all-clear.** Remedy applied: key the matcher on the **symbols the
+  declaration constrains** (`("camera","zoom")` plus `target`), not on the comparison's shape, and
+  **ratchet that exactly one shipped action is recognised**, with a rewrite-survival test and a
+  negative control. **What held: two pre-existing tests caught it instantly** — the reason to write
+  the guard's tests against behaviour rather than against the guard.
+- **The bare full-suite command does not complete on this box, and it does not complete at the parent
+  commit either** — control run confirmed identical truncation at 59% with `EXITCODE:143`. So it is
+  **pre-existing, not any lane's change.** `faulthandler_timeout=120` never dumped and `--timeout=60`
+  never named a test, which argues **slow under contention** (box load 5.6–7.1 with another lane's
+  pytest running) rather than wedged. **Contention vs. a genuinely slow test is NOT settled — do not
+  quote this as a hang.** The split form loop-state prescribes is green and, because `addopts`
+  excludes `tests/live` by default, the split IS the full accepted suite.
 - **A query that returns the same empty answer for your control as for your subject is broken, not
   conclusive.** A sweep read `outcome: None` for everything including the control, because the
   execution record nests under `decision` rather than beside it. **The control caught a broken query
