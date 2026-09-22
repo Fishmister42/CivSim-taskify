@@ -243,6 +243,18 @@ there was one partial lookup between them.
   the real defect then sits behind a green metric with a documented cause. **The defence: predict the
   specific observable before making the change.** A movement that matches the prediction counts; a
   movement that merely goes the right way does not.
+- **OPEN, HIGH: the store may misattribute which provider served a call**, and it is a **provenance**
+  defect, not a cost one — cost is merely where it surfaces. `run-e8c96e29c…` is recorded as served by
+  `openrouter/anthropic/claude-sonnet-5`, one call, unpriced, while its own `results.json` says
+  `provider: fake`. **If the store cannot say whether a model or a stub made a decision, a coverage
+  number built from those runs is not measuring what it claims.** It cuts both ways — a fake recorded
+  as paid inflates spend, a paid recorded as fake understates it — and **nobody has established the
+  direction**. Every spend figure quoted on 2026-09-22 carries this caveat until settled.
+  **And the free blocks have MORE at stake than the paid ones**, not less: the whole argument for
+  `--provider stochastic` is *"the claim under test is applicability, not whether a model chose it"*,
+  which holds only if the record reliably says a stub was in the loop. **A stochastic block
+  misrecorded as a model call is a Principle I question, not an accounting one — a decision attributed
+  to a model that no model made.**
 - **A MECHANISM THAT EXPLAINS THE EVIDENCE IS NOT THE MECHANISM THAT PRODUCED IT.** On 2026-09-22 a
   "deterministic suite hang" was escalated as blocking: **byte-identical truncation at ~60% across two
   runs with different outer budgets (870 s, 890 s)**, presented as ruling out contention. It does not —
