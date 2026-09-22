@@ -24,6 +24,7 @@
         "model_chain_exhausted",
         "image_withheld",
         "capture_failed",
+        "decision_step_completed",
         "operator_intervention",
         "game_over_detected",
         "branch_created",
