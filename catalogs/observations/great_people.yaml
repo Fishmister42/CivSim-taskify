@@ -10,11 +10,13 @@
 - declaration_id: great_people.state
   kind: observation
   summary: >
-    Great people currently recruitable by the local player, and the local player's own
-    accumulated points per great-person class.
+    The great-person cards the Great People screen is currently offering, each flagged with
+    whether its Recruit button is live, and the local player's own accumulated points per
+    great-person class.
   parity_basis: >
-    Open the Great People screen and read the currently recruitable individuals and the local
-    player's own point totals per class.
+    Open the Great People screen and read the cards it is currently offering -- their class,
+    their point threshold, and whether Recruit is available -- and the local player's own point
+    totals per class.
   context: GameCore_Tuner
   capability_id: great_people.read
   output_schema:
@@ -25,11 +27,20 @@
         type: array
         items:
           type: object
-          required: [individual_id, class_type, name]
+          required: [individual_id, class_type, name, is_recruitable]
           properties:
             individual_id: { type: integer }
-            class_type: { type: string }
+            class_type: { type: [string, "null"] }
             name: { type: string }
+            # greatpeoplepopup.lua:723 `entry.Cost` -- the point threshold the panel renders as
+            # "<points>/<threshold>". Named `points_required` because `cost` is a banned key.
+            points_required: { type: [number, "null"] }
+            # greatpeoplepopup.lua:728 CanRecruitPerson -- exactly what shows (:265-269) or hides
+            # (:276) the Recruit button. `great_people.recruit` reads this off the targeted row.
+            is_recruitable: { type: boolean }
+      # Present only when the list could not be read at all -- never a silent `[]`. See the
+      # 2026-09-21 accessor audit: GetAvailableIndividuals/GetPlayerPoints were invented names.
+      recruitable_individuals_reason: { type: string }
       points_by_class:
         type: array
         items:
@@ -38,4 +49,6 @@
           properties:
             class_type: { type: string }
             points: { type: number }
+            points_per_turn: { type: [number, "null"] }
+      points_by_class_reason: { type: string }
   introduced_in_version: "2026.09.1"

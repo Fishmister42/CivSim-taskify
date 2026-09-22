@@ -19,9 +19,14 @@
       pantheon_selected: { type: boolean }
       religion_founded: { type: boolean }
       own_religion: { type: [string, "null"] }
+      # The beliefs the chooser a human would have open right now would offer: pantheon-class
+      # beliefs before a pantheon is chosen, religion beliefs after (pantheonchooser.lua:69-77,
+      # religionscreen.lua:446-469). Present only when that list could not be read at all --
+      # never a silent `[]`, the failure the 2026-09-21 accessor audit found here.
       available_beliefs:
         type: array
         items: { type: string }
+      available_beliefs_reason: { type: string }
       city_majority_religions:
         type: array
         items:

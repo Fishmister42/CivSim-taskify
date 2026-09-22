@@ -19,9 +19,15 @@
       available_governments:
         type: array
         items: { type: string }
+      # Present only when the list could not be read at all -- never a silent `[]`. See
+      # lua/gamecore/government.lua and the 2026-09-21 accessor audit: the three phantom accessors
+      # this observation used (GetSlottablePolicies, HasGovernment, governorList.Members /
+      # GetAssignedCityID) each reported an honest-looking empty list forever.
+      available_governments_reason: { type: string }
       available_policies:
         type: array
         items: { type: string }
+      available_policies_reason: { type: string }
       governors:
         type: array
         items:
@@ -29,6 +35,7 @@
           properties:
             governor_type: { type: [string, "null"] }
             assigned_city_id: { type: [integer, "null"] }
+      governors_reason: { type: string }
       available_governors:
         type: array
         items: { type: string }

@@ -8,7 +8,10 @@
   parity_basis: >
     Open the Espionage panel and look at the local player's own spy list and their assigned
     missions.
-  context: GameCore_Tuner
+  # 2026-09-21 accessor audit: was GameCore_Tuner. A spy is a unit, and finding one needs
+  # `unit:GetUnitType()` (MEASURED InGame-only, T213) plus `Cities.GetPlotPurchaseCity`, so this
+  # read moves to InGame alongside units.state.
+  context: InGame
   capability_id: espionage.read
   output_schema:
     type: object
@@ -21,7 +24,14 @@
           required: [unit_id]
           properties:
             unit_id: { type: integer }
+            # `unit:GetSpyOperation()` resolved through GameInfo.UnitOperations
+            # (espionageoverview.lua:659,673); null when the spy is idle (-1).
             mission: { type: [string, "null"] }
+            # Derived from the spy's own plot via Cities.GetPlotPurchaseCity
+            # (espionageoverview.lua:643-644) -- no target-city accessor exists.
             target_city_id: { type: [integer, "null"] }
             is_available: { type: boolean }
+      # Present only when the spy list could not be built at all -- never a silent `[]`, the
+      # failure the accessor audit found here (`player:GetEspionage()` does not exist).
+      spies_reason: { type: string }
   introduced_in_version: "2026.09.1"

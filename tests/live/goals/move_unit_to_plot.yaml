@@ -7,10 +7,11 @@ objective: >
   Move one of your units. Select a unit, read the plots it can currently reach, and order it to
   move to one of them.
 
-# units.move_to's verification_predicate is
-# `unit.plot == target or (unit.queued_path != null and unit.queued_path.destination == target)`,
-# so an `applied` outcome means the harness re-read the unit and saw it on -- or pathing to --
-# the plot the agent named. That read-back is the success evidence; nothing else is needed.
+# units.move_to's verification_predicate is `unit.plot == target`, so an `applied` outcome means
+# the harness re-read the unit and saw it standing on the plot the agent named. That read-back is
+# the success evidence; nothing else is needed. (Before 2026-09-21 the predicate also accepted
+# "pathing to" via `unit.queued_path.destination`; the accessor audit found that field could never
+# hold a destination on any build, so it is gone. A multi-turn order verifies on arrival.)
 success: observed_applied_units_move_to >= 1
 
 prerequisites:

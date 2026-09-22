@@ -287,10 +287,25 @@ local function CivSim_DescribeUnit(unit, localPlayer)
                 entry.available_builds_reason = buildsReason
             end
         end
-        -- Queued path, if any (mirrors the little destination marker the UI shows a unit with
-        -- a pending multi-turn move order).
-        if unit.GetActivityType and unit:GetActivityType() == UnitActivityType.ACTIVITY_OPERATION then -- UNVERIFIED
-            entry.queued_path = { destination = nil } -- UNVERIFIED: no confirmed path-destination accessor
+        -- ACCESSOR AUDIT (2026-09-21, spikes/lua-accessor-audit-2026-09-21.md): this block carried
+        -- two phantoms and made one non-claim.
+        --   * `unit:GetActivityType()` is not a unit method. The real accessor is
+        --     `UnitManager.GetActivityType(pUnit)` -- a UnitManager function
+        --     (base/assets/ui/panels/unitpanel.lua:2147, unitflagmanager.lua:856).
+        --   * `UnitActivityType` is not a table in Civilization VI; the enum is `ActivityTypes`
+        --     (unitpanel.lua:2148, unitflagmanager.lua:857-869).
+        --   * `queued_path = { destination = nil }` promised a destination that no accessor in the
+        --     shipped corpus can answer. `UnitManager.GetMoveToPathEx(unit, endPlotId)`
+        --     (worldinput.lua:961) computes a *prospective* path to a plot the caller already
+        --     names; it cannot say where a unit is already headed. Reporting a field whose only
+        --     possible value is null is a claim the harness cannot keep, so the field is gone
+        --     (Principle I non-claim) rather than emitted empty.
+        -- What a human can see is kept: the unit's activity, which is what the flag badge shows.
+        local activity = CivSim_Units_Try(function() return UnitManager.GetActivityType(unit) end)
+        if type(activity) == "number" then
+            entry.has_queued_orders = (activity == ActivityTypes.ACTIVITY_OPERATION)
+        else
+            entry.has_queued_orders_reason = "unit_manager_get_activity_type_unanswerable"
         end
     end
     return entry

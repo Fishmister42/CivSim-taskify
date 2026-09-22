@@ -37,8 +37,14 @@
   availability_predicate: >
     unit.is_selected and unit.owner_is_local_player and unit.movement_remaining > 0
     and target in unit.reachable_plots
+  # 2026-09-21 accessor audit: the second disjunct used to be
+  # `unit.queued_path != null and unit.queued_path.destination == target`. That field could never
+  # hold a destination -- its guard called a method the unit does not have and its only value was
+  # hard-coded nil -- so the disjunct was always false and is removed rather than left as dead
+  # weight in the rendered predicate. A multi-turn order now verifies on the turn the unit
+  # arrives, which is the only thing the game will actually tell us.
   verification_predicate: >
-    unit.plot == target or (unit.queued_path != null and unit.queued_path.destination == target)
+    unit.plot == target
   target_kind: plot
   target_hint: >
     a destination plot from the selected unit's reachable_plots -- the plot, never the unit's id

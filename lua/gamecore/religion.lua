@@ -8,10 +8,14 @@
 -- either. This file must stay entirely self-contained — no shared module can ever be factored out
 -- and `require`d elsewhere — and carries its own hand-rolled JSON encoder.
 --
--- This file's own accessors (Player:GetReligion(), Game.GetReligion(), etc.) were not covered by
--- the live-client sweep and remain unconfirmed guesses; see the per-call UNVERIFIED markers below,
--- left as-is because the sweep did not test them. The one correction made here (P4 spot-check) is
--- PlayerManager.GetAlive() replacing the unconfirmed PlayerManager.GetAliveMajors() guess.
+-- ACCESSOR AUDIT (2026-09-21, specs/002-civ-playing-harness/spikes/lua-accessor-audit-2026-09-21.md):
+-- `Game.GetReligion():GetAvailableBeliefs(playerId)` exists in none of Firaxis' 645 shipped Lua
+-- files and is not a registered engine binding. Under its `pcall` the list stayed `[]` on every
+-- step, so all three religion actions (`religion.select_pantheon`, `religion.found_religion`,
+-- `religion.select_belief`), whose availability predicates all read `target in
+-- player.available_beliefs`, could never become available. There is no engine enumerator at all:
+-- Firaxis iterates the static GameInfo.Beliefs() table and filters it with three real predicates,
+-- which is what this file does now. Cited inline. UNVERIFIED LIVE.
 --
 -- Parity note: pantheon/religion state is reported only for the local player and only the
 -- majority religion of a visible city (exactly what the standard religion overview and city
@@ -58,13 +62,78 @@ local function CivSim_JsonEncode(value)
     end
 end
 
+local function CivSim_Religion_Try(fn)
+    local ok, value = pcall(fn)
+    if ok then return value end
+    return nil
+end
+
+-- --------------------------------------------------------------------------
+-- The beliefs the game's own chooser would offer right now.
+--
+-- SOURCE (this machine, 2026-09-21; steamassets/base/assets/ui/):
+--   choosers/pantheonchooser.lua:29-40,:69-77 -- before a pantheon, the chooser walks
+--     `for row in GameInfo.Beliefs()` and keeps a row when
+--       not Game.GetReligion():IsInSomePantheon(row.Index)
+--       and not Game.GetReligion():IsInSomeReligion(row.Index)
+--       and row.BeliefClassType == "BELIEF_CLASS_PANTHEON"
+--   religionscreen.lua:446-469 -- for a religion, the same two predicates plus
+--     not Game.GetReligion():IsTooManyForReligion(row.Index, <religion type>), and the class
+--     filter inverts: everything EXCEPT "BELIEF_CLASS_PANTHEON" (:465-466)
+--
+-- There is no "give me the available beliefs" call anywhere in the shipped corpus; this is how
+-- the game itself answers the question. The list this body reports is the one the chooser a human
+-- would have open right now would show: pantheon-class beliefs before a pantheon is chosen,
+-- religion beliefs after.
+-- --------------------------------------------------------------------------
+local function CivSim_Religion_AvailableBeliefs(pantheonSelected, ownReligionIndex)
+    local beliefs = {}
+    local gameReligion = CivSim_Religion_Try(function() return Game.GetReligion() end)
+    if gameReligion == nil then
+        return beliefs, "game_religion_unavailable"
+    end
+    local answered = false
+    for row in GameInfo.Beliefs() do
+        local inPantheon = CivSim_Religion_Try(function()
+            return gameReligion:IsInSomePantheon(row.Index)
+        end)
+        local inReligion = CivSim_Religion_Try(function()
+            return gameReligion:IsInSomeReligion(row.Index)
+        end)
+        if type(inPantheon) == "boolean" or type(inReligion) == "boolean" then answered = true end
+        local taken = (inPantheon == true) or (inReligion == true)
+        local classMatches
+        if not pantheonSelected then
+            classMatches = (row.BeliefClassType == "BELIEF_CLASS_PANTHEON")
+        else
+            classMatches = (row.BeliefClassType ~= "BELIEF_CLASS_PANTHEON")
+            if classMatches and type(ownReligionIndex) == "number" and ownReligionIndex ~= -1 then
+                local tooMany = CivSim_Religion_Try(function()
+                    return gameReligion:IsTooManyForReligion(row.Index, ownReligionIndex)
+                end)
+                if tooMany == true then classMatches = false end
+            end
+        end
+        if classMatches and not taken and row.BeliefType ~= nil then
+            beliefs[#beliefs + 1] = row.BeliefType
+        end
+    end
+    if not answered then
+        -- Never a silent `[]`: without the two predicates this body cannot tell a taken belief
+        -- from an offered one, and an unfiltered GameInfo dump is not what the chooser shows.
+        return {}, "belief_availability_predicates_unanswerable"
+    end
+    return beliefs, nil
+end
+
 -- VERIFIED (P3, per-context probe: spikes/sweep-raw/GameCore_Tuner__P3_congress_greatpeople_religion.txt):
 -- `Game.GetReligion()` as a global religion-game singleton is confirmed to exist as a function in
 -- both InGame and this file's own GameCore_Tuner context (one of only 4 of the 8 manager
 -- accessors present in GameCore_Tuner — see lua/gamecore/congress.lua's header for the full
--- breakdown and the contrasting case where the accessor is GameCore_Tuner-absent). UNVERIFIED:
--- existence is not arity — every method called on it below, and on the separate
--- `Player:GetReligion()` call, remains an unconfirmed guess.
+-- breakdown and the contrasting case where the accessor is GameCore_Tuner-absent).
+-- `Player:GetReligion():GetPantheon()` returns a GameInfo.Beliefs row INDEX, or < 0 for none
+-- (base/assets/ui/religionscreen.lua:121, :311; base/assets/ui/launchbar.lua:138) -- both real,
+-- both left as they were.
 local function CivSim_Religion_GetState()
     local localPlayer = Game.GetLocalPlayer()
     local player = Players[localPlayer]
@@ -84,14 +153,8 @@ local function CivSim_Religion_GetState()
         ownReligionType = GameInfo.Religions[foundedType].ReligionType -- UNVERIFIED
     end
 
-    local availableBeliefs = {}
-    -- VERIFIED (P3): Game.GetReligion() itself confirmed to exist. UNVERIFIED: :GetAvailableBeliefs(...).
-    local ok3, beliefList = pcall(function() return Game.GetReligion():GetAvailableBeliefs(localPlayer) end) -- UNVERIFIED
-    if ok3 and type(beliefList) == "table" then
-        for _, beliefType in ipairs(beliefList) do
-            availableBeliefs[#availableBeliefs + 1] = GameInfo.Beliefs[beliefType].BeliefType -- UNVERIFIED
-        end
-    end
+    local availableBeliefs, beliefsReason =
+        CivSim_Religion_AvailableBeliefs(pantheonSelected, foundedType)
 
     -- Majority religion of visible cities only (what a city banner shows).
     -- VERIFIED (P4 spot-check): PlayerManager.GetAlive() exists, replacing the unconfirmed
@@ -118,13 +181,15 @@ local function CivSim_Religion_GetState()
         end
     end
 
-    return {
+    local state = {
         pantheon_selected = pantheonSelected,
         religion_founded = religionFounded,
         own_religion = ownReligionType,
         available_beliefs = availableBeliefs,
         city_majority_religions = cityReligions,
     }
+    if beliefsReason ~= nil then state.available_beliefs_reason = beliefsReason end
+    return state
 end
 
 CivSim_Religion = {

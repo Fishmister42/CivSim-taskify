@@ -80,10 +80,15 @@
             # Why the build list is empty, when the panel's own query could not be asked at all --
             # never a silent `[]` (the failure that hid cities.state's empty available_productions).
             available_builds_reason: { type: string }
-            queued_path:
-              type: [object, "null"]
-              properties:
-                destination:
-                  type: object
-                  properties: { x: { type: integer }, y: { type: integer } }
+            # 2026-09-21 accessor audit: `queued_path` is gone. It was emitted only when
+            # `unit:GetActivityType() == UnitActivityType.ACTIVITY_OPERATION` -- a method that is
+            # not on the unit (the real one is `UnitManager.GetActivityType(pUnit)`,
+            # unitpanel.lua:2147) and an enum table that does not exist (`ActivityTypes`,
+            # unitpanel.lua:2148) -- and its only field, `destination`, was hard-coded nil because
+            # no accessor in the shipped corpus can say where a unit is already headed. A field
+            # whose only possible value is null is a claim the harness cannot keep (Principle I).
+            # What a human can see -- the badge on the unit flag saying it has standing orders --
+            # is reported instead.
+            has_queued_orders: { type: boolean }
+            has_queued_orders_reason: { type: string }
   introduced_in_version: "2026.09.1"

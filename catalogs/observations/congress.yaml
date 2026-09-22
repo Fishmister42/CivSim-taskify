@@ -9,21 +9,32 @@
   parity_basis: >
     Open the World Congress screen while a session is active and read the currently proposed
     resolutions.
-  context: GameCore_Tuner
+  # 2026-09-21 accessor audit: was GameCore_Tuner, where the sweep MEASURED
+  # `Game.GetWorldCongress()` as nil (spikes/sweep-raw/GameCore_Tuner__P3_*.txt) while InGame has
+  # it as a function -- so every read failed in its own declared context. Same correction
+  # units.yaml took under T213.
+  context: InGame
   capability_id: congress.read
   output_schema:
     type: object
     required: [is_in_session, local_player_favor, active_resolutions]
     properties:
       is_in_session: { type: boolean }
+      is_in_session_reason: { type: string }
       local_player_favor: { type: number }
+      local_player_favor_reason: { type: string }
       active_resolutions:
         type: array
         items:
           type: object
           required: [resolution_id, resolution_type]
           properties:
+            # The resolution row's Hash -- the same value PlayerOperations.PARAM_RESOLUTION_TYPE
+            # takes (worldcongresspopup.lua:606, :2241), so congress.cast_vote's `target` is
+            # directly usable. A runtime resolution entry carries no id of its own; its only
+            # identity is `.Type` (worldcongresspopup.lua:590), and there is no proposer on it.
             resolution_id: { type: integer }
             resolution_type: { type: string }
-            proposer_player_id: { type: [integer, "null"] }
+            name: { type: [string, "null"] }
+      active_resolutions_reason: { type: string }
   introduced_in_version: "2026.09.1"
