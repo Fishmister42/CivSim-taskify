@@ -55,6 +55,17 @@
       "title": "DeclarationKind",
       "type": "string"
     },
+    "HudCorner": {
+      "description": "A frame corner a view declares as holding the game's own HUD (T283).\n\nSee ``parity.screening._corner_overlay_is_suspect`` for what the content gate does with it:\na declared corner is not exempt, it is judged against the *other declared HUD corners*\ninstead of against the whole frame, which is what makes the detector sharper rather than\nmore permissive.",
+      "enum": [
+        "top_left",
+        "top_right",
+        "bottom_left",
+        "bottom_right"
+      ],
+      "title": "HudCorner",
+      "type": "string"
+    },
     "LuaContext": {
       "description": "Which Lua execution context a catalog entry or observation entry came from.\n\nShared by ``ObservationEntry.context`` (models/turn.py) and\n``ParityDeclaration.context`` (models/catalog.py) -- both name the same\ntwo contexts (contracts/capability-catalog.md), so it is defined once\nhere rather than twice.",
       "enum": [
@@ -119,6 +130,21 @@
     "declaration_id": {
       "title": "Declaration Id",
       "type": "string"
+    },
+    "hud_corners": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/HudCorner"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hud Corners"
     },
     "introduced_in_version": {
       "title": "Introduced In Version",

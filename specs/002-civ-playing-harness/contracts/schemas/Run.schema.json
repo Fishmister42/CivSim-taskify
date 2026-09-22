@@ -43,6 +43,16 @@
       "title": "ComparabilityStatus",
       "type": "string"
     },
+    "DebugMenuState": {
+      "description": "Whether ``EnableDebugMenu`` could be read from ``AppOptions.txt`` at preflight, and if so\nwhat it said (T204 hardening item 1; ``spikes/principle-i-debugmenu-linux.md``).\n\nLives here rather than beside its reader in ``run/preparation.py`` because it is a field of\n:class:`Run`, and ``models/`` is the foundation layer -- it may not import from ``run/``.\n``run.preparation`` re-exports this name, so existing imports of it from there keep working.\n\nThis is **provenance, never a gate**. The originating spike ran the tuner three ways with the\ndebug menu on and off and found the callable surface byte-identical, so there is no Principle I\ntension to enforce; what the spike asked for is that a run's parity configuration be\n\"reconstructible from its record alone rather than from a claim about how the host was set up\",\nwhich is what recording this on the ``Run`` is for.",
+      "enum": [
+        "enabled",
+        "disabled",
+        "unknown"
+      ],
+      "title": "DebugMenuState",
+      "type": "string"
+    },
     "HostSupportTier": {
       "description": "Resolved at preflight. ``unsupported`` has no member here: an\nunsupported host cannot produce a run at all, so there is nothing to\nrecord (R19) -- only the two tiers a run can actually carry are\nrepresentable.",
       "enum": [
@@ -124,6 +134,17 @@
     "config_id": {
       "title": "Config Id",
       "type": "string"
+    },
+    "debug_menu_state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DebugMenuState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "ended_at": {
       "anyOf": [
