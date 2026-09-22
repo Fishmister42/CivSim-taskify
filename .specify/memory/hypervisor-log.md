@@ -1667,8 +1667,16 @@ Three instances today, and the third had already been fixed by the time the firs
    `recognized=true`, `has_blocking_prompt=false`, screen `world` — with `EndGameMenu` full-screen in
    front of it. **`recognized=true` while wrong is categorically worse than `recognized=false`**: an
    unknown screen would have made the harness know it did not know. Instead every downstream consumer
-   treated a false answer as settled, dispatched into a modal, and recorded the resulting failures as
-   **action** failures rather than as a blocked board.
+   treated a false answer as settled. **CORRECTED 2026-09-22, later: the consequence stated next was
+   not observed.** This entry went on to say the harness "dispatched into a modal and recorded the
+   resulting failures as action failures rather than as a blocked board" — a mechanism relayed to this
+   lane as confirmed, repeated here and in two further messages, and **never checked**. The audit finds
+   modal blindness is **not positively identified anywhere in the store**: all 670 bundles read
+   `recognized: true` and no end-game screen id appears at all. The nine steps that *were* dispatched
+   into a blocking prompt are a **different and cheaper defect — an availability-gate gap**, where the
+   harness **recognised** the prompt and dispatched anyway. The probe's false all-clear is real and is
+   the finding here; the downstream consequence attributed to it is withdrawn.
+   **Blast radius of one unverified relayed sentence: four documents before anyone ran the lookup.**
 2. **`lua/ACCESSORS.txt`.** Answers "does this method exist". The segfault spike already records that
    it does **not** answer "is it safe to call here, on this object, from this context".
 3. **The content screening gate.** A contaminant category no technique addressed read as **clean** —
@@ -1749,3 +1757,55 @@ every release path already converges on — disarms it. That is *"ask whether th
 at all"* one level up: it does not need the paths to funnel, so it does not care that they do not.
 The convergence claim was verified rather than accepted, which is the only reason the design is known
 to hold.
+
+### Three rules from the day's last hour (2026-09-22)
+
+**1. A record worse than the truth and a record better than the truth are different emergencies.**
+Every defect found today makes the harness look **worse** than it is — an action that landed recorded
+as refused, a turn caused and not credited, a capability that works reported as failed. Those are
+**recoverable**: the truth is better than the record and the record corrects upward.
+
+`make_peace` runs the other way. Its predicate is `!= "war"` against a field that **does not exist**,
+so absence makes it evaluate **True** — it would record a **no-op as `applied`**. It is harmless only
+because availability reads the same absent field first and refuses. **Fix the context without fixing
+the predicate shape and an unreachable action becomes a silently lying one.**
+
+> **A predicate compared against a possibly-absent field must distinguish absent from false. Its
+> polarity alone decides whether it under-reports or fabricates.**
+
+Under-reporting is a measurement problem. **Fabricating is a credibility problem: nothing in the data
+would ever reveal it, and it poisons the claims that are currently sound along with the rest.** The
+sweep's primary deliverable is therefore the **polarity list** — for every predicate over a possibly
+absent field, does absence resolve False (under-reports, visible) or True (**fabricates, invisible**).
+The True list did not exist, and it is the only artefact that can say whether the store already holds
+a fabricated `applied`. Producing it and fixing nothing is the preferred outcome.
+
+Ordering that follows: **predicate shape first, then the context probe, then wiring — never the
+context alone.** This is spec 004's spine arriving in a third place: **absence and unobservability
+must not share a representation.**
+
+**2. Beware the fix that manufactures its own confirmation.**
+`cities.set_production`'s 110 failures are a **dispatch** defect — an operator probe shows the same
+order landing in **+1 s** when correctly parameterised. Raising `ACTION_CONFIRM_TIMEOUT_S` would have
+moved that number **for reasons unrelated to bounds**, and the movement would have been read as
+evidence the bound caused them. The real defect would then sit behind a green metric **with a
+documented cause**, and nobody would look again.
+
+> **The danger is not wasted effort. It is that the number moving is taken as evidence for the
+> hypothesis that motivated the fix, so the wrong explanation gets confirmed and the question closes.**
+
+Defence: **predict the specific observable before making the change.** A movement matching the
+prediction counts; a movement that merely goes the right way does not.
+
+**3. A mid-task message may narrow, never widen.**
+The provenance rule — *a scope change is never a mid-task message, it is a fresh brief* — read as
+*ignore all mid-task messages*, which would block a re-prioritisation exactly as hard as an
+escalation. **An agent that cannot be told to stop is worse than one that cannot be told to start**,
+and the stop channel was needed three times today, including the quiescence hold.
+
+> **Does this message permit an action that was previously forbidden? If no, it is not an escalation.**
+
+A message that forbids, reorders or re-prioritises **permits nothing new, so it carries no injection
+risk by construction**. The worst a hostile narrowing achieves is making the agent do less — denial of
+service, not privilege escalation. The test keeps the property that made the original refusal correct:
+**it is mechanical and does not require judging the sender.**
