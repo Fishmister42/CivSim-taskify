@@ -45,6 +45,19 @@ itself was switched to Opus 5. Separate from the OpenRouter budget, which funds 
   killed by pid. **Green at `5464571`: 2147 passed / 18 skipped / 0 failed.**
 - Git on a shared tree: explicit paths, `git add <paths> && git commit -- <paths>` back to back,
   push after each commit, never `-A`/stash/reset/rebase/force. Catalog-shape pins move with the catalog.
+- **A commit is verified in a clean detached worktree at the committed hash, never against the shared
+  working tree** (adopted 2026-09-22). With two lanes holding uncommitted `src/` edits the suite reads
+  half-saved files: two runs minutes apart returned 90 and then 98 failures with *different* failing
+  modules. So: commit, push, `git worktree add --detach /home/matt/CivSolver-verify <hash>`, run the
+  accepted suite command there, revert on red. Never verify in `/home/matt/CivSolver-live` — a bad
+  commit there can be picked up by a run before it can be walked back. The rule always meant "the tree
+  this commit produces is green"; reading a neighbour's unfinished file was never what it verified.
+- **Only lane leads commit and push. Nested sub-agents never do**, however finished the work looks.
+- **A closing counterpart is required for every action that opens a modal or full-screen view**, and
+  its verification must confirm the view closed. The harness opened a diplomacy session it could not
+  exit: `CloseSession()` answers `ok: true` and does nothing, `IsSessionActive()` does not exist on
+  this build, and a human closes the view with one Escape. An action that can strand the game is worse
+  than one that fails.
 - Host: never `pgrep -f`; `import` only under `timeout`; the tuner is one connection; popups are
   not persisted in saves; the UI lays out at 1024×768 (scale 1.875 × 1.5625 on 1920×1200).
 - **A fixture the system under test keeps writing to is not a fixture**, and a test that skips at
