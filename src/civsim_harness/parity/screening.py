@@ -75,13 +75,21 @@ passed the frame -- a gate that failed open exactly where it was most needed.
 It now fails closed, which is the only outcome Principle I permits: a capture
 that cannot be proven clean is withheld.
 
-**Profile resolution never falls back to a permissive default.**
-:func:`resolve_screening_profile` implements ``screening_profiles.yaml``'s
-own resolution rule exactly: a view's declared ``screening_profile`` of
-``"default"`` always means the strictest profile; anything else resolves by
-the running host's platform identifier, and a platform with no dedicated
-entry -- including one this codebase does not yet know the name of --
-resolves to that same strictest profile, never to an absent check.
+**Profile resolution never falls back to a permissive default, and never
+resolves a value nobody declared.** :func:`resolve_screening_profile`
+implements ``screening_profiles.yaml``'s own resolution rule over a closed
+vocabulary (:class:`~civsim_harness.models.catalog.ScreeningProfileDeclaration`):
+``"default"`` always means the strictest profile, ``"platform"`` means the
+running host's own profile, and a platform with no dedicated entry --
+including one this codebase does not yet know the name of -- resolves to that
+same strictest profile, never to an absent check. **Any other declared value
+is an error**, not a third behaviour: until 2026-09-22 every unrecognised
+string fell into the platform branch, which meant a typo resolved silently
+and the one string that was honoured (``"default"``) silently screened Linux
+frames for Windows chrome -- 34 withholds across two runs named
+``windows_capture_border`` on X11 hosts that cannot draw one. A check that
+runs against the wrong data is not a check that ran; it is a check counted as
+if it had worked.
 """
 
 from __future__ import annotations
@@ -100,7 +108,12 @@ from PIL import Image, ImageStat
 from civsim_harness.capability.registry import CapabilityRegistry
 from civsim_harness.errors import CatalogError
 from civsim_harness.host.port import CaptureFrame, GameProcess, GameWindow
-from civsim_harness.models.catalog import DeclarationKind, ParityDeclaration
+from civsim_harness.models.catalog import (
+    DeclarationKind,
+    HudCorner,
+    ParityDeclaration,
+    ScreeningProfileDeclaration,
+)
 from civsim_harness.models.common import (
     CaptureId,
     CapturePath,
@@ -286,14 +299,41 @@ def resolve_screening_profile(
 ) -> ScreeningProfile:
     """Resolve which :class:`ScreeningProfile` applies (screening_profiles.yaml's own rule).
 
-    ``declared_profile_key == "default"`` always resolves to the strictest
-    profile regardless of *platform*. Otherwise resolution is keyed on
-    *platform*; a platform with no dedicated entry resolves to the strictest
-    profile too -- never to an absent check or a permissive default.
+    Exactly two declared values are legal, and they are named
+    (:class:`~civsim_harness.models.catalog.ScreeningProfileDeclaration`):
+
+    - ``"default"`` -- the strictest union profile, regardless of *platform*.
+    - ``"platform"`` -- the running host's own profile; a *platform* with no
+      dedicated entry resolves to the strictest profile, never to an absent
+      check.
+
+    **Anything else raises** :class:`~civsim_harness.errors.CatalogError`
+    (T292). It used to fall into the platform branch, which made every
+    unrecognised string -- a typo, a profile key that does not exist, a value
+    from a newer catalog -- resolve to *something*, silently. That is how 34
+    withholds across two Linux runs came to name ``windows_capture_border``:
+    the views declared ``default``, the one value whose meaning *was* honoured,
+    and it means "screen this frame for every platform's chrome including the
+    ones that cannot apply here". A resolution that cannot be wrong is worth
+    more than one that always answers.
     """
-    if declared_profile_key == DEFAULT_PROFILE_KEY:
+    if declared_profile_key == ScreeningProfileDeclaration.DEFAULT:
         return profiles.profiles[DEFAULT_PROFILE_KEY]
-    return profiles.profiles.get(platform, profiles.profiles[DEFAULT_PROFILE_KEY])
+    if declared_profile_key == ScreeningProfileDeclaration.PLATFORM:
+        return profiles.profiles.get(platform, profiles.profiles[DEFAULT_PROFILE_KEY])
+    raise CatalogError(
+        f"declared screening_profile {declared_profile_key!r} is not a declarable value",
+        detail={
+            "declared_profile_key": declared_profile_key,
+            "declarable": sorted(v.value for v in ScreeningProfileDeclaration),
+            "platform": platform,
+            "note": (
+                "a platform profile key such as 'linux' is resolved from the running host by "
+                "'platform'; it is never declared directly, and an unknown value must not "
+                "resolve to a profile that merely looks strict"
+            ),
+        },
+    )
 
 
 # --------------------------------------------------------------------------
@@ -591,8 +631,13 @@ def _border_ring_is_suspect(image: Image.Image) -> bool:
 # the 1.8 threshold here -- i.e. decided by float-vs-histogram rounding, not by signal. Visual
 # inspection of those five found ordinary game UI (leader portraits and a tooltip in the
 # top-right), no contaminant. So on real frames this detector is a coin-flip at its own boundary,
-# and `tests/unit/test_image_screening.py`'s realistic-frame negative control (added 2026-09-22,
-# and currently xfail) demonstrates the same false-positive shape from synthetic pixels.
+# and `tests/unit/test_image_screening.py`'s realistic-frame negative control (added 2026-09-22)
+# demonstrates the same false-positive shape from synthetic pixels.
+#
+# T283 (2026-09-22) addressed that WITHOUT touching these three numbers: what changed is which
+# reference a corner is compared against when the view declares that corner as its own HUD (see
+# `_corner_overlay_is_suspect`). The negative control, previously xfail(strict=True), now passes.
+# An undeclared corner is still judged against the whole frame at exactly these values.
 #
 # That is a finding about the thresholds, NOT a licence to raise them. Moving a number until live
 # frames pass would be tuning the gate to the outcome someone wanted rather than to evidence, and
@@ -605,32 +650,86 @@ _CORNER_VARIANCE_RATIO_MIN: Final[float] = 1.8
 _CORNER_VARIANCE_ABS_MIN: Final[float] = 200.0
 
 
-def _corner_overlay_is_suspect(image: Image.Image) -> bool:
-    """A generic in-frame overlay detector: a corner patch far busier than the whole frame.
+def _corner_boxes(width: int, height: int) -> dict[HudCorner, tuple[int, int, int, int]]:
+    corner_width = max(1, int(width * _CORNER_FRACTION))
+    corner_height = max(1, int(height * _CORNER_FRACTION))
+    return {
+        HudCorner.TOP_LEFT: (0, 0, corner_width, corner_height),
+        HudCorner.TOP_RIGHT: (width - corner_width, 0, width, corner_height),
+        HudCorner.BOTTOM_LEFT: (0, height - corner_height, corner_width, height),
+        HudCorner.BOTTOM_RIGHT: (
+            width - corner_width,
+            height - corner_height,
+            width,
+            height,
+        ),
+    }
+
+
+def _corner_overlay_is_suspect(
+    image: Image.Image, *, hud_corners: frozenset[HudCorner] = frozenset()
+) -> bool:
+    """A generic in-frame overlay detector: a corner patch anomalously busier than its reference.
 
     This is the technique that can catch chrome the game itself composites
     into its own window (the Linux 60 FPS overlay finding this task calls
     out) -- it never inspects what the patch says, only that one corner is
-    anomalously higher-variance than the rest of the captured frame, which is
-    the generic shape any small fixed-position HUD/counter/overlay takes.
+    anomalously higher-variance than what it is compared against.
+
+    **What the comparison is depends on what the view declares** (T283, and the
+    reason the two constants below did not have to move):
+
+    - A corner the view does **not** declare as its own HUD is compared against
+      the whole frame, exactly as before. Unchanged strictness: an overlay
+      somewhere the game keeps no chrome still trips at the same numbers.
+    - A corner the view **does** declare as HUD (``ParityDeclaration.hud_corners``)
+      is compared against the busiest of the *other declared HUD corners*. A fixed
+      HUD's corners are all dense chrome, so "busier than the whole frame" describes
+      every one of them and says nothing; "busier than the other HUD corners" is a
+      statement about this corner in particular. A debug overlay drawn *over* the
+      minimap is still caught, because it still lifts that corner away from its peers.
+      With no peers to compare against (a view declaring a single HUD corner), the
+      whole-frame comparison is used -- the strict one, never no check.
+
+    MEASURED on ``tests/unit/test_image_screening.py::_realistic_gameplay_frame``
+    (1920x1200, built from the retro-audit's findings; the *only* negative control
+    that exists, and synthetic -- the 421 withheld live captures were stored with
+    ``blob_ref=NULL``, so there is no real negative population to tune against):
+
+    ============================  ==========  ==================  ====================
+    frame                         whole/var   worst whole-ratio   worst HUD-peer ratio
+    ============================  ==========  ==================  ====================
+    clean gameplay frame             590.6    5.02 (top-right)    1.53 (top-right)
+    + full-corner overlay, TL        690.4    7.90                1.84
+    + full-corner overlay, TR        668.4    8.16                2.82
+    + full-corner overlay, BL        679.9    8.02                1.84
+    + full-corner overlay, BR        688.6    7.92                1.84
+    ============================  ==========  ==================  ====================
+
+    So against ``_CORNER_VARIANCE_RATIO_MIN`` = 1.8 the HUD-peer comparison separates
+    clean (1.53) from contaminated (1.84+) -- but by 15% on one side and 2% on the
+    other, on one synthetic frame. That is a *narrow* band and it is stated here
+    rather than rounded off: a smaller overlay drawn over a busy HUD corner (measured:
+    a 220x60 patch on the bottom-left minimap reaches only 1.71) is **not** caught by
+    this technique. It is not a residual-risk-free change; it is a technique that now
+    carries information where it previously fired on everything.
     """
     width, height = image.size
-    corner_width = max(1, int(width * _CORNER_FRACTION))
-    corner_height = max(1, int(height * _CORNER_FRACTION))
     whole_stat = ImageStat.Stat(image)
     whole_variance = sum(whole_stat.var) / len(whole_stat.var)
-    corners = (
-        image.crop((0, 0, corner_width, corner_height)),
-        image.crop((width - corner_width, 0, width, corner_height)),
-        image.crop((0, height - corner_height, corner_width, height)),
-        image.crop((width - corner_width, height - corner_height, width, height)),
-    )
-    for corner in corners:
-        stat = ImageStat.Stat(corner)
-        corner_variance = sum(stat.var) / len(stat.var)
-        if corner_variance >= _CORNER_VARIANCE_ABS_MIN and corner_variance >= (
-            whole_variance * _CORNER_VARIANCE_RATIO_MIN
-        ):
+
+    variances: dict[HudCorner, float] = {}
+    for corner, box in _corner_boxes(width, height).items():
+        stat = ImageStat.Stat(image.crop(box))
+        variances[corner] = sum(stat.var) / len(stat.var)
+
+    declared = frozenset(hud_corners) & frozenset(variances)
+    for corner, corner_variance in variances.items():
+        if corner_variance < _CORNER_VARIANCE_ABS_MIN:
+            continue
+        peers = [variances[other] for other in declared if other is not corner]
+        reference = max(peers) if (corner in declared and peers) else whole_variance
+        if corner_variance >= reference * _CORNER_VARIANCE_RATIO_MIN:
             return True
     return False
 
@@ -729,8 +828,13 @@ class ContentDetector(Protocol):
         *,
         reject_categories: frozenset[str],
         detected_text_tokens: frozenset[str],
+        hud_corners: frozenset[HudCorner] = frozenset(),
     ) -> frozenset[str]:
-        """Return the subset of *reject_categories* this detector found evidence of in *frame*."""
+        """Return the subset of *reject_categories* this detector found evidence of in *frame*.
+
+        *hud_corners* is the view's own declaration of which frame corners hold the game's HUD
+        (T283). A detector is free to ignore it; an empty set is the strict reading.
+        """
         ...
 
     def addressable_categories(
@@ -807,6 +911,7 @@ class DefaultContentDetector:
         *,
         reject_categories: frozenset[str],
         detected_text_tokens: frozenset[str],
+        hud_corners: frozenset[HudCorner] = frozenset(),
     ) -> frozenset[str]:
         if not reject_categories:
             return frozenset()
@@ -825,7 +930,7 @@ class DefaultContentDetector:
             matches.update(border_categories)
 
         overlay_categories = _categories_for(ScreeningTechnique.CORNER_OVERLAY)
-        if overlay_categories and _corner_overlay_is_suspect(image):
+        if overlay_categories and _corner_overlay_is_suspect(image, hud_corners=hud_corners):
             matches.update(overlay_categories)
 
         for category in _categories_for(ScreeningTechnique.DECLARED_TEXT):
@@ -848,9 +953,18 @@ def _check_content(
     declared_profile_key = declaration.screening_profile
     assert declared_profile_key is not None  # guaranteed for kind == view
 
-    profile = resolve_screening_profile(
-        profiles, declared_profile_key=declared_profile_key, platform=attempt.platform
-    )
+    try:
+        profile = resolve_screening_profile(
+            profiles, declared_profile_key=declared_profile_key, platform=attempt.platform
+        )
+    except CatalogError as exc:
+        # Unreachable through a loaded catalog (ParityDeclaration validates the declared value at
+        # load), and deliberately not fatal here: a run must not die mid-turn over a declaration,
+        # and it must not screen against a profile nobody asked for either. Withheld, saying so.
+        return (
+            f"the view's declared screening_profile could not be resolved: {exc.message} "
+            f"(detail: {exc.detail}); no profile means no certified screening"
+        )
 
     # Coverage BEFORE findings (Principle I). "No technique reported a match" only means the
     # frame is clean for the categories some technique actually examined; for any other category
@@ -877,6 +991,9 @@ def _check_content(
         attempt.frame,
         reject_categories=profile.reject,
         detected_text_tokens=attempt.detected_text_tokens or frozenset(),
+        # T283: the view's own statement of where the game keeps its HUD. Absent means nothing is
+        # declared, which is the strict reading (every corner judged against the whole frame).
+        hud_corners=frozenset(declaration.hud_corners or ()),
     )
     if matches:
         noun = "category" if len(matches) == 1 else "categories"

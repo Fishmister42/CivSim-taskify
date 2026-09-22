@@ -8,8 +8,19 @@
 #
 # Per contracts/capability-catalog.md, every view carries camera_requirements
 # (mode ∈ {world, strategic, city_screen, diplomacy, congress}, a zoom_range within what the
-# standard UI allows, target_must_be_revealed: true) and a screening_profile naming a platform
-# profile key in catalogs/screening_profiles.yaml (FR-024, FR-026).
+# standard UI allows, target_must_be_revealed: true) and a screening_profile (FR-024, FR-026).
+#
+# screening_profile takes exactly two values (models/catalog.py's ScreeningProfileDeclaration):
+# `platform` — screen against the running host's own profile in catalogs/screening_profiles.yaml —
+# or `default` — always the strictest union profile, whatever the host. It is NOT a profile key:
+# `linux` here is an error, not a pin. Until 2026-09-22 any unrecognised value silently resolved by
+# host platform and `default` silently screened Linux frames for Windows chrome (T292).
+#
+# hud_corners (T283, optional) names the frame corners where this view shows the GAME's own HUD.
+# It makes the content gate's corner-overlay technique sharper, not weaker: a declared corner is
+# judged against the other declared HUD corners instead of against the whole frame (which every
+# HUD corner beats by construction), while an undeclared corner is judged exactly as before. It is
+# declared only where there is a measurement to declare it from — see each view below.
 
 - declaration_id: views.world
   kind: view
@@ -22,6 +33,11 @@
     zoom_range: [0.2, 1.0]
     target_must_be_revealed: true
   screening_profile: platform
+  # MEASURED (spikes/frame-retro-audit-2026-09-22.md, all 188 real frames the harness has shown a
+  # model — every one a world view at 1920x1200): the resource bar runs along row 0 into both top
+  # corners, the leader portraits and tooltip sit top-right, the minimap bottom-left and the unit
+  # panel bottom-right. All four corners carry the game's own chrome on every frame examined.
+  hud_corners: [top_left, top_right, bottom_left, bottom_right]
   output_schema:
     type: object
     required: [view_declaration_id, camera_state]
@@ -49,6 +65,11 @@
     zoom_range: [0.05, 0.3]
     target_must_be_revealed: true
   screening_profile: platform
+  # Same in-game HUD as views.world — the strategic view is a map-rendering toggle, it does not
+  # move or remove the resource bar, minimap or unit panel. Not separately measured: the audit's
+  # 188 frames were world views. If that assumption is wrong the effect is a *less* sensitive
+  # corner test on strategic frames, so it is recorded here rather than left implicit.
+  hud_corners: [top_left, top_right, bottom_left, bottom_right]
   output_schema:
     type: object
     required: [view_declaration_id, camera_state]
@@ -76,6 +97,11 @@
     zoom_range: [0.3, 0.6]
     target_must_be_revealed: true
   screening_profile: platform
+  # No hud_corners: not one city-screen frame exists in the retro-audit's sample, so there is
+  # nothing to declare this from. Undeclared is the strict reading — every corner judged against
+  # the whole frame, as today — which on a full-screen UI panel will keep false-positiving and
+  # withholding. That is the fail-closed direction, and it is the honest one until a city-screen
+  # frame has actually been looked at.
   output_schema:
     type: object
     required: [view_declaration_id, camera_state, city_id]

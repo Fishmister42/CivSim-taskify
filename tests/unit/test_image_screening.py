@@ -31,6 +31,7 @@ from civsim_harness.models.catalog import (
     CapabilityPath,
     CatalogVersion,
     DeclarationKind,
+    HudCorner,
     IntegrationCapability,
     ParityDeclaration,
 )
@@ -47,7 +48,10 @@ HEIGHT = 480
 
 
 def _build_registry(
-    *, target_must_be_revealed: bool = True, screening_profile: str = "default"
+    *,
+    target_must_be_revealed: bool = True,
+    screening_profile: str = "default",
+    hud_corners: tuple[HudCorner, ...] | None = None,
 ) -> CapabilityRegistry:
     capability = IntegrationCapability(
         capability_id="camera.control",
@@ -71,6 +75,7 @@ def _build_registry(
             target_must_be_revealed=target_must_be_revealed,
         ),
         screening_profile=screening_profile,
+        hud_corners=hud_corners,
         output_schema={"type": "object"},
         introduced_in_version="2026.09.1",
     )
@@ -483,54 +488,200 @@ def test_the_corner_heuristic_fires_on_an_ordinary_gameplay_frame(registry, prof
     ordinary Civ VI frame carries HUD, so "one corner is busier than the whole frame" describes
     the game, not an intruder.
 
-    This is deliberately separate from the xfail below: this test pins *what the detector does*,
-    so a future change to the technique or the thresholds shows up here as an explicit edit with
-    a number attached, instead of silently moving the boundary.
+    This test pins *what the detector does with no HUD declaration*, so a future change to the
+    technique or the thresholds shows up here as an explicit edit with a number attached, instead
+    of silently moving the boundary. It is the undeclared case that T283 deliberately left alone:
+    a view that says nothing about its HUD still gets the whole-frame comparison.
     """
     image = screening._decode_frame(_realistic_gameplay_frame())  # noqa: SLF001 - whitebox
     assert image is not None
     assert screening._corner_overlay_is_suspect(image) is True  # noqa: SLF001
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN DEFECT, not an accepted outcome: the corner-variance technique false-positives on "
-        "ordinary gameplay frames. Corroborated on real pixels by "
-        "specs/002-civ-playing-harness/spikes/frame-retro-audit-2026-09-22.md, where it fired on "
-        "5 of 188 uncontaminated live frames, all at ratio 1.800-1.802 against a 1.8 threshold. "
-        "strict=True on purpose: whoever makes this pass must come back and justify how, because "
-        "the wrong way to make it pass -- raising _CORNER_VARIANCE_ABS_MIN or the ratio until "
-        "live frames get through, dropping debug_overlay from a profile, deleting the technique "
-        "-- weakens the one in-frame-chrome defence the harness has. The right way needs a "
-        "real-frame sample of both contaminated and clean frames, which does not exist yet: the "
-        "421 withheld captures were stored with blob_ref NULL, so their pixels are gone."
-    ),
-)
-def test_a_realistic_gameplay_frame_should_pass_the_content_gate(registry, profiles) -> None:
-    """The outcome a clean frame is entitled to, written down before anyone tunes anything.
+# --------------------------------------------------------------------------
+# T283: the corner heuristic, narrowed by a view's own HUD declaration
+# --------------------------------------------------------------------------
+#
+# WHAT CHANGED, AND WHAT DID NOT. ``_CORNER_FRACTION``, ``_CORNER_VARIANCE_RATIO_MIN`` and
+# ``_CORNER_VARIANCE_ABS_MIN`` are untouched, no category was dropped from any profile, and the
+# technique still exists. What changed is the *reference* a corner is compared against, and only
+# for corners a view declares as holding the game's own HUD: those are compared against the
+# busiest of the other declared HUD corners instead of against the whole frame. An undeclared
+# corner is unchanged.
+#
+# Why that is narrowing and not loosening: "one corner is busier than the whole frame" is true of
+# every corner of every Civ VI frame by construction -- terrain in the middle, chrome pinned in
+# all four corners -- so on a declared HUD corner the old test carried no information at all. It
+# fired on 5 of 188 uncontaminated live frames only because the game's HUD happens to sit near
+# the 1.8 boundary, i.e. the outcome was decided by rounding. Compared against its peers, a
+# corner has to be anomalous *for a HUD corner*, which an overlay drawn over the minimap still is.
+#
+# MEASURED on ``_realistic_gameplay_frame`` (the numbers the module docstring tabulates): clean
+# worst peer-ratio 1.53, full-corner overlay 1.84-2.82, against a 1.8 threshold. That is a narrow
+# band -- 15% clear on one side, 2% on the other -- and the tests below pin both edges of it.
+# There is still no real negative population to tune against (the 421 withheld captures were
+# stored with ``blob_ref=NULL``), so nothing here claims an empirical derivation.
 
-    The three thresholds had a positive control and no negative one; this is the negative one.
-    Its job is to exist and be red, so that the cost of the current thresholds is visible and any
-    future adjustment is measured against a frame that looks like the game rather than against a
-    flat rectangle.
+_ALL_HUD_CORNERS = (
+    HudCorner.TOP_LEFT,
+    HudCorner.TOP_RIGHT,
+    HudCorner.BOTTOM_LEFT,
+    HudCorner.BOTTOM_RIGHT,
+)
+
+
+def _live_window() -> GameWindow:
+    return GameWindow(
+        handle=1,
+        title="Sid Meier's Civilization VI",
+        rect=WindowRect(0, 0, LIVE_WIDTH, LIVE_HEIGHT),
+        pid=1234,
+    )
+
+
+def _with_corner_overlay(
+    frame: CaptureFrame, corner: HudCorner, *, width: int = 230, height: int = 144
+) -> CaptureFrame:
+    """Draw a busy, high-entropy patch into one corner of an existing frame.
+
+    Stands in for chrome the game composites into its own surface (an FPS counter, a debug HUD).
+    As everywhere else in this file, nothing about the patch encodes what it *says*.
     """
+    image = screening._decode_frame(frame)  # noqa: SLF001 - whitebox fixture construction
+    assert image is not None
+    pixels = image.load()
+    rng = random.Random(4242)
+    left = 0 if corner in (HudCorner.TOP_LEFT, HudCorner.BOTTOM_LEFT) else LIVE_WIDTH - width
+    top = 0 if corner in (HudCorner.TOP_LEFT, HudCorner.TOP_RIGHT) else LIVE_HEIGHT - height
+    for x in range(left, left + width):
+        for y in range(top, top + height):
+            pixels[x, y] = (rng.randrange(256), rng.randrange(256), rng.randrange(256))
+    return _frame_from_image(image, width=LIVE_WIDTH, height=LIVE_HEIGHT)
+
+
+def test_a_realistic_gameplay_frame_passes_the_content_gate(profiles) -> None:
+    """Formerly xfail(strict=True). It passes now, and this docstring says exactly why.
+
+    Two independent changes were needed, and neither is a threshold move:
+
+    1. **T292.** The view declares ``screening_profile: platform``, so a Linux capture resolves
+       the *linux* profile. It used to resolve the union ``default`` profile, which names
+       ``windows_capture_border`` -- so this frame was also being tested for a Windows recording
+       border it cannot contain. (The border-ring technique does still fire on this frame's flat
+       dark top bar; on the Linux profile no reject category has a ``border`` token, so nothing
+       maps to it. On a Windows host that finding would still withhold this frame, and that is a
+       separate, unfixed problem -- stated rather than quietly passed over.)
+    2. **T283.** The view declares all four corners as its own HUD, so each is judged against the
+       other three rather than against the whole frame.
+    """
+    registry = _build_registry(screening_profile="platform", hud_corners=_ALL_HUD_CORNERS)
+
     outcome = screening.screen_capture(
         _attempt(
             frame=_realistic_gameplay_frame(),
-            window=GameWindow(
-                handle=1,
-                title="Sid Meier's Civilization VI",
-                rect=WindowRect(0, 0, LIVE_WIDTH, LIVE_HEIGHT),
-                pid=1234,
-            ),
+            window=_live_window(),
             platform="linux",
         ),
         registry=registry,
         profiles=profiles,
     )
 
-    assert outcome.status is ScreeningStatus.SCREENED_CLEAN
+    assert outcome.status is ScreeningStatus.SCREENED_CLEAN, outcome.detail
+
+
+@pytest.mark.parametrize("corner", _ALL_HUD_CORNERS)
+def test_an_overlay_drawn_over_declared_hud_still_trips_the_gate(profiles, corner) -> None:
+    """The requirement that makes this a narrowing rather than an exemption.
+
+    A declared HUD corner is not skipped. A debug overlay drawn *over* the minimap, or over the
+    leader portraits, lifts that corner away from its HUD peers and is caught -- all four
+    corners, one parametrised case each, so no corner is quietly exempt.
+    """
+    registry = _build_registry(screening_profile="platform", hud_corners=_ALL_HUD_CORNERS)
+
+    outcome = screening.screen_capture(
+        _attempt(
+            frame=_with_corner_overlay(_realistic_gameplay_frame(), corner),
+            window=_live_window(),
+            platform="linux",
+        ),
+        registry=registry,
+        profiles=profiles,
+    )
+
+    assert outcome.status is ScreeningStatus.WITHHELD
+    assert outcome.failed_gate is screening.ScreeningGate.CONTENT
+    assert "debug_overlay" in (outcome.detail or "")
+
+
+def test_an_overlay_in_an_undeclared_corner_trips_at_full_strength(profiles) -> None:
+    """An overlay where the view says the game keeps no chrome is judged as it always was.
+
+    The view here declares only the three corners it actually uses; the top-left is undeclared,
+    so it is compared against the whole frame (measured ratio 7.90 against a 1.8 threshold), not
+    against the HUD peers. Narrowing the rule for declared corners must not narrow it anywhere
+    else, and this is the test that says so.
+    """
+    registry = _build_registry(
+        screening_profile="platform",
+        hud_corners=(HudCorner.TOP_RIGHT, HudCorner.BOTTOM_LEFT, HudCorner.BOTTOM_RIGHT),
+    )
+
+    outcome = screening.screen_capture(
+        _attempt(
+            frame=_with_corner_overlay(_realistic_gameplay_frame(), HudCorner.TOP_LEFT),
+            window=_live_window(),
+            platform="linux",
+        ),
+        registry=registry,
+        profiles=profiles,
+    )
+
+    assert outcome.status is ScreeningStatus.WITHHELD
+    assert outcome.failed_gate is screening.ScreeningGate.CONTENT
+    assert "debug_overlay" in (outcome.detail or "")
+
+
+def test_a_view_that_declares_nothing_keeps_the_old_strict_comparison(profiles) -> None:
+    """Absent ``hud_corners`` is the strict reading, not a shortcut to the lenient one.
+
+    A view added tomorrow without a HUD declaration must behave exactly as every view did before
+    T283 -- withheld on a busy corner. Fail-closed is the only safe default for a field whose
+    presence makes a check less likely to fire.
+    """
+    registry = _build_registry(screening_profile="platform", hud_corners=None)
+
+    outcome = screening.screen_capture(
+        _attempt(
+            frame=_realistic_gameplay_frame(),
+            window=_live_window(),
+            platform="linux",
+        ),
+        registry=registry,
+        profiles=profiles,
+    )
+
+    assert outcome.status is ScreeningStatus.WITHHELD
+    assert outcome.failed_gate is screening.ScreeningGate.CONTENT
+    assert "debug_overlay" in (outcome.detail or "")
+
+
+def test_a_single_declared_hud_corner_has_no_peers_and_falls_back_to_the_strict_rule() -> None:
+    """One declared corner cannot be compared against its peers, so it is not compared leniently.
+
+    The degenerate declaration. "No peers" must mean the whole-frame comparison, never "no check":
+    a lenient answer reached by having nothing to compare against is the same failure this whole
+    file exists to catch.
+    """
+    image = screening._decode_frame(_realistic_gameplay_frame())  # noqa: SLF001 - whitebox
+    assert image is not None
+
+    assert (
+        screening._corner_overlay_is_suspect(  # noqa: SLF001
+            image, hud_corners=frozenset({HudCorner.TOP_RIGHT})
+        )
+        is True
+    )
 
 
 def test_content_gate_withholds_on_declared_text_token_match(registry, profiles) -> None:
@@ -740,11 +891,64 @@ def test_screened_clean_capture_can_carry_a_blob_and_be_shown(registry, profiles
 def test_profile_resolution_falls_back_to_default_for_unknown_platform(
     profiles: screening.ScreeningProfiles,
 ) -> None:
+    """An OS this codebase has no profile for gets the strictest one, never an absent check.
+
+    The declared key is ``platform`` (T292): that is the value that *means* "resolve by host".
+    This test previously passed ``"windows"`` as the declared key, which worked only because the
+    resolver treated every unrecognised string as a request to resolve by host -- the same
+    permissiveness that let the views' ``default`` and then ``platform`` both resolve without
+    anyone noticing neither was a profile key.
+    """
     resolved = screening.resolve_screening_profile(
-        profiles, declared_profile_key="windows", platform="some_future_console_os"
+        profiles,
+        declared_profile_key=screening.ScreeningProfileDeclaration.PLATFORM,
+        platform="some_future_console_os",
     )
 
     assert resolved is profiles.profiles["default"]
+
+
+def test_platform_declaration_resolves_the_hosts_own_profile(
+    profiles: screening.ScreeningProfiles,
+) -> None:
+    for platform in ("windows", "macos", "linux"):
+        resolved = screening.resolve_screening_profile(
+            profiles,
+            declared_profile_key=screening.ScreeningProfileDeclaration.PLATFORM,
+            platform=platform,
+        )
+        assert resolved is profiles.profiles[platform]
+
+
+def test_an_undeclarable_profile_key_raises_instead_of_resolving_by_host(
+    profiles: screening.ScreeningProfiles,
+) -> None:
+    """T292: the silent third branch is gone. ``linux`` is not declarable -- it is resolved *to*."""
+    with pytest.raises(CatalogError):
+        screening.resolve_screening_profile(
+            profiles, declared_profile_key="linux", platform="linux"
+        )
+
+
+def test_an_undeclarable_profile_key_withholds_the_frame_rather_than_crashing_the_run(
+    profiles: screening.ScreeningProfiles,
+) -> None:
+    """Defence in depth: the catalog validator stops this at load, and the gate fails closed.
+
+    A declaration that never loaded cannot reach the gate, but a hand-built ``ParityDeclaration``
+    (or a future loader that skips the model) can. The frame is withheld with the reason, because
+    "which profile applies" is not a question the gate may guess at -- and a run is not killed
+    mid-turn over a catalog typo either.
+    """
+    registry = _build_registry()
+    view = registry.resolve("views.world")  # type: ignore[arg-type]
+    view.screening_profile = "platfrom"  # bypasses the load-time validator on purpose
+
+    outcome = screening.screen_capture(_attempt(), registry=registry, profiles=profiles)
+
+    assert outcome.status is ScreeningStatus.WITHHELD
+    assert outcome.failed_gate is screening.ScreeningGate.CONTENT
+    assert "could not be resolved" in (outcome.detail or "")
 
 
 def test_declared_default_profile_ignores_host_platform(

@@ -77,6 +77,48 @@ class CameraRequirements(HarnessModel):
     target_must_be_revealed: bool
 
 
+class ScreeningProfileDeclaration(StrEnum):
+    """The closed vocabulary a view's ``screening_profile`` may use (T292).
+
+    MEASURED, 2026-09-22 (``spikes/frame-retro-audit-2026-09-22.md``): 34 content-gate withholds
+    across ``run-227998759f75`` and ``run-fd9c08a1df1d`` named ``windows_capture_border`` on hosts
+    that recorded ``os=linux, session_type=x11``. A Windows recording-border category cannot apply
+    to an XComposite frame, so those withholds were a check running against the wrong data and
+    being counted as protection. The cause was this field: the views declared ``default``, which
+    resolves to the strictest *union* profile on every host, so Linux frames were screened for
+    Windows chrome. 98c71bb changed the declaration to ``platform`` -- a value that is **not a key**
+    in ``catalogs/screening_profiles.yaml`` and only worked because
+    ``parity.screening.resolve_screening_profile`` treated *every* non-``default`` string as
+    "resolve by host platform". Under that rule ``platfrom``, ``Default`` and ``linux-x11`` would
+    all have resolved silently too, and the one value that meant something specific -- ``default``
+    -- silently meant "screen this Linux frame for Windows chrome".
+
+    Naming the two legal values makes the declaration say what it does: ``default`` is a deliberate
+    request for the strictest union profile regardless of host; ``platform`` is a request for the
+    running host's own profile (falling back to the strictest one when the host has no dedicated
+    entry, never to an absent check). Anything else is a typo or a profile key that does not exist,
+    and fails here, at catalog load, rather than resolving to something that merely looks strict.
+    """
+
+    DEFAULT = "default"
+    PLATFORM = "platform"
+
+
+class HudCorner(StrEnum):
+    """A frame corner a view declares as holding the game's own HUD (T283).
+
+    See ``parity.screening._corner_overlay_is_suspect`` for what the content gate does with it:
+    a declared corner is not exempt, it is judged against the *other declared HUD corners*
+    instead of against the whole frame, which is what makes the detector sharper rather than
+    more permissive.
+    """
+
+    TOP_LEFT = "top_left"
+    TOP_RIGHT = "top_right"
+    BOTTOM_LEFT = "bottom_left"
+    BOTTOM_RIGHT = "bottom_right"
+
+
 class ParityDeclaration(HarnessModel):
     """One observable, visual view, or action, with its human equivalent
     (data-model.md SS10; contracts/capability-catalog.md).
@@ -100,6 +142,11 @@ class ParityDeclaration(HarnessModel):
     output_schema: dict[str, Any] | None = None
     camera_requirements: CameraRequirements | None = None
     screening_profile: str | None = None
+    # T283, views only, optional and additive. Which corners of this view's frame hold the game's
+    # own HUD -- declared per view because it is a property of the screen being looked at, not of
+    # the detector. Absent (or empty) means "nothing declared", which is the strictest reading and
+    # the one every view had before: every corner is then judged against the whole frame.
+    hud_corners: tuple[HudCorner, ...] | None = None
     introduced_in_version: str
     # T256: actions only, optional (additive). `target_hint` is one short human-facing sentence
     # rendered after the kind's example, e.g. "a destination plot from the selected unit's
@@ -123,11 +170,27 @@ class ParityDeclaration(HarnessModel):
                 raise ValueError("camera_requirements is required when kind == view")
             if not self.screening_profile:
                 raise ValueError("screening_profile is required when kind == view")
+            # T292: a closed vocabulary, checked at load. An unrecognised value used to resolve
+            # silently -- by host platform, because that was the catch-all branch -- so a typo
+            # screened frames against whichever profile the host happened to have, and the one
+            # recognised value (``default``) screened Linux frames for Windows chrome. Both read
+            # as a working gate in the record. See ScreeningProfileDeclaration for the measurement.
+            if self.screening_profile not in set(ScreeningProfileDeclaration):
+                raise ValueError(
+                    f"screening_profile {self.screening_profile!r} is not a declarable value; "
+                    f"use one of {sorted(v.value for v in ScreeningProfileDeclaration)} "
+                    "(a platform profile key such as 'linux' is resolved *from* the running host "
+                    "by 'platform'; it is not declared here)"
+                )
+            if self.hud_corners is not None and len(set(self.hud_corners)) != len(self.hud_corners):
+                raise ValueError("hud_corners must not repeat a corner")
         else:
             if self.camera_requirements is not None:
                 raise ValueError("camera_requirements must be absent unless kind == view")
             if self.screening_profile is not None:
                 raise ValueError("screening_profile must be absent unless kind == view")
+            if self.hud_corners is not None:
+                raise ValueError("hud_corners must be absent unless kind == view")
 
         if self.kind == DeclarationKind.ACTION:
             if not self.availability_predicate:

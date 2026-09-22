@@ -33,18 +33,31 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from civsim_harness.host.detect import OperatingSystem
+from civsim_harness.capability.loader import load_catalog
+from civsim_harness.errors import CatalogError
+from civsim_harness.host.detect import OperatingSystem, detect_host_info
+from civsim_harness.models.catalog import (
+    CameraMode,
+    CameraRequirements,
+    DeclarationKind,
+    ParityDeclaration,
+    ScreeningProfileDeclaration,
+)
 from civsim_harness.parity.screening import (
     DefaultContentDetector,
     ScreeningProfiles,
     ScreeningTechnique,
     load_screening_profiles,
+    resolve_screening_profile,
     techniques_for_category,
     unaddressed_reject_categories,
 )
 
 ALL_TECHNIQUES = frozenset(ScreeningTechnique)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CATALOG_ROOT = REPO_ROOT / "catalogs"
 
 
 @pytest.fixture(scope="module")
@@ -157,6 +170,171 @@ def test_the_detectors_declared_coverage_is_the_coverage_it_partitions_on(
     assert detector.addressable_categories(reject, text_evidence_available=True) == frozenset(
         c for c in reject if techniques_for_category(c)
     )
+
+
+# --------------------------------------------------------------------------
+# T292: the profile that actually resolves must be the running host's own
+# --------------------------------------------------------------------------
+#
+# A second way for this gate to be decorative, and the one the retro-audit caught in the record:
+# the techniques were fine and the categories were covered, but the *profile* being screened
+# against was the wrong one. 34 content-gate withholds across ``run-227998759f75`` (19) and
+# ``run-fd9c08a1df1d`` (15) -- both recorded ``os=linux, session_type=x11`` -- named
+# ``windows_capture_border``, a category describing a border the Windows.Graphics.Capture API
+# draws and an XComposite frame cannot contain. A Windows recording-border test was evaluating
+# Linux frames, firing on the game's own dark UI edging, and the withholds it produced were filed
+# as safety. This is not the "mechanism never reached" shape the rest of this file guards: the
+# mechanism ran, reached the wrong thing, and was counted as if it had worked.
+#
+# The cause was the declaration. The views said ``screening_profile: default``, which means "the
+# strictest union profile regardless of host" -- the union of every platform's chrome, including
+# every platform that is not this one. 98c71bb changed it to ``platform``, which was not a key in
+# ``screening_profiles.yaml`` either; it only worked because the resolver treated every
+# non-``default`` string as "resolve by host". The assertions below are about the resolved
+# *outcome* rather than the declared string, so neither a typo nor a future catalog edit can put
+# a profile in front of a frame that does not belong to the host that captured it.
+
+
+def _shipped_views() -> list[ParityDeclaration]:
+    """Every ``kind: view`` declaration the repository actually ships, read at collection time."""
+    catalog = load_catalog(CATALOG_ROOT)
+    return [d for d in catalog.declarations.values() if d.kind is DeclarationKind.VIEW]
+
+
+def _shipped_view_ids() -> list[str]:
+    return sorted(str(view.declaration_id) for view in _shipped_views())
+
+
+_PLATFORM_KEYS = frozenset(os.value for os in OperatingSystem)
+
+
+@pytest.mark.parametrize("view_id", _shipped_view_ids())
+@pytest.mark.parametrize("platform", sorted(_PLATFORM_KEYS))
+def test_a_shipped_view_resolves_to_the_profile_of_the_host_it_is_screened_on(
+    view_id: str, platform: str, shipped: ScreeningProfiles
+) -> None:
+    """The invariant the 34 withholds violated, asserted as data on every supported platform.
+
+    Both sides are derived: the declared value comes from the real ``catalogs/observations/
+    views.yaml``, the expected profile name from ``OperatingSystem``. A Linux host resolving
+    anything but the Linux profile fails here -- including resolving ``default``, which is what
+    actually happened and which looks like extra strictness rather than a mistake.
+    """
+    view = next(v for v in _shipped_views() if str(v.declaration_id) == view_id)
+    assert view.screening_profile is not None
+
+    resolved = resolve_screening_profile(
+        shipped, declared_profile_key=view.screening_profile, platform=platform
+    )
+
+    assert resolved.name == platform, (
+        f"view {view_id!r} declares screening_profile={view.screening_profile!r}, which on a "
+        f"{platform!r} host resolves to the {resolved.name!r} profile. A view must be screened "
+        f"against the profile of the host that captured the frame; resolving {resolved.name!r} "
+        f"means {platform!r} frames are tested for chrome that platform cannot produce (T292)."
+    )
+
+
+@pytest.mark.parametrize("view_id", _shipped_view_ids())
+@pytest.mark.parametrize("platform", sorted(_PLATFORM_KEYS))
+def test_the_resolved_profile_never_names_another_platforms_chrome(
+    view_id: str, platform: str, shipped: ScreeningProfiles
+) -> None:
+    """The measured symptom, not just the mechanism: no foreign-platform category in the set.
+
+    ``windows_capture_border`` in a reject set applied to an X11 frame is the whole finding in one
+    string. Derived: a reject id is "another platform's" when its first token is a supported
+    platform name that is not this host's -- the same token vocabulary
+    ``techniques_for_category`` splits on, so a new ``macos_...`` id is covered without an edit.
+    """
+    view = next(v for v in _shipped_views() if str(v.declaration_id) == view_id)
+    assert view.screening_profile is not None
+
+    resolved = resolve_screening_profile(
+        shipped, declared_profile_key=view.screening_profile, platform=platform
+    )
+    foreign = {
+        category
+        for category in resolved.reject
+        if category.split("_")[0] in (_PLATFORM_KEYS - {platform})
+    }
+
+    assert not foreign, (
+        f"on a {platform!r} host, view {view_id!r} resolves profile {resolved.name!r}, whose "
+        f"reject set names another platform's chrome: {sorted(foreign)}. Those categories cannot "
+        f"appear in a {platform!r} frame, so any withhold citing one is a test firing on "
+        f"something else -- recorded as protection, and it was not."
+    )
+
+
+def test_on_this_very_host_the_resolved_profile_is_this_hosts_profile(
+    shipped: ScreeningProfiles,
+) -> None:
+    """The same assertion against the host the suite is actually running on, not a parameter.
+
+    The retro-audit's evidence is per-host: the runs recorded ``os=linux/x11`` and screened
+    against the union profile anyway. This test would have been red on that box, on that day.
+    """
+    platform = detect_host_info().os.value
+
+    for view in _shipped_views():
+        assert view.screening_profile is not None
+        resolved = resolve_screening_profile(
+            shipped, declared_profile_key=view.screening_profile, platform=platform
+        )
+        assert resolved.name == platform, (
+            f"this host reports platform {platform!r}, and view {view.declaration_id!r} resolves "
+            f"the {resolved.name!r} profile"
+        )
+
+
+def test_the_historical_declaration_is_exactly_what_the_assertion_above_catches(
+    shipped: ScreeningProfiles,
+) -> None:
+    """``default`` on a Linux host resolves the union profile -- reproduced, and named as the cause.
+
+    This is the pre-98c71bb declaration, kept as an executable record of the mechanism rather than
+    a sentence about it: the value is legal, the resolution is correct for what it says, and the
+    result is that an X11 frame is tested for a Windows recording border. Nothing here is a bug in
+    the resolver; the bug was declaring it.
+    """
+    resolved = resolve_screening_profile(
+        shipped, declared_profile_key=ScreeningProfileDeclaration.DEFAULT, platform="linux"
+    )
+
+    assert resolved.name == "default"
+    assert "windows_capture_border" in resolved.reject
+    assert "windows_capture_border" not in shipped.profiles["linux"].reject
+
+
+def test_an_undeclarable_screening_profile_value_fails_loudly_at_both_ends() -> None:
+    """A value outside the vocabulary is an error at load *and* at resolution, not a third rule.
+
+    Before T292 every unrecognised string fell through to "resolve by host platform", so
+    ``platfrom``, ``Default`` and ``linux-x11`` all resolved to *something* and nothing said so.
+    A silent fallback at the exact point where the gate decides what it is testing for is how a
+    check comes to run against the wrong data for two whole runs.
+    """
+    with pytest.raises(ValidationError):
+        ParityDeclaration(
+            declaration_id="views.typo",  # type: ignore[arg-type]
+            kind=DeclarationKind.VIEW,
+            summary="A view with a mistyped screening profile.",
+            parity_basis="Look at the map.",
+            context="InGame",  # type: ignore[arg-type]
+            capability_id="camera.control",  # type: ignore[arg-type]
+            camera_requirements=CameraRequirements(
+                mode=CameraMode.WORLD, zoom_range=(0.2, 1.0), target_must_be_revealed=True
+            ),
+            screening_profile="platfrom",
+            output_schema={"type": "object"},
+            introduced_in_version="2026.09.1",
+        )
+
+    profiles = load_screening_profiles()
+    for undeclarable in ("platfrom", "linux", "Default", ""):
+        with pytest.raises(CatalogError):
+            resolve_screening_profile(profiles, declared_profile_key=undeclarable, platform="linux")
 
 
 # --------------------------------------------------------------------------
