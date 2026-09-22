@@ -1652,3 +1652,58 @@ has already closed leg 1's client before `run_goal()` regains control. The fix w
 **parameterising a production close for a test driver's convenience** — a worse dependency than the
 one it removes. **The probe is therefore the correct answer, not a fallback.** Reuse is appended as a
 task with this analysis attached so it reopens from here rather than from scratch.
+
+### Pattern: an allowlist inverts its safety property depending on which way it is read (2026-09-22)
+
+An allowlist is **safe when used to permit**: unknown means deny, and the failure mode is a false
+refusal — visible, annoying, self-correcting. It is **unsafe when used to detect**: unknown means
+"nothing there", and the failure mode is a **false all-clear** — invisible, and stated with
+confidence. **Same data structure, opposite failure mode, and nothing in the code distinguishes the
+two uses.**
+
+Three instances today, and the third had already been fixed by the time the first was found:
+
+1. **The screen watchlist.** A screen not on it reads as *no screen*. The probe reported
+   `recognized=true`, `has_blocking_prompt=false`, screen `world` — with `EndGameMenu` full-screen in
+   front of it. **`recognized=true` while wrong is categorically worse than `recognized=false`**: an
+   unknown screen would have made the harness know it did not know. Instead every downstream consumer
+   treated a false answer as settled, dispatched into a modal, and recorded the resulting failures as
+   **action** failures rather than as a blocked board.
+2. **`lua/ACCESSORS.txt`.** Answers "does this method exist". The segfault spike already records that
+   it does **not** answer "is it safe to call here, on this object, from this context".
+3. **The content screening gate.** A contaminant category no technique addressed read as **clean** —
+   and the remedy already adopted was **fail-closed**: a category nothing can detect now **withholds**.
+
+**So the probe's fix is the gate's fix, one subsystem over.** The gate went from *"no technique
+addresses this category -> pass"* to *"-> withhold"*. The probe must go from *"no watchlist entry
+matches -> world"* to *"-> unknown"*. That is not a new design argument; it is a **precedent set today
+under the owner's own criterion, on the same class of defect**, which turns a debate into a
+consistency requirement.
+
+**The dull, mechanical test for any detector, in the family of "which line releases the lock on each
+exit path":** *can this check ever return "I do not know"?* If it cannot, it is an allowlist read as a
+detector, and it will produce confident false all-clears.
+
+**And the taxonomy consequence.** Spec 004's classes were "the game is blocked", "I blocked myself",
+"I cannot reach a healthy game". This is a fourth — **the harness believes nothing is blocked while a
+modal is up** — and it is the worst, because a watchdog consulting harness state does not merely fail
+to notice: **it agrees, and certifies a dead run as healthy.** That makes "compare the harness's
+belief against an independent read of the engine" load-bearing for the whole spec rather than a
+refinement of one class.
+
+### A check that worked, recorded with the same care as the ones that did not
+
+This ledger is heavy with mechanisms that could not fail in the way that mattered. One did, today, and
+the record should say so or it teaches the wrong lesson.
+
+`tests/contract/test_record_schemas.py::test_published_schema_matches_current_model` caught a real
+drift between `Run` / `ParityDeclaration` and their published JSON schema **immediately**, by machine,
+and **reproduced in two independent environments** — an isolated worktree at `7981ead` and the shared
+tree at `2012c8e`, different venvs, different heads. No judgement, no interpretation, no one needing
+to be suspicious. **This is what a check looks like when it is real**, and it is the counter-example
+to every finding above it.
+
+Its remaining risk is the tempting fix: regenerating the export **always** goes green, whether or not
+that was the right direction. Whether the model gained a field it should have, or the export went
+stale, is a question about **intent** that the test cannot answer and must be established from the
+commit that caused the drift.
