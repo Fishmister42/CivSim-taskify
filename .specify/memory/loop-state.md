@@ -358,15 +358,40 @@ there was one partial lookup between them.
   only the Lua context dump, and nearly called a subagent's true claim fabricated. The stdout carries
   progress lines and nexus warnings; **step records live in the store**. Check the instrument that
   would hold the evidence before concluding the evidence does not exist.
-- **A fix that removes an accidental guard is a behaviour change, even when the diff is a pure
-  improvement.** `research.set_civic` verifies `player.current_civic == target`, so a null target
-  makes `None == None` True and a no-op records as `applied`. It was safe only because
-  `researchable_civics` was permanently `[]`, making the action undraftable. `0989e3b` populates that
-  field and thereby opens the fabrication path. **`policies.change_government` has the identical
-  shape and the identical accidental guard.** This is a third fabrication axis: T310 covered `!=`,
-  `not in`, `not X`; T311 the left operand of `in`/`not in`; **neither asked about `==` against a
-  null target.** Fix centrally — make a null-target comparison unevaluable in the evaluator — never
-  by editing the two YAML predicates, because a per-declaration guard is a rule, not a control.
+- **🔴 RETRACTED 2026-09-22 15:20 — the escalation below was wrong, and the way it was wrong is the
+  lesson.** The claim was that `0989e3b` populating `researchable_civics` opens a fabrication path,
+  because `research.set_civic` verifies `player.current_civic == target` and `None == None` is True,
+  guarded only accidentally by the field being permanently `[]`. **The mechanism does not hold:
+  `None in ["CIVIC_X"]` is False exactly as `None in []` is**, so the availability gate
+  `target in player.researchable_civics` refuses a null target whether the list is empty or full.
+  **The twin settles it and was in the store the whole time:** `research.set_tech` has the identical
+  predicate pair, a populated `researchable_techs`, 70 applied, and **15 null-target decisions all
+  refused at dispatch**. **The error was reasoning forward from a mechanism instead of looking up its
+  already-unlocked twin** — do the lookup first; this project keeps paying for that one. `0989e3b`
+  stays gated on the **segfault** reason, which was always the stronger of the two.
+  **The `==`-against-null shape is still real as a fabrication axis** (T310 covered `!=`, `not in`,
+  `not X`; T311 the left operand of `in`/`not in`; neither asked about `==`), and the central fix
+  landed anyway at `d74a4c7`: **a comparison either of whose operands went missing is unevaluable,
+  for every operator, in every declaration.** It **raises rather than returning False**, which is
+  load-bearing — a False inside `not (target in X)` is negated straight back into a fabricated True,
+  while unevaluable propagates out through the negation. **25 fabrications closed, three of them
+  instances neither T310 nor T311 had enumerated**, found only because the fix was enumerated rather
+  than targeted. An explicit `null` literal on either side is exempt, because the catalog needs to
+  ask about absence **on purpose** (`spy.mission != null`) and the first draft destroyed that idiom.
+- **A positive control that production cannot reach is not a positive control.** `camera.zoom`
+  verifies `camera.zoom == target` and the engine answers `0.049999713897705` for a requested `0.05`,
+  so working zooms record as refused (T321): **zoom 49 rejected / 0 applied, set_view_mode 69 / 0**,
+  against a control of `cities.set_production` 5 applied / 117 rejected **in the same query**.
+  Nothing was red because `tests/unit/test_predicates.py:850` **is** a positive control and **passes**
+  — it compares `0.5` to `0.5`, an exactly-equal float the engine never produces. **This means our
+  coverage numbers understate.** Not to be rolled in: `camera.move`'s 48 refusals carry
+  `out_of_parity_camera` with `dispatch_result: null`, never dispatched, because the agent asked to
+  look at fog. **That is Principle I working, and burying a good refusal inside a bug report is its
+  own defect.**
+- **A query that returns the same empty answer for your control as for your subject is broken, not
+  conclusive.** A sweep read `outcome: None` for everything including the control, because the
+  execution record nests under `decision` rather than beside it. **The control caught a broken query
+  that would otherwise have read as a dramatic finding.**
 - **`nm -DC` silence is not evidence that an accessor is unbound.** No `l*Favor*` symbol exists on any
   player interface, yet `strings -a` finds `GetFavor` and Firaxis' own shipped XP2 UI calls
   `Players[id]:GetFavor()`. **Some Lua bindings exist only as name strings with no exported
