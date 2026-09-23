@@ -1006,7 +1006,9 @@ async def run_decision_loop(ctx: DecisionLoopContext) -> DecisionLoopResult:
         events.extend(next_fresh.events)
 
         ended_at = ctx.clock()
-        no_progress_streak_after = tracker.record(progress)
+        no_progress_streak_after = tracker.record(
+            progress, str(raw_decision.action_declaration_id)
+        )
 
         decision_record = build_decision(
             raw_decision,

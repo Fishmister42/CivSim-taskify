@@ -57,23 +57,52 @@ class NoProgressTracker:
 
     limit: int
     streak: int = 0
+    #: The declaration the previous step issued, and how many consecutive steps have issued it.
+    #: Separate from ``streak`` because they count different futilities and only one of them can
+    #: be reset by the agent.
+    repeated_declaration: str | None = None
+    repeat_streak: int = 0
 
     def __post_init__(self) -> None:
         if self.limit < 1:
             raise ValueError("no_progress_step_limit must be >= 1 (FR-014)")
 
-    def record(self, progress: StepProgress) -> int:
-        """Update the streak for one just-completed step's *progress*; return the new streak."""
+    def record(self, progress: StepProgress, declaration_id: str) -> int:
+        """Update the streaks for one just-completed step; return the no-progress streak.
+
+        *declaration_id* is required, with no default. A bound an existing caller can keep by
+        forgetting a new argument is the shape three of this project's worst defects had.
+        """
         if progress is StepProgress.CHANGED_STATE:
             self.streak = 0
         else:  # NO_CHANGE or REJECTED
             self.streak += 1
+
+        if declaration_id == self.repeated_declaration:
+            self.repeat_streak += 1
+        else:
+            self.repeated_declaration = declaration_id
+            self.repeat_streak = 1
         return self.streak
 
     @property
     def tripped(self) -> bool:
-        """Whether the streak reached ``limit`` -- the turn must end ``ended_on_no_progress``."""
-        return self.streak >= self.limit
+        """Whether the turn must end ``ended_on_no_progress`` -- on either futility.
+
+        **The second test exists because the first one cannot see a loop that succeeds.**
+        ``streak`` resets on ``CHANGED_STATE``, so an agent that keeps issuing an action which
+        genuinely changes something resets the bound on every step and the guard can never trip.
+        Measured live 2026-09-22: a run issued ``research.set_tech`` **158 consecutive times**, every
+        one of them ``applied``, for twenty-one minutes on a single turn, and this counter stayed at
+        zero throughout -- each step really did change the research, so each step really was
+        progress by the only definition available here.
+
+        A repeat streak is not resettable by doing the same thing again, which is exactly the
+        property ``streak`` lacks. The threshold is ``limit`` itself rather than a new constant:
+        issuing one action ``limit`` times in a row is as futile as ``limit`` steps that change
+        nothing, and a second number here would be a second thing to mis-tune.
+        """
+        return self.streak >= self.limit or self.repeat_streak >= self.limit
 
 
 def build_no_progress_event(
