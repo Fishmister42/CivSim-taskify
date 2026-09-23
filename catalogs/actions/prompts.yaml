@@ -446,6 +446,80 @@
     the single offered option, "continue" (prompt_options)
   introduced_in_version: "2026.09.6"
 
+# MEASURED live 2026-09-22: the board froze behind "Unit Captured -- Your unit has been captured by
+# Barbarians" with an OK button. A block paused four seconds after launch and the client sat dead
+# for twenty minutes. `InGamePopup` was already watched and mapped to no id, so the probe saw it
+# open, refused to name it (FR-049) and stalled -- correct, and unchanged.
+#
+# THIS IS NOT ONE SCREEN, IT IS A CHANNEL, and that is what scopes the claim below.
+# `unitcaptured.lua:35-39` builds its dialog with `PopupDialogInGame:new("UnitCaptured")`;
+# `popupdialog.lua:39-40` calls that class the "Helper class to interface with InGamePopup
+# context" and `PopupDialogInGame:Open()` (:536-539) is literally
+# `LuaEvents.OnRaisePopupInGame(self.ID, self.m_options)`, which `ingamepopup.lua:84` subscribes
+# to. So every `PopupDialogInGame` user in the game renders into the ONE `InGamePopup` context --
+# about seventeen of them in the shipped tree, including `FoundCityAt`, `ConfirmWMDStrike`,
+# `ConfirmICBMStrike`, `ConfirmWarPopup`, `ConfirmGovtChange`, `ConfirmPolicies`,
+# `PlaceWonderAt_*`, `GovernorAssignmentReplaceConfirm` and `CannotMoveWork`.
+#
+# ⚠ THE CHANNEL CARRIES REAL DECISIONS. `AddCancelButton` (:514), `AddConfirmButton` (:520),
+# `ShowOkCancelDialog` (:558-564) and `ShowYesNoDialog` (:570-576) all put TWO buttons in the same
+# dialog; `governmentscreen.lua:888-897` uses exactly that to ask whether to accept anarchy, and
+# `unitpanel.lua:2741-2742` to ask whether to delete a unit. `ingamepopup.lua:16-22` even
+# substitutes a two-button Accept/Cancel dialog when a caller passes no options at all.
+# Acknowledging one of those would answer a decision the agent was never shown, so THIS ACTION IS
+# SCOPED TO THE ONE-BUTTON CASE: `lua/ingame/screens.lua` reports `prompt.generic_popup` only when
+# the dialog's own button row holds exactly one button, and answers `unknown` with the count
+# otherwise -- including at answer time, from a fresh read, so a dialog that changed between the
+# two round trips is refused rather than clicked.
+#
+# THERE IS NO STATIC CONTROL PATH FOR THE BUTTON, and that is the finding, not a gap in the
+# search. `PopupDialog:AddButton` (popupdialog.lua:177-224) builds it at runtime --
+# `ContextPtr:BuildInstanceForControl(buttonInstanceName, pInstance, pTopControl)` at :195, with
+# `buttonInstanceName` defaulting to "PopupButtonInstance" (:58, :194) and `pTopControl` the `Row`
+# top control of a `PopupRowInstance` built into `PopupStack` (:185-191, :454). The XML side is
+# `<Instance Name="PopupButtonInstance"><GridButton ID="Button" .../></Instance>`
+# (popupdialog.xml:22-24) inside `<Instance Name="PopupRowInstance"><Stack ID="Row" .../></Instance>`
+# (:38-40), placed in this context by `ingamepopup.xml:5`'s `<MakeInstance Name="PopupDialog"/>`.
+# The deepest NAMED ancestor is `PopupStack` (popupdialog.xml:14); below it every control is an
+# unnamed instance clone. Confirmed live: a four-level walk of `/InGame/InGamePopup` on an open
+# dialog showed `PopupRoot / PopupAlphaIn / PopupSlideIn / #1 (Grid)` -- popupdialog.xml:9's
+# unnamed Grid. The buttons are therefore reached structurally and clicked by rectangle.
+#
+# NO FALLBACK, deliberately. The button's callback is a closure built in the RAISING context and
+# handed over through that LuaEvent, then wrapped by `ingamepopup.lua:32` and
+# `popupdialog.lua:216`. Nothing reachable from InGame stands in for it -- `UIManager:PopModal`
+# would run half of `OnClosePopup` (ingamepopup.lua:49) and leave the dialog visibly on screen
+# with its input handler gone. A click that cannot be built fails and is recorded.
+#
+# The verification predicate is POSITIVE in both branches, like `prompts.historic_moment`'s and
+# for the same reason.
+
+- declaration_id: prompts.generic_popup
+  kind: action
+  summary: >
+    Acknowledge a one-button in-game dialog ({"target": "continue"}) -- the framework popup that
+    reports something and offers a single button, such as "Unit Captured". Offered ONLY when the
+    dialog carries exactly one button; a dialog presenting a choice is never named by the probe and
+    is never answered by this action.
+  parity_basis: >
+    A small modal dialog appears in the middle of the screen with a title, a line or two of text
+    and one button along the bottom -- "Your unit has been captured by Barbarians", with OK. A
+    human clicks that button (or presses Escape or Return) to dismiss it and carry on. When the
+    same kind of dialog offers two buttons it is asking a question, and this action does not
+    answer it.
+  context: InGame
+  capability_id: prompts.orders
+  availability_predicate: >
+    game.has_blocking_prompt and game.current_screen == "prompt.generic_popup"
+    and target in prompt.options
+  verification_predicate: >
+    game.current_screen == "world" or (game.has_blocking_prompt and
+    game.current_screen != "prompt.generic_popup")
+  target_kind: option
+  target_hint: >
+    "continue" -- the dialog this action is offered for has exactly one button
+  introduced_in_version: "2026.09.22"
+
 # MEASURED live 2026-09-22, through the tuner, while the board was frozen: two consecutive blocks
 # died four seconds after launch (block 44 at 19:06:42, block 45 at 19:24:54, both `paused turn=1`)
 # and `UIManager:GetPopupStack()` answered depth 2 --

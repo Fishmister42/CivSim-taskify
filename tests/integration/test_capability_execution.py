@@ -48,7 +48,9 @@ async def test_the_real_catalog_loads_with_the_documented_shape() -> None:
     # 61 -> 62 (catalog 2026.09.9): units.build_improvement, the first charge-spending action.
     # 62 -> 63 (catalog 2026.09.22): prompts.historic_moment, Gathering Storm's "Era Makes History"
     # card -- measured on the engine's popup stack while two blocks died at turn 1.
-    assert len(catalog.declarations) == 63
+    # 63 -> 64 (catalog 2026.09.22): prompts.generic_popup, the framework in-game dialog, scoped
+    # to the one-button case because the same context also carries two-button decisions.
+    assert len(catalog.declarations) == 64
     # +cities.selection, +yields.read, +selection.orders (2026-09-21)
     assert len(catalog.capabilities) == 27
     assert _UNITS_STATE in catalog.declarations

@@ -137,7 +137,7 @@ local CIVSIM_KNOWN_SCREENS = {
     "prompt.congress_intro", "prompt.congress_vote", "prompt.era_transition",
     "prompt.era_dedication",
     "prompt.tech_civic_completed", "prompt.boost_unlocked", "prompt.great_work_created",
-    "prompt.natural_disaster", "prompt.historic_moment",
+    "prompt.natural_disaster", "prompt.historic_moment", "prompt.generic_popup",
 }
 
 -- T253 (MEASURED 2026-09-21, attempt 5 of the first model-driven runs): the civic "Code of Laws"
@@ -415,6 +415,14 @@ local CIVSIM_SCREEN_WATCHLIST = {
 --     context that `IsHidden()` cannot see. Resolved without a state mapping: the mode IS readable
 --     as control visibility, so the probe answers this id directly (see CIVSIM_DIPLOMACY_STATE
 --     below) and it must stay out of this table.
+--   * `prompt.generic_popup` — `InGamePopup` is ONE context for every `PopupDialogInGame` dialog
+--     in the game (popupdialog.lua:39-40, :482, :536-539), and those range from a one-button
+--     "Unit Captured" report to a Yes/No that changes your government. `IsHidden()==false` on it
+--     therefore says "a dialog is up", never "a dialog I may acknowledge is up" — mapping the id
+--     here would offer `continue` against a live decision. The probe answers it directly and only
+--     when the dialog's own button row holds EXACTLY ONE button (see CivSim_InGamePopupButtons
+--     below); every other shape is reported `unknown` with the count. `InGamePopup` stays on the
+--     watchlist so its context is still swept, but nothing in this table names it.
 local CIVSIM_SCREEN_ID_BY_STATE = {
     -- MEASURED 2026-09-22 14:53Z (live stage 5, game turn 67; evidence in
     -- specs/002-civ-playing-harness/spikes/gameplay-2026-09-22/block-04/). Persia was eliminated
@@ -895,6 +903,160 @@ local function CivSim_CongressPhaseChoices()
 end
 
 -- ---------------------------------------------------------------------------
+-- The generic in-game dialog (`prompt.generic_popup`)
+-- ---------------------------------------------------------------------------
+--
+-- MEASURED live 2026-09-22: the board froze behind "Unit Captured -- Your unit has been captured
+-- by Barbarians" with an OK button. A block paused four seconds after launch and the client sat
+-- dead for twenty minutes. `InGamePopup` was already on the watchlist and mapped to no catalog id,
+-- so the probe saw it open, refused to name it (FR-049) and stalled -- correct, and not changed
+-- here.
+--
+-- THIS IS NOT ONE SCREEN. IT IS A CHANNEL. `unitcaptured.lua:35-39` builds its dialog with
+-- `PopupDialogInGame:new("UnitCaptured")` and `popupdialog.lua:39-40` describes that class as the
+-- "Helper class to interface with InGamePopup context"; `:482` says it "sends daya to
+-- InGamePopup.lua via a LuaEvent", and `PopupDialogInGame:Open()` (:536-539) is literally
+-- `LuaEvents.OnRaisePopupInGame(self.ID, self.m_options)`, which `ingamepopup.lua:84` subscribes
+-- to. So EVERY `PopupDialogInGame` user renders into the ONE `InGamePopup` context.
+-- `UnitCaptured` is only the instance that bit us; the shipped tree has ~17 others, including
+-- `FoundCityAt`, `ConfirmWMDStrike`, `ConfirmICBMStrike`, `ConfirmWarPopup`, `ConfirmGovtChange`,
+-- `ConfirmPolicies`, `PlaceWonderAt_*`, `GovernorAssignmentReplaceConfirm` and `CannotMoveWork`.
+--
+-- ⚠ THE CHANNEL CARRIES REAL DECISIONS, so this declaration is SCOPED TO THE ONE-BUTTON CASE and
+-- the probe refuses to name anything else. `PopupDialogInGame` offers `AddCustomButton` (:508),
+-- `AddCancelButton` (:514), `AddConfirmButton` (:520) and `AddDefaultButton` (:527), plus
+-- `ShowOkCancelDialog` (:558-564) and `ShowYesNoDialog` (:570-576) which each add TWO. Shipped
+-- two-button users of this exact context include `governmentscreen.lua:888-897`
+-- (`ConfirmGovtChange`: `AddConfirmButton` + `AddCancelButton`) and `unitpanel.lua:2741-2742`
+-- (`ShowYesNoDialog`, delete a unit). `ingamepopup.lua:16-22` even substitutes a two-button
+-- Accept/Cancel dialog when a caller passes no options at all. Acknowledging any of those would
+-- answer a decision the agent was never shown -- a fabricated interaction -- so the probe reports
+-- `prompt.generic_popup` ONLY when exactly one button is offered, and fails closed otherwise.
+--
+-- THE DEFAULT BUTTON HAS NO STATIC CONTROL PATH, and that is a finding, not a gap in the search.
+-- It is built at runtime: `PopupDialog:AddButton` (popupdialog.lua:177-224) calls
+-- `ContextPtr:BuildInstanceForControl(buttonInstanceName, pInstance, pTopControl)` at :195, where
+-- `buttonInstanceName` defaults to `PopupDialog.DEFAULT_INSTANCE_BUTTON` = "PopupButtonInstance"
+-- (:58, :194) and `pTopControl` is the `Row` top control of a `PopupRowInstance` built into
+-- `self.Controls.PopupStack` (:185-191, :454). The XML side is
+-- `<Instance Name="PopupButtonInstance"><GridButton ID="Button" .../></Instance>`
+-- (popupdialog.xml:22-24) and `<Instance Name="PopupRowInstance"><Stack ID="Row" .../></Instance>`
+-- (:38-40), and `ingamepopup.xml:5`'s `<MakeInstance Name="PopupDialog"/>` is what puts that tree
+-- into this context. So the deepest NAMED ancestor is
+--     PopupRoot (xml:6) > PopupAlphaIn (:7) > PopupSlideIn (:8) > <Grid> unnamed (:9)
+--       > PopupBox (:10) > PopupStack (:14)
+-- and everything below `PopupStack` is an unnamed instance clone. CONFIRMED LIVE by the
+-- hypervisor walking `/InGame/InGamePopup` four levels deep on an open dialog: the chain shown was
+-- `PopupRoot / PopupAlphaIn / PopupSlideIn / #1 (Grid)` -- which is exactly popupdialog.xml:9, the
+-- unnamed Grid. There is nothing to look up by name, so the buttons are reached STRUCTURALLY.
+--
+-- The structural rule, straight out of `SetInstanceNames` (popupdialog.lua:442-457): the Text,
+-- CountDown, CheckBox and EditBox instance managers are all built over `PopupStack` itself
+-- (:453-457), so those land as its DIRECT children; only buttons go one level deeper, inside a
+-- `Row` (:185-195). Buttons are therefore the CHILDREN OF `PopupStack`'S CHILDREN.
+--
+-- That rule's only possible false positive is a countdown's inner `<Label ID="Text"/>`
+-- (popupdialog.xml:43-45), and its failure direction is the safe one: an extra candidate can only
+-- push the count above one, which makes the probe refuse to name the screen rather than
+-- acknowledge a choice. No shipped `PopupDialogInGame` caller passes a Count option anyway (the
+-- only `:AddCountDown(` call sites are `test.lua:48` and `options.lua:277`, both front-end
+-- `PopupDialog`s, plus `ingamepopup.lua:34`'s own generic handler).
+--
+-- Where it is readable, Firaxis's own button test refines it: `AddButton` decides a control "isn't
+-- a Button, ColorBoxButton, or a GridButton type" by `if not pButtonControl.RegisterCallback`
+-- (popupdialog.lua:197-203). A candidate that answers that field as nil is dropped. A build where
+-- the field cannot be read across states at all leaves the structural rule in charge, and the
+-- result records which rule decided.
+--
+-- UNVERIFIED LIVE: that `/InGame/InGamePopup/PopupStack` resolves from InGame, that `GetChildren`
+-- answers on a control obtained from another state, and the `RegisterCallback` read. Every step is
+-- pcall'd; a failure leaves the popup unnamed and the run stalls exactly as it does today, with a
+-- reason naming which read failed.
+local CIVSIM_INGAME_POPUP_STATE = "InGamePopup"
+local CIVSIM_INGAME_POPUP_ROOT = "PopupRoot"
+local CIVSIM_INGAME_POPUP_STACK = "PopupStack"
+local CIVSIM_INGAME_POPUP_LABEL_DEPTH = 1
+
+-- Is a dialog actually up? TWO positive signals, ORed, because the one the watchlist uses is not
+-- established for this context. `ingamepopup.lua:44` raises the dialog with
+-- `UIManager:PushModal(ContextPtr)` -- no show flag, unlike `stagingroom.lua:878`'s
+-- `PushModal(control, true)` -- while `<LuaContext ID="InGamePopup" ... Hidden="1"/>`
+-- (dlc/expansion2/ui/replacements/ingame.xml:117) declares the context hidden, so whether
+-- `/InGame/InGamePopup`'s own `IsHidden()` flips is NOT something this file has measured.
+--
+-- The popup's own definition of open does not depend on that at all: `PopupDialog:IsOpen()` is
+-- exactly `self.Controls.PopupRoot:IsVisible()` (popupdialog.lua:411-413), and `PopupRoot` is
+-- declared `Hidden="1"` (popupdialog.xml:6), shown only by `Open()` (:344) and hidden again by
+-- `Close()` (:368). So it is a precise signal that costs one lookup.
+--
+-- Reading BOTH and taking either removes the dependency rather than betting on which one works: a
+-- build where the context flips is covered, and so is a build where only `PopupRoot` does. What it
+-- does NOT do is turn unobservability into a stall -- if neither can be read the board reads as it
+-- does today, which is the deliberate choice here, because a dialog-detector that fails closed on
+-- every probe would stall the plain world view.
+local function CivSim_InGamePopupIsShowing()
+    local ctx = CivSim_LookUp(CIVSIM_INGAME_POPUP_STATE, nil)
+    if ctx ~= nil and CivSim_IsVisible(ctx) then return true end
+    local root = CivSim_LookUp(CIVSIM_INGAME_POPUP_STATE, CIVSIM_INGAME_POPUP_ROOT)
+    if root == nil then return false end
+    local ok, visible = pcall(function() return root:IsVisible() end)
+    return ok and visible == true
+end
+
+-- Firaxis's own "is this a button" test (popupdialog.lua:197-203), as a three-way answer: true
+-- (it carries RegisterCallback), false (it does not, so it is a label), nil (the field could not
+-- be read at all on this build). Three-way for the same reason `CivSim_ContextIsHidden` is:
+-- folding "could not read" into "not a button" would silently shrink the count towards one, which
+-- is the direction that turns a two-button decision into an acknowledge.
+local function CivSim_ControlIsButton(control)
+    local ok, callback = pcall(function() return control.RegisterCallback end)
+    if not ok then return nil end
+    if callback == nil then return false end
+    return true
+end
+
+-- The buttons the open generic dialog is offering, as {control, text} records, plus which rule
+-- decided -- or nil when the dialog is not open at all, or `{readable = false, reason}` when it is
+-- open and the button row could not be read. The three outcomes are kept apart on purpose: only
+-- the first means "there is nothing here", and the caller must not treat the third as it.
+local function CivSim_InGamePopupButtons()
+    if not CivSim_InGamePopupIsShowing() then return nil end
+    local stack = CivSim_LookUp(CIVSIM_INGAME_POPUP_STATE, CIVSIM_INGAME_POPUP_STACK)
+    if stack == nil then
+        return { readable = false, reason = "popup_button_stack_absent" }
+    end
+    local okRows, rows = pcall(function() return stack:GetChildren() end)
+    if not okRows or rows == nil then
+        return { readable = false, reason = "popup_button_stack_unreadable" }
+    end
+    local buttons = {}
+    local rule = "register_callback"
+    for _, row in ipairs(rows) do
+        local okKids, kids = pcall(function() return row:GetChildren() end)
+        if okKids and kids ~= nil then
+            for _, child in ipairs(kids) do
+                if CivSim_IsVisible(child) and not CivSim_IsDisabled(child) then
+                    local isButton = CivSim_ControlIsButton(child)
+                    if isButton == nil then
+                        -- The refinement is unavailable on this build; the structural position
+                        -- (a child of a child of PopupStack) is what stands, and the record says so.
+                        rule = "structural"
+                        isButton = true
+                    end
+                    if isButton then
+                        buttons[#buttons + 1] = {
+                            control = child,
+                            text = CivSim_ControlTextDeep(child, CIVSIM_INGAME_POPUP_LABEL_DEPTH),
+                        }
+                    end
+                end
+            end
+        end
+    end
+    return { readable = true, buttons = buttons, rule = rule }
+end
+
+-- ---------------------------------------------------------------------------
 -- What is ACTUALLY showing: the engine's own popup stack
 -- ---------------------------------------------------------------------------
 --
@@ -1127,6 +1289,54 @@ local function CivSim_Screens_State()
             screen = "unknown", raw_screen_id = unaccounted.id, recognized = false,
             has_blocking_prompt = false, prompt_options = {},
             screen_probe_reason = unaccounted.reason,
+            popup_stack_depth = popupDepth, popup_stack_ids = popups.ids,
+        }
+    end
+
+    -- The generic in-game dialog is read BEFORE anything else and outranks everything, because
+    -- `ingamepopup.lua:44` raises it with `UIManager:PushModal` -- it is on top of whatever else is
+    -- open, by construction, and its `InputHandler` "eat[s] all the input, just in case. popups are
+    -- blocking!" (`ingamepopup.lua:75`). It is also read WITHOUT consulting the watchlist sweep
+    -- below, so it does not depend on this context's own hidden flag flipping (see
+    -- CivSim_InGamePopupIsShowing).
+    --
+    -- Only the one-button case is named. A dialog offering a choice is a DECISION, and this file
+    -- exposes no way to present one, so naming it would either fabricate an acknowledge over a
+    -- choice or -- worse -- let the screen underneath it name the board. `ConfirmGovtChange`
+    -- (governmentscreen.lua:888-897) is raised from the government screen, which IS mapped, so the
+    -- old fall-through would have answered `government`, `recognized = true`,
+    -- `has_blocking_prompt = false` with a modal Yes/No dialog on top of it -- the same false
+    -- all-clear shape as the `EndGameMenu` defect, reachable today. Every branch that is not
+    -- exactly one button stalls, and says which it was.
+    local genericPopup = CivSim_InGamePopupButtons()
+    if genericPopup ~= nil then
+        if not genericPopup.readable then
+            return {
+                screen = "unknown", raw_screen_id = CIVSIM_INGAME_POPUP_STATE, recognized = false,
+                has_blocking_prompt = false, prompt_options = {},
+                screen_probe_reason = genericPopup.reason,
+                popup_stack_depth = popupDepth, popup_stack_ids = popups.ids,
+            }
+        end
+        if #genericPopup.buttons ~= 1 then
+            local reason = "generic_popup_offers_a_choice"
+            if #genericPopup.buttons == 0 then reason = "generic_popup_offers_no_button" end
+            local labels = {}
+            for _, button in ipairs(genericPopup.buttons) do
+                if button.text ~= nil then labels[#labels + 1] = button.text end
+            end
+            return {
+                screen = "unknown", raw_screen_id = CIVSIM_INGAME_POPUP_STATE, recognized = false,
+                has_blocking_prompt = false, prompt_options = {},
+                screen_probe_reason = reason,
+                popup_button_count = #genericPopup.buttons, popup_button_labels = labels,
+                popup_stack_depth = popupDepth, popup_stack_ids = popups.ids,
+            }
+        end
+        return {
+            screen = "prompt.generic_popup", raw_screen_id = CIVSIM_INGAME_POPUP_STATE,
+            recognized = true, has_blocking_prompt = true,
+            prompt_options = { CIVSIM_ACKNOWLEDGE_OPTION },
             popup_stack_depth = popupDepth, popup_stack_ids = popups.ids,
         }
     end
@@ -1654,6 +1864,60 @@ local function CivSim_Screens_AnswerCongressPhase(promptType, optionId)
              offered = offered }
 end
 
+-- Acknowledge the generic in-game dialog by clicking its one button.
+--
+-- The single-button check is made AGAIN here, from a fresh read, rather than trusted from the
+-- probe that offered the option: dispatch and answer are separate round trips and the dialog on
+-- screen at the second one is not necessarily the dialog that was on screen at the first. This is
+-- the one place where getting it wrong means clicking a button in a decision the agent was never
+-- shown, so it is re-established rather than remembered.
+--
+-- DELIBERATELY NO FALLBACK, for the reason `CivSim_Screens_AnswerCongressPhase` has none. The
+-- button's callback is a closure built in the RAISING context and handed over as
+-- `LuaEvents.OnRaisePopupInGame(id, options)` (popupdialog.lua:536-539), then wrapped twice --
+-- once by `ingamepopup.lua:32` (`OnClosePopup()` then the caller's own callback) and once by
+-- `popupdialog.lua:216` (`self:Close()` then that). Nothing reachable from InGame stands in for
+-- it: `UIManager:PopModal(ctx)` would run the first half of `OnClosePopup` (ingamepopup.lua:49)
+-- and leave `PopupRoot` still shown, i.e. the dialog visibly on screen with its input handler
+-- gone -- strictly worse than not trying. A click that cannot be built fails, is recorded, and
+-- the run stalls honestly.
+local function CivSim_Screens_AnswerGenericPopup(promptType, optionId)
+    if optionId ~= CIVSIM_ACKNOWLEDGE_OPTION then
+        return { ok = false, reason = "unknown_option", prompt = promptType, option = optionId }
+    end
+    local found = CivSim_InGamePopupButtons()
+    if found == nil then
+        return { ok = false, reason = "popup_not_open", prompt = promptType, option = optionId }
+    end
+    if not found.readable then
+        return { ok = false, reason = found.reason, prompt = promptType, option = optionId,
+                 state = CIVSIM_INGAME_POPUP_STATE }
+    end
+    if #found.buttons ~= 1 then
+        -- The dialog now on screen presents a choice (or nothing). Acknowledging it would answer a
+        -- decision on the agent's behalf, so it is refused and the count is recorded.
+        local labels = {}
+        for _, button in ipairs(found.buttons) do
+            if button.text ~= nil then labels[#labels + 1] = button.text end
+        end
+        return { ok = false, reason = "generic_popup_offers_a_choice", prompt = promptType,
+                 option = optionId, state = CIVSIM_INGAME_POPUP_STATE,
+                 popup_button_count = #found.buttons, popup_button_labels = labels }
+    end
+    local button = found.buttons[1]
+    local request = CivSim_Screens_HostClickRequest(button.control)
+    if request == nil then
+        return { ok = false, reason = "control_rect_unreadable", prompt = promptType,
+                 option = optionId, state = CIVSIM_INGAME_POPUP_STATE }
+    end
+    request.prompt = promptType
+    request.option = optionId
+    request.state = CIVSIM_INGAME_POPUP_STATE
+    request.button_label = button.text
+    request.button_rule = found.rule
+    return request
+end
+
 local function CivSim_Screens_RespondToPrompt(promptType, optionId)
     if not CivSim_ScreenIsKnown(promptType) then
         return { ok = false, reason = "unknown_prompt" }
@@ -1670,6 +1934,9 @@ local function CivSim_Screens_RespondToPrompt(promptType, optionId)
     end
     if promptType == "prompt.congress_vote" then
         return CivSim_Screens_AnswerCongressPhase(promptType, optionId)
+    end
+    if promptType == "prompt.generic_popup" then
+        return CivSim_Screens_AnswerGenericPopup(promptType, optionId)
     end
     -- ACCESSOR AUDIT (2026-09-21, spikes/lua-accessor-audit-2026-09-21.md): this used to fall
     -- through to `UI.RespondToPrompt(promptType, optionId)`, a name that appears in none of

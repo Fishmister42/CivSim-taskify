@@ -86,6 +86,19 @@
       # private state.
       screen_probe_reason: { type: string }
       screen_probe_error: { type: string }
+      # 2026.09.22. The generic in-game dialog (`InGamePopup`) is ONE context for every
+      # `PopupDialogInGame` in the game, and that channel carries both one-button reports and
+      # two-button decisions (`popupdialog.lua:514-576`). The probe names it `prompt.generic_popup`
+      # only when the dialog's own button row holds exactly one button; any other count is reported
+      # `unknown` with `screen_probe_reason` `generic_popup_offers_a_choice` or
+      # `generic_popup_offers_no_button`, and these two fields are what that stall saw. Present
+      # only on those branches. `popup_button_labels` are the labels a human reads on the buttons,
+      # and they are reported so an operator can see WHICH decision the harness declined to answer
+      # -- never so anything acts on them.
+      popup_button_count: { type: integer, minimum: 0 }
+      popup_button_labels:
+        type: array
+        items: { type: string }
       popup_stack_depth: { type: integer, minimum: 0 }
       popup_stack_ids:
         type: array

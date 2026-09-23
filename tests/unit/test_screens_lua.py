@@ -108,6 +108,7 @@ function M.reset(open_states, hidden_states)
     M.drop_selection_table = false
     M.reply_choices = nil
     M.popup_stack = {}
+    M.button_test_unreadable = false
     M.controls = {}
     for _, s in ipairs(open_states) do M.controls["/InGame/" .. s] = make_control(s, false) end
     for _, s in ipairs(hidden_states) do M.controls["/InGame/" .. s] = make_control(s, true) end
@@ -244,6 +245,75 @@ function M.set_congress_phase(live, greyed)
         attach_rect(control, 300 + index * 210, 720, 200, 41)
         M.controls[CONGRESS .. "/" .. name] = control
     end
+end
+
+-- The generic in-game dialog's tree, exactly as `ingamepopup.xml:5`'s
+-- `<MakeInstance Name="PopupDialog"/>` builds popupdialog.xml into this context and as
+-- popupdialog.lua then fills it: a `PopupRoot` whose visibility IS the dialog's own definition of
+-- open (`PopupDialog:IsOpen()`, popupdialog.lua:411-413), a `PopupStack` holding the text
+-- instances directly (the instance managers are built over PopupStack itself, :453-457), and ONE
+-- `Row` instance (popupdialog.xml:38-40) holding the buttons, which `AddButton` builds into it
+-- (:185-195). Nothing below PopupStack carries a name a lookup could use; that is the point.
+--
+-- `RegisterCallback` is served through a metatable rather than set as a field so the build where
+-- it cannot be read at all -- a condition this box cannot otherwise reproduce -- can be simulated
+-- and asserted to have fired. It is Firaxis's own button test (popupdialog.lua:197-203).
+local INGAME_POPUP = "/InGame/InGamePopup"
+
+local function attach_button_test(control, isButton)
+    setmetatable(control, { __index = function(t, k)
+        if k ~= "RegisterCallback" then return nil end
+        if M.button_test_unreadable then error("stubbed RegisterCallback read failure") end
+        if isButton then return function() end end
+        return nil
+    end })
+    return control
+end
+
+-- `labels` are the dialog's buttons, in order. `row_labels` are extra controls sitting in the
+-- SAME row that are not buttons -- a countdown's inner `<Label ID="Text"/>`
+-- (popupdialog.xml:43-45), the only other thing that can appear at that depth.
+function M.set_ingame_popup(labels, row_labels, hidden)
+    local root = make_control("PopupRoot", hidden == true)
+    function root:IsVisible() return not self.hidden end
+    M.controls[INGAME_POPUP .. "/PopupRoot"] = root
+
+    local stack = make_control("PopupStack", false)
+    local body = make_control("Text", false)
+    body.text = "Your unit has been captured by Barbarians"
+    local row = make_control("Row", false)
+    local kids = {}
+    for index, label in ipairs(labels) do
+        local button = make_control("Button", false)
+        button.text = label
+        attach_rect(button, 300 + index * 230, 520, 220, 41)
+        kids[#kids + 1] = attach_button_test(button, true)
+    end
+    for _, label in ipairs(row_labels or {}) do
+        local other = make_control("Text", false)
+        other.text = label
+        attach_rect(other, 500, 470, 50, 50)
+        kids[#kids + 1] = attach_button_test(other, false)
+    end
+    row.children = kids
+    stack.children = { body, row }
+    M.controls[INGAME_POPUP .. "/PopupStack"] = stack
+end
+
+-- The dialog is up but its button row cannot be reached by name at all.
+function M.drop_popup_button_stack()
+    M.controls[INGAME_POPUP .. "/PopupStack"] = nil
+end
+
+-- A build on which a control's `RegisterCallback` cannot be read from another state. Returns true
+-- so the caller can assert the simulation actually fired rather than passing vacuously.
+function M.drop_button_test()
+    M.button_test_unreadable = true
+    return M.button_test_unreadable == true
+end
+
+function M.button_test_is_readable()
+    return M.button_test_unreadable ~= true
 end
 
 Mouse = { eLClick = 1 }
@@ -734,6 +804,233 @@ def test_the_historic_moment_card_outranks_the_lower_priority_card_beneath_it(
     assert state["screen"] == "prompt.historic_moment"
     assert state["raw_screen_id"] == "HistoricMoments"
     assert state["prompt_options"] == ["continue"]
+
+
+# ---------------------------------------------------------------------------
+# The generic in-game dialog (`prompt.generic_popup`)
+# ---------------------------------------------------------------------------
+#
+# MEASURED live 2026-09-22: the board froze behind "Unit Captured -- Your unit has been captured by
+# Barbarians" with an OK button; a block paused four seconds after launch and the client sat dead
+# for twenty minutes. `InGamePopup` was watched and mapped to no id, so the probe stalled --
+# correctly, and that is not changed.
+#
+# The thing that makes this family different from every acknowledge-only popup above it:
+# `InGamePopup` is ONE context for EVERY `PopupDialogInGame` dialog in the game
+# (popupdialog.lua:39-40, :482; `Open()` is `LuaEvents.OnRaisePopupInGame`, :536-539, which
+# ingamepopup.lua:84 subscribes to), and that channel carries real decisions as well as reports --
+# `AddConfirmButton`/`AddCancelButton` (:514-522), `ShowOkCancelDialog` (:558) and
+# `ShowYesNoDialog` (:570) each put TWO buttons in the same dialog, and
+# `governmentscreen.lua:888-897` uses exactly that to ask whether to accept anarchy. So the claim
+# is scoped to the ONE-BUTTON case, and the tests below fix that scope from both sides.
+#
+# There is no static control id for the button. It is built at runtime by
+# `ContextPtr:BuildInstanceForControl("PopupButtonInstance", ...)` into a `Row` instance
+# (popupdialog.lua:194-195, popupdialog.xml:22-24, :38-40), so the deepest NAMED ancestor is
+# `PopupStack` (popupdialog.xml:14) and the buttons are its children's children.
+
+
+def _generic_popup(
+    runtime: Any,
+    stubs: Any,
+    *,
+    labels: list[str],
+    row_labels: list[str] = (),
+    open: list[str] = (),
+    hidden: list[str] = ("CityPanel",),
+) -> dict[str, Any]:
+    stubs.reset(runtime.table(*open), runtime.table(*hidden))
+    stubs.set_ingame_popup(runtime.table(*labels), runtime.table(*row_labels), False)
+    result = runtime.globals()["CivSim_Screens"]["probe"]()
+    return {k: (list(v.values()) if k in _LIST_FIELDS else v) for k, v in result.items()}
+
+
+def test_a_one_button_dialog_is_a_recognised_acknowledge_only_prompt(
+    lua: tuple[Any, Any],
+) -> None:
+    """The "Unit Captured" dialog that froze the board. One button, so acknowledging it answers
+    nothing a human was being asked to decide."""
+    runtime, stubs = lua
+    state = _generic_popup(runtime, stubs, labels=["OK"])
+    assert state["screen"] == "prompt.generic_popup"
+    assert state["raw_screen_id"] == "InGamePopup"
+    assert state["recognized"] is True
+    assert state["has_blocking_prompt"] is True
+    assert state["prompt_options"] == ["continue"]
+    assert "screen_probe_reason" not in state
+
+
+def test_a_two_button_dialog_is_a_decision_and_is_never_named(lua: tuple[Any, Any]) -> None:
+    """THE RULE THIS CLAIM IS SCOPED BY, and the positive control for the test above: the same
+    context, the same mechanism, one more button. `ConfirmGovtChange` (governmentscreen.lua:888-897)
+    is this shape. Offering `continue` here would answer a decision the agent was never shown."""
+    runtime, stubs = lua
+    state = _generic_popup(runtime, stubs, labels=["Yes", "No"])
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["has_blocking_prompt"] is False
+    assert state["prompt_options"] == []
+    assert state["screen_probe_reason"] == "generic_popup_offers_a_choice"
+    # The stall has to say what it saw, or the operator cannot tell this from a broken read.
+    assert state["popup_button_count"] == 2
+    assert list(state["popup_button_labels"].values()) == ["Yes", "No"]
+
+
+def test_a_dialog_offering_a_choice_over_a_mapped_screen_still_stalls(
+    lua: tuple[Any, Any],
+) -> None:
+    """The false all-clear this branch exists to remove. MEASURED at `3ac3791` by running this
+    exact input against the previous file: it answered `screen: city_screen` with a modal Yes/No
+    demonstrably on top -- on the branch that also sets `recognized = true` and, since the id
+    carries no `prompt.` prefix, `has_blocking_prompt = false`. The `EndGameMenu` signature,
+    reached a different way: `InGamePopup` sits late in the watchlist and `CityPanel` second, so
+    the mapped screen underneath won the `open[1]` fall-through.
+
+    STATED AS THE STRUCTURE IT IS, not as a live sighting: this is a reachable shape, not a
+    measured board. The shipped `PopupDialogInGame` callers each raise their dialog over a
+    particular screen (`governmentscreen.lua:888` over `GovernmentScreen`,
+    `strategicview_mapplacement.lua:69`/`:234` during placement, `unitcaptured.lua:35` over the
+    world), and which of those leaves a *mapped* watchlist context open behind it is not something
+    this lane established. `GovernmentScreen` in particular is NOT in
+    `CIVSIM_SCREEN_ID_BY_STATE`, so that one already failed closed -- with `InGamePopup` unnamed in
+    the record, which is its own problem."""
+    runtime, stubs = lua
+    state = _generic_popup(
+        runtime, stubs, labels=["Yes", "No"], open=["CityPanel", "InGamePopup"], hidden=[]
+    )
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["has_blocking_prompt"] is False
+    assert state["raw_screen_id"] == "InGamePopup"
+
+
+def test_a_one_button_dialog_over_a_mapped_screen_is_still_the_dialog(
+    lua: tuple[Any, Any],
+) -> None:
+    """The negative control for the test above, varying the button count and nothing else: the
+    dialog is pushed modal (`ingamepopup.lua:44`) and eats all input (:75), so it outranks whatever
+    is open behind it rather than letting that screen name the board."""
+    runtime, stubs = lua
+    state = _generic_popup(
+        runtime, stubs, labels=["OK"], open=["CityPanel", "InGamePopup"], hidden=[]
+    )
+    assert state["screen"] == "prompt.generic_popup"
+    assert state["has_blocking_prompt"] is True
+
+
+def test_a_dialog_whose_button_row_cannot_be_reached_stalls_rather_than_guessing(
+    lua: tuple[Any, Any],
+) -> None:
+    """`/InGame/InGamePopup/PopupStack` resolving from InGame is UNVERIFIED LIVE. A build where it
+    does not is unobservable, not empty -- and unobservable must never read as `world`."""
+    runtime, stubs = lua
+    stubs.reset(runtime.table("InGamePopup"), runtime.table("CityPanel"))
+    stubs.set_ingame_popup(runtime.table("OK"), runtime.table(), False)
+    stubs.drop_popup_button_stack()
+    result = runtime.globals()["CivSim_Screens"]["probe"]()
+    state = {k: (list(v.values()) if k in _LIST_FIELDS else v) for k, v in result.items()}
+    assert state["screen"] == "unknown"
+    assert state["recognized"] is False
+    assert state["screen_probe_reason"] == "popup_button_stack_absent"
+
+
+def test_a_closed_dialog_leaves_the_board_alone(lua: tuple[Any, Any]) -> None:
+    """The negative control for the detector itself. `PopupRoot` is declared `Hidden="1"`
+    (popupdialog.xml:6) and only `Open()` shows it (popupdialog.lua:344), so a context that exists
+    with the dialog closed must not make every probe report a prompt."""
+    runtime, stubs = lua
+    stubs.reset(runtime.table(), runtime.table("InGamePopup", "CityPanel"))
+    stubs.set_ingame_popup(runtime.table("OK"), runtime.table(), True)
+    result = runtime.globals()["CivSim_Screens"]["probe"]()
+    state = {k: (list(v.values()) if k in _LIST_FIELDS else v) for k, v in result.items()}
+    assert state["screen"] == "world"
+    assert state["recognized"] is True
+    assert state["has_blocking_prompt"] is False
+
+
+def test_a_non_button_in_the_row_is_not_counted_as_a_button(lua: tuple[Any, Any]) -> None:
+    """The only other control that can sit at button depth is a countdown's inner
+    `<Label ID="Text"/>` (popupdialog.xml:43-45). Firaxis's own test tells them apart -- `AddButton`
+    rejects a control by `if not pButtonControl.RegisterCallback` (popupdialog.lua:197-203) -- and
+    the probe uses exactly that, so a one-button dialog with a countdown is still one button."""
+    runtime, stubs = lua
+    assert stubs.button_test_is_readable() is True
+    state = _generic_popup(runtime, stubs, labels=["OK"], row_labels=["15"])
+    assert state["screen"] == "prompt.generic_popup"
+    assert state["prompt_options"] == ["continue"]
+
+
+def test_without_the_button_test_the_same_dialog_fails_closed_instead(
+    lua: tuple[Any, Any],
+) -> None:
+    """The positive control for the test above, varying exactly the dimension the refinement
+    constrains -- whether `RegisterCallback` can be read across states, which this box cannot
+    otherwise reproduce -- and the simulation is ASSERTED to have fired. The structural rule then
+    counts two candidates, and its failure direction is the safe one: refuse to name the screen,
+    never acknowledge a choice."""
+    runtime, stubs = lua
+    stubs.reset(runtime.table("InGamePopup"), runtime.table("CityPanel"))
+    stubs.set_ingame_popup(runtime.table("OK"), runtime.table("15"), False)
+    assert stubs.drop_button_test() is True, "the simulation did not fire"
+    assert stubs.button_test_is_readable() is False
+    result = runtime.globals()["CivSim_Screens"]["probe"]()
+    state = {k: (list(v.values()) if k in _LIST_FIELDS else v) for k, v in result.items()}
+    assert state["screen"] == "unknown"
+    assert state["screen_probe_reason"] == "generic_popup_offers_a_choice"
+    assert state["popup_button_count"] == 2
+
+
+def test_acknowledging_the_dialog_clicks_its_one_button_by_rectangle(
+    lua: tuple[Any, Any],
+) -> None:
+    """There is no control id to name, so the answer is the button's own rectangle for a host
+    click -- the same mechanism the era card's Continue already uses."""
+    runtime, stubs = lua
+    stubs.reset(runtime.table("InGamePopup"), runtime.table())
+    stubs.set_ingame_popup(runtime.table("OK"), runtime.table(), False)
+    result = dict(runtime.globals()["CivSim_Screens"]["respond"]("prompt.generic_popup", "continue"))
+    assert result["ok"] is False
+    assert result["reason"] == "requires_host_click"
+    assert result["mechanism"] == "host_click_at_control_rect"
+    assert result["button_label"] == "OK"
+    assert dict(result["click"]) == {"x": 530, "y": 520, "w": 220, "h": 41}
+    # No fallback was taken: nothing reachable from InGame stands in for that button's callback.
+    assert list(stubs.dequeued.values()) == []
+    assert list(stubs.set_hidden.values()) == []
+
+
+def test_acknowledging_a_dialog_that_now_offers_a_choice_is_refused(
+    lua: tuple[Any, Any],
+) -> None:
+    """The check is made again at answer time from a fresh read, not remembered from the probe
+    that offered the option: the dialog on screen at the second round trip is not necessarily the
+    one that was there at the first, and this is the one place where being wrong means clicking a
+    button in somebody's decision."""
+    runtime, stubs = lua
+    stubs.reset(runtime.table("InGamePopup"), runtime.table())
+    stubs.set_ingame_popup(runtime.table("Yes", "No"), runtime.table(), False)
+    result = dict(runtime.globals()["CivSim_Screens"]["respond"]("prompt.generic_popup", "continue"))
+    assert result["ok"] is False
+    assert result["reason"] == "generic_popup_offers_a_choice"
+    assert result["popup_button_count"] == 2
+
+
+def test_acknowledging_a_dialog_that_is_not_open_says_so(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    stubs.reset(runtime.table(), runtime.table("InGamePopup"))
+    stubs.set_ingame_popup(runtime.table("OK"), runtime.table(), True)
+    result = dict(runtime.globals()["CivSim_Screens"]["respond"]("prompt.generic_popup", "continue"))
+    assert result["ok"] is False
+    assert result["reason"] == "popup_not_open"
+
+
+def test_the_dialog_refuses_an_option_it_never_offered(lua: tuple[Any, Any]) -> None:
+    runtime, stubs = lua
+    stubs.reset(runtime.table("InGamePopup"), runtime.table())
+    stubs.set_ingame_popup(runtime.table("OK"), runtime.table(), False)
+    result = dict(runtime.globals()["CivSim_Screens"]["respond"]("prompt.generic_popup", "OK"))
+    assert result["ok"] is False
+    assert result["reason"] == "unknown_option"
 
 
 @pytest.mark.parametrize(

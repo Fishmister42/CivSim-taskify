@@ -61,7 +61,13 @@ CATALOGS_ROOT = _REPO_ROOT / "catalogs"
 # after launch at turn 1, because the card was mapped to no screen id and the probe correctly
 # refused to name the board. Backed by the existing `prompts.orders` capability
 # (lua/ingame/screens.lua), so the capability count is unchanged.
-EXPECTED_DECLARATION_COUNT = 63
+#
+# 63 -> 64, 2026-09-22 (catalog `2026.09.22`): `prompts.generic_popup` -- the framework in-game
+# dialog (`InGamePopup`), measured freezing the board for twenty minutes behind "Unit Captured".
+# Scoped to the one-button case: the same context also carries two-button decisions, and
+# acknowledging one of those would answer a question the agent was never shown. Backed by the
+# existing `prompts.orders` capability, so the capability count is unchanged.
+EXPECTED_DECLARATION_COUNT = 64
 EXPECTED_CAPABILITY_COUNT = 27
 
 
