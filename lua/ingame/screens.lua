@@ -998,6 +998,21 @@ local function CivSim_InGamePopupIsShowing()
     local ctx = CivSim_LookUp(CIVSIM_INGAME_POPUP_STATE, nil)
     if ctx ~= nil and CivSim_IsVisible(ctx) then return true end
     local root = CivSim_LookUp(CIVSIM_INGAME_POPUP_STATE, CIVSIM_INGAME_POPUP_ROOT)
+    if root == nil and ctx ~= nil then
+        -- Same measured reason as `CivSim_FindDescendant` below: on this build `LookUpControl`
+        -- reaches the context and nothing under it, so `PopupRoot` -- a DIRECT child -- answers nil
+        -- by path and answers correctly by walk.
+        local okKids, kids = pcall(function() return ctx:GetChildren() end)
+        if okKids and kids ~= nil then
+            for _, kid in ipairs(kids) do
+                local okId, id = pcall(function() return kid:GetID() end)
+                if okId and id ~= nil and tostring(id) == CIVSIM_INGAME_POPUP_ROOT then
+                    root = kid
+                    break
+                end
+            end
+        end
+    end
     if root == nil then return false end
     local ok, visible = pcall(function() return root:IsVisible() end)
     return ok and visible == true
@@ -1019,9 +1034,43 @@ end
 -- decided -- or nil when the dialog is not open at all, or `{readable = false, reason}` when it is
 -- open and the button row could not be read. The three outcomes are kept apart on purpose: only
 -- the first means "there is nothing here", and the caller must not treat the third as it.
+-- Find a named descendant by WALKING, not by path.
+--
+-- MEASURED LIVE 2026-09-22, with a generic dialog open: `ContextPtr:LookUpControl` resolves
+-- `/InGame/InGamePopup` and NOTHING below it -- not `/InGame/InGamePopup/PopupRoot`, which is a
+-- direct child, and not `/InGame/InGamePopup/PopupStack`. Eight candidate paths were probed and
+-- seven answered nil. `GetChildren()` on the same controls answers correctly, and walking it found
+-- the whole chain: PopupRoot > PopupAlphaIn > PopupSlideIn > (unnamed Grid) > PopupBox > PopupStack,
+-- with `PopupStack` carrying `Text` and `Row`. So the path form cannot reach into this context from
+-- the `InGame` state and the walk can.
+--
+-- This is why the first live block stalled with `popup_button_stack_absent` rather than answering:
+-- the read was named, which is the whole point of naming it, and the name said which one to fix.
+--
+-- Depth-bounded because an unbounded walk over a live UI tree is how a probe becomes the thing that
+-- hangs the client. Six levels is the measured chain plus one.
+local function CivSim_FindDescendant(control, wantedId, depth)
+    if control == nil or depth > 6 then return nil end
+    local okKids, kids = pcall(function() return control:GetChildren() end)
+    if not okKids or kids == nil then return nil end
+    for _, kid in ipairs(kids) do
+        local okId, id = pcall(function() return kid:GetID() end)
+        if okId and id ~= nil and tostring(id) == wantedId then return kid end
+        local found = CivSim_FindDescendant(kid, wantedId, depth + 1)
+        if found ~= nil then return found end
+    end
+    return nil
+end
+
 local function CivSim_InGamePopupButtons()
     if not CivSim_InGamePopupIsShowing() then return nil end
+    -- Path first, so a build where it DOES resolve keeps the cheaper read; the walk is the fallback
+    -- that the measurement above says this build actually needs.
     local stack = CivSim_LookUp(CIVSIM_INGAME_POPUP_STATE, CIVSIM_INGAME_POPUP_STACK)
+    if stack == nil then
+        local ctx = CivSim_LookUp(CIVSIM_INGAME_POPUP_STATE, nil)
+        stack = CivSim_FindDescendant(ctx, CIVSIM_INGAME_POPUP_STACK, 1)
+    end
     if stack == nil then
         return { readable = false, reason = "popup_button_stack_absent" }
     end
