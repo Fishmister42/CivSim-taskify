@@ -86,3 +86,21 @@ def test_transport_outranks_refusal() -> None:
     """
     body = "ERR:SOMETHING\nCannot connect to Civ 6 at 127.0.0.1:4318."
     assert classify_reply(body) is Verdict.TRANSPORT_FAILURE
+
+
+def test_unconfirmed_replies_are_flagged_without_being_refusals() -> None:
+    """"Action completed (no response)" confirms nothing and must be visible as such.
+
+    A real confirmation looks like PRODUCING|DISTRICT_CAMPUS|4 turns or FOUNDED|11,23.
+    Observed 2026-09-24: within one block, two set_city_production calls confirmed and two
+    returned no response at all. Treating those four as identical would be exactly the
+    "a call that returned is an action that applied" assumption this module exists to
+    refuse — applied here to our own numbers rather than only to the upstream server's.
+    """
+    from civsim_harness.agent.mcp_verdict import is_unconfirmed
+
+    assert is_unconfirmed("Action completed (no response).")
+    assert not is_unconfirmed("PRODUCING|DISTRICT_CAMPUS|4 turns")
+    assert not is_unconfirmed("FOUNDED|11,23")
+    # Still not a refusal: nothing says it failed.
+    assert classify_reply("Action completed (no response).") is Verdict.APPLIED

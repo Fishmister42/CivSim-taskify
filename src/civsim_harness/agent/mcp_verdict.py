@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-__all__ = ["Verdict", "classify_reply", "is_applied"]
+__all__ = ["Verdict", "classify_reply", "is_applied", "is_unconfirmed"]
 
 
 class Verdict(str, Enum):
@@ -81,6 +81,28 @@ SOFT_REFUSAL: tuple[str, ...] = (
 
 #: How far into the reply a soft marker still counts as opening it.
 SOFT_WINDOW = 200
+
+
+#: Replies that confirm nothing. The server returns these when a command was dispatched but
+#: the engine gave no answer back, e.g. "Action completed (no response)". Counting them as
+#: applied is optimistic: a real confirmation looks like "PRODUCING|DISTRICT_CAMPUS|4 turns"
+#: or "FOUNDED|11,23". Observed 2026-09-24 on set_city_production, where two calls in the
+#: same block confirmed and two did not.
+#:
+#: They are NOT reclassified as refusals — nothing says the action failed — but they are
+#: reported separately so a coverage tally can decide for itself rather than inheriting an
+#: assumption. This project's whole complaint about the upstream server is that a call which
+#: returned is not an action that applied; the same standard has to survive contact with our
+#: own numbers.
+UNCONFIRMED_MARKERS: tuple[str, ...] = (
+    "no response",
+    "Action completed (no response)",
+)
+
+
+def is_unconfirmed(body: str) -> bool:
+    """True when the reply neither confirms nor denies that the action took effect."""
+    return any(m in body for m in UNCONFIRMED_MARKERS)
 
 
 def classify_reply(body: str, *, is_error: bool = False) -> Verdict:
