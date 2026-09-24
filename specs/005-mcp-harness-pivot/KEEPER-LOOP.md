@@ -96,6 +96,18 @@ Two defects are expected and are not news:
 - **`unit_action(found_city)` can return a different tile than requested**, and `get_cities` can
   read empty immediately after a successful founding.
 
+## The artifact sub-loop
+
+The paper trail is **not** this loop's job either. A separate cron sub-loop
+(`7,22,37,52 * * * *`, job `3ccaf0a2`) rebuilds it from `evidence/cyrus-run` plus every
+`evidence/keeper/cycle-*` and republishes to
+**https://claude.ai/artifact/LAumGNJ7GLPx2NVMjibhYL**, skipping the publish when the turn count has
+not moved. Three loops, three jobs, one client: the keeper plays, the migration loop changes code,
+the sub-loop renders. None of them touches another's surface.
+
+The sub-loop is session-only and dies with the session — re-create it with CronCreate if the
+artifact stops moving while cycles are still landing.
+
 ## Stop conditions
 
 1. The owner asks for Steam (tick 1) — stop immediately.

@@ -18,17 +18,19 @@ together" but **"the keeper holds the client; migration ticks take client-free t
 - **Client-needing** (require a keeper pause — touch `evidence/keeper/STOP`, do the task, delete the
   STOP file and restart the keeper): **R3a, V2, V3, M3, M5, M6.**
 
-**Every tick also republishes the paper trail**, so the artifact tracks the running experiment:
+**The paper trail has its own sub-loop — do NOT republish from a migration tick.** A cron job
+(`7,22,37,52 * * * *`, session-only, job `3ccaf0a2`) rebuilds and republishes
+**https://claude.ai/artifact/LAumGNJ7GLPx2NVMjibhYL** on its own cadence:
 
 ```bash
-cd /home/matt/civ6-mcp && uv run python audit/build_papertrail.py \
-    /home/matt/CivSolver/specs/005-mcp-harness-pivot/evidence/<newest run dir> \
-    /tmp/.../papertrail.html 900
+cd /home/matt/civ6-mcp && EV=/home/matt/CivSolver/specs/005-mcp-harness-pivot/evidence && \
+RUNS=$(ls -d $EV/cyrus-run $EV/keeper/cycle-* 2>/dev/null | tr '\n' ' ') && \
+uv run python audit/build_papertrail.py <tmp>/papertrail.html 900 $RUNS
 ```
 
-then publish that file to **https://claude.ai/artifact/LAumGNJ7GLPx2NVMjibhYL** (same path in the
-publishing conversation keeps the URL; from another conversation pass it as `url`). The keeper's
-per-cycle run dirs are `evidence/keeper/cycle-NNNN/`; the reference run is `evidence/cyrus-run/`.
+It **skips the publish when the turn count has not moved** — republishing identical bytes is noise
+dressed as progress. The keeper's per-cycle run dirs are `evidence/keeper/cycle-NNNN/`; the
+reference run is `evidence/cyrus-run/`. If the session ends the cron dies with it; re-create it.
 
 ---
 
