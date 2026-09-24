@@ -127,7 +127,11 @@ in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediatio
       every city of every living player when `found == 0`.
       *Done when*: the fallback filters on `pDiplo:HasMet(i)` and `pVis:IsRevealed`, matching the
       primary path's spirit.
-- [ ] **R5 — redact the found-city refusal.** `src/civ_mcp/lua/map.py:382` names the blocking city.
+- [x] **R5 — DONE 2026-09-24.** `map.py` now shows the blocking city's name only for our own
+      cities or where `myVis:IsRevealed(cx, cy)`; otherwise "another city". Distance and
+      coordinates kept — those are what the human gets from the greyed-out button anyway.
+      **The too-close branch is untested**: `build_found_city` ran live this session (it founded
+      Pasargadae) but never hit this path. ~~redact the refusal.~~ `src/civ_mcp/lua/map.py:382` names the blocking city.
       *Done when*: the message names the city only when `pVis:IsRevealed` is true for its plot.
 - [ ] **R6 — gate `_SETTLE_PREAMBLE`.** `src/civ_mcp/lua/map.py:36` builds the city-distance list
       from all cities of all players, so recommendations are shaped by unseen cities.
