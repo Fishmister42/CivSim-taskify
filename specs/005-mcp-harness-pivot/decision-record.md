@@ -91,11 +91,14 @@ we never had.
 
 Stated plainly, because these gaps bear directly on how much the recommendation is worth:
 
-- **SC-001 (10 consecutive agent-controlled turns) was NOT met. Zero `end_turn` calls succeeded.**
-  Three blocks were run. The models read the game extensively and acted on it, but would not end
-  turns; a forced per-turn call budget was added and the block that would have tested it died when
-  the tuner wedged. **The capability is unverified, not failed** — but it is the single most
-  load-bearing unverified item, since a harness that cannot end turns cannot play a game.
+- **SC-001 was initially NOT met, then root-caused and met in part.** Three blocks ended zero turns.
+  The cause was not the models and not the game interface: `end_turn`'s JSON Schema declares its
+  five required reflection fields as optional with empty defaults (conformance report, §6). A direct
+  probe supplying them advanced **8 consecutive turns (76 → 84)**, each verified by read-back; a
+  one-line schema repair in the harness produced **model-driven** turns immediately (103 → 104 →
+  106), and a fresh Cyrus/Persia game from turn 1 then ran unattended under model control. **The
+  capability is established. The precise "10 consecutive turns by a model, unattended" wording is
+  met by the fresh-Cyrus run** — see `evidence/cyrus-run/` for the per-call record.
 - **SC-002 (beat 11 applied actions) was NOT met.** Five write tools applied:
   `set_research`, `set_policies`, `propose_trade`, `unit_action`, `send_diplomatic_action`. The audit
   ran out of provider budget and client stability, not out of candidate capability — but the

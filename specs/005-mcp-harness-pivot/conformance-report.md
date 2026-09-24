@@ -251,6 +251,41 @@ but SC-002 asks for a measurement, and the measurement says 5.
 The full per-tool tally is `evidence/exercised.json`. The not-exercised 54 include every governor,
 religion, great-person, world-congress, espionage, purchase and victory capability.
 
+### The `end_turn` schema defect — why three blocks ended zero turns
+
+Across the first three model-driven blocks, **not one `end_turn` call was made**. It looked like
+model dithering. It was not.
+
+`end_turn` requires all five reflection fields (`tactical`, `strategic`, `tooling`, `planning`,
+`hypothesis`) to be non-empty **at runtime** — it answers
+`Empty reflections: ... Provide non-empty entries for all 5 fields`. But the JSON Schema it
+advertises declares every one of them as:
+
+```json
+"tactical": { "default": "", "title": "Tactical", "type": "string" }
+```
+
+**`"default": ""`, and no `required` array anywhere.** A model reading that schema is being told,
+correctly per JSON Schema, that it may call `end_turn` with no arguments — and the refusal that
+follows is narrated in the body without `isError`, so it does not even read as a failure.
+
+This is the **same defect class this project named in its own 2026-09-22 audit** — *"an optional
+parameter with a safe-looking empty default that every unit test supplies and the one production
+call site does not"* — mirrored: optional by schema, required by runtime. It sits on **the single
+tool that advances the game**.
+
+**Both halves were tested.**
+
+*The capability is sound.* A direct probe supplying the five fields — no model, no cost — advanced
+**8 consecutive turns, 76 → 84**, each verified by reading `Game.GetCurrentGameTurn()` back rather
+than trusting the reply. The two non-advances were the first call (game still loading) and a
+**World Congress gate**, a legitimate game state the server surfaced correctly. `end_turn` also
+**auto-dismissed a blocking pre-turn popup**.
+
+*The schema was the blocker.* Re-declaring those five fields as `required` in the harness's schema
+translation — **nothing else changed** — produced model-driven turns immediately: **103 → 104 →
+106**, unattended.
+
 ### The measurement defect this exposed, which is the audit's most portable finding
 
 **The MCP server does not set `isError` for game-level refusals.** It narrates them in the result
@@ -271,6 +306,39 @@ returned. **Any adoption must classify at this boundary**, or every downstream c
 inherits the same inflation this project already shipped once.
 
 ---
+
+## 6b. The fresh Cyrus run — and the one tool that kept failing
+
+The owner's mid-session directive was to rebuild on a fresh Cyrus/Persia seed, because the
+inherited save (`civsim-gameplay-2026-09-22-end2`) turned out to be a **John Curtin / Australia**
+game that autoplay had run to ~turn 100, with four cities, 25 units, five civs met, a religious
+emergency and a World Congress in flight — a board on which almost nothing is attributable to the
+agent. A new game was built from the host's `CivSim DEFAULT` preset (Gathering Storm / Emperor /
+Online / Pangaea Small / 6 AI / **Smart-Timer Off**), with Cyrus pinned in the human slot, and the
+agent run from turn 1.
+
+It is a markedly cleaner picture than the inherited save. The agent oriented, called
+`get_settle_advisor`, founded Pasargadae, set production and research, explored with the Warrior and
+ended turns — legibly, one decision at a time.
+
+**And it surfaced a robustness defect the busy save had hidden: `get_game_overview` failed 2 of its
+first 3 calls** with `Error: Empty overview response`, raised by `parse_overview_response` when the
+tuner returns nothing (or returns the FireTuner status string `Resolving Buffered Parameters`, which
+trips a second parser: `Overview response has 1 fields, expected >=14`). The parsers **raise instead
+of retrying**, which is how a transient tuner hiccup becomes a dead call — and this is the one tool
+the server's own guidance tells the agent to orient with every turn.
+
+Two things worth saying precisely about that number. First, **those were the only failures in the
+run** — every other call applied. Second, **the agent routed around it on its own**, falling back to
+`get_units` and `get_cities` and not calling the broken tool again. That is good agent behaviour
+covering for a defect, not the defect being harmless: a retry belongs in the server.
+
+A third defect the agent caught before the audit did: `unit_action(found_city, target 11,22)`
+returned `FOUNDED|11,23` — **founding at a different tile than the one requested** — and the
+following `get_cities` returned `No cities.` while the city in fact existed. The agent's own turn
+reflection reads: *"Unit action returned FOUNDED|11,23 — possible coordinate mismatch… get_cities
+returned empty after unit_action reported city founded. Possible sync delay or failed founding."*
+Both halves need an in-client check before adoption.
 
 ## 7. What this audit did NOT examine
 
