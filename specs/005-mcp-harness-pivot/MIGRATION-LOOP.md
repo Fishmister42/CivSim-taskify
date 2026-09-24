@@ -173,7 +173,12 @@ in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediatio
       *Done when*: `evidence/remediations/diplo-crash-repro.md` records **either** a reproduction
       with a new symbol resolution **or** three clean attempts. A non-reproduction is a complete
       result; record it as such.
-- [ ] **V4 — upstream the two corrections.** (a) `game_lifecycle.py:457`'s claim that
+- [~] **V4 — DRAFTED 2026-09-24, AWAITING OWNER GO-AHEAD.** Both findings written up with
+      evidence in `evidence/remediations/upstream-report-draft.md`, as two separate issues.
+      **Not posted**: opening issues on a third party's public repo under the owner's GitHub
+      identity is outward-facing and not easily undone, so the posting is his call, not the
+      loop's. Everything up to the irreversible step is done.
+      ~~upstream the two corrections.~~ (a) `game_lifecycle.py:457`'s claim that
       `Network.SaveGame` does nothing on Aspyr Linux is wrong on this host. (b) `end_turn`'s schema
       needs a `required` array. *Done when*: an upstream issue or PR exists and its URL is recorded.
 
