@@ -95,7 +95,15 @@ in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediatio
       - The keeper is unaffected. It reaches the tuner **directly** for health and checkpointing,
         because operator capability is deliberately not agent capability. Deleting the agent-facing
         escape hatch costs the operator path nothing — which is the point.
-- [ ] **R2 — gate `get_diary`'s rival block.** `src/civ_mcp/lua/overview.py:722` and the loop at
+- [x] **R2 — DONE 2026-09-24.** `PlayersVisibility[<rival>]` removed (it was computing each
+      rival's map-exploration percentage — no human route to that at all); `explorePct` is now
+      `-1` for everyone but the local player, deliberately not `0`, because a silent zero reads
+      as a measurement. Player loop gated on `(i == me or myDiplo:HasMet(i))`; the docstring that
+      said "omniscient" now says what the code does. Verified: `grep 'PlayersVisibility\['`
+      across `lua/` returns only `[me]` and `[id]`, and `id = Game.GetLocalPlayer()`.
+      **Residual**: `ownerTerritory`/`ownerImprove` still count plots map-wide, so a met civ's
+      territory total includes tiles never seen. Narrower than R2; owed its own pass.
+      ~~gate `get_diary`'s rival block.~~ `src/civ_mcp/lua/overview.py:722` and the loop at
       `:798` (their comment: `# === Player loop (omniscient — all alive major civs) ===`), plus the
       `aliveVis[i] = PlayersVisibility[i]` handles at `:766`.
       *Done when*: no `PlayersVisibility[<other player>]` is constructed anywhere in `lua/`, and the
