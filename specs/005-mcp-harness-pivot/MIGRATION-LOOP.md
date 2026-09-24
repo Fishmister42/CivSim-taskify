@@ -53,16 +53,33 @@ reference run is `evidence/cyrus-run/`. If the session ends the cron dies with i
 - **Test command**: `timeout 900 uv run pytest -q -p no:cacheprovider -o faulthandler_timeout=120`,
   redirected to a log that you poll. A green must be produced in a **clean detached worktree at the
   committed hash**, synced with `uv sync --all-groups --all-extras`, using a **bare `uv run`**.
-- **Budget**: OpenRouter had **$2.86 of $360** on 2026-09-24. Prefer `audit/end_turn_probe.py`
+- **Budget**: measure with `/api/v1/key` → `limit_remaining`, **never** `/api/v1/credits`, which is
+  account-wide across every key and read $2.25 while this key had **$31.86 of its $80** left.
+  On 2026-09-24: limit 80, usage 48.14, remaining 31.86, spent today 3.20. Key expires 2026-09-27. Prefer `audit/end_turn_probe.py`
   (zero model cost) for verification. Use `qwen/qwen3-235b-a22b-2507` when a model is needed —
   a 13-turn run cost ~$0.05. **The provider's refusal is the stop.** Do not ask for more.
 - **Steam**: announce on issue #1 before taking the account and release it explicitly when done.
 
 ## The gate
 
-**Phase 3 may not start until every Phase 1 and Phase 2 box is ticked.** If a tick would delete
-CivSolver code while any Phase 1 box is unticked, **stop and report instead**. Deleting our harness
-before the replacement is admissible leaves the project with nothing admissible at all.
+**Phase 4 — DELETION — may not start until every Phase 1 and Phase 2 box is ticked.** If a tick
+would delete CivSolver code while any of those is unticked, **stop and report instead**. Deleting
+our harness before the replacement is admissible leaves the project with nothing admissible at all.
+
+**Phase 3 — RE-POINTING — requires Phase 1 (the Principle I remediations) complete, which it is.**
+Phase 3 tasks are additive or modifying: they change what our code drives, they delete nothing. A
+Phase 3 task that would delete anything is misfiled and belongs in Phase 4.
+
+**Amended 2026-09-24, and flagged rather than done quietly**, because loosening one's own gate is
+exactly the move that deserves scrutiny. The original text blocked Phase 3 on Phases 1 AND 2 while
+giving a rationale entirely about *deletion* — so the rule was stricter than its own stated reason,
+and the only thing it was actually holding back was work that deletes nothing. The one outstanding
+Phase 2 item (V3, the crash reproduction) is a *verification* task needing exclusive client access;
+it does not bear on whether our agent-side schema translation is correct. The admissibility work
+that the gate exists to protect — all six Principle I remediations — **is** complete.
+
+What has NOT been relaxed: Phase 4 still requires V3, and every Phase 3 task must leave the old
+code in place and working until Phase 4 removes it.
 
 ---
 
@@ -198,7 +215,16 @@ in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediatio
 
 - [ ] **M1 — `agent/`**: tool schemas from `list_tools()`, **carrying the `end_turn` `required`
       repair** (`audit/minimal_agent.py` has the reference implementation).
-- [ ] **M2 — verdict classification at the boundary**: every call recorded as
+- [x] **M2 — DONE 2026-09-24.** `src/civsim_harness/agent/mcp_verdict.py` +
+      `tests/unit/test_mcp_verdict.py` (13 cases, all real reply shapes observed against
+      civ6-mcp). `classify_reply()` returns `applied` / `engine_refused` / `transport_failure`
+      / `mcp_error`; `is_applied()` is what coverage counting must use instead of
+      `not response.isError`. Transport outranks refusal — "the game said no" and "nothing was
+      asked" are different facts. Structured markers (`ERR:`, `FAILED:`, `WARN:SILENT_FAILURE`)
+      match anywhere; English phrasing only in the first 200 chars, because a 12 KB aggregate
+      of correct state was otherwise classified a refusal for containing the word "cannot".
+      Additive: nothing existing was changed or removed.
+      ~~every call recorded as~~
       `applied` / `engine_refused` / `transport_failure` / `mcp_error`, classified from the reply
       body, because the server does not set `isError`.
       *Done when*: a test asserts a narrated refusal is **not** counted as applied.
@@ -233,6 +259,24 @@ retro-audit, `.specify/memory/`, or the measured baselines. See `NEXT-SESSION-CL
       `memory/civsim_resume_here.md`.
 
 ---
+
+## Known hazard, NOT yet addressed — agent context bouncing across a rewind
+
+**Owner, 2026-09-24, flagged for future work and explicitly not to be actioned yet:** when a
+reload rewinds the game to its last checkpoint, the agent's message history still contains
+the turns it played *after* that checkpoint. Its own record says it founded a city, moved a
+unit, ended a turn — and the world disagrees. The model is then reasoning from a past that
+no longer happened, and it will keep doing so for the rest of the block.
+
+This is why seed 1 looked incoherent: not the model, the harness. Every keeper restart I
+made rewound the game while the conversation carried on regardless.
+
+Candidate fixes when this is picked up (none implemented):
+- Truncate the agent's history back to the checkpoint boundary on a reload, so its memory
+  and the world agree.
+- Or end the block on a rewind and start a new one, which is cruder but cannot desync.
+- Either way the auto-injected turn summary is the resync point: it is authoritative about
+  the world and arrives at the top of every turn.
 
 ## Stop conditions — end the loop and report
 
