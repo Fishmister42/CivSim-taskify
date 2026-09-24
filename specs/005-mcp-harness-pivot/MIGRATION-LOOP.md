@@ -118,7 +118,12 @@ in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediatio
       and city count. *Done when*: a screenshot plus a one-line verdict lands in
       `evidence/remediations/diplo-visibility-parity.md`. **R3 cannot be written correctly without
       this** — the audit established the inconsistency, not the correct line.
-- [ ] **R4 — gate `get_trade_destinations`' fallback.** `src/civ_mcp/lua/economy.py:274` enumerates
+- [x] **R4 — DONE 2026-09-24.** Fallback at `economy.py:274` gated on
+      `(i == me or myDiplo:HasMet(i))` and per city on `myVis:IsRevealed(cx, cy)`. The primary
+      path was left alone: `UnitManager.CanStartOperation` is the engine's own legality check,
+      i.e. the game's trade-route picker, and is admissible as-is. **Source-verified only** — no
+      trade-destination call has been made in any audit block, so this fix is unexercised.
+      ~~gate the fallback.~~ `src/civ_mcp/lua/economy.py:274` enumerates
       every city of every living player when `found == 0`.
       *Done when*: the fallback filters on `pDiplo:HasMet(i)` and `pVis:IsRevealed`, matching the
       primary path's spirit.
