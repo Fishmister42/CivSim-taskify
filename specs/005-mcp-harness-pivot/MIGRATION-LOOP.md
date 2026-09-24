@@ -154,7 +154,14 @@ in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediatio
 
 ## Phase 2 — verification (BLOCKING)
 
-- [ ] **V1 — reachability assertion.** Port the `parity/` reachability roster to assert that **no
+- [x] **V1 — DONE 2026-09-24.** `tests/test_principle_i_reachability.py` in the fork. One
+      absolute check (`PlayersVisibility` may only be indexed by the local player, no
+      allowlist) and one ratchet (per-module reviewed counts of sweep-flagged loops, with a
+      written reason each, failing on additions) plus a third that stops the ledger drifting
+      above reality. 3 passed. The first run failed on an R2 *comment* describing the removed
+      read — comments are now stripped, because a checker that cannot tell code from a comment
+      about code invites deleting the explanation to go green.
+      ~~reachability assertion.~~ Port the `parity/` reachability roster to assert that **no
       ungated foreign-player read is reachable from the tool-call path**.
       *Done when*: a test fails if a new ungated `Players[i]` read is added. **This is the box that
       makes R1–R6 stay fixed**; without it the seventh violation gets written next month.
