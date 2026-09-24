@@ -9,6 +9,27 @@ whose gate is open, tick the box with evidence, commit, stop. One task per tick.
 /loop Read specs/005-mcp-harness-pivot/MIGRATION-LOOP.md and execute exactly one unchecked task, then update the file and commit.
 ```
 
+**The keeper owns the client.** The owner asked (2026-09-24) for the Cyrus experiment to keep
+running alongside the migration. The two loops cannot share the tuner, so the rule is not "never run
+together" but **"the keeper holds the client; migration ticks take client-free tasks."**
+
+- **Client-free** (do these while the keeper plays): R1, R2, R4, R5, R6, V1, V4, M1, M2, M4, M7,
+  all of Phase 4 and Phase 5.
+- **Client-needing** (require a keeper pause — touch `evidence/keeper/STOP`, do the task, delete the
+  STOP file and restart the keeper): **R3a, V2, V3, M3, M5, M6.**
+
+**Every tick also republishes the paper trail**, so the artifact tracks the running experiment:
+
+```bash
+cd /home/matt/civ6-mcp && uv run python audit/build_papertrail.py \
+    /home/matt/CivSolver/specs/005-mcp-harness-pivot/evidence/<newest run dir> \
+    /tmp/.../papertrail.html 900
+```
+
+then publish that file to **https://claude.ai/artifact/LAumGNJ7GLPx2NVMjibhYL** (same path in the
+publishing conversation keeps the URL; from another conversation pass it as `url`). The keeper's
+per-cycle run dirs are `evidence/keeper/cycle-NNNN/`; the reference run is `evidence/cyrus-run/`.
+
 ---
 
 ## Standing rules (inherited; violating one is a failed tick)
@@ -45,24 +66,33 @@ before the replacement is admissible leaves the project with nothing admissible 
 
 ## Phase 0 — preflight (re-run at the start of any tick that touches the client)
 
-- [ ] **P0.1** `uv sync --extra launcher-linux` in `/home/matt/civ6-mcp` succeeds; `tesseract` and
-      `xdotool` on PATH.
-      *Done when*: `uv run python -c "import civ_mcp; print(civ_mcp.__file__)"` resolves under
-      `/home/matt/civ6-mcp/src`.
-- [ ] **P0.2** No straggler agent processes; port 4318 reachable or client recyclable.
-      *Done when*: `ps -eo pid,comm,args | awk '$2 ~ /^python/ && /minimal_agent|end_turn_probe/'`
-      is empty **and** a `GameConnection().connect()` resolves a non-null `gamecore_index`.
+- [x] **P0.1** — **2026-09-24.** `civ_mcp` resolves to `/home/matt/civ6-mcp/src/civ_mcp/__init__.py`;
+      `tesseract` and `xdotool` both on PATH at `/usr/bin`.
+- [x] **P0.2 — DELEGATED to the keeper, 2026-09-24.** Straggler check is clean, but client
+      reachability is now the keeper's job: it reaps stragglers, diagnoses and heals every cycle.
+      A migration tick must **not** race it. Before any client-needing task, touch
+      `evidence/keeper/STOP`, confirm the keeper exited, then work; restore afterwards.
+      *Note*: the tuner was wedged at the time of this tick (accept-then-reset) and the keeper
+      recycled it — which is exactly the division of labour working.
 
 ## Phase 1 — Principle I remediations (BLOCKING)
 
 Each is a change in the fork (`/home/matt/civ6-mcp`, branch `civsim-audit`). Cite the file and line
 in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediations/`.
 
-- [ ] **R1 — delete `run_lua`.** Remove the tool registration in `src/civ_mcp/server.py`.
-      *Done when*: a fresh `session.list_tools()` returns **75** tools and no name equal to
-      `run_lua`. A prompt instruction not to call it does **not** satisfy this box.
-      ⚠ `audit/end_turn_probe.py` currently reads the turn counter through `run_lua`. Re-point it at
-      a dedicated read before removing the tool, or the probe breaks.
+- [x] **R1 — `run_lua` deleted. 2026-09-24.** Verified by a live `session.list_tools()`:
+      **75 tools, `run_lua` present: False**, and `grep -c run_lua src/civ_mcp/server.py` = 0.
+      Three notes for whoever reviews it:
+      - `audit/end_turn_probe.py` read the turn counter through `run_lua`. Re-pointed **first**, at
+        `get_game_overview` with three retries, returning `None` rather than guessing — the read has
+        to stay *independent* of `end_turn`'s own claim or it stops being a verification.
+      - Upstream already had `if os.environ.get("CIV_MCP_DISABLE_LUA"): remove_tool("run_lua")`.
+        **That hook was removed too.** A flag is not a control: this project's own rule is to
+        guarantee a property by the **absence of an edge**, not by every future caller setting an
+        env var right. The tool is gone, not switchable.
+      - The keeper is unaffected. It reaches the tuner **directly** for health and checkpointing,
+        because operator capability is deliberately not agent capability. Deleting the agent-facing
+        escape hatch costs the operator path nothing — which is the point.
 - [ ] **R2 — gate `get_diary`'s rival block.** `src/civ_mcp/lua/overview.py:722` and the loop at
       `:798` (their comment: `# === Player loop (omniscient — all alive major civs) ===`), plus the
       `aliveVis[i] = PlayersVisibility[i]` handles at `:766`.
