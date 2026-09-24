@@ -163,8 +163,11 @@ Delete none of this, and do not let it become unreachable when the code it descr
    fresh load, under crash watch. Attributed at +0x0, not reproduced.
 5. **Exercise the other 54 capabilities**, or state per capability that they remain unverified.
 6. **Examine Principles IV, V and VI**, untouched by this audit.
-7. **Upstream two corrections**: `Network.SaveGame` does work on Aspyr Linux; `end_turn`'s schema
-   needs a `required` array.
+7. **Do NOT upstream anything.** Owner decision 2026-09-24: *"we should detach from them for now
+   and keep our fixes to ourselves til we have a more substantive project."* The two corrections
+   (`Network.SaveGame` works on Aspyr Linux; `end_turn`'s schema needs a `required` array) are
+   written up at `evidence/remediations/upstream-report-draft.md` for whenever that changes. Keep
+   the `upstream` remote for pulling and diffing — reading is not contributing.
 
 ## 6. Disposition of the existing specs
 
