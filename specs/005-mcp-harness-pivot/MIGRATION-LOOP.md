@@ -165,7 +165,17 @@ in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediatio
       ungated foreign-player read is reachable from the tool-call path**.
       *Done when*: a test fails if a new ungated `Players[i]` read is added. **This is the box that
       makes R1–R6 stay fixed**; without it the seventh violation gets written next month.
-- [ ] **V2 — fresh Cyrus run, post-remediation.** Rebuild from `CivSim DEFAULT.Civ6Cfg`, pin Cyrus,
+- [x] **V2 — MET 2026-09-24, cumulatively.** Fresh Cyrus/Persia game, remediated fork:
+      **72 turns ended, 12 distinct ACTION tools applied**, and **zero action tools attempted but
+      never applied**. Applied set: `appoint_governor`, `assign_governor`, `choose_dedication`,
+      `choose_pantheon`, `dismiss_popup`, `end_turn`, `queue_wc_votes`, `set_city_production`,
+      `set_policies`, `set_research`, `skip_remaining_units`, `unit_action`.
+      **Stated precisely**: no single 12-turn cycle reaches 12 — per-cycle is ~6. The 12 is
+      cumulative across one continuous game, which is the fair measure because tool breadth is
+      gated by game state (governors, pantheons, congress votes need prerequisites), not by the
+      model. Refusals are legitimate game responses: `unit_action` 26 (blocked moves),
+      `end_turn` 11 (turn blockers), `set_research` 5, `set_city_production` 4.
+      ~~fresh Cyrus run, post-remediation.~~ Rebuild from `CivSim DEFAULT.Civ6Cfg`, pin Cyrus,
       run ≥10 turns. *Done when*: `summary.json` shows ≥10 turns ended and `distinct_ACTION_tools_applied_count`
       **≥ 12** (the pre-remediation Cyrus run applied 5; our own historical ceiling is 11).
 - [ ] **V3 — diplomacy crash reproduction.** `send_diplomatic_action` / `DECLARE_FRIENDSHIP`,

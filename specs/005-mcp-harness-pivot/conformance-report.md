@@ -242,11 +242,23 @@ Of the 22 exercised: 19 reached `applied`, 5 produced at least one `engine_refus
 (`unit_action`, `get_game_overview`, `set_policies`, `get_governors`, plus refusals within otherwise
 applied tools), 0 transport failures inside a block, 0 MCP-level errors.
 
-**Write tools that actually applied: 5** — `set_research`, `set_policies`, `propose_trade`,
-`unit_action`, `send_diplomatic_action`. Against this project's own measured ceiling of **11
-distinct actions applied live** after four weeks, **SC-002 is NOT met by this audit.** The honest
-reading is that the audit ran out of provider budget, not that the candidate ran out of capability —
-but SC-002 asks for a measurement, and the measurement says 5.
+**Write tools that actually applied: 5** at the time this section was first written — against this
+project's own ceiling of **11 distinct actions applied live** after four weeks.
+
+**Superseded by measurement, same day.** After the Phase 1 remediations, a fresh Cyrus/Persia game
+run continuously by the keeper reached **12 distinct action tools applied across 72 turns, with
+zero action tools attempted but never applied**: `appoint_governor`, `assign_governor`,
+`choose_dedication`, `choose_pantheon`, `dismiss_popup`, `end_turn`, `queue_wc_votes`,
+`set_city_production`, `set_policies`, `set_research`, `skip_remaining_units`, `unit_action`.
+**SC-002 is met.**
+
+The "zero attempted but never applied" figure is the one that matters most against our history:
+this project's own harness had **14 of 38 actions that could never have worked on any model**. The
+candidate has none of that shape — everything the agent reached for eventually landed, and the
+refusals that did occur are legitimate game responses (blocked moves, turn blockers).
+
+Qualification kept deliberately: the 12 is cumulative over one continuous game, not within a single
+block (~6 per 12-turn cycle), because breadth is gated by game state rather than by the model.
 
 The full per-tool tally is `evidence/exercised.json`. The not-exercised 54 include every governor,
 religion, great-person, world-congress, espionage, purchase and victory capability.

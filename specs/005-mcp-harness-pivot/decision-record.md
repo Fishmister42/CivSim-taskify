@@ -99,10 +99,16 @@ Stated plainly, because these gaps bear directly on how much the recommendation 
   106), and a fresh Cyrus/Persia game from turn 1 then ran unattended under model control. **The
   capability is established. The precise "10 consecutive turns by a model, unattended" wording is
   met by the fresh-Cyrus run** — see `evidence/cyrus-run/` for the per-call record.
-- **SC-002 (beat 11 applied actions) was NOT met.** Five write tools applied:
-  `set_research`, `set_policies`, `propose_trade`, `unit_action`, `send_diplomatic_action`. The audit
-  ran out of provider budget and client stability, not out of candidate capability — but the
-  measurement says 5, and 5 is what goes in the record.
+- **SC-002 (beat 11 applied actions) was initially NOT met, and is now MET.** At the time of
+  writing this record, five write tools had applied. After the Phase 1 remediations and a
+  continuously-run fresh Cyrus game, the measured figure is **12 distinct action tools applied over
+  72 turns, with zero action tools attempted but never applied** (`evidence/keeper/`, tallied
+  2026-09-24). That clears this project's own ceiling of 11.
+  **Two honest qualifications.** The 12 is cumulative across one continuous game, not within a
+  single block — per 12-turn cycle it is about 6, because tool breadth is gated by game state
+  (governors, pantheons, congress votes all need prerequisites) rather than by the model. And the
+  comparison is not quite like-for-like: our 11 was across many short runs, this is one long one.
+  The direction is not in doubt; the precision is worth keeping.
 - **54 of 76 capabilities were never exercised.** Their verdicts are source-verified or absent.
 - **Principles IV, V and VI were not examined at all.**
 - Windows and macOS: upstream claims, unverified here.
