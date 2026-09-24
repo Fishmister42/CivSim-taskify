@@ -133,7 +133,11 @@ in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediatio
       **The too-close branch is untested**: `build_found_city` ran live this session (it founded
       Pasargadae) but never hit this path. ~~redact the refusal.~~ `src/civ_mcp/lua/map.py:382` names the blocking city.
       *Done when*: the message names the city only when `pVis:IsRevealed` is true for its plot.
-- [ ] **R6 — gate `_SETTLE_PREAMBLE`.** `src/civ_mcp/lua/map.py:36` builds the city-distance list
+- [x] **R6 — DONE 2026-09-24.** `_SETTLE_PREAMBLE` city-distance list gated on
+      `(i == me or vis:IsRevealed(ccx, ccy))`; both callers already had `me` and `vis` in scope.
+      Verified both `build_settle_advisor_query` and `build_global_settle_scan` render the gate.
+      **Phase 1 is now R1-R2-R4-R5-R6 done; only R3 remains, blocked on R3a.**
+      ~~gate the preamble.~~ `src/civ_mcp/lua/map.py:36` builds the city-distance list
       from all cities of all players, so recommendations are shaped by unseen cities.
       *Done when*: the preamble filters on revealed plots. **This is the subtle one** — the leak is
       in the shape of the answer, not its text.
