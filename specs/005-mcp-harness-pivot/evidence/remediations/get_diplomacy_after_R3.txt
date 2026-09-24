@@ -1,0 +1,40 @@
+4 civilizations:
+  Cree (Poundmaker) — UNFRIENDLY (-9) [player 2]
+    +2 Trade routes between our nations
+    +4 We joined an emergency against the same person
+    -15 Grievances from other players against us
+    Agenda: Iron Confederacy — Tries to form multiple alliances and respects those who do likewise. Dislikes those with few alliances.
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Can: Declare Friendship, Denounce, Resident Embassy, Open Borders (Via Propose Trade), Declare War
+  Georgia (Tamar) — FRIENDLY (+3) [player 3]
+    -3 Settled near them
+    +2 Trade routes between our nations
+    -1 We had troops on their border
+    -1 Decided to not make a pledge to move troops
+    +1 Favorable trade deals to them
+    +3 Open borders
+    -12 Grievances from other players against us
+    +8 Tamar is happy you are fortifying your cities
+    +6 They are pleased to see you clearing barbarian camps
+    Agenda: Narikala Fortress — Tries to put high-level walls around her cities and respects civilizations who follow her lead. Does not like civilizations who fail to fortify their cities.
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Can: Declare Friendship, Denounce, Resident Embassy, Declare War
+  France (Catherine de Medici (Black Queen)) — UNFRIENDLY (-18) [player 4]
+    -8 Respects strong espionage opponents
+    -10 Unknown Reason
+    Agenda: Black Queen — Gains as many Spies and as much diplomatic access as possible.  Does not like civilizations who ignore these espionage activities.
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Can: Declare Friendship, Denounce, Resident Embassy, Open Borders (Via Propose Trade), Declare War
+  India (Gandhi) — WAR (-37) **AT WAR** [player 5]
+    -1 We had troops on their border
+    -2 Decided to not make a pledge to move troops
+    +5 They are following our religion
+    -30 Grievances against us
+    +5 Gandhi is pleased that you have been keeping the peace
+    -8 Gandhi is upset with your warmongering
+    -6 Unknown Reason
+    Agenda: Peacekeeper — Never declares wars for which he can be branded a warmonger, and will try to befriend those who maintain the peace. Hates warmongers.
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)

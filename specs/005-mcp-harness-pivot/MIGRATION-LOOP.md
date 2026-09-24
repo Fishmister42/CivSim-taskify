@@ -109,11 +109,21 @@ in the commit. Evidence goes in `specs/005-mcp-harness-pivot/evidence/remediatio
       *Done when*: no `PlayersVisibility[<other player>]` is constructed anywhere in `lua/`, and the
       rival loop is gated on `pDiplo:HasMet(i)`. Grep is the check:
       `grep -n 'PlayersVisibility\[' src/civ_mcp/lua/*.py` shows only `PlayersVisibility[me]`.
-- [ ] **R3 — make `get_diplomacy` consistent.** `src/civ_mcp/lua/diplomacy.py` prints `MILITARY|`
+- [x] **R3 — DONE 2026-09-24, on measured evidence.** `MILITARY|` and `CIVCITIES|` gated on
+      `vis >= 3`, the level the candidate's own hidden-agenda gate names. Verified live on the
+      same save: no `Cities:` line, no `Military:` line, agendas and modifiers still present;
+      99 upstream tests pass. Narration also fixed — a withheld count was printing
+      `Cities: 0 (all in fog)`, a confident falsehood replacing a leak. ~~make it consistent.~~ `src/civ_mcp/lua/diplomacy.py` prints `MILITARY|`
       and `CIVCITIES|` ungated while gating agendas on `pDiplo:GetVisibilityOn(i)`.
       **Blocked on R3a.** *Done when*: both fields are gated on the same visibility level the
       agenda check uses, or removed.
-- [ ] **R3a — in-client comparison (owner-adjacent).** Open the in-game intel panel for a met civ at
+- [x] **R3a — DONE 2026-09-24.** Civ VI's own Intel Report at **Access Level: Limited** shows
+      Gossip / Access Level / Government / Our Relationship / Agendas / Relationships and
+      **neither a city count nor military strength**, while the tool reported
+      `Cities: 6 (all in fog)` and `Military: 447 vs our 651` for the same civ. Screenshots and
+      verdict in `evidence/remediations/diplo-visibility-parity.md`. **Only the Limited level was
+      observed**; higher levels unverified, so R3 errs toward withholding.
+      ~~in-client comparison.~~ Open the in-game intel panel for a met civ at
       a known diplomatic visibility level and record what Civ VI itself shows for military strength
       and city count. *Done when*: a screenshot plus a one-line verdict lands in
       `evidence/remediations/diplo-visibility-parity.md`. **R3 cannot be written correctly without

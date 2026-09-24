@@ -1,0 +1,43 @@
+4 civilizations:
+  Cree (Poundmaker) — FRIENDLY (+9) [player 2]
+    Cities (6): Makwa-Sakahikan pop 6 (28,17); Mistawasis pop 4 (30,13); Paskwaw-Askihk pop 4 (26,20) + 3 in fog
+    Military: 322 vs our 651 (0.5x)
+    Access: we have delegation
+    +2 Trade routes between our nations
+    +3 We sent them a delegation
+    +4 We joined an emergency against the same person
+    Agenda: Iron Confederacy — Tries to form multiple alliances and respects those who do likewise. Dislikes those with few alliances.
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Can: Declare Friendship, Denounce, Open Borders (Via Propose Trade), Declare War
+  Georgia (Tamar) — FRIENDLY (+8) [player 3]
+    Cities (8): Kutaisi pop 9 (25,25) [walls]; Omalo pop 2 (32,25) + 6 in fog
+    Military: 397 vs our 651 (0.6x)
+    Access: we have delegation, they have delegation, grievances: 38
+    +3 We sent them a delegation
+    -4 Moving forces near their cities
+    -2 We had troops on their border
+    -3 Decided to not make a pledge to move troops
+    +8 Tamar is happy you are fortifying your cities
+    +6 Unknown Reason
+    Agenda: Narikala Fortress — Tries to put high-level walls around her cities and respects civilizations who follow her lead. Does not like civilizations who fail to fortify their cities.
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Can: Declare Friendship, Denounce, Open Borders (Via Propose Trade), Declare War
+  France (Catherine de Medici (Black Queen)) — UNFRIENDLY (-8) [player 4]
+    Cities: 6 (all in fog)
+    Military: 447 vs our 651 (0.7x)
+    Access: they have delegation
+    -8 Respects strong espionage opponents
+    Agenda: Black Queen — Gains as many Spies and as much diplomatic access as possible.  Does not like civilizations who ignore these espionage activities.
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Can: Diplomatic Delegation, Declare Friendship, Denounce, Open Borders (Via Propose Trade), Declare War
+  India (Gandhi) — FRIENDLY (+7) [player 5]
+    Cities (6): Delhi pop 14 (53,24); Hyderabad pop 13 (50,22); Patna pop 11 (54,20); Agra pop 8 (54,29); Jabalpur pop 6 (49,18); Madurai pop 4 (57,24)
+    Military: 182 vs our 651 (0.3x)
+    Access: we have delegation, they have embassy
+    +3 We sent them a delegation
+    +5 They are following our religion
+    +5 Gandhi is pleased that you have been keeping the peace
+    -6 Unknown Reason
+    Agenda: Peacekeeper — Never declares wars for which he can be branded a warmonger, and will try to befriend those who maintain the peace. Hates warmongers.
+    Agenda: [Hidden] — Requires Secret diplomatic visibility (spy or alliance)
+    Can: Declare Friendship, Denounce, Open Borders (Via Propose Trade), Declare War
